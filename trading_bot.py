@@ -295,7 +295,8 @@ class TradingBot:
                 return False
 
             if self.config.exchange == "lighter":
-                current_order_status = self.exchange_client.current_order.status
+                current_order_status = (self.exchange_client.current_order.status 
+                                      if self.exchange_client.current_order else 'UNKNOWN')
             else:
                 order_info = await self.exchange_client.get_order_info(order_id)
                 current_order_status = order_info.status
@@ -307,7 +308,8 @@ class TradingBot:
                 self.logger.log(f"[OPEN] [{order_id}] Waiting for order to be filled", "INFO")
                 await asyncio.sleep(5)
                 if self.config.exchange == "lighter":
-                    current_order_status = self.exchange_client.current_order.status
+                    current_order_status = (self.exchange_client.current_order.status 
+                                          if self.exchange_client.current_order else 'UNKNOWN')
                 else:
                     order_info = await self.exchange_client.get_order_info(order_id)
                     current_order_status = order_info.status
@@ -319,14 +321,18 @@ class TradingBot:
             if self.config.exchange == "lighter":
                 cancel_result = await self.exchange_client.cancel_order(order_id)
                 start_time = time.time()
-                while (time.time() - start_time < 10 and self.exchange_client.current_order.status != 'CANCELED' and
-                        self.exchange_client.current_order.status != 'FILLED'):
+                while (time.time() - start_time < 10 and 
+                       self.exchange_client.current_order and
+                       self.exchange_client.current_order.status != 'CANCELED' and
+                       self.exchange_client.current_order.status != 'FILLED'):
                     await asyncio.sleep(0.1)
 
-                if self.exchange_client.current_order.status not in ['CANCELED', 'FILLED']:
+                if (self.exchange_client.current_order and 
+                    self.exchange_client.current_order.status not in ['CANCELED', 'FILLED']):
                     raise Exception(f"[OPEN] Error cancelling order: {self.exchange_client.current_order.status}")
                 else:
-                    self.order_filled_amount = self.exchange_client.current_order.filled_size
+                    self.order_filled_amount = (self.exchange_client.current_order.filled_size 
+                                              if self.exchange_client.current_order else 0)
             else:
                 try:
                     cancel_result = await self.exchange_client.cancel_order(order_id)

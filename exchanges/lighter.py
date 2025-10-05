@@ -323,14 +323,26 @@ class LighterClient(BaseExchangeClient):
             if self.current_order is not None:
                 order_status = self.current_order.status
 
-        return OrderResult(
-            success=True,
-            order_id=self.current_order.order_id,
-            side=direction,
-            size=quantity,
-            price=order_price,
-            status=self.current_order.status
-        )
+        # Handle case where current_order might be None
+        if self.current_order is not None:
+            return OrderResult(
+                success=True,
+                order_id=self.current_order.order_id,
+                side=direction,
+                size=quantity,
+                price=order_price,
+                status=self.current_order.status
+            )
+        else:
+            # Fallback when current_order is None
+            return OrderResult(
+                success=True,
+                order_id=order_result.order_id if order_result else None,
+                side=direction,
+                size=quantity,
+                price=order_price,
+                status='OPEN'
+            )
 
     async def _get_active_close_orders(self, contract_id: str) -> int:
         """Get active close orders for a contract using official SDK."""
