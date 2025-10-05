@@ -538,14 +538,30 @@ class LighterClient(BaseExchangeClient):
 
         # Find the market that matches our ticker
         market_info = None
+        available_symbols = []
+        
         for market in order_books.order_books:
+            available_symbols.append(market.symbol)
+            # Try exact match first
             if market.symbol == ticker:
+                market_info = market
+                break
+            # Try case-insensitive match
+            elif market.symbol.upper() == ticker.upper():
+                market_info = market
+                break
+            # Try common variations (APEX-USD, APEX-USDC, etc.)
+            elif market.symbol.upper().startswith(ticker.upper() + '-'):
+                market_info = market
+                break
+            elif market.symbol.upper().startswith(ticker.upper() + 'USD'):
                 market_info = market
                 break
 
         if market_info is None:
-            self.logger.log("Failed to get markets", "ERROR")
-            raise ValueError("Failed to get markets")
+            self.logger.log(f"Ticker '{ticker}' not found in available markets", "ERROR")
+            self.logger.log(f"Available symbols: {', '.join(available_symbols[:10])}{'...' if len(available_symbols) > 10 else ''}", "ERROR")
+            raise ValueError(f"Ticker '{ticker}' not found in available markets. Available: {', '.join(available_symbols[:5])}")
 
         market_summary = await order_api.order_book_details(market_id=market_info.market_id)
         order_book_details = market_summary.order_book_details[0]
