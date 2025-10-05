@@ -49,6 +49,16 @@ def parse_arguments():
                         'Sell: pause if price <= pause-price. (default: -1, no pause)')
     parser.add_argument('--boost', action='store_true',
                         help='Use the Boost mode for volume boosting')
+    
+    # Randomization parameters
+    parser.add_argument('--random-timing', action='store_true',
+                        help='Enable random timing variation (±50% of wait-time)')
+    parser.add_argument('--dynamic-profit', action='store_true',
+                        help='Enable dynamic profit-taking (varies around take-profit value)')
+    parser.add_argument('--profit-range', type=Decimal, default=Decimal(0.5),
+                        help='Dynamic profit range as multiplier (default: 0.5 = ±50%)')
+    parser.add_argument('--timing-range', type=Decimal, default=Decimal(0.5),
+                        help='Random timing range as multiplier (default: 0.5 = ±50%)')
 
     return parser.parse_args()
 
@@ -116,7 +126,12 @@ async def main():
         grid_step=Decimal(args.grid_step),
         stop_price=Decimal(args.stop_price),
         pause_price=Decimal(args.pause_price),
-        boost_mode=args.boost
+        boost_mode=args.boost,
+        # Randomization settings
+        random_timing=args.random_timing,
+        dynamic_profit=args.dynamic_profit,
+        profit_range=args.profit_range,
+        timing_range=args.timing_range
     )
 
     # Create and run the bot

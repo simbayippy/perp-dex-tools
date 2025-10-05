@@ -6,6 +6,7 @@ import os
 import time
 import asyncio
 import traceback
+import random
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
@@ -32,6 +33,11 @@ class TradingConfig:
     stop_price: Decimal
     pause_price: Decimal
     boost_mode: bool
+    # Randomization parameters
+    random_timing: bool = False
+    dynamic_profit: bool = False
+    profit_range: Decimal = Decimal('0.5')
+    timing_range: Decimal = Decimal('0.5')
 
     @property
     def close_order_side(self) -> str:
@@ -156,7 +162,7 @@ class TradingBot:
         self.exchange_client.setup_order_update_handler(order_update_handler)
 
     def _calculate_wait_time(self) -> Decimal:
-        """Calculate wait time between orders."""
+        """Calculate wait time between orders with optional randomization."""
         cool_down_time = self.config.wait_time
 
         if len(self.active_close_orders) < self.last_close_orders:
@@ -175,6 +181,16 @@ class TradingBot:
             cool_down_time = self.config.wait_time / 2
         else:
             cool_down_time = self.config.wait_time / 4
+
+        # Apply random timing if enabled
+        if self.config.random_timing:
+            # Add randomization: ±timing_range% of the calculated cool_down_time
+            variation = float(cool_down_time) * float(self.config.timing_range)
+            random_offset = random.uniform(-variation, variation)
+            cool_down_time = max(1, cool_down_time + random_offset)  # Minimum 1 second
+            
+            self.logger.log(f"Random timing: base={self.config.wait_time}s, "
+                          f"calculated={cool_down_time:.1f}s (±{variation:.1f}s)", "DEBUG")
 
         # if the program detects active_close_orders during startup, it is necessary to consider cooldown_time
         if self.last_open_order_time == 0 and len(self.active_close_orders) > 0:
@@ -233,12 +249,25 @@ class TradingBot:
                 )
             else:
                 self.last_open_order_time = time.time()
-                # Place close order
+                # Place close order with dynamic profit-taking
                 close_side = self.config.close_order_side
+                
+                # Calculate dynamic take-profit if enabled
+                take_profit_pct = self.config.take_profit
+                if self.config.dynamic_profit:
+                    # Vary take-profit by ±profit_range% of the base take_profit
+                    base_profit = float(self.config.take_profit)
+                    variation = base_profit * float(self.config.profit_range)
+                    random_offset = random.uniform(-variation, variation)
+                    take_profit_pct = Decimal(max(0, base_profit + random_offset))  # Minimum 0%
+                    
+                    self.logger.log(f"Dynamic profit: base={self.config.take_profit}%, "
+                                  f"actual={take_profit_pct:.4f}% (±{variation:.4f}%)", "DEBUG")
+                
                 if close_side == 'sell':
-                    close_price = filled_price * (1 + self.config.take_profit/100)
+                    close_price = filled_price * (1 + take_profit_pct/100)
                 else:
-                    close_price = filled_price * (1 - self.config.take_profit/100)
+                    close_price = filled_price * (1 - take_profit_pct/100)
 
                 close_order_result = await self.exchange_client.place_close_order(
                     self.config.contract_id,
@@ -332,10 +361,21 @@ class TradingBot:
                         close_side
                     )
                 else:
+                    # Calculate dynamic take-profit if enabled (for partial fills)
+                    take_profit_pct = self.config.take_profit
+                    if self.config.dynamic_profit:
+                        base_profit = float(self.config.take_profit)
+                        variation = base_profit * float(self.config.profit_range)
+                        random_offset = random.uniform(-variation, variation)
+                        take_profit_pct = Decimal(max(0, base_profit + random_offset))
+                        
+                        self.logger.log(f"Dynamic profit (partial): base={self.config.take_profit}%, "
+                                      f"actual={take_profit_pct:.4f}% (±{variation:.4f}%)", "DEBUG")
+                    
                     if close_side == 'sell':
-                        close_price = filled_price * (1 + self.config.take_profit/100)
+                        close_price = filled_price * (1 + take_profit_pct/100)
                     else:
-                        close_price = filled_price * (1 - self.config.take_profit/100)
+                        close_price = filled_price * (1 - take_profit_pct/100)
 
                     close_order_result = await self.exchange_client.place_close_order(
                         self.config.contract_id,
@@ -500,6 +540,15 @@ class TradingBot:
             self.logger.log(f"Stop Price: {self.config.stop_price}", "INFO")
             self.logger.log(f"Pause Price: {self.config.pause_price}", "INFO")
             self.logger.log(f"Boost Mode: {self.config.boost_mode}", "INFO")
+            
+            # Log randomization features
+            if self.config.random_timing:
+                self.logger.log(f"Random Timing: ENABLED (±{self.config.timing_range:.1%})", "INFO")
+            if self.config.dynamic_profit:
+                self.logger.log(f"Dynamic Profit: ENABLED (±{self.config.profit_range:.1%})", "INFO")
+            if not self.config.random_timing and not self.config.dynamic_profit:
+                self.logger.log("Randomization: DISABLED", "INFO")
+                
             self.logger.log("=============================", "INFO")
 
             # Capture the running event loop for thread-safe callbacks
