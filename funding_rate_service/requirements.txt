@@ -37,3 +37,7 @@ websockets==12.0
 
 # DEX SDKs
 git+https://github.com/elliottech/lighter-python.git@d0009799970aad54ebb940aa3dc90cbc00028c54
+# Paradex SDK
+paradex-py>=0.1.0  
+# GRVT SDK 
+grvt-pysdk

@@ -1,8 +1,9 @@
 # Dev environment
 /backend/db.sqlite3
 
-# lighter sdk
-/lighter-python
+# dexes sdk
+/sdks
+
 /existing-repos
 
 *.csv

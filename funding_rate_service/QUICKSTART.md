@@ -236,9 +236,7 @@ python main.py  # or restart systemd service
 
 ## 📚 Documentation Links
 
-- **Full Setup**: [docs/SIMPLE-SETUP.md](../docs/SIMPLE-SETUP.md)
-- **System Design**: [docs/tasks/funding-rate-service-design.md](../docs/tasks/funding-rate-service-design.md)
-- **VPS Setup**: [docs/VPS-SETUP.md](../docs/VPS-SETUP.md)
+- **System Design**: [/funding-rate-service/tasks/funding-rate-service-design.md](./tasks/funding-rate-service-design.md)
 
 ---
 

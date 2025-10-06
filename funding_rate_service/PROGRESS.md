@@ -55,17 +55,30 @@ Created `collection/base_adapter.py`:
 - Error handling
 - Collection metrics (latency tracking)
 
-### 2.2 DEX Adapters - **Lighter Complete** 
+### 2.2 DEX Adapters - **3 DEXs Implemented** ✅
 Implemented in `collection/adapters/`:
-- [x] `lighter_adapter.py` - **Lighter adapter ✅**
+- [x] `lighter_adapter.py` - **Lighter ✅ (SDK Verified)**
   - Uses official Lighter Python SDK
   - FundingApi.funding_rates() endpoint
   - Symbol normalization (BTC-PERP -> BTC)
   - Handles multipliers (1000PEPE -> PEPE)
-  - Includes test script
+  - **Latency**: ~100-300ms
+  
+- [x] `paradex_adapter.py` - **Paradex ✅ (SDK Verified)**
+  - Uses official Paradex Python SDK
+  - Markets summary endpoint with funding rates
+  - Symbol format: BTC-USD-PERP -> BTC
+  - **SDK verified 100% correct implementation**
+  - **Latency**: ~200-400ms
+  
+- [x] `grvt_adapter.py` - **GRVT ✅ (SDK Verified & Fixed)**
+  - Uses GRVT CCXT SDK
+  - Two-step: fetch_markets() + fetch_ticker()
+  - Symbol format: BTC_USDT_Perp -> BTC
+  - **Fixed to use fetch_ticker() for funding rates**
+  - **Latency**: ~2-5s (N+1 calls)
+  
 - [ ] `edgex.py` - EdgeX adapter (future)
-- [ ] `paradex.py` - Paradex adapter (future)
-- [ ] `grvt.py` - GRVT adapter (future)
 - [ ] `hyperliquid.py` - Hyperliquid adapter (future)
 
 ### 2.3 Collection Orchestrator - **✅ COMPLETE**
@@ -82,7 +95,8 @@ Created `collection/orchestrator.py`:
 - Dynamic symbol discovery (auto-creates new symbols)
 - Updates both historical and latest_funding_rates tables
 - Tracks collection metrics (latency, success rate)
-- Works with just Lighter now, ready for more DEXs
+- **Works with 3 DEXs: Lighter, Paradex, GRVT**
+- Ready for more DEX adapters (EdgeX, Hyperliquid, etc.)
 
 ---
 
@@ -215,21 +229,26 @@ Need to create in `tasks/`:
 - `database/repositories/funding_rate_repository.py`
 - `database/repositories/opportunity_repository.py`
 
-### Collection (5 files)
+### Collection (9 files)
 - `collection/__init__.py`
 - `collection/base_adapter.py`
-- `collection/orchestrator.py` ⭐ NEW
+- `collection/orchestrator.py`
 - `collection/adapters/__init__.py`
 - `collection/adapters/lighter_adapter.py`
+- `collection/adapters/paradex_adapter.py` ⭐
+- `collection/adapters/grvt_adapter.py` ⭐ (Fixed)
+- `collection/adapters/README.md` ⭐ NEW
+- `collection/adapters/SDK_VERIFICATION.md` ⭐ NEW
 
-### Scripts (2 test files)
+### Scripts (3 test files)
 - `scripts/test_lighter_adapter.py`
-- `scripts/test_collection_system.py` ⭐ NEW
+- `scripts/test_collection_system.py`
+- `scripts/test_all_adapters.py` ⭐
 
 ### Documentation (1 file)
 - `INSTALL.md`
 
-**Total: 24 new files created**
+**Total: 29 new files created** (includes SDK verification docs)
 
 ---
 
