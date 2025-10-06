@@ -3,6 +3,8 @@
 venv/
 env/
 
+/tasks/
+
 # Python
 __pycache__/
 *.py[cod]

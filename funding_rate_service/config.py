@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
     
     # Database
-    database_url: str = "postgresql://funding_user:dev_password@localhost:5432/funding_rates"
+    database_url: str = "postgresql://funding_user:simba2001%23%23%23@localhost:5432/funding_rates"
     database_pool_min_size: int = 5
     database_pool_max_size: int = 20
     
