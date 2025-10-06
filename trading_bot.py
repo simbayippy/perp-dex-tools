@@ -220,25 +220,14 @@ class TradingBot:
                             await self.graceful_shutdown("Emergency risk management triggered")
                             break
 
-                # Strategy-based execution
+                # Strategy-based execution (universal interface)
                 try:
                     market_data = await self.strategy.get_market_data()
                     
                     if await self.strategy.should_execute(market_data):
-                        # For grid strategy, use the complete cycle method
-                        if self.config.strategy == 'grid' and hasattr(self.strategy, 'execute_grid_cycle'):
-                            success, error_message = await self.strategy.execute_grid_cycle()
-                            if not success and self.risk_manager and error_message:
-                                # Check if this was a margin failure
-                                if 'margin' in error_message.lower():
-                                    self.risk_manager.record_margin_failure()
-                            elif success and self.risk_manager:
-                                # Record successful order
-                                self.risk_manager.record_successful_order()
-                        else:
-                            # For other strategies, use the standard flow
-                            strategy_result = await self.strategy.execute_strategy(market_data)
-                            await self._handle_strategy_result(strategy_result)
+                        # All strategies use the same interface
+                        strategy_result = await self.strategy.execute_strategy(market_data)
+                        await self._handle_strategy_result(strategy_result)
                     else:
                         await asyncio.sleep(1)  # Brief wait if strategy says not to execute
                         
@@ -298,6 +287,9 @@ class TradingBot:
     async def _execute_order(self, order_params) -> bool:
         """Execute an order based on order parameters."""
         try:
+            # Determine if this is an open order (for grid strategy state tracking)
+            is_open_order = order_params.metadata.get("stage") == "open" if order_params.metadata else False
+            
             if order_params.order_type == "market":
                 result = await self.exchange_client.place_market_order(
                     contract_id=order_params.contract_id or self.config.contract_id,
@@ -310,15 +302,29 @@ class TradingBot:
                     best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(self.config.contract_id)
                     order_params.price = best_ask if order_params.side == 'buy' else best_bid
                 
-                result = await self.exchange_client.place_close_order(
-                    contract_id=order_params.contract_id or self.config.contract_id,
-                    quantity=order_params.quantity,
-                    price=order_params.price,
-                    side=order_params.side
-                )
+                # Use place_open_order for open orders, place_close_order for close orders
+                if is_open_order:
+                    result = await self.exchange_client.place_open_order(
+                        contract_id=order_params.contract_id or self.config.contract_id,
+                        quantity=order_params.quantity,
+                        direction=order_params.side
+                    )
+                else:
+                    result = await self.exchange_client.place_close_order(
+                        contract_id=order_params.contract_id or self.config.contract_id,
+                        quantity=order_params.quantity,
+                        price=order_params.price,
+                        side=order_params.side
+                    )
             
             if result.success:
-                self.logger.log(f"Order executed: {order_params.side} {order_params.quantity} @ {order_params.price or 'market'}", "INFO")
+                self.logger.log(f"Order executed: {order_params.side} {order_params.quantity} @ {order_params.price or result.price or 'market'}", "INFO")
+                
+                # Notify strategy if this was an open order that got filled
+                if is_open_order and result.price and hasattr(self.strategy, 'notify_order_filled'):
+                    filled_quantity = result.filled_size or order_params.quantity
+                    self.strategy.notify_order_filled(result.price, filled_quantity)
+                
                 return True
             else:
                 self.logger.log(f"Order failed: {result.error_message}", "ERROR")
