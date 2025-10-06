@@ -8,6 +8,7 @@ This is a read-only adapter (no trading) focused solely on data collection.
 from typing import Dict, Optional
 from decimal import Decimal
 import re
+import asyncio
 
 from collection.base_adapter import BaseDEXAdapter
 from utils.logger import logger
@@ -42,7 +43,8 @@ class GrvtAdapter(BaseDEXAdapter):
         self, 
         api_base_url: Optional[str] = None,
         environment: str = "prod",
-        timeout: int = 10
+        timeout: int = 10,
+        max_concurrent_requests: int = 10
     ):
         """
         Initialize GRVT adapter
@@ -51,6 +53,7 @@ class GrvtAdapter(BaseDEXAdapter):
             api_base_url: GRVT API base URL (optional, determined by environment)
             environment: "prod", "testnet", "staging", or "dev"
             timeout: Request timeout in seconds
+            max_concurrent_requests: Maximum number of parallel ticker fetches (default: 10)
         """
         if not GRVT_SDK_AVAILABLE:
             raise ImportError(
@@ -77,6 +80,7 @@ class GrvtAdapter(BaseDEXAdapter):
         )
         
         self.environment = environment
+        self.max_concurrent_requests = max_concurrent_requests
         
         # Initialize GRVT client (read-only, minimal config)
         # For public data, we don't need credentials
@@ -85,14 +89,17 @@ class GrvtAdapter(BaseDEXAdapter):
             parameters={}  # No auth needed for public endpoints
         )
         
-        logger.info(f"GRVT adapter initialized ({environment})")
+        logger.info(
+            f"GRVT adapter initialized ({environment}, "
+            f"max_concurrent={max_concurrent_requests})"
+        )
     
     async def fetch_funding_rates(self) -> Dict[str, Decimal]:
         """
-        Fetch all funding rates from GRVT
+        Fetch all funding rates from GRVT (with parallel fetching)
         
         GRVT provides funding rates through ticker data for each market.
-        We fetch all perpetual markets then query ticker for each to get funding rate.
+        We fetch all perpetual markets then query tickers in PARALLEL for speed.
         
         Returns:
             Dictionary mapping normalized symbols to funding rates
@@ -111,69 +118,56 @@ class GrvtAdapter(BaseDEXAdapter):
                 logger.warning(f"{self.dex_name}: No markets data returned")
                 return {}
             
-            # Extract funding rates from perpetual markets
-            rates_dict = {}
+            # Filter for USDT perpetuals and prepare tasks
+            perpetual_markets = []
             for market in markets:
-                try:
-                    # Only process perpetual markets
-                    if market.get('kind') != 'PERPETUAL':
-                        continue
-                    
-                    instrument = market.get('instrument', '')
-                    base = market.get('base', '')
-                    quote = market.get('quote', '')
-                    
-                    # Skip if not USDT perpetual
-                    if quote != 'USDT':
-                        continue
-                    
-                    # Fetch ticker data which includes funding rate
-                    # GRVT returns funding_rate_curr in ticker response
-                    try:
-                        ticker = self.rest_client.fetch_ticker(instrument)
-                        
-                        # Get funding_rate_curr (current funding rate)
-                        # This is typically in basis points or scaled format
-                        funding_rate_curr = ticker.get('funding_rate_curr')
-                        
-                        if funding_rate_curr is None:
-                            logger.debug(
-                                f"{self.dex_name}: No funding rate for {instrument}"
-                            )
-                            continue
-                        
-                        # Convert from scaled value to decimal rate
-                        # GRVT uses basis points: divide by 1,000,000
-                        # (1 basis point = 0.0001, so 10000 basis points = 0.01 = 1%)
-                        funding_rate = Decimal(str(funding_rate_curr)) / Decimal('1000000')
-                        
-                        # Use base symbol directly (already clean)
-                        normalized_symbol = self.normalize_symbol(base)
-                        
-                        rates_dict[normalized_symbol] = funding_rate
-                        
-                        logger.debug(
-                            f"{self.dex_name}: {instrument} ({base}) -> "
-                            f"{normalized_symbol}: {funding_rate} "
-                            f"(raw: {funding_rate_curr})"
-                        )
-                    
-                    except Exception as e:
-                        # If ticker fetch fails for this market, log and continue
-                        logger.debug(
-                            f"{self.dex_name}: Could not fetch ticker for {instrument}: {e}"
-                        )
-                        continue
-                
-                except Exception as e:
-                    logger.error(
-                        f"{self.dex_name}: Error processing market "
-                        f"{market.get('instrument', 'unknown')}: {e}"
-                    )
-                    continue
+                if market.get('kind') == 'PERPETUAL' and market.get('quote') == 'USDT':
+                    perpetual_markets.append(market)
+            
+            if not perpetual_markets:
+                logger.warning(f"{self.dex_name}: No USDT perpetuals found")
+                return {}
             
             logger.info(
-                f"{self.dex_name}: Successfully fetched {len(rates_dict)} funding rates"
+                f"{self.dex_name}: Found {len(perpetual_markets)} USDT perpetuals, "
+                f"fetching tickers in parallel (max {self.max_concurrent_requests} concurrent)..."
+            )
+            
+            # Create semaphore to limit concurrent requests
+            semaphore = asyncio.Semaphore(self.max_concurrent_requests)
+            
+            # Fetch all tickers in parallel using asyncio with concurrency limit
+            tasks = [
+                self._fetch_single_ticker(
+                    market.get('instrument', ''),
+                    market.get('base', ''),
+                    semaphore
+                )
+                for market in perpetual_markets
+            ]
+            
+            # Execute all tasks in parallel (but limited by semaphore)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Collect successful results
+            rates_dict = {}
+            successful = 0
+            failed = 0
+            
+            for result in results:
+                if isinstance(result, Exception):
+                    failed += 1
+                    logger.debug(f"{self.dex_name}: Ticker fetch failed: {result}")
+                elif result is not None:
+                    symbol, rate = result
+                    rates_dict[symbol] = rate
+                    successful += 1
+                else:
+                    failed += 1
+            
+            logger.info(
+                f"{self.dex_name}: Successfully fetched {successful} funding rates "
+                f"({failed} failed) from {len(perpetual_markets)} markets"
             )
             
             return rates_dict
@@ -181,6 +175,69 @@ class GrvtAdapter(BaseDEXAdapter):
         except Exception as e:
             logger.error(f"{self.dex_name}: Failed to fetch funding rates: {e}")
             raise
+    
+    async def _fetch_single_ticker(
+        self, 
+        instrument: str, 
+        base: str,
+        semaphore: asyncio.Semaphore
+    ) -> Optional[tuple[str, Decimal]]:
+        """
+        Fetch funding rate for a single instrument (with concurrency limit)
+        
+        This method runs in parallel with other ticker fetches, but respects
+        the semaphore limit to avoid overwhelming the API or system.
+        
+        Args:
+            instrument: Instrument name (e.g., "BTC_USDT_Perp")
+            base: Base currency (e.g., "BTC")
+            semaphore: Asyncio semaphore to limit concurrent requests
+            
+        Returns:
+            Tuple of (normalized_symbol, funding_rate) or None if failed
+        """
+        async with semaphore:  # Limit concurrent requests
+            try:
+                # Run the synchronous fetch_ticker in a thread pool
+                # to avoid blocking the event loop
+                loop = asyncio.get_event_loop()
+                ticker_response = await loop.run_in_executor(
+                    None, 
+                    self.rest_client.fetch_ticker, 
+                    instrument
+                )
+            
+            # GRVT returns data nested under 'result' key
+            ticker = ticker_response.get('result', {})
+            
+            # Get funding_rate_8h_curr (8-hour funding rate)
+            funding_rate_8h = ticker.get('funding_rate_8h_curr')
+            
+            if funding_rate_8h is None:
+                logger.debug(
+                    f"{self.dex_name}: No funding rate for {instrument}"
+                )
+                return None
+            
+            # Convert from percentage string to decimal rate
+            # GRVT returns as percentage: '0.1248' = 0.1248% = 0.001248 as decimal
+            funding_rate = Decimal(str(funding_rate_8h)) / Decimal('100')
+            
+            # Normalize symbol
+            normalized_symbol = self.normalize_symbol(base)
+            
+            logger.debug(
+                f"{self.dex_name}: {instrument} ({base}) -> "
+                f"{normalized_symbol}: {funding_rate} (raw: {funding_rate_8h}%)"
+            )
+            
+                return (normalized_symbol, funding_rate)
+            
+            except Exception as e:
+                logger.debug(
+                    f"{self.dex_name}: Error fetching ticker for {instrument}: {e}"
+                )
+                return None
     
     def normalize_symbol(self, dex_symbol: str) -> str:
         """

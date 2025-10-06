@@ -32,7 +32,7 @@ Each adapter extends `BaseDEXAdapter` and implements:
 
 ### ✅ GRVT (`grvt_adapter.py`)
 - **SDK**: `grvt-pysdk` (CCXT-compatible SDK)
-- **API Method**: `GrvtCcxt.fetch_markets()` + `fetch_ticker()`
+- **API Method**: `GrvtCcxt.fetch_markets()` + `fetch_ticker()` (parallel)
 - **Symbol Format**: `BTC_USDT_Perp`, `ETH_USDT_Perp`
 - **Normalized**: `BTC`, `ETH`
 - **Notes**: 
@@ -40,8 +40,10 @@ Each adapter extends `BaseDEXAdapter` and implements:
   - Requires two-step process:
     1. `fetch_markets()` to get all perpetuals
     2. `fetch_ticker(symbol)` for each market to get funding rate
-  - Funding rate in `funding_rate_curr` field (scaled by 1,000,000)
+  - **Uses parallel fetching** with configurable concurrency limit (default: 10)
+  - Funding rate in `funding_rate_8h_curr` field (percentage format)
   - Only fetches USDT perpetuals
+  - Configurable: `GrvtAdapter(max_concurrent_requests=20)` for faster fetching
 
 ## SDK Verification
 
@@ -176,9 +178,28 @@ See `ADDING_EXCHANGES.md` in the root docs for more details.
 Typical latencies (production):
 - **Lighter**: ~100-300ms (single API call)
 - **Paradex**: ~200-400ms (single API call)
-- **GRVT**: ~2-5s (N+1 API calls, N=number of markets)
+- **GRVT**: ~1-3s (parallel fetching with 10 concurrent requests, ~60 markets)
 
-**Note**: GRVT is slower due to requiring individual ticker fetches per market.
+### GRVT Performance Tuning
+
+The GRVT adapter uses parallel fetching with a configurable concurrency limit:
+
+```python
+# Default (balanced - 10 concurrent requests)
+adapter = GrvtAdapter()
+
+# Faster (20 concurrent requests - more aggressive)
+adapter = GrvtAdapter(max_concurrent_requests=20)
+
+# Gentler (5 concurrent requests - less load on API/system)
+adapter = GrvtAdapter(max_concurrent_requests=5)
+```
+
+**Performance comparison** (60 markets):
+- Sequential: ~16-20s
+- 5 concurrent: ~4-6s
+- 10 concurrent: ~1-3s ⭐ (recommended)
+- 20 concurrent: ~0.8-2s (may hit rate limits)
 
 ## Error Handling
 
