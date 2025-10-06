@@ -9,7 +9,7 @@ from typing import Optional, List, Dict, Any
 from decimal import Decimal
 from datetime import datetime
 
-from core.opportunity_finder import opportunity_finder
+from core import opportunity_finder as opp_finder_module
 from models.opportunity import ArbitrageOpportunity
 from models.filters import OpportunityFilter
 from utils.logger import logger
@@ -85,7 +85,7 @@ async def get_opportunities(
         )
         
         # Find opportunities
-        opportunities = await opportunity_finder.find_opportunities(filters)
+        opportunities = await opp_finder_module.opportunity_finder.find_opportunities(filters)
         
         # Convert to response format
         opportunities_data = []
@@ -164,7 +164,7 @@ async def get_best_opportunity(
         )
         
         # Find best opportunity
-        best = await opportunity_finder.find_best_opportunity(filters)
+        best = await opp_finder_module.opportunity_finder.find_best_opportunity(filters)
         
         if not best:
             return {
@@ -210,7 +210,7 @@ async def get_opportunities_for_symbol(
     Useful for focusing on a particular asset (e.g., BTC, ETH)
     """
     try:
-        opportunities = await opportunity_finder.find_opportunities_for_symbol(
+        opportunities = await opp_finder_module.opportunity_finder.find_opportunities_for_symbol(
             symbol=symbol.upper(),
             filters=OpportunityFilter(
                 min_profit_percent=min_profit,
@@ -256,7 +256,7 @@ async def compare_dex_opportunities(
     Shows rate differences and recommendations for each symbol
     """
     try:
-        comparisons = await opportunity_finder.compare_dexes(
+        comparisons = await opp_finder_module.opportunity_finder.compare_dexes(
             dex1=dex1.lower(),
             dex2=dex2.lower(),
             symbol=symbol.upper() if symbol else None

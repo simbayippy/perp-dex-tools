@@ -11,7 +11,7 @@ from datetime import datetime
 
 from database.connection import database
 from core.mappers import dex_mapper, symbol_mapper
-from core.historical_analyzer import historical_analyzer
+from core import historical_analyzer as hist_analyzer_module
 from models.funding_rate import (
     FundingRateResponse,
     LatestFundingRates,
@@ -269,7 +269,7 @@ async def get_historical_funding_rates(
         period_days = _parse_period(period)
         
         # Use historical analyzer
-        history = await historical_analyzer.get_funding_rate_history(
+        history = await hist_analyzer_module.historical_analyzer.get_funding_rate_history(
             symbol=symbol.upper(),
             dex_name=dex.lower(),
             period_days=period_days,
@@ -301,7 +301,7 @@ async def get_funding_rate_stats(
         period_days = _parse_period(period)
         
         # Use historical analyzer
-        stats = await historical_analyzer.get_funding_rate_stats(
+        stats = await hist_analyzer_module.historical_analyzer.get_funding_rate_stats(
             symbol=symbol.upper(),
             dex_name=dex.lower() if dex else None,
             period_days=period_days
