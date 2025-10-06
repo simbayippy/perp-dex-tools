@@ -152,17 +152,77 @@ Created `core/opportunity_finder.py`:
 - Sorts by any field (default: net profit)
 - Global `opportunity_finder` instance (initialized with dependencies)
 
+### 3.3 Historical Analyzer ✅
+Created `core/historical_analyzer.py`:
+- ✅ Analyze historical funding rate data from time-series DB
+- ✅ Calculate comprehensive statistics:
+  - Average, median, standard deviation
+  - Min, max, percentiles (25th, 75th)
+  - Volatility (coefficient of variation)
+  - Annualized APY (from 8-hour rates)
+  - Positive rate frequency (% of time rate > 0)
+- ✅ Get historical data points for charting
+- ✅ Compare statistics across multiple DEXs
+- ✅ Get symbol summary across all DEXs
+- ✅ Flexible time period filtering (days, start/end timestamps)
+
+**Key Features:**
+- Queries historical `funding_rates` time-series table
+- Statistical analysis using Python `statistics` module
+- Percentile calculations with linear interpolation
+- Global `historical_analyzer` instance (initialized with dependencies)
+
 ---
 
-## 🌐 Phase 4: API Endpoints - **PENDING**
+## ✅ Phase 4: API Endpoints - **COMPLETE**
 
-### 4.1 API Routes
-Need to create in `api/routes/`:
-- [ ] `health.py` - Health checks, system status
-- [ ] `funding_rates.py` - Get funding rates
-- [ ] `opportunities.py` - Get arbitrage opportunities
-- [ ] `dexes.py` - DEX metadata
-- [ ] `history.py` - Historical data & stats
+### 4.1 FastAPI Application ✅
+Created `main.py`:
+- ✅ FastAPI app with async lifespan management
+- ✅ Database connection on startup
+- ✅ Mappers loaded on startup
+- ✅ Business logic components initialized
+- ✅ CORS middleware configured
+- ✅ Global exception handler
+- ✅ OpenAPI docs at `/api/v1/docs`
+- ✅ Auto-reload for development
+
+### 4.2 API Routes ✅
+Created complete REST API in `api/routes/`:
+
+**`funding_rates.py`** ✅
+- ✅ `GET /api/v1/funding-rates` - All latest rates across DEXs
+- ✅ `GET /api/v1/funding-rates/{dex}` - Rates for specific DEX
+- ✅ `GET /api/v1/funding-rates/{dex}/{symbol}` - Specific rate
+- ✅ `GET /api/v1/history/funding-rates/{dex}/{symbol}` - Historical data
+- ✅ `GET /api/v1/stats/funding-rates/{symbol}` - Statistical analysis
+
+**`opportunities.py`** ✅
+- ✅ `GET /api/v1/opportunities` - Find opportunities with comprehensive filtering
+  - Filter by: symbol, DEX, divergence, profit, volume, OI, spread
+  - **Perfect for low OI farming** (max_oi parameter)
+- ✅ `GET /api/v1/opportunities/best` - Get single best opportunity
+- ✅ `GET /api/v1/opportunities/symbol/{symbol}` - Symbol-specific opportunities
+- ✅ `GET /api/v1/opportunities/compare` - Compare two DEXs
+
+**`dexes.py`** ✅
+- ✅ `GET /api/v1/dexes` - All DEX metadata
+- ✅ `GET /api/v1/dexes/{dex}` - Specific DEX metadata
+- ✅ `GET /api/v1/dexes/{dex}/symbols` - Supported symbols with market data
+
+**`health.py`** ✅
+- ✅ `GET /api/v1/health` - Comprehensive service health
+- ✅ `GET /api/v1/health/simple` - Fast ping check
+- ✅ `GET /api/v1/health/database` - Database connectivity
+- ✅ `GET /api/v1/health/dex/{dex}` - DEX-specific health
+
+**Key Features:**
+- Async/await throughout for performance
+- Comprehensive error handling
+- Query parameter validation
+- Response formatting with timestamps
+- DEX and symbol name normalization
+- OpenAPI documentation auto-generated
 
 ---
 
@@ -183,10 +243,10 @@ Need to create in `tasks/`:
 | Phase 1: Data Models & Repositories | ✅ Complete | 100% |
 | Phase 2: Data Collection | ✅ Complete | 100% |
 | Phase 3: Business Logic | ✅ Complete | 100% |
-| Phase 4: API Endpoints | ⏳ Pending | 0% |
+| Phase 4: API Endpoints | ✅ Complete | 100% |
 | Phase 5: Background Tasks | ⏳ Pending | 0% |
 
-**Overall Progress: ~60%** 🎉
+**Overall Progress: ~80%** 🎉
 
 ---
 
@@ -255,11 +315,12 @@ Need to create in `tasks/`:
 - `models/system.py`
 - `models/history.py`
 
-### Core (4 files)
+### Core (5 files)
 - `core/__init__.py`
 - `core/mappers.py`
-- `core/fee_calculator.py` ⭐ NEW!
-- `core/opportunity_finder.py` ⭐ NEW!
+- `core/fee_calculator.py` ⭐
+- `core/opportunity_finder.py` ⭐
+- `core/historical_analyzer.py` ⭐ NEW!
 
 ### Database Repositories (5 files)
 - `database/repositories/__init__.py`
@@ -280,24 +341,33 @@ Need to create in `tasks/`:
 - `collection/adapters/README.md` ⭐
 - `collection/adapters/SDK_VERIFICATION.md` ⭐
 
+### API (7 files) ⭐ NEW!
+- `api/__init__.py`
+- `api/routes/__init__.py`
+- `api/routes/funding_rates.py` ⭐
+- `api/routes/opportunities.py` ⭐
+- `api/routes/dexes.py` ⭐
+- `api/routes/health.py` ⭐
+- `main.py` ⭐ (FastAPI application)
+
 ### Scripts (4 test files)
 - `scripts/test_lighter_adapter.py`
 - `scripts/test_collection_system.py`
 - `scripts/test_all_adapters.py` ⭐
-- `scripts/test_phase3.py` ⭐ NEW!
+- `scripts/test_phase3.py` ⭐
 
 ### Documentation (1 file)
 - `INSTALL.md`
 
-**Total: 32 new files created** (includes Phase 3: Business Logic)
+**Total: 40 new files created** (Phase 1-4 Complete!)
 
 ---
 
-## 🎉 Phase 3 Complete - Business Logic Ready!
+## 🎉 Phase 4 Complete - Full REST API Ready!
 
-The **complete business logic layer** is now implemented and ready to use!
+The **complete REST API** is now implemented and ready to use!
 
-### ✅ What's Working Now (Phase 1-3)
+### ✅ What's Working Now (Phase 1-4)
 
 **Data Layer:**
 1. **Pydantic Models** - Complete data validation and serialization
@@ -310,11 +380,19 @@ The **complete business logic layer** is now implemented and ready to use!
 6. **Dynamic Symbol Discovery** - Auto-creates symbols as they're discovered
 7. **Database Integration** - Stores rates in both historical and latest tables
 
-**Business Logic (NEW!):**
+**Business Logic:**
 8. **Fee Calculator** - Calculate trading costs and net profitability
 9. **Opportunity Finder** - Find profitable arbitrage opportunities
 10. **Comprehensive Filtering** - By symbol, DEX, volume, OI, spread, profit
 11. **Ranking System** - Sort opportunities by any metric
+12. **Historical Analyzer** - Statistical analysis of funding rate trends
+
+**API Layer (NEW!):**
+13. **FastAPI Application** - Production-ready REST API with auto-docs ⭐
+14. **Funding Rate Endpoints** - Get latest/historical rates across all DEXs ⭐
+15. **Opportunity Endpoints** - Find and filter arbitrage opportunities ⭐
+16. **DEX Metadata Endpoints** - Get DEX info, fees, supported symbols ⭐
+17. **Health Check Endpoints** - Monitor service and DEX health ⭐
 
 ### 🧪 Testing
 
@@ -331,32 +409,47 @@ python scripts/seed_dexes.py
 python scripts/test_collection_system.py
 
 # Test Phase 3: Business logic
-# Fee calculator only (no database needed)
 python scripts/test_phase3.py --fees-only
 
-# Full test with opportunity finder (requires database with funding rates)
-python scripts/test_phase3.py
-
-# Test with specific symbol
-python scripts/test_phase3.py --symbol BTC
+# Test Phase 4: Run the API server!
+python main.py
 ```
 
-### 🎯 Next Steps: Phase 4 - API Endpoints
+**API is now available at:**
+- 📖 **API Docs**: http://localhost:8000/api/v1/docs
+- 🔄 **ReDoc**: http://localhost:8000/api/v1/redoc
+- 🏥 **Health Check**: http://localhost:8000/api/v1/health
 
-Now that the business logic is complete, create the API layer:
+**Example API Calls:**
+```bash
+# Get all latest funding rates
+curl http://localhost:8000/api/v1/funding-rates
 
-1. **FastAPI Application Setup** (`main.py`)
-   - Initialize FastAPI app
-   - Setup dependency injection
-   - Configure CORS, middleware
+# Find best opportunity
+curl http://localhost:8000/api/v1/opportunities/best
 
-2. **API Routes** (`api/routes/`)
-   - `funding_rates.py` - Get latest/historical rates
-   - `opportunities.py` - Find and filter opportunities
-   - `dexes.py` - DEX metadata and health
-   - `health.py` - Service health checks
+# Find low OI opportunities (< $2M OI)
+curl "http://localhost:8000/api/v1/opportunities?max_oi=2000000&limit=5"
 
-3. **Request/Response Models** (already have Pydantic models!)
+# Get DEX metadata
+curl http://localhost:8000/api/v1/dexes
 
-This will enable you to **access funding arb opportunities via REST API**!
+# Check service health
+curl http://localhost:8000/api/v1/health
+```
+
+### 🎯 Next Steps: Phase 5 - Background Tasks (Optional)
+
+The service is now fully functional! You can:
+- ✅ Access funding rates via API
+- ✅ Find arbitrage opportunities
+- ✅ Filter by OI for low OI farming
+- ✅ Monitor DEX and service health
+
+**Optional Phase 5** would add:
+- Automatic periodic data collection (every 60s)
+- Background opportunity analysis
+- Data cleanup tasks
+
+But you can already use the service by running `python main.py` and calling the API endpoints!
 

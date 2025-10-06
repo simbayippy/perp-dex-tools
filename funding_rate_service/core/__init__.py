@@ -14,6 +14,11 @@ from core.opportunity_finder import (
     opportunity_finder,
     init_opportunity_finder
 )
+from core.historical_analyzer import (
+    HistoricalAnalyzer,
+    historical_analyzer,
+    init_historical_analyzer
+)
 
 __all__ = [
     # Mappers
@@ -30,5 +35,10 @@ __all__ = [
     "OpportunityFinder",
     "opportunity_finder",
     "init_opportunity_finder",
+    
+    # Historical Analyzer
+    "HistoricalAnalyzer",
+    "historical_analyzer",
+    "init_historical_analyzer",
 ]
 
