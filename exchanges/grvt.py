@@ -157,11 +157,8 @@ class GrvtClient(BaseExchangeClient):
                         filled_size = order_state.get('traded_size')[0] if order_state.get('traded_size') else '0'
 
                         if order_id and status:
-                            # Determine order type based on side
-                            if side == self.config.close_order_side:
-                                order_type = "CLOSE"
-                            else:
-                                order_type = "OPEN"
+                            # Let strategy determine order type
+                            order_type = "ORDER"
 
                             # Map GRVT status to our status
                             status_map = {
@@ -455,13 +452,9 @@ class GrvtClient(BaseExchangeClient):
         )
 
     async def _get_active_close_orders(self, contract_id: str) -> int:
-        """Get active close orders for a contract using official SDK."""
+        """Get active orders count for a contract."""
         active_orders = await self.get_active_orders(contract_id)
-        active_close_orders = 0
-        for order in active_orders:
-            if order.side == self.config.close_order_side:
-                active_close_orders += 1
-        return active_close_orders
+        return len(active_orders)
 
     @query_retry(reraise=True)
     async def get_active_orders(self, contract_id: str) -> List[OrderInfo]:
