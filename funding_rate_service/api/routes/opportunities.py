@@ -9,7 +9,7 @@ from typing import Optional, List, Dict, Any
 from decimal import Decimal
 from datetime import datetime
 
-from core import opportunity_finder as opp_finder_module
+import core.opportunity_finder as opp_finder_module
 from models.opportunity import ArbitrageOpportunity
 from models.filters import OpportunityFilter
 from utils.logger import logger

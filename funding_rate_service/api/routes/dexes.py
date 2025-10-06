@@ -111,7 +111,7 @@ async def get_dex_metadata(dex: str) -> Dict[str, Any]:
                 COUNT(DISTINCT ds.symbol_id) as supported_symbols_count
             FROM dexes d
             LEFT JOIN dex_symbols ds ON ds.dex_id = d.id AND ds.is_active = TRUE
-            WHERE d.id = $1
+            WHERE d.id = :dex_id
             GROUP BY d.id, d.name, d.display_name, d.api_base_url, d.is_active,
                      d.supports_websocket, d.maker_fee_percent, d.taker_fee_percent,
                      d.has_fee_tiers, d.collection_interval_seconds, d.rate_limit_per_minute,
@@ -119,7 +119,7 @@ async def get_dex_metadata(dex: str) -> Dict[str, Any]:
                      d.created_at, d.updated_at
         """
         
-        row = await database.fetch_one(query, dex_id)
+        row = await database.fetch_one(query, values={"dex_id": dex_id})
         
         if not row:
             raise HTTPException(status_code=404, detail=f"DEX '{dex}' not found")
@@ -180,11 +180,11 @@ async def get_dex_symbols(dex: str) -> Dict[str, Any]:
                 ds.last_updated
             FROM dex_symbols ds
             JOIN symbols s ON ds.symbol_id = s.id
-            WHERE ds.dex_id = $1
+            WHERE ds.dex_id = :dex_id
             ORDER BY ds.volume_24h DESC NULLS LAST, s.symbol
         """
         
-        rows = await database.fetch_all(query, dex_id)
+        rows = await database.fetch_all(query, values={"dex_id": dex_id})
         
         symbols = []
         for row in rows:

@@ -11,7 +11,7 @@ from datetime import datetime
 
 from database.connection import database
 from core.mappers import dex_mapper, symbol_mapper
-from core import historical_analyzer as hist_analyzer_module
+import core.historical_analyzer as hist_analyzer_module
 from models.funding_rate import (
     FundingRateResponse,
     LatestFundingRates,
@@ -50,21 +50,20 @@ async def get_all_funding_rates(
             WHERE d.is_active = TRUE
         """
         
-        params = []
+        params = {}
         
         if symbol:
-            query += " AND s.symbol = $1"
-            params.append(symbol)
+            query += " AND s.symbol = :symbol"
+            params["symbol"] = symbol
         
         if dex:
-            param_num = len(params) + 1
-            query += f" AND d.name = ${param_num}"
-            params.append(dex)
+            query += " AND d.name = :dex"
+            params["dex"] = dex
         
         query += " ORDER BY s.symbol, d.name"
         
         # Execute query
-        rows = await database.fetch_all(query, *params)
+        rows = await database.fetch_all(query, values=params)
         
         if not rows:
             return {
@@ -144,11 +143,11 @@ async def get_dex_funding_rates(
                 lfr.updated_at
             FROM latest_funding_rates lfr
             JOIN symbols s ON lfr.symbol_id = s.id
-            WHERE lfr.dex_id = $1
+            WHERE lfr.dex_id = :dex_id
             ORDER BY s.symbol
         """
         
-        rows = await database.fetch_all(query, dex_id)
+        rows = await database.fetch_all(query, values={"dex_id": dex_id})
         
         if not rows:
             return {
@@ -219,10 +218,10 @@ async def get_dex_symbol_funding_rate(
                 ds.open_interest_usd
             FROM latest_funding_rates lfr
             LEFT JOIN dex_symbols ds ON ds.dex_id = lfr.dex_id AND ds.symbol_id = lfr.symbol_id
-            WHERE lfr.dex_id = $1 AND lfr.symbol_id = $2
+            WHERE lfr.dex_id = :dex_id AND lfr.symbol_id = :symbol_id
         """
         
-        row = await database.fetch_one(query, dex_id, symbol_id)
+        row = await database.fetch_one(query, values={"dex_id": dex_id, "symbol_id": symbol_id})
         
         if not row:
             raise HTTPException(

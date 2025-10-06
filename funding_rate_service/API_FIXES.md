@@ -10,24 +10,41 @@
 - ❌ `/api/dexes`
 - ✅ `/api/v1/dexes`
 
-### 2. ✅ Global Variable Import Issue (NoneType Error)
+### 2. ✅ Global Variable Import Issue (NoneType Error - First Attempt)
 **Problem:** `'NoneType' object has no attribute 'find_opportunities'`  
 **Root Cause:** Python's `from module import variable` creates a **copy** at import time, not a reference
 
-**What was happening:**
-1. Route files imported: `from core.opportunity_finder import opportunity_finder`
-2. At import time, `opportunity_finder` was `None`
-3. Later during startup, `init_opportunity_finder()` set the global to an actual instance
-4. But the route's imported copy was still `None`!
-
-**Solution:** Import the module, not the variable
+**First attempt (INCORRECT):**
 - Changed: `from core.opportunity_finder import opportunity_finder`
-- To: `from core import opportunity_finder as opp_finder_module`
-- Then use: `opp_finder_module.opportunity_finder.find_opportunities(...)`
+- To: `from core import opportunity_finder as opp_finder_module` ❌
+- This still imported the VARIABLE, not the MODULE!
+
+**Second attempt (CORRECT):**
+- Changed to: `import core.opportunity_finder as opp_finder_module` ✅
+- This imports the MODULE itself, so `opp_finder_module.opportunity_finder` gets the actual global variable
+
+### 3. ✅ SQLAlchemy Parameter Binding Error
+**Problem:** `/api/v1/dexes/lighter` failed with: `sqlalchemy.sql.elements.TextClause.bindparams() argument after ** must be a mapping, not int`
+
+**Root Cause:** The `databases` library expects named parameters with `values=` keyword argument
+
+**What was wrong:**
+```python
+query = "SELECT * FROM dexes WHERE id = $1"
+row = await database.fetch_one(query, dex_id)  # ❌ Passing positional arg
+```
+
+**Fixed to:**
+```python
+query = "SELECT * FROM dexes WHERE id = :dex_id"
+row = await database.fetch_one(query, values={"dex_id": dex_id})  # ✅ Named params
+```
 
 ## Files Modified
-1. `api/routes/opportunities.py` - Fixed 4 calls to `opportunity_finder`
-2. `api/routes/funding_rates.py` - Fixed 2 calls to `historical_analyzer`
+1. `api/routes/opportunities.py` - Fixed import to use `import` instead of `from`
+2. `api/routes/funding_rates.py` - Fixed import + 3 query parameter bindings
+3. `api/routes/dexes.py` - Fixed 2 query parameter bindings
+4. `api/routes/health.py` - Fixed 1 query parameter binding
 
 ## Testing
 

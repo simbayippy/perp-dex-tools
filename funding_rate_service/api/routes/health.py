@@ -214,12 +214,12 @@ async def get_dex_health(dex: str) -> Dict[str, Any]:
                 END) as recent_updates
             FROM dexes d
             LEFT JOIN latest_funding_rates lfr ON lfr.dex_id = d.id
-            WHERE LOWER(d.name) = LOWER($1)
+            WHERE LOWER(d.name) = LOWER(:dex_name)
             GROUP BY d.id, d.name, d.is_active, d.last_successful_fetch, 
                      d.last_error, d.consecutive_errors
         """
         
-        row = await database.fetch_one(query, dex.lower())
+        row = await database.fetch_one(query, values={"dex_name": dex.lower()})
         
         if not row:
             raise HTTPException(status_code=404, detail=f"DEX '{dex}' not found")
