@@ -31,41 +31,42 @@ def parse_arguments():
                         help='Trading strategy to use (default: grid). '
                              f'Available: {", ".join(StrategyFactory.get_supported_strategies())}')
 
-    # Trading parameters
-    parser.add_argument('--ticker', type=str, default='ETH',
-                        help='Ticker (default: ETH)')
-    parser.add_argument('--quantity', type=Decimal, default=Decimal(0.1),
-                        help='Order quantity (default: 0.1)')
-    parser.add_argument('--take-profit', type=Decimal, default=Decimal(0.02),
-                        help='Take profit in USDT (default: 0.02)')
-    parser.add_argument('--direction', type=str, default='buy', choices=['buy', 'sell'],
-                        help='Direction of the bot (default: buy)')
-    parser.add_argument('--max-orders', type=int, default=40,
-                        help='Maximum number of active orders (default: 40)')
-    parser.add_argument('--wait-time', type=int, default=450,
-                        help='Wait time between orders in seconds (default: 450)')
+    # Universal trading parameters
+    parser.add_argument('--ticker', type=str, required=True,
+                        help='Trading ticker (e.g., BTC, ETH, HYPE)')
+    parser.add_argument('--quantity', type=Decimal, required=True,
+                        help='Order quantity')
     parser.add_argument('--env-file', type=str, default=".env",
                         help=".env file path (default: .env)")
-    parser.add_argument('--grid-step', type=str, default='-100',
-                        help='The minimum distance in percentage to the next close order price (default: -100)')
-    parser.add_argument('--stop-price', type=Decimal, default=-1,
-                        help='Price to stop trading and exit. Buy: exits if price >= stop-price.'
-                        'Sell: exits if price <= stop-price. (default: -1, no stop)')
-    parser.add_argument('--pause-price', type=Decimal, default=-1,
-                        help='Pause trading and wait. Buy: pause if price >= pause-price.'
-                        'Sell: pause if price <= pause-price. (default: -1, no pause)')
-    parser.add_argument('--boost', action='store_true',
-                        help='Use the Boost mode for volume boosting')
     
-    # Randomization parameters
+    # Strategy-specific parameters (passed as key=value pairs)
+    parser.add_argument('--strategy-params', type=str, nargs='*', default=[],
+                        help='Strategy-specific parameters as key=value pairs '
+                             '(e.g., --strategy-params take_profit=0.008 direction=buy max_orders=25)')
+    
+    # Grid strategy specific parameters (for convenience)
+    parser.add_argument('--take-profit', type=Decimal,
+                        help='Grid: Take profit percentage (e.g., 0.008 = 0.8%%)')
+    parser.add_argument('--direction', type=str, choices=['buy', 'sell'],
+                        help='Grid: Trading direction')
+    parser.add_argument('--max-orders', type=int,
+                        help='Grid: Maximum number of active orders')
+    parser.add_argument('--wait-time', type=int,
+                        help='Grid: Wait time between orders in seconds')
+    parser.add_argument('--grid-step', type=Decimal,
+                        help='Grid: Minimum distance percentage to next order')
     parser.add_argument('--random-timing', action='store_true',
-                        help='Enable random timing variation (±50% of wait-time)')
+                        help='Grid: Enable random timing variation')
     parser.add_argument('--dynamic-profit', action='store_true',
-                        help='Enable dynamic profit-taking (varies around take-profit value)')
-    parser.add_argument('--profit-range', type=Decimal, default=Decimal(0.5),
-                        help='Dynamic profit range as multiplier (default: 0.5 = ±50%)')
-    parser.add_argument('--timing-range', type=Decimal, default=Decimal(0.5),
-                        help='Random timing range as multiplier (default: 0.5 = ±50%)')
+                        help='Grid: Enable dynamic profit-taking')
+    
+    # Funding arbitrage specific parameters (for convenience)
+    parser.add_argument('--target-exposure', type=Decimal,
+                        help='Funding: Target position size per side')
+    parser.add_argument('--min-profit-rate', type=Decimal,
+                        help='Funding: Minimum hourly profit rate to trade')
+    parser.add_argument('--exchanges', type=str,
+                        help='Funding: Comma-separated list of exchanges (e.g., lighter,extended)')
 
     return parser.parse_args()
 
@@ -107,11 +108,18 @@ async def main():
     # Setup logging first
     setup_logging("WARNING")
 
-    # Validate boost-mode can only be used with aster and backpack exchange
-    if args.boost and args.exchange.lower() != 'aster' and args.exchange.lower() != 'backpack':
-        print(f"Error: --boost can only be used when --exchange is 'aster' or 'backpack'. "
-              f"Current exchange: {args.exchange}")
-        sys.exit(1)
+    # Validate strategy-specific requirements
+    if args.strategy == 'grid':
+        if not args.take_profit and 'take_profit' not in [p.split('=')[0] for p in args.strategy_params]:
+            print("Error: Grid strategy requires --take-profit parameter")
+            sys.exit(1)
+        if not args.direction and 'direction' not in [p.split('=')[0] for p in args.strategy_params]:
+            print("Error: Grid strategy requires --direction parameter")
+            sys.exit(1)
+    elif args.strategy == 'funding_arbitrage':
+        if not args.target_exposure and 'target_exposure' not in [p.split('=')[0] for p in args.strategy_params]:
+            print("Error: Funding arbitrage strategy requires --target-exposure parameter")
+            sys.exit(1)
 
     env_path = Path(args.env_file)
     if not env_path.exists():
@@ -119,7 +127,57 @@ async def main():
         sys.exit(1)
     dotenv.load_dotenv(args.env_file)
 
-    # Create configuration
+    # Build strategy parameters
+    strategy_params = {}
+    
+    # Parse key=value strategy parameters
+    for param in args.strategy_params:
+        if '=' in param:
+            key, value = param.split('=', 1)
+            # Try to convert to appropriate type
+            try:
+                if '.' in value:
+                    strategy_params[key] = Decimal(value)
+                elif value.lower() in ['true', 'false']:
+                    strategy_params[key] = value.lower() == 'true'
+                elif value.isdigit():
+                    strategy_params[key] = int(value)
+                else:
+                    strategy_params[key] = value
+            except:
+                strategy_params[key] = value
+    
+    # Add convenience parameters for grid strategy
+    if args.strategy == 'grid':
+        if args.take_profit is not None:
+            strategy_params['take_profit'] = args.take_profit
+        if args.direction:
+            strategy_params['direction'] = args.direction.lower()
+        if args.max_orders is not None:
+            strategy_params['max_orders'] = args.max_orders
+        if args.wait_time is not None:
+            strategy_params['wait_time'] = args.wait_time
+        if args.grid_step is not None:
+            strategy_params['grid_step'] = args.grid_step
+        if args.random_timing:
+            strategy_params['random_timing'] = True
+        if args.dynamic_profit:
+            strategy_params['dynamic_profit'] = True
+    
+    # Add convenience parameters for funding arbitrage strategy
+    elif args.strategy == 'funding_arbitrage':
+        if args.target_exposure is not None:
+            strategy_params['target_exposure'] = args.target_exposure
+        if args.min_profit_rate is not None:
+            strategy_params['min_profit_rate'] = args.min_profit_rate
+        if args.exchanges:
+            strategy_params['exchanges'] = args.exchanges.split(',')
+        
+        # Set defaults for funding arbitrage
+        strategy_params.setdefault('rebalance_threshold', Decimal('0.05'))
+        strategy_params.setdefault('funding_check_interval', 300)
+    
+    # Create clean configuration
     config = TradingConfig(
         ticker=args.ticker.upper(),
         contract_id='',  # will be set in the bot's run method
@@ -127,20 +185,7 @@ async def main():
         quantity=args.quantity,
         exchange=args.exchange.lower(),
         strategy=args.strategy.lower(),
-        # Legacy parameters (for backward compatibility)
-        take_profit=args.take_profit,
-        direction=args.direction.lower(),
-        max_orders=args.max_orders,
-        wait_time=args.wait_time,
-        grid_step=Decimal(args.grid_step),
-        stop_price=Decimal(args.stop_price),
-        pause_price=Decimal(args.pause_price),
-        boost_mode=args.boost,
-        # Randomization settings
-        random_timing=args.random_timing,
-        dynamic_profit=args.dynamic_profit,
-        profit_range=args.profit_range,
-        timing_range=args.timing_range
+        strategy_params=strategy_params
     )
 
     # Create and run the bot
