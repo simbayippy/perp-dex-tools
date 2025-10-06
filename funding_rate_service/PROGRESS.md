@@ -55,7 +55,7 @@ Created `collection/base_adapter.py`:
 - Error handling
 - Collection metrics (latency tracking)
 
-### 2.2 DEX Adapters - **3 DEXs Implemented** ✅
+### 2.2 DEX Adapters - **4 DEXs Implemented** ✅
 Implemented in `collection/adapters/`:
 - [x] `lighter_adapter.py` - **Lighter ✅ (SDK Verified)**
   - Uses official Lighter Python SDK
@@ -79,7 +79,13 @@ Implemented in `collection/adapters/`:
   - **Parallel fetching with semaphore-based concurrency limit**
   - **Latency**: ~1-3s (10 concurrent, ~60 markets) - **83% faster!**
   
-- [ ] `edgex.py` - EdgeX adapter (future)
+- [x] `edgex_adapter.py` - **EdgeX ✅ NEW!**
+  - Uses EdgeX public Funding API (no SDK required)
+  - Two-step: metadata endpoint + getLatestFundingRate (parallel)
+  - Symbol format: BTCUSD -> BTC
+  - **Parallel fetching with configurable concurrency (20 concurrent default)**
+  - **Latency**: ~1-2s (estimated, 20+ markets)
+  
 - [ ] `aster.py` - Aster adapter (future)
 - [ ] `backpack.py` - backpack adapter (future)
 - [ ] `hyperliquid.py` - Hyperliquid adapter (future)
@@ -98,8 +104,8 @@ Created `collection/orchestrator.py`:
 - Dynamic symbol discovery (auto-creates new symbols)
 - Updates both historical and latest_funding_rates tables
 - Tracks collection metrics (latency, success rate)
-- **Works with 3 DEXs: Lighter, Paradex, GRVT**
-- Ready for more DEX adapters (EdgeX, Hyperliquid, etc.)
+- **Works with 4 DEXs: Lighter, GRVT, EdgeX (Paradex ready but disabled)**
+- Ready for more DEX adapters (Hyperliquid, Aster, Backpack, etc.)
 
 ---
 
@@ -232,16 +238,17 @@ Need to create in `tasks/`:
 - `database/repositories/funding_rate_repository.py`
 - `database/repositories/opportunity_repository.py`
 
-### Collection (9 files)
+### Collection (10 files)
 - `collection/__init__.py`
 - `collection/base_adapter.py`
 - `collection/orchestrator.py`
 - `collection/adapters/__init__.py`
 - `collection/adapters/lighter_adapter.py`
-- `collection/adapters/paradex_adapter.py` ⭐
-- `collection/adapters/grvt_adapter.py` ⭐ (Fixed)
-- `collection/adapters/README.md` ⭐ NEW
-- `collection/adapters/SDK_VERIFICATION.md` ⭐ NEW
+- `collection/adapters/paradex_adapter.py` (disabled due to dependencies)
+- `collection/adapters/grvt_adapter.py` ⭐ (Fixed & Optimized)
+- `collection/adapters/edgex_adapter.py` ⭐ NEW!
+- `collection/adapters/README.md` ⭐
+- `collection/adapters/SDK_VERIFICATION.md` ⭐
 
 ### Scripts (3 test files)
 - `scripts/test_lighter_adapter.py`
@@ -251,7 +258,7 @@ Need to create in `tasks/`:
 ### Documentation (1 file)
 - `INSTALL.md`
 
-**Total: 29 new files created** (includes SDK verification docs)
+**Total: 30 new files created** (includes EdgeX adapter)
 
 ---
 

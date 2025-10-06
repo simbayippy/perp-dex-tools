@@ -92,7 +92,7 @@ async def test_adapters_only(adapter_filter=None):
     adapters_to_test = {
         'lighter': (LighterAdapter, 'Lighter', ["BTC-PERP", "ETH-PERP", "1000PEPE-PERP"]),
         'grvt': (GrvtAdapter, 'GRVT', ["BTC_USDT_Perp", "ETH_USDT_Perp", "SOL_USDT_Perp"]),
-        'edgex': (EdgeXAdapter, 'EdgeX', ["BTCUSD", "ETHUSD", "SOLUSD"]),
+        'edgex': (EdgeXAdapter, 'EdgeX', ["BTCUSDT", "ETHUSDT", "SOLUSDT"]),
     }
     
     # Filter if specific adapter requested

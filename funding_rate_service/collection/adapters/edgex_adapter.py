@@ -73,7 +73,7 @@ class EdgeXAdapter(BaseDEXAdapter):
             logger.debug(f"{self.dex_name}: Fetching contract metadata...")
             
             # Step 1: Fetch all contracts
-            metadata_response = await self._make_request("/api/v1/public/metadata")
+            metadata_response = await self._make_request("/api/v1/public/meta/getMetaData")
             
             if metadata_response.get('code') != 'SUCCESS':
                 logger.error(
@@ -88,17 +88,17 @@ class EdgeXAdapter(BaseDEXAdapter):
                 logger.warning(f"{self.dex_name}: No contracts found in metadata")
                 return {}
             
-            # Filter to perpetual contracts only (exclude options, etc.)
+            # Filter to perpetual contracts only (enableTrade = true)
             perpetual_contracts = []
             for contract in contract_list:
                 contract_name = contract.get('contractName', '')
-                # EdgeX perpetuals typically end with 'USD' (e.g., BTCUSD, ETHUSD)
-                # and have contractType = 'PERPETUAL' or similar
-                if contract_name.endswith('USD'):
+                enable_trade = contract.get('enableTrade', False)
+                
+                # EdgeX perpetuals have names like BTCUSDT, ETHUSDT
+                if enable_trade and ('USDT' in contract_name or 'USD' in contract_name):
                     perpetual_contracts.append({
                         'contract_id': contract.get('contractId'),
                         'contract_name': contract_name,
-                        'base_currency': contract.get('baseCurrency', ''),
                     })
             
             if not perpetual_contracts:
@@ -225,21 +225,21 @@ class EdgeXAdapter(BaseDEXAdapter):
         Normalize EdgeX symbol format to standard format
         
         EdgeX format examples:
-        - BTCUSD -> BTC
-        - ETHUSD -> ETH
-        - SOLUSD -> SOL
-        - 1000PEPE USD -> PEPE (handle multiplier prefix)
+        - BTCUSDT -> BTC
+        - ETHUSDT -> ETH
+        - SOLUSDT -> SOL
+        - 1000PEPEUSDT -> PEPE (handle multiplier prefix)
         
         Args:
-            dex_symbol: EdgeX symbol format (e.g., "BTCUSD")
+            dex_symbol: EdgeX symbol format (e.g., "BTCUSDT")
             
         Returns:
             Normalized symbol (e.g., "BTC")
         """
         normalized = dex_symbol.upper()
         
-        # Remove USD suffix
-        normalized = normalized.replace('USD', '')
+        # Remove USDT/USD suffix
+        normalized = normalized.replace('USDT', '').replace('USD', '')
         
         # Handle multiplier prefixes (e.g., 1000PEPE -> PEPE)
         match = re.match(r'^(\d+)([A-Z]+)$', normalized)
@@ -264,9 +264,9 @@ class EdgeXAdapter(BaseDEXAdapter):
             normalized_symbol: Normalized symbol (e.g., "BTC")
             
         Returns:
-            EdgeX format (e.g., "BTCUSD")
+            EdgeX format (e.g., "BTCUSDT")
         """
-        return f"{normalized_symbol.upper()}USD"
+        return f"{normalized_symbol.upper()}USDT"
     
     async def close(self) -> None:
         """Close the adapter and cleanup resources"""

@@ -63,7 +63,7 @@ async def test_adapter(adapter_class, name):
             'lighter': ["BTC-PERP", "ETH-PERP", "1000PEPE-PERP"],
             'paradex': ["BTC-USD-PERP", "ETH-USD-PERP", "SOL-USD-PERP"],
             'grvt': ["BTC", "ETH", "SOL"],
-            'edgex': ["BTCUSD", "ETHUSD", "SOLUSD"]
+            'edgex': ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
         }
         
         for test_sym in test_symbols.get(name.lower(), ["BTC-PERP", "ETH-PERP"]):
