@@ -20,7 +20,7 @@ import argparse
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from collection.adapters import LighterAdapter, GrvtAdapter
+from collection.adapters import LighterAdapter, GrvtAdapter, EdgeXAdapter
 from utils.logger import logger
 
 
@@ -62,7 +62,8 @@ async def test_adapter(adapter_class, name):
         test_symbols = {
             'lighter': ["BTC-PERP", "ETH-PERP", "1000PEPE-PERP"],
             'paradex': ["BTC-USD-PERP", "ETH-USD-PERP", "SOL-USD-PERP"],
-            'grvt': ["BTC", "ETH", "SOL"]
+            'grvt': ["BTC", "ETH", "SOL"],
+            'edgex': ["BTCUSD", "ETHUSD", "SOLUSD"]
         }
         
         for test_sym in test_symbols.get(name.lower(), ["BTC-PERP", "ETH-PERP"]):
@@ -87,7 +88,7 @@ async def main():
     parser = argparse.ArgumentParser(description='Test DEX adapters')
     parser.add_argument(
         '--adapter',
-        choices=['lighter', 'paradex', 'grvt', 'all'],
+        choices=['lighter', 'paradex', 'grvt', 'edgex', 'all'],
         default='all',
         help='Which adapter to test'
     )
@@ -101,6 +102,7 @@ async def main():
     adapters = {
         'lighter': (LighterAdapter, 'Lighter'),
         'grvt': (GrvtAdapter, 'GRVT'),
+        'edgex': (EdgeXAdapter, 'EdgeX'),
     }
     
     # Determine which adapters to test

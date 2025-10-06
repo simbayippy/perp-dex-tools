@@ -3,7 +3,7 @@
 Test script for the complete collection system
 
 This script tests:
-1. Multiple DEX adapters (Lighter, GRVT) - standalone
+1. Multiple DEX adapters (Lighter, GRVT, EdgeX) - standalone
 2. Collection orchestrator (with database)
 3. End-to-end data flow
 
@@ -14,6 +14,7 @@ Usage:
     # Test specific adapter only
     python scripts/test_collection_system.py --adapter-only --adapter lighter
     python scripts/test_collection_system.py --adapter-only --adapter grvt
+    python scripts/test_collection_system.py --adapter-only --adapter edgex
     
     # Test full system (requires database)
     python scripts/test_collection_system.py
@@ -27,7 +28,7 @@ import argparse
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from collection.adapters import LighterAdapter, GrvtAdapter
+from collection.adapters import LighterAdapter, GrvtAdapter, EdgeXAdapter
 from collection.orchestrator import CollectionOrchestrator
 from database.connection import database
 from core.mappers import dex_mapper, symbol_mapper
@@ -91,6 +92,7 @@ async def test_adapters_only(adapter_filter=None):
     adapters_to_test = {
         'lighter': (LighterAdapter, 'Lighter', ["BTC-PERP", "ETH-PERP", "1000PEPE-PERP"]),
         'grvt': (GrvtAdapter, 'GRVT', ["BTC_USDT_Perp", "ETH_USDT_Perp", "SOL_USDT_Perp"]),
+        'edgex': (EdgeXAdapter, 'EdgeX', ["BTCUSD", "ETHUSD", "SOLUSD"]),
     }
     
     # Filter if specific adapter requested
@@ -128,13 +130,14 @@ async def test_full_system():
         await symbol_mapper.load_from_db(database)
         print(f"✅ Loaded {len(dex_mapper)} DEXs and {len(symbol_mapper)} symbols\n")
         
-        # Create adapters for both Lighter and GRVT
+        # Create adapters for Lighter, GRVT, and EdgeX
         print("🔧 Initializing adapters...")
         adapters = [
             LighterAdapter(),
             GrvtAdapter(),
+            EdgeXAdapter(),
         ]
-        print(f"✅ Initialized {len(adapters)} adapters (Lighter, GRVT)\n")
+        print(f"✅ Initialized {len(adapters)} adapters (Lighter, GRVT, EdgeX)\n")
         
         # Create orchestrator
         print("🎭 Creating orchestrator...")
@@ -208,7 +211,7 @@ async def main():
     )
     parser.add_argument(
         '--adapter',
-        choices=['lighter', 'grvt', 'all'],
+        choices=['lighter', 'grvt', 'edgex', 'all'],
         default='all',
         help='Which adapter to test (only with --adapter-only)'
     )

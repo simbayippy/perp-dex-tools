@@ -41,3 +41,5 @@ websockets>=15.0
 git+https://github.com/elliottech/lighter-python.git@d0009799970aad54ebb940aa3dc90cbc00028c54
 # GRVT SDK 
 grvt-pysdk
+# Paradex SDK (depednecy issue)  
+# paradex-py 
