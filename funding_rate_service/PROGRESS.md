@@ -81,10 +81,11 @@ Implemented in `collection/adapters/`:
   
 - [x] `edgex_adapter.py` - **EdgeX ✅ NEW!**
   - Uses EdgeX public Funding API (no SDK required)
-  - Two-step: metadata endpoint + getLatestFundingRate (parallel)
-  - Symbol format: BTCUSD -> BTC
-  - **Parallel fetching with configurable concurrency (20 concurrent default)**
-  - **Latency**: ~1-2s (estimated, 20+ markets)
+  - Two-step: metadata endpoint + getLatestFundingRate (batched)
+  - Symbol format: BTCUSDT -> BTC
+  - **Batched fetching with rate limit protection (5 concurrent, 0.5s delay between batches)**
+  - **Latency**: ~15-20s (138 contracts, rate-limited by Cloudflare)
+  - **Success rate**: ~70-100% (depends on API rate limits)
   
 - [ ] `aster.py` - Aster adapter (future)
 - [ ] `backpack.py` - backpack adapter (future)

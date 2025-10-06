@@ -32,7 +32,8 @@ class EdgeXAdapter(BaseDEXAdapter):
         self, 
         api_base_url: Optional[str] = None,
         timeout: int = 10,
-        max_concurrent_requests: int = 20
+        max_concurrent_requests: int = 5,
+        delay_between_batches: float = 0.5
     ):
         """
         Initialize EdgeX adapter
@@ -40,7 +41,8 @@ class EdgeXAdapter(BaseDEXAdapter):
         Args:
             api_base_url: Base API URL (default: https://pro.edgex.exchange)
             timeout: Request timeout in seconds
-            max_concurrent_requests: Max parallel requests for funding rate fetching
+            max_concurrent_requests: Max parallel requests (default: 5 to avoid rate limits)
+            delay_between_batches: Delay in seconds between request batches (default: 0.5s)
         """
         if api_base_url is None:
             api_base_url = "https://pro.edgex.exchange"
@@ -52,9 +54,11 @@ class EdgeXAdapter(BaseDEXAdapter):
         )
         
         self.max_concurrent_requests = max_concurrent_requests
+        self.delay_between_batches = delay_between_batches
         
         logger.info(
-            f"EdgeX adapter initialized (max_concurrent={max_concurrent_requests})"
+            f"EdgeX adapter initialized (max_concurrent={max_concurrent_requests}, "
+            f"batch_delay={delay_between_batches}s)"
         )
     
     async def fetch_funding_rates(self) -> Dict[str, Decimal]:
@@ -107,22 +111,12 @@ class EdgeXAdapter(BaseDEXAdapter):
             
             logger.info(
                 f"{self.dex_name}: Found {len(perpetual_contracts)} perpetual contracts, "
-                f"fetching funding rates in parallel (max {self.max_concurrent_requests} concurrent)..."
+                f"fetching funding rates in batches (max {self.max_concurrent_requests} concurrent, "
+                f"{self.delay_between_batches}s delay between batches)..."
             )
             
-            # Step 2: Fetch funding rates for all contracts in parallel
-            semaphore = asyncio.Semaphore(self.max_concurrent_requests)
-            
-            tasks = [
-                self._fetch_single_funding_rate(
-                    contract['contract_id'],
-                    contract['contract_name'],
-                    semaphore
-                )
-                for contract in perpetual_contracts
-            ]
-            
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Step 2: Fetch funding rates in batches with delays to avoid rate limiting
+            results = await self._fetch_in_batches(perpetual_contracts)
             
             # Step 3: Collect results
             rates_dict = {}
@@ -150,6 +144,51 @@ class EdgeXAdapter(BaseDEXAdapter):
         except Exception as e:
             logger.error(f"{self.dex_name}: Failed to fetch funding rates: {e}")
             raise
+    
+    async def _fetch_in_batches(self, contracts: list) -> list:
+        """
+        Fetch funding rates in batches with delays to avoid rate limiting
+        
+        Args:
+            contracts: List of contract dicts with 'contract_id' and 'contract_name'
+            
+        Returns:
+            List of results (tuples or exceptions)
+        """
+        all_results = []
+        semaphore = asyncio.Semaphore(self.max_concurrent_requests)
+        
+        # Process contracts in batches
+        for i in range(0, len(contracts), self.max_concurrent_requests):
+            batch = contracts[i:i + self.max_concurrent_requests]
+            
+            logger.debug(
+                f"{self.dex_name}: Processing batch {i // self.max_concurrent_requests + 1} "
+                f"({len(batch)} contracts)"
+            )
+            
+            # Fetch this batch
+            tasks = [
+                self._fetch_single_funding_rate(
+                    contract['contract_id'],
+                    contract['contract_name'],
+                    semaphore
+                )
+                for contract in batch
+            ]
+            
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+            all_results.extend(batch_results)
+            
+            # Add delay between batches (except for the last batch)
+            if i + self.max_concurrent_requests < len(contracts):
+                logger.debug(
+                    f"{self.dex_name}: Waiting {self.delay_between_batches}s "
+                    f"before next batch..."
+                )
+                await asyncio.sleep(self.delay_between_batches)
+        
+        return all_results
     
     async def _fetch_single_funding_rate(
         self, 
