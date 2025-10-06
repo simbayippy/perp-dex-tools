@@ -12,6 +12,7 @@ import dotenv
 from decimal import Decimal
 from trading_bot import TradingBot, TradingConfig
 from exchanges import ExchangeFactory
+from strategies import StrategyFactory
 
 
 def parse_arguments():
@@ -23,6 +24,12 @@ def parse_arguments():
                         choices=ExchangeFactory.get_supported_exchanges(),
                         help='Exchange to use (default: edgex). '
                              f'Available: {", ".join(ExchangeFactory.get_supported_exchanges())}')
+    
+    # Strategy selection
+    parser.add_argument('--strategy', type=str, default='grid',
+                        choices=StrategyFactory.get_supported_strategies(),
+                        help='Trading strategy to use (default: grid). '
+                             f'Available: {", ".join(StrategyFactory.get_supported_strategies())}')
 
     # Trading parameters
     parser.add_argument('--ticker', type=str, default='ETH',
@@ -118,11 +125,13 @@ async def main():
         contract_id='',  # will be set in the bot's run method
         tick_size=Decimal(0),
         quantity=args.quantity,
+        exchange=args.exchange.lower(),
+        strategy=args.strategy.lower(),
+        # Legacy parameters (for backward compatibility)
         take_profit=args.take_profit,
         direction=args.direction.lower(),
         max_orders=args.max_orders,
         wait_time=args.wait_time,
-        exchange=args.exchange.lower(),
         grid_step=Decimal(args.grid_step),
         stop_price=Decimal(args.stop_price),
         pause_price=Decimal(args.pause_price),

@@ -9,41 +9,82 @@ import traceback
 import random
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from exchanges import ExchangeFactory
 from helpers import TradingLogger
 from helpers.lark_bot import LarkBot
 from helpers.telegram_bot import TelegramBot
 from helpers.risk_manager import RiskManager, RiskAction, RiskThresholds
+from strategies import StrategyFactory
 
 
 @dataclass
 class TradingConfig:
     """Configuration class for trading parameters."""
+    # Universal parameters
     ticker: str
     contract_id: str
     quantity: Decimal
-    take_profit: Decimal
     tick_size: Decimal
-    direction: str
-    max_orders: int
-    wait_time: int
     exchange: str
-    grid_step: Decimal
-    stop_price: Decimal
-    pause_price: Decimal
-    boost_mode: bool
-    # Randomization parameters
+    strategy: str = "grid"  # Default to grid for backward compatibility
+    
+    # Strategy-specific parameters
+    strategy_params: Dict[str, Any] = None
+    
+    # Legacy parameters (for backward compatibility)
+    take_profit: Decimal = Decimal('0')
+    direction: str = "buy"
+    max_orders: int = 40
+    wait_time: int = 450
+    grid_step: Decimal = Decimal('-100')
+    stop_price: Decimal = Decimal('-1')
+    pause_price: Decimal = Decimal('-1')
+    boost_mode: bool = False
+    
+    # Randomization parameters (legacy)
     random_timing: bool = False
     dynamic_profit: bool = False
     profit_range: Decimal = Decimal('0.5')
     timing_range: Decimal = Decimal('0.5')
 
+    def __post_init__(self):
+        """Post-initialization to handle strategy parameters."""
+        if self.strategy_params is None:
+            self.strategy_params = {}
+        
+        # For backward compatibility, migrate legacy parameters to strategy_params
+        if self.strategy == "grid":
+            self._migrate_grid_parameters()
+    
+    def _migrate_grid_parameters(self):
+        """Migrate legacy grid parameters to strategy_params."""
+        grid_params = {
+            'take_profit': self.take_profit,
+            'direction': self.direction,
+            'max_orders': self.max_orders,
+            'wait_time': self.wait_time,
+            'grid_step': self.grid_step,
+            'stop_price': self.stop_price,
+            'pause_price': self.pause_price,
+            'boost_mode': self.boost_mode,
+            'random_timing': self.random_timing,
+            'dynamic_profit': self.dynamic_profit,
+            'profit_range': self.profit_range,
+            'timing_range': self.timing_range,
+        }
+        
+        # Only add parameters that aren't already in strategy_params
+        for key, value in grid_params.items():
+            if key not in self.strategy_params:
+                self.strategy_params[key] = value
+
     @property
     def close_order_side(self) -> str:
-        """Get the close order side based on bot direction."""
-        return 'buy' if self.direction == "sell" else 'sell'
+        """Get the close order side based on bot direction (legacy support)."""
+        direction = self.strategy_params.get('direction', self.direction)
+        return 'buy' if direction == "sell" else 'sell'
 
 
 @dataclass
@@ -92,6 +133,17 @@ class TradingBot:
         # Register order callback
         self._setup_websocket_handlers()
         
+        # Initialize strategy
+        try:
+            self.strategy = StrategyFactory.create_strategy(
+                self.config.strategy,
+                self.config,
+                self.exchange_client
+            )
+            self.logger.log(f"Strategy '{self.config.strategy}' created successfully", "INFO")
+        except ValueError as e:
+            raise ValueError(f"Failed to create strategy: {e}")
+        
         # Initialize risk manager (only for supported exchanges)
         self.risk_manager = None
         if self.exchange_client.supports_risk_management():
@@ -106,6 +158,10 @@ class TradingBot:
         self.shutdown_requested = True
 
         try:
+            # Cleanup strategy
+            if hasattr(self, 'strategy') and self.strategy:
+                await self.strategy.cleanup()
+            
             # Disconnect from exchange
             await self.exchange_client.disconnect()
             self.logger.log("Graceful shutdown completed", "INFO")
@@ -575,6 +631,9 @@ class TradingBot:
             # wait for connection to establish
             await asyncio.sleep(5)
             
+            # Initialize strategy after connection
+            await self.strategy.initialize()
+            
             # Initialize risk manager after connection
             if self.risk_manager:
                 await self.risk_manager.initialize()
@@ -620,19 +679,19 @@ class TradingBot:
                     continue
 
                 if not mismatch_detected:
-                    wait_time = self._calculate_wait_time()
-
-                    if wait_time > 0:
-                        await asyncio.sleep(wait_time)
-                        continue
-                    else:
-                        meet_grid_step_condition = await self._meet_grid_step_condition()
-                        if not meet_grid_step_condition:
-                            await asyncio.sleep(1)
-                            continue
-
-                        await self._place_and_monitor_open_order()
-                        self.last_close_orders += 1
+                    # Strategy-based execution
+                    try:
+                        market_data = await self.strategy.get_market_data()
+                        
+                        if await self.strategy.should_execute(market_data):
+                            strategy_result = await self.strategy.execute_strategy(market_data)
+                            await self._handle_strategy_result(strategy_result)
+                        else:
+                            await asyncio.sleep(1)  # Brief wait if strategy says not to execute
+                            
+                    except Exception as e:
+                        self.logger.log(f"Strategy execution error: {e}", "ERROR")
+                        await asyncio.sleep(5)  # Wait longer on error
 
         except KeyboardInterrupt:
             self.logger.log("Bot stopped by user")
@@ -651,6 +710,70 @@ class TradingBot:
                 await self.exchange_client.disconnect()
             except Exception as e:
                 self.logger.log(f"Error disconnecting from exchange: {e}", "ERROR")
+
+    async def _handle_strategy_result(self, strategy_result):
+        """Handle the result from strategy execution."""
+        from strategies.base_strategy import StrategyAction
+        
+        if strategy_result.action == StrategyAction.PLACE_ORDER:
+            for order_params in strategy_result.orders:
+                success = await self._execute_order(order_params)
+                if success and hasattr(self.strategy, 'record_successful_order'):
+                    self.strategy.record_successful_order()
+                elif not success and self.risk_manager:
+                    # This might be a margin failure
+                    self.risk_manager.record_margin_failure()
+        
+        elif strategy_result.action == StrategyAction.WAIT:
+            if strategy_result.wait_time > 0:
+                await asyncio.sleep(strategy_result.wait_time)
+        
+        elif strategy_result.action == StrategyAction.CLOSE_POSITION:
+            # Handle position closing
+            for order_params in strategy_result.orders:
+                await self._execute_order(order_params)
+        
+        elif strategy_result.action == StrategyAction.REBALANCE:
+            # Handle rebalancing
+            self.logger.log("Strategy rebalancing requested", "INFO")
+            for order_params in strategy_result.orders:
+                await self._execute_order(order_params)
+        
+        if strategy_result.message:
+            self.logger.log(f"Strategy: {strategy_result.message}", "INFO")
+
+    async def _execute_order(self, order_params) -> bool:
+        """Execute an order based on order parameters."""
+        try:
+            if order_params.order_type == "market":
+                result = await self.exchange_client.place_market_order(
+                    contract_id=order_params.contract_id or self.config.contract_id,
+                    quantity=order_params.quantity,
+                    side=order_params.side
+                )
+            else:  # limit order
+                if order_params.price is None:
+                    # Get current market price for limit order
+                    best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(self.config.contract_id)
+                    order_params.price = best_ask if order_params.side == 'buy' else best_bid
+                
+                result = await self.exchange_client.place_close_order(
+                    contract_id=order_params.contract_id or self.config.contract_id,
+                    quantity=order_params.quantity,
+                    price=order_params.price,
+                    side=order_params.side
+                )
+            
+            if result.success:
+                self.logger.log(f"Order executed: {order_params.side} {order_params.quantity} @ {order_params.price or 'market'}", "INFO")
+                return True
+            else:
+                self.logger.log(f"Order failed: {result.error_message}", "ERROR")
+                return False
+                
+        except Exception as e:
+            self.logger.log(f"Error executing order: {e}", "ERROR")
+            return False
 
     async def _handle_risk_action(self, risk_action: RiskAction):
         """Handle risk management actions."""
