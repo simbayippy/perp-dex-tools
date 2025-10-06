@@ -9,13 +9,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import logging
 
 from database.connection import database
 from core.mappers import dex_mapper, symbol_mapper
 from core.fee_calculator import fee_calculator
-from core.opportunity_finder import init_opportunity_finder
-from core.historical_analyzer import init_historical_analyzer
+from core.opportunity_finder import OpportunityFinder
+from core.historical_analyzer import HistoricalAnalyzer
+from core.dependencies import services
 from api.routes import funding_rates, opportunities, dexes, health
 from utils.logger import logger
 
@@ -57,20 +57,22 @@ async def lifespan(app: FastAPI):
         logger.info("Initializing business logic components...")
         
         # Opportunity finder
-        init_opportunity_finder(
+        opportunity_finder = OpportunityFinder(
             database=database,
             fee_calculator=fee_calculator,
             dex_mapper=dex_mapper,
             symbol_mapper=symbol_mapper
         )
+        services.set_opportunity_finder(opportunity_finder)
         logger.info("✅ Opportunity finder initialized")
         
         # Historical analyzer
-        init_historical_analyzer(
+        historical_analyzer = HistoricalAnalyzer(
             database=database,
             dex_mapper=dex_mapper,
             symbol_mapper=symbol_mapper
         )
+        services.set_historical_analyzer(historical_analyzer)
         logger.info("✅ Historical analyzer initialized")
         
         logger.info("🚀 Funding Rate Service started successfully!")
@@ -78,7 +80,7 @@ async def lifespan(app: FastAPI):
         yield
         
     except Exception as e:
-        logger.error(f"Failed to start service: {e}")
+        logger.error(f"Failed to start service: {e}", exc_info=True)
         raise
     
     finally:

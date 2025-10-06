@@ -428,33 +428,3 @@ class HistoricalAnalyzer:
             positive_rate_frequency=0.0
         )
 
-
-# Global instance (to be initialized with dependencies)
-historical_analyzer: Optional[HistoricalAnalyzer] = None
-
-
-def init_historical_analyzer(
-    database: Database,
-    dex_mapper: DEXMapper,
-    symbol_mapper: SymbolMapper
-) -> HistoricalAnalyzer:
-    """
-    Initialize global historical analyzer instance
-    
-    Args:
-        database: Database connection
-        dex_mapper: DEX mapper
-        symbol_mapper: Symbol mapper
-        
-    Returns:
-        Initialized HistoricalAnalyzer
-    """
-    global historical_analyzer
-    historical_analyzer = HistoricalAnalyzer(
-        database=database,
-        dex_mapper=dex_mapper,
-        symbol_mapper=symbol_mapper
-    )
-    logger.info(f"HistoricalAnalyzer initialized: {historical_analyzer is not None}")
-    return historical_analyzer
-

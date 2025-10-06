@@ -4,14 +4,14 @@ Funding Rates API Routes
 Endpoints for accessing latest and historical funding rates.
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional, Dict, Any
-from decimal import Decimal
 from datetime import datetime
 
 from database.connection import database
 from core.mappers import dex_mapper, symbol_mapper
-import core.historical_analyzer as hist_analyzer_module
+from core.historical_analyzer import HistoricalAnalyzer
+from core.dependencies import get_historical_analyzer
 from models.funding_rate import (
     FundingRateResponse,
     LatestFundingRates,
@@ -115,7 +115,7 @@ async def get_all_funding_rates(
         return response
         
     except Exception as e:
-        logger.error(f"Error fetching funding rates: {e}")
+        logger.error(f"Error fetching funding rates: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -184,7 +184,7 @@ async def get_dex_funding_rates(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching rates for {dex}: {e}")
+        logger.error(f"Error fetching rates for {dex}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -247,7 +247,7 @@ async def get_dex_symbol_funding_rate(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching rate for {symbol} on {dex}: {e}")
+        logger.error(f"Error fetching rate for {symbol} on {dex}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -255,6 +255,7 @@ async def get_dex_symbol_funding_rate(
 async def get_historical_funding_rates(
     dex: str,
     symbol: str,
+    analyzer: HistoricalAnalyzer = Depends(get_historical_analyzer),
     period: Optional[str] = Query("7d", description="Period (e.g., '7d', '30d', '90d')"),
     limit: Optional[int] = Query(1000, ge=1, le=10000, description="Max data points")
 ) -> FundingRateHistory:
@@ -264,17 +265,11 @@ async def get_historical_funding_rates(
     Returns time-series data with statistics
     """
     try:
-        # Check if historical analyzer is initialized
-        if hist_analyzer_module.historical_analyzer is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Historical analyzer not initialized. Service may still be starting up."
-            )
         # Parse period
         period_days = _parse_period(period)
         
-        # Use historical analyzer
-        history = await hist_analyzer_module.historical_analyzer.get_funding_rate_history(
+        # Use historical analyzer (injected dependency)
+        history = await analyzer.get_funding_rate_history(
             symbol=symbol.upper(),
             dex_name=dex.lower(),
             period_days=period_days,
@@ -286,13 +281,14 @@ async def get_historical_funding_rates(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error fetching historical rates: {e}")
+        logger.error(f"Error fetching historical rates: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/stats/funding-rates/{symbol}")
 async def get_funding_rate_stats(
     symbol: str,
+    analyzer: HistoricalAnalyzer = Depends(get_historical_analyzer),
     dex: Optional[str] = Query(None, description="Specific DEX or all DEXs"),
     period: Optional[str] = Query("30d", description="Analysis period (e.g., '7d', '30d', '90d')")
 ) -> FundingRateStats:
@@ -302,17 +298,11 @@ async def get_funding_rate_stats(
     Includes: average, median, volatility, percentiles, APY, etc.
     """
     try:
-        # Check if historical analyzer is initialized
-        if hist_analyzer_module.historical_analyzer is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Historical analyzer not initialized. Service may still be starting up."
-            )
         # Parse period
         period_days = _parse_period(period)
         
-        # Use historical analyzer
-        stats = await hist_analyzer_module.historical_analyzer.get_funding_rate_stats(
+        # Use historical analyzer (injected dependency)
+        stats = await analyzer.get_funding_rate_stats(
             symbol=symbol.upper(),
             dex_name=dex.lower() if dex else None,
             period_days=period_days
@@ -323,7 +313,7 @@ async def get_funding_rate_stats(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error calculating stats: {e}")
+        logger.error(f"Error calculating stats: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -349,4 +339,3 @@ def _parse_period(period: str) -> int:
             raise ValueError(f"Invalid period format: {period}")
     else:
         raise ValueError(f"Period must end with 'd' (days): {period}")
-

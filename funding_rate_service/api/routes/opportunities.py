@@ -4,12 +4,13 @@ Opportunities API Routes
 Endpoints for finding and filtering arbitrage opportunities.
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional, List, Dict, Any
 from decimal import Decimal
 from datetime import datetime
 
-import core.opportunity_finder as opp_finder_module
+from core.opportunity_finder import OpportunityFinder
+from core.dependencies import get_opportunity_finder
 from models.opportunity import ArbitrageOpportunity
 from models.filters import OpportunityFilter
 from utils.logger import logger
@@ -20,6 +21,7 @@ router = APIRouter()
 
 @router.get("/opportunities", response_model=Dict[str, Any])
 async def get_opportunities(
+    finder: OpportunityFinder = Depends(get_opportunity_finder),
     # Symbol and DEX filters
     symbol: Optional[str] = Query(None, description="Filter by symbol"),
     long_dex: Optional[str] = Query(None, description="Filter by long DEX"),
@@ -59,12 +61,6 @@ async def get_opportunities(
     - Volume-based filtering
     """
     try:
-        # Check if opportunity finder is initialized
-        if opp_finder_module.opportunity_finder is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Opportunity finder not initialized. Service may still be starting up."
-            )
         # Parse include/exclude DEXs
         include_dexes_list = [d.strip() for d in include_dexes.split(',')] if include_dexes else None
         exclude_dexes_list = [d.strip() for d in exclude_dexes.split(',')] if exclude_dexes else None
@@ -90,8 +86,8 @@ async def get_opportunities(
             sort_desc=sort_desc
         )
         
-        # Find opportunities
-        opportunities = await opp_finder_module.opportunity_finder.find_opportunities(filters)
+        # Find opportunities using injected dependency
+        opportunities = await finder.find_opportunities(filters)
         
         # Convert to response format
         opportunities_data = []
@@ -136,12 +132,13 @@ async def get_opportunities(
         }
         
     except Exception as e:
-        logger.error(f"Error finding opportunities: {e}")
+        logger.error(f"Error finding opportunities: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/opportunities/best", response_model=Dict[str, Any])
 async def get_best_opportunity(
+    finder: OpportunityFinder = Depends(get_opportunity_finder),
     # Same filters as above
     symbol: Optional[str] = Query(None, description="Filter by symbol"),
     include_dexes: Optional[str] = Query(None, description="Comma-separated list of DEXs to include"),
@@ -155,12 +152,6 @@ async def get_best_opportunity(
     Perfect for automated trading bots that want the top opportunity
     """
     try:
-        # Check if opportunity finder is initialized
-        if opp_finder_module.opportunity_finder is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Opportunity finder not initialized. Service may still be starting up."
-            )
         # Parse include/exclude DEXs
         include_dexes_list = [d.strip() for d in include_dexes.split(',')] if include_dexes else None
         exclude_dexes_list = [d.strip() for d in exclude_dexes.split(',')] if exclude_dexes else None
@@ -176,7 +167,7 @@ async def get_best_opportunity(
         )
         
         # Find best opportunity
-        best = await opp_finder_module.opportunity_finder.find_best_opportunity(filters)
+        best = await finder.find_best_opportunity(filters)
         
         if not best:
             return {
@@ -206,13 +197,14 @@ async def get_best_opportunity(
         }
         
     except Exception as e:
-        logger.error(f"Error finding best opportunity: {e}")
+        logger.error(f"Error finding best opportunity: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/opportunities/symbol/{symbol}", response_model=Dict[str, Any])
 async def get_opportunities_for_symbol(
     symbol: str,
+    finder: OpportunityFinder = Depends(get_opportunity_finder),
     min_profit: Optional[Decimal] = Query(Decimal('0'), description="Minimum net profit percent"),
     limit: int = Query(10, ge=1, le=100, description="Number of results")
 ) -> Dict[str, Any]:
@@ -222,13 +214,7 @@ async def get_opportunities_for_symbol(
     Useful for focusing on a particular asset (e.g., BTC, ETH)
     """
     try:
-        # Check if opportunity finder is initialized
-        if opp_finder_module.opportunity_finder is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Opportunity finder not initialized. Service may still be starting up."
-            )
-        opportunities = await opp_finder_module.opportunity_finder.find_opportunities_for_symbol(
+        opportunities = await finder.find_opportunities_for_symbol(
             symbol=symbol.upper(),
             filters=OpportunityFilter(
                 min_profit_percent=min_profit,
@@ -258,7 +244,7 @@ async def get_opportunities_for_symbol(
         }
         
     except Exception as e:
-        logger.error(f"Error finding opportunities for {symbol}: {e}")
+        logger.error(f"Error finding opportunities for {symbol}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -266,6 +252,7 @@ async def get_opportunities_for_symbol(
 async def compare_dex_opportunities(
     dex1: str = Query(..., description="First DEX"),
     dex2: str = Query(..., description="Second DEX"),
+    finder: OpportunityFinder = Depends(get_opportunity_finder),
     symbol: Optional[str] = Query(None, description="Filter by symbol")
 ) -> Dict[str, Any]:
     """
@@ -274,13 +261,7 @@ async def compare_dex_opportunities(
     Shows rate differences and recommendations for each symbol
     """
     try:
-        # Check if opportunity finder is initialized
-        if opp_finder_module.opportunity_finder is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Opportunity finder not initialized. Service may still be starting up."
-            )
-        comparisons = await opp_finder_module.opportunity_finder.compare_dexes(
+        comparisons = await finder.compare_dexes(
             dex1=dex1.lower(),
             dex2=dex2.lower(),
             symbol=symbol.upper() if symbol else None
@@ -295,6 +276,5 @@ async def compare_dex_opportunities(
         }
         
     except Exception as e:
-        logger.error(f"Error comparing {dex1} vs {dex2}: {e}")
+        logger.error(f"Error comparing {dex1} vs {dex2}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-

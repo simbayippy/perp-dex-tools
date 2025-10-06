@@ -6,11 +6,9 @@ Filters by volume, OI, spread, and other criteria.
 """
 
 from decimal import Decimal
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict
 from datetime import datetime
-import asyncio
-
-from core.fee_calculator import FeeCalculator, TradingCosts
+from core.fee_calculator import FeeCalculator
 from models.opportunity import ArbitrageOpportunity
 from models.filters import OpportunityFilter
 from database.connection import Database
@@ -495,36 +493,4 @@ class OpportunityFinder:
             logger.error(f"Error fetching rates from database: {e}")
             return []
 
-
-# Global instance (to be initialized with dependencies)
-opportunity_finder: Optional[OpportunityFinder] = None
-
-
-def init_opportunity_finder(
-    database: Database,
-    fee_calculator: FeeCalculator,
-    dex_mapper: DEXMapper,
-    symbol_mapper: SymbolMapper
-) -> OpportunityFinder:
-    """
-    Initialize global opportunity finder instance
-    
-    Args:
-        database: Database connection
-        fee_calculator: Fee calculator instance
-        dex_mapper: DEX mapper
-        symbol_mapper: Symbol mapper
-        
-    Returns:
-        Initialized OpportunityFinder
-    """
-    global opportunity_finder
-    opportunity_finder = OpportunityFinder(
-        database=database,
-        fee_calculator=fee_calculator,
-        dex_mapper=dex_mapper,
-        symbol_mapper=symbol_mapper
-    )
-    logger.info(f"OpportunityFinder initialized: {opportunity_finder is not None}")
-    return opportunity_finder
 
