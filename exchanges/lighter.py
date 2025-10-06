@@ -186,10 +186,8 @@ class LighterClient(BaseExchangeClient):
                 continue
 
             side = 'sell' if order_data['is_ask'] else 'buy'
-            if side == self.config.close_order_side:
-                order_type = "CLOSE"
-            else:
-                order_type = "OPEN"
+            # Let strategy determine order type - exchange client just reports the order
+            order_type = "ORDER"
 
             order_id = order_data['order_index']
             status = order_data['status'].upper()
@@ -351,13 +349,9 @@ class LighterClient(BaseExchangeClient):
             )
 
     async def _get_active_close_orders(self, contract_id: str) -> int:
-        """Get active close orders for a contract using official SDK."""
+        """Get active orders count for a contract using official SDK."""
         active_orders = await self.get_active_orders(contract_id)
-        active_close_orders = 0
-        for order in active_orders:
-            if order.side == self.config.close_order_side:
-                active_close_orders += 1
-        return active_close_orders
+        return len(active_orders)
 
     async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
         """Place a close order with Lighter using official SDK."""
@@ -389,13 +383,8 @@ class LighterClient(BaseExchangeClient):
 
         order_price = (best_bid + best_ask) / 2
 
-        active_orders = await self.get_active_orders(self.config.contract_id)
-        close_orders = [order for order in active_orders if order.side == self.config.close_order_side]
-        for order in close_orders:
-            if side == 'buy':
-                order_price = min(order_price, order.price - self.config.tick_size)
-            else:
-                order_price = max(order_price, order.price + self.config.tick_size)
+        # Simple mid-price calculation - let strategy handle order placement logic
+        # (removed strategy-specific close order logic)
 
         return order_price
 
