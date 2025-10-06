@@ -525,5 +525,6 @@ def init_opportunity_finder(
         dex_mapper=dex_mapper,
         symbol_mapper=symbol_mapper
     )
+    logger.info(f"OpportunityFinder initialized: {opportunity_finder is not None}")
     return opportunity_finder
 

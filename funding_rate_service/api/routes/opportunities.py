@@ -59,6 +59,12 @@ async def get_opportunities(
     - Volume-based filtering
     """
     try:
+        # Check if opportunity finder is initialized
+        if opp_finder_module.opportunity_finder is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Opportunity finder not initialized. Service may still be starting up."
+            )
         # Parse include/exclude DEXs
         include_dexes_list = [d.strip() for d in include_dexes.split(',')] if include_dexes else None
         exclude_dexes_list = [d.strip() for d in exclude_dexes.split(',')] if exclude_dexes else None
@@ -149,6 +155,12 @@ async def get_best_opportunity(
     Perfect for automated trading bots that want the top opportunity
     """
     try:
+        # Check if opportunity finder is initialized
+        if opp_finder_module.opportunity_finder is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Opportunity finder not initialized. Service may still be starting up."
+            )
         # Parse include/exclude DEXs
         include_dexes_list = [d.strip() for d in include_dexes.split(',')] if include_dexes else None
         exclude_dexes_list = [d.strip() for d in exclude_dexes.split(',')] if exclude_dexes else None
@@ -210,6 +222,12 @@ async def get_opportunities_for_symbol(
     Useful for focusing on a particular asset (e.g., BTC, ETH)
     """
     try:
+        # Check if opportunity finder is initialized
+        if opp_finder_module.opportunity_finder is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Opportunity finder not initialized. Service may still be starting up."
+            )
         opportunities = await opp_finder_module.opportunity_finder.find_opportunities_for_symbol(
             symbol=symbol.upper(),
             filters=OpportunityFilter(
@@ -256,6 +274,12 @@ async def compare_dex_opportunities(
     Shows rate differences and recommendations for each symbol
     """
     try:
+        # Check if opportunity finder is initialized
+        if opp_finder_module.opportunity_finder is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Opportunity finder not initialized. Service may still be starting up."
+            )
         comparisons = await opp_finder_module.opportunity_finder.compare_dexes(
             dex1=dex1.lower(),
             dex2=dex2.lower(),

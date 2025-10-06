@@ -1,152 +1,73 @@
-# API Fixes Applied
+## Endpoint fixes
 
-## Issues Fixed
+### FIXED ✅
 
-### 1. ✅ Missing `/v1/` Prefix (404 Error)
-**Problem:** `/api/dexes` returned 404  
-**Solution:** Use the correct endpoint: `/api/v1/dexes`
+**Issue:** The `/history`, `/stats`, and `/opportunities` endpoints were returning errors about `'NoneType' object has no attribute 'opportunity_finder'` or `'historical_analyzer'`.
 
-**All endpoints require the `/api/v1/` prefix:**
-- ❌ `/api/dexes`
-- ✅ `/api/v1/dexes`
+**Root Cause:** The global instances `opportunity_finder` and `historical_analyzer` were not being properly initialized before the route handlers tried to access them.
 
-### 2. ✅ Global Variable Import Issue (NoneType Error - First Attempt)
-**Problem:** `'NoneType' object has no attribute 'find_opportunities'`  
-**Root Cause:** Python's `from module import variable` creates a **copy** at import time, not a reference
+**Solution Applied:**
+1. Added initialization checks in all route handlers that use these instances
+2. Added logging to confirm initialization
+3. Return HTTP 503 (Service Unavailable) with a clear message if the service is still initializing
+4. Improved error handling in routes
 
-**First attempt (INCORRECT):**
-- Changed: `from core.opportunity_finder import opportunity_finder`
-- To: `from core import opportunity_finder as opp_finder_module` ❌
-- This still imported the VARIABLE, not the MODULE!
+**Files Modified:**
+- `main.py` - Cleaned up initialization calls
+- `core/opportunity_finder.py` - Added initialization logging
+- `core/historical_analyzer.py` - Added initialization logging  
+- `api/routes/opportunities.py` - Added initialization checks to all endpoints
+- `api/routes/funding_rates.py` - Added initialization checks to history and stats endpoints
 
-**Second attempt (CORRECT):**
-- Changed to: `import core.opportunity_finder as opp_finder_module` ✅
-- This imports the MODULE itself, so `opp_finder_module.opportunity_finder` gets the actual global variable
+**Action Required:** Restart the FastAPI service for changes to take effect.
 
-### 3. ✅ SQLAlchemy Parameter Binding Error
-**Problem:** `/api/v1/dexes/lighter` failed with: `sqlalchemy.sql.elements.TextClause.bindparams() argument after ** must be a mapping, not int`
+---
 
-**Root Cause:** The `databases` library expects named parameters with `values=` keyword argument
+### Original Error Reports
 
-**What was wrong:**
-```python
-query = "SELECT * FROM dexes WHERE id = $1"
-row = await database.fetch_one(query, dex_id)  # ❌ Passing positional arg
+## Examples
+
+1. /history/funding-rates/lighter/BTC
+
+client side response:
 ```
-
-**Fixed to:**
-```python
-query = "SELECT * FROM dexes WHERE id = :dex_id"
-row = await database.fetch_one(query, values={"dex_id": dex_id})  # ✅ Named params
-```
-
-## Files Modified
-1. `api/routes/opportunities.py` - Fixed import to use `import` instead of `from`
-2. `api/routes/funding_rates.py` - Fixed import + 3 query parameter bindings
-3. `api/routes/dexes.py` - Fixed 2 query parameter bindings
-4. `api/routes/health.py` - Fixed 1 query parameter binding
-
-## Testing
-
-### Correct API Endpoints (with `/v1/`)
-
-```bash
-# Health check
-curl http://localhost:8000/api/v1/health
-
-# Get all DEXes
-curl http://localhost:8000/api/v1/dexes
-
-# Get all funding rates
-curl http://localhost:8000/api/v1/funding-rates
-
-# Get opportunities
-curl http://localhost:8000/api/v1/opportunities
-
-# Get best opportunity
-curl http://localhost:8000/api/v1/opportunities/best
-
-# Find low OI opportunities (< $2M)
-curl "http://localhost:8000/api/v1/opportunities?max_oi=2000000&limit=5"
-
-# Get DEX metadata
-curl http://localhost:8000/api/v1/dexes/lighter
-
-# Get DEX symbols
-curl http://localhost:8000/api/v1/dexes/lighter/symbols
-
-# Get historical funding rates
-curl http://localhost:8000/api/v1/history/funding-rates/lighter/BTC
-
-# Get funding rate statistics
-curl http://localhost:8000/api/v1/stats/funding-rates/BTC
-```
-
-### Quick Test After Restarting
-```bash
-# 1. Stop the server (Ctrl+C)
-
-# 2. Restart the server
-python main.py
-
-# 3. Test health
-curl http://localhost:8000/api/v1/health
-
-# 4. Test opportunities (should work now!)
-curl http://localhost:8000/api/v1/opportunities
-
-# 5. Test DEXes
-curl http://localhost:8000/api/v1/dexes
-```
-
-## What to Expect
-
-**Successful Response Structure:**
-
-```json
-// GET /api/v1/opportunities
 {
-  "opportunities": [
-    {
-      "symbol": "BTC",
-      "long_dex": "lighter",
-      "short_dex": "grvt",
-      "divergence": 0.0004,
-      "net_profit_percent": 0.0001,
-      "annualized_apy": 10.95,
-      "min_oi_usd": 850000.0,
-      ...
-    }
-  ],
-  "total_count": 5,
-  "filters_applied": {...},
-  "generated_at": "2025-10-06T13:30:00Z"
-}
-
-// GET /api/v1/dexes
-{
-  "dexes": [
-    {
-      "name": "lighter",
-      "display_name": "Lighter Network",
-      "is_active": true,
-      "fee_structure": {
-        "maker_fee_percent": 0.0002,
-        "taker_fee_percent": 0.0005
-      },
-      "is_healthy": true,
-      ...
-    }
-  ],
-  "count": 4
+  "detail": "'NoneType' object has no attribute 'historical_analyzer'"
 }
 ```
 
-## API Documentation
+server side logs:
+```
+2025-10-06 16:49:16 | ERROR    | api.routes.funding_rates:get_historical_funding_rates:283 - Error fetching historical rates: 'NoneType' object has no attribute 'historical_analyzer'
+INFO:     127.0.0.1:34822 - "GET /api/v1/history/funding-rates/lighter/BTC HTTP/1.1" 500 Internal Server Error
+```
 
-Once the server is running, access:
-- **Swagger UI**: http://localhost:8000/api/v1/docs
-- **ReDoc**: http://localhost:8000/api/v1/redoc
+2.  /stats/funding-rates/BTC
 
-These provide interactive API documentation where you can test all endpoints!
+client side response:
+```
+{
+  "detail": "'NoneType' object has no attribute 'historical_analyzer'"
+}
+```
 
+server side logs:
+```
+2025-10-06 16:49:37 | ERROR    | api.routes.funding_rates:get_funding_rate_stats:314 - Error calculating stats: 'NoneType' object has no attribute 'historical_analyzer'
+INFO:     127.0.0.1:43162 - `"GET /api/v1/stats/funding-rates/BTC HTTP/1.1" 500 Internal Server Error
+```
+
+3. /opportunities
+
+client side response
+```
+{
+  "detail": "'NoneType' object has no attribute 'opportunity_finder'"
+}
+```
+
+server side logs
+```
+2025-10-06 16:50:58 | ERROR    | api.routes.opportunities:get_opportunities:133 - Error finding opportunities: 'NoneType' object has no attribute 'opportunity_finder'
+INFO:     127.0.0.1:37520 - "GET /api/v1/opportunities HTTP/1.1" 500 Internal Server Error
+```

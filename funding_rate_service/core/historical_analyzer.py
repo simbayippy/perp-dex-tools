@@ -455,5 +455,6 @@ def init_historical_analyzer(
         dex_mapper=dex_mapper,
         symbol_mapper=symbol_mapper
     )
+    logger.info(f"HistoricalAnalyzer initialized: {historical_analyzer is not None}")
     return historical_analyzer
 

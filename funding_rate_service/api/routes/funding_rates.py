@@ -264,6 +264,12 @@ async def get_historical_funding_rates(
     Returns time-series data with statistics
     """
     try:
+        # Check if historical analyzer is initialized
+        if hist_analyzer_module.historical_analyzer is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Historical analyzer not initialized. Service may still be starting up."
+            )
         # Parse period
         period_days = _parse_period(period)
         
@@ -296,6 +302,12 @@ async def get_funding_rate_stats(
     Includes: average, median, volatility, percentiles, APY, etc.
     """
     try:
+        # Check if historical analyzer is initialized
+        if hist_analyzer_module.historical_analyzer is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Historical analyzer not initialized. Service may still be starting up."
+            )
         # Parse period
         period_days = _parse_period(period)
         

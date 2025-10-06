@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
         logger.info("Initializing business logic components...")
         
         # Opportunity finder
-        opportunity_finder = init_opportunity_finder(
+        init_opportunity_finder(
             database=database,
             fee_calculator=fee_calculator,
             dex_mapper=dex_mapper,
@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Opportunity finder initialized")
         
         # Historical analyzer
-        historical_analyzer = init_historical_analyzer(
+        init_historical_analyzer(
             database=database,
             dex_mapper=dex_mapper,
             symbol_mapper=symbol_mapper
