@@ -585,22 +585,6 @@ python runbot.py --strategy funding_arbitrage --exchange dydx --ticker HYPE ...
 
 ---
 
-## 🎯 The Power of This Architecture
-
-### **N × M Combinations:**
-
-With **3 strategies** and **6 exchanges**, you get **18 possible combinations** without any extra code:
-
-| Strategy ↓ / Exchange → | Lighter | Paradex | Backpack | GRVT | EdgeX | Aster |
-|------------------------|---------|---------|----------|------|-------|-------|
-| **Grid**               | ✅      | ✅      | ✅       | ✅   | ✅    | ✅    |
-| **Funding Arbitrage**  | ✅      | ✅      | ✅       | ✅   | ✅    | ✅    |
-| **Your Future Strategy**| ✅     | ✅      | ✅       | ✅   | ✅    | ✅    |
-
-**All combinations work because the interfaces are properly abstracted!**
-
----
-
 ## 🛡️ Risk Management Layer
 
 **Role**: Account protection (exchange-specific)
@@ -627,30 +611,6 @@ if risk_action == CLOSE_WORST_POSITIONS:
 - Time stall: 10 minutes
 - Account loss: -10%
 - Emergency loss: -15%
-
----
-
-## 📐 Design Principles
-
-### **1. Separation of Concerns**
-- **Strategy** = Business logic
-- **Exchange** = Technical implementation
-- **Trading Bot** = Coordination
-
-### **2. Interface-Based Design**
-- Strategies implement `BaseStrategy`
-- Exchanges implement `BaseExchangeClient`
-- No special cases in coordinator
-
-### **3. Dependency Injection**
-- Strategy receives `exchange_client` as dependency
-- Exchange receives `config` as dependency
-- Clean, testable architecture
-
-### **4. Strategy Pattern**
-- Swap strategies at runtime
-- Swap exchanges at runtime
-- No code changes needed
 
 ---
 
@@ -684,124 +644,6 @@ strategy_state = {
     "active_close_orders": [...],
 }
 ```
-
----
-
-## 🚀 Example: Adding a New Strategy
-
-Let's say you want to add a **momentum trading strategy**:
-
-### **1. Create the Strategy**
-
-```python
-# strategies/momentum_strategy.py
-class MomentumStrategy(BaseStrategy):
-    def get_strategy_name(self) -> str:
-        return "momentum"
-    
-    def get_required_parameters(self) -> List[str]:
-        return ["lookback_period", "threshold", "position_size"]
-    
-    async def should_execute(self, market_data) -> bool:
-        # Calculate momentum indicator
-        momentum = await self._calculate_momentum()
-        threshold = self.get_parameter('threshold')
-        
-        # Trade if momentum exceeds threshold
-        return abs(momentum) > threshold
-    
-    async def execute_strategy(self, market_data) -> StrategyResult:
-        momentum = await self._calculate_momentum()
-        
-        # Buy if positive momentum, sell if negative
-        side = 'buy' if momentum > 0 else 'sell'
-        quantity = self.get_parameter('position_size')
-        
-        return StrategyResult(
-            action=StrategyAction.PLACE_ORDER,
-            orders=[OrderParams(
-                side=side,
-                quantity=quantity,
-                order_type='market',
-                metadata={'momentum': float(momentum)}
-            )],
-            message=f"Momentum signal: {momentum:.4f}"
-        )
-```
-
-### **2. Register It**
-
-```python
-# strategies/factory.py
-from .momentum_strategy import MomentumStrategy
-
-_strategies = {
-    'grid': GridStrategy,
-    'funding_arbitrage': FundingArbitrageStrategy,
-    'momentum': MomentumStrategy,  # ← Add one line
-}
-```
-
-### **3. Use It on ANY Exchange**
-
-```bash
-# Works on Lighter
-python runbot.py --strategy momentum --exchange lighter --ticker BTC --quantity 0.01 --lookback-period 50 --threshold 0.02
-
-# Works on Paradex (same strategy, different exchange!)
-python runbot.py --strategy momentum --exchange paradex --ticker ETH --quantity 0.1 --lookback-period 50 --threshold 0.02
-```
-
-**No changes to `trading_bot.py` or any exchange clients required!**
-
----
-
-## 🎯 Summary: Where is the Logic?
-
-| Concern | Location | Analogy |
-|---------|----------|---------|
-| **Trading Decisions** | `strategies/grid_strategy.py` | Portfolio Manager's Brain |
-| **Order Execution** | `exchanges/lighter.py` | Broker's API System |
-| **Coordination** | `trading_bot.py` | Operations Supervisor |
-| **Risk Management** | `helpers/risk_manager.py` | Risk Officer |
-| **Configuration** | `runbot.py` | Admin/Setup |
-
-### **Main Logic is SPLIT:**
-
-- **High-level logic** (what, when, why) → `grid_strategy.py`
-- **Low-level execution** (how to API, SDK calls) → `lighter.py`
-- **Coordination** (tie it together) → `trading_bot.py`
-
-### **The Beautiful Part:**
-
-Each layer **only knows what it needs to know**:
-- Grid strategy doesn't know about Lighter API
-- Lighter client doesn't know about grid logic
-- Trading bot doesn't have strategy-specific code
-
-**This is proper software engineering!** 🎉
-
----
-
-## 🏆 Architecture Principles
-
-1. **✅ No Special Cases** - All strategies use the same interface
-2. **✅ Separation of Concerns** - Each layer has one job
-3. **✅ Open/Closed Principle** - Open for extension, closed for modification
-4. **✅ Dependency Inversion** - Depend on abstractions, not concretions
-5. **✅ Single Responsibility** - Each class has one reason to change
-
----
-
-## 🔮 Future Extensibility
-
-Want to add:
-- **New strategy?** → Implement `BaseStrategy` interface
-- **New exchange?** → Implement `BaseExchangeClient` interface  
-- **New risk logic?** → Add to `RiskManager` or create strategy-specific override
-- **Multi-exchange strategy?** → Strategy can coordinate multiple exchange clients
-
-**The architecture scales effortlessly!** 🚀
 
 ---
 
@@ -840,8 +682,3 @@ class YourExchange(BaseExchangeClient):
     async def place_close_order(...) -> OrderResult
     async def get_active_orders(...) -> List[OrderInfo]
 ```
-
----
-
-**Your codebase is now a professional-grade, modular trading platform with clean separation of concerns!** 🏆
-
