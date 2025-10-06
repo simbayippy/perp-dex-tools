@@ -15,6 +15,7 @@ from exchanges import ExchangeFactory
 from helpers import TradingLogger
 from helpers.lark_bot import LarkBot
 from helpers.telegram_bot import TelegramBot
+from helpers.risk_manager import RiskManager, RiskAction, RiskThresholds
 
 
 @dataclass
@@ -90,6 +91,14 @@ class TradingBot:
 
         # Register order callback
         self._setup_websocket_handlers()
+        
+        # Initialize risk manager (only for supported exchanges)
+        self.risk_manager = None
+        if self.exchange_client.supports_risk_management():
+            self.risk_manager = RiskManager(self.exchange_client, self.config)
+            self.logger.log("Risk management enabled", "INFO")
+        else:
+            self.logger.log("Risk management not supported by exchange", "INFO")
 
     async def graceful_shutdown(self, reason: str = "Unknown"):
         """Perform graceful shutdown of the trading bot."""
@@ -217,9 +226,16 @@ class TradingBot:
             )
 
             if not order_result.success:
+                # Check if this is a margin-related failure
+                if (self.risk_manager and order_result.error_message and 
+                    'margin' in order_result.error_message.lower()):
+                    self.risk_manager.record_margin_failure()
                 return False
 
             if order_result.status == 'FILLED':
+                # Record successful order for risk management
+                if self.risk_manager:
+                    self.risk_manager.record_successful_order()
                 return await self._handle_order_result(order_result)
             elif not self.order_filled_event.is_set():
                 try:
@@ -558,9 +574,22 @@ class TradingBot:
 
             # wait for connection to establish
             await asyncio.sleep(5)
+            
+            # Initialize risk manager after connection
+            if self.risk_manager:
+                await self.risk_manager.initialize()
 
             # Main trading loop
             while not self.shutdown_requested:
+                # Check risk conditions first
+                if self.risk_manager:
+                    risk_action = await self.risk_manager.check_risk_conditions()
+                    if risk_action != RiskAction.NONE:
+                        await self._handle_risk_action(risk_action)
+                        if risk_action == RiskAction.EMERGENCY_CLOSE_ALL:
+                            await self.graceful_shutdown("Emergency risk management triggered")
+                            break
+                
                 # Update active orders
                 active_orders = await self.exchange_client.get_active_orders(self.config.contract_id)
 
@@ -607,6 +636,9 @@ class TradingBot:
 
         except KeyboardInterrupt:
             self.logger.log("Bot stopped by user")
+            # Emergency close all positions on Ctrl+C
+            if self.risk_manager:
+                await self._emergency_close_all_positions()
             await self.graceful_shutdown("User interruption (Ctrl+C)")
         except Exception as e:
             self.logger.log(f"Critical error: {e}", "ERROR")
@@ -619,3 +651,103 @@ class TradingBot:
                 await self.exchange_client.disconnect()
             except Exception as e:
                 self.logger.log(f"Error disconnecting from exchange: {e}", "ERROR")
+
+    async def _handle_risk_action(self, risk_action: RiskAction):
+        """Handle risk management actions."""
+        if risk_action == RiskAction.CLOSE_WORST_POSITIONS:
+            await self._close_worst_positions()
+        elif risk_action == RiskAction.EMERGENCY_CLOSE_ALL:
+            await self._emergency_close_all_positions()
+        elif risk_action == RiskAction.PAUSE_TRADING:
+            self.logger.log("Risk management: Pausing trading", "WARNING")
+            await asyncio.sleep(30)  # Pause for 30 seconds
+
+    async def _close_worst_positions(self):
+        """Close worst performing positions."""
+        if not self.risk_manager:
+            return
+            
+        try:
+            worst_positions = await self.risk_manager.get_worst_positions()
+            if not worst_positions:
+                self.logger.log("No worst positions to close", "INFO")
+                return
+            
+            self.logger.log(f"Closing {len(worst_positions)} worst positions", "WARNING")
+            
+            for position in worst_positions:
+                try:
+                    # Determine order side (opposite of position)
+                    side = 'sell' if position['sign'] > 0 else 'buy'
+                    quantity = abs(position['position'])
+                    
+                    # Place market order to close position
+                    result = await self.exchange_client.place_market_order(
+                        contract_id=str(position['market_id']),
+                        quantity=quantity,
+                        side=side
+                    )
+                    
+                    if result.success:
+                        self.logger.log(
+                            f"Closed position {position['symbol']}: {quantity} @ market ({side})",
+                            "INFO"
+                        )
+                    else:
+                        self.logger.log(
+                            f"Failed to close position {position['symbol']}: {result.error_message}",
+                            "ERROR"
+                        )
+                        
+                except Exception as e:
+                    self.logger.log(f"Error closing position {position.get('symbol', 'unknown')}: {e}", "ERROR")
+            
+            # Reset risk counters after successful action
+            if self.risk_manager:
+                self.risk_manager.record_successful_order()
+                
+        except Exception as e:
+            self.logger.log(f"Error in _close_worst_positions: {e}", "ERROR")
+
+    async def _emergency_close_all_positions(self):
+        """Emergency close all positions."""
+        if not self.risk_manager:
+            return
+            
+        try:
+            all_positions = await self.risk_manager.get_all_positions()
+            if not all_positions:
+                self.logger.log("No positions to close", "INFO")
+                return
+            
+            self.logger.log(f"EMERGENCY: Closing ALL {len(all_positions)} positions", "ERROR")
+            
+            for position in all_positions:
+                try:
+                    # Determine order side (opposite of position)
+                    side = 'sell' if position['sign'] > 0 else 'buy'
+                    quantity = abs(position['position'])
+                    
+                    # Place market order to close position
+                    result = await self.exchange_client.place_market_order(
+                        contract_id=str(position['market_id']),
+                        quantity=quantity,
+                        side=side
+                    )
+                    
+                    if result.success:
+                        self.logger.log(
+                            f"EMERGENCY CLOSED: {position['symbol']}: {quantity} @ market ({side})",
+                            "WARNING"
+                        )
+                    else:
+                        self.logger.log(
+                            f"FAILED EMERGENCY CLOSE: {position['symbol']}: {result.error_message}",
+                            "ERROR"
+                        )
+                        
+                except Exception as e:
+                    self.logger.log(f"Error in emergency close {position.get('symbol', 'unknown')}: {e}", "ERROR")
+                    
+        except Exception as e:
+            self.logger.log(f"Error in _emergency_close_all_positions: {e}", "ERROR")

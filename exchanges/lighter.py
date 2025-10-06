@@ -52,6 +52,9 @@ class LighterClient(BaseExchangeClient):
 
         # Initialize API client (will be done in connect)
         self.api_client = None
+        
+        # Initialize account API (will be done in connect)
+        self.account_api = None
 
         # Market configuration
         self.base_amount_multiplier = None
@@ -128,6 +131,9 @@ class LighterClient(BaseExchangeClient):
 
             # Initialize Lighter client
             await self._initialize_lighter_client()
+            
+            # Initialize account API for risk management
+            self.account_api = lighter.AccountApi(self.api_client)
 
             # Add market config to config for WebSocket manager
             self.config.market_index = self.config.contract_id
@@ -577,3 +583,131 @@ class LighterClient(BaseExchangeClient):
             raise ValueError("Failed to get tick size")
 
         return self.config.contract_id, self.config.tick_size
+
+    # Risk Management Methods (Lighter-specific implementations)
+    def supports_risk_management(self) -> bool:
+        """Lighter supports advanced risk management."""
+        return True
+
+    async def get_account_balance(self) -> Optional[Decimal]:
+        """Get current account balance using Lighter SDK."""
+        try:
+            if not self.account_api:
+                return None
+                
+            account_data = await self.account_api.account(by="index", value=str(self.account_index))
+            if account_data and account_data.accounts:
+                return Decimal(account_data.accounts[0].available_balance or "0")
+            return None
+        except Exception as e:
+            self.logger.log(f"Error getting account balance: {e}", "ERROR")
+            return None
+
+    async def get_detailed_positions(self) -> List[Dict[str, Any]]:
+        """Get detailed position info using Lighter SDK."""
+        try:
+            if not self.account_api:
+                return []
+                
+            account_data = await self.account_api.account(by="index", value=str(self.account_index))
+            if account_data and account_data.accounts:
+                positions = []
+                for pos in account_data.accounts[0].positions:
+                    positions.append({
+                        'market_id': pos.market_id,
+                        'symbol': pos.symbol,
+                        'position': Decimal(pos.position),
+                        'avg_entry_price': Decimal(pos.avg_entry_price),
+                        'position_value': Decimal(pos.position_value),
+                        'unrealized_pnl': Decimal(pos.unrealized_pnl),
+                        'realized_pnl': Decimal(pos.realized_pnl),
+                        'liquidation_price': Decimal(pos.liquidation_price),
+                        'allocated_margin': Decimal(pos.allocated_margin),
+                        'sign': pos.sign  # 1 for Long, -1 for Short
+                    })
+                return positions
+            return []
+        except Exception as e:
+            self.logger.log(f"Error getting detailed positions: {e}", "ERROR")
+            return []
+
+    async def get_account_pnl(self) -> Optional[Decimal]:
+        """Get account P&L using Lighter SDK."""
+        try:
+            positions = await self.get_detailed_positions()
+            total_pnl = Decimal('0')
+            for pos in positions:
+                total_pnl += pos['unrealized_pnl']
+            return total_pnl
+        except Exception as e:
+            self.logger.log(f"Error getting account P&L: {e}", "ERROR")
+            return None
+
+    async def get_total_asset_value(self) -> Optional[Decimal]:
+        """Get total account asset value using Lighter SDK."""
+        try:
+            if not self.account_api:
+                return None
+                
+            account_data = await self.account_api.account(by="index", value=str(self.account_index))
+            if account_data and account_data.accounts:
+                return Decimal(account_data.accounts[0].total_asset_value or "0")
+            return None
+        except Exception as e:
+            self.logger.log(f"Error getting total asset value: {e}", "ERROR")
+            return None
+
+    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
+        """Place a market order with Lighter using official SDK."""
+        try:
+            # Ensure client is initialized
+            if self.lighter_client is None:
+                raise ValueError("Lighter client not initialized. Call connect() first.")
+
+            # Determine order side
+            if side.lower() == 'buy':
+                is_ask = False
+            elif side.lower() == 'sell':
+                is_ask = True
+            else:
+                raise Exception(f"Invalid side: {side}")
+
+            # Generate unique client order index
+            client_order_index = int(time.time() * 1000) % 1000000
+
+            # Create market order parameters
+            order_params = {
+                'market_index': int(contract_id),
+                'client_order_index': client_order_index,
+                'base_amount': int(quantity * self.base_amount_multiplier),
+                'price': 0,  # Market order
+                'is_ask': is_ask,
+                'order_type': self.lighter_client.ORDER_TYPE_MARKET,
+                'time_in_force': self.lighter_client.TIME_IN_FORCE_IOC,  # Immediate or Cancel
+                'reduce_only': True  # For closing positions
+            }
+
+            # Submit order
+            create_order, tx_hash, error = await self.lighter_client.create_order(**order_params)
+            
+            if error is not None:
+                return OrderResult(
+                    success=False,
+                    order_id=str(client_order_index),
+                    error_message=f"Market order error: {error}"
+                )
+            else:
+                return OrderResult(
+                    success=True,
+                    order_id=str(client_order_index),
+                    side=side,
+                    size=quantity,
+                    status='SUBMITTED'
+                )
+
+        except Exception as e:
+            self.logger.log(f"Error placing market order: {e}", "ERROR")
+            return OrderResult(
+                success=False,
+                error_message=f"Market order exception: {e}"
+            )

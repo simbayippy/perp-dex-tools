@@ -1,6 +1,9 @@
 # Dev environment
 /backend/db.sqlite3
 
+# lighter sdk
+/lighter-python
+
 *.csv
 bnbenv
 

@@ -98,6 +98,10 @@ class BaseExchangeClient(ABC):
         """Place a close order."""
         pass
 
+    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
+        """Place a market order. Override if exchange supports it."""
+        return OrderResult(success=False, error_message="Market orders not supported by this exchange")
+
     @abstractmethod
     async def cancel_order(self, order_id: str) -> OrderResult:
         """Cancel an order."""
@@ -127,3 +131,24 @@ class BaseExchangeClient(ABC):
     def get_exchange_name(self) -> str:
         """Get the exchange name."""
         pass
+
+    # Optional risk management methods (exchanges can override if supported)
+    async def get_account_balance(self) -> Optional[Decimal]:
+        """Get current account balance. Override if exchange supports it."""
+        return None
+    
+    async def get_detailed_positions(self) -> List[Dict[str, Any]]:
+        """Get detailed position info. Override if exchange supports it."""
+        return []
+    
+    async def get_account_pnl(self) -> Optional[Decimal]:
+        """Get account P&L. Override if exchange supports it."""
+        return None
+    
+    async def get_total_asset_value(self) -> Optional[Decimal]:
+        """Get total account asset value. Override if exchange supports it."""
+        return None
+    
+    def supports_risk_management(self) -> bool:
+        """Check if exchange supports advanced risk management."""
+        return False
