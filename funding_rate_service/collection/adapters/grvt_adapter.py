@@ -202,29 +202,22 @@ class GrvtAdapter(BaseDEXAdapter):
                 # to avoid blocking the event loop
                 loop = asyncio.get_event_loop()
                 
-                logger.debug(f"{self.dex_name}: Fetching ticker for {instrument}...")
-                
                 ticker_response = await loop.run_in_executor(
                     None, 
                     self.rest_client.fetch_ticker, 
                     instrument
                 )
                 
-                logger.debug(f"{self.dex_name}: Got response type: {type(ticker_response)}, keys: {ticker_response.keys() if isinstance(ticker_response, dict) else 'N/A'}")
-                
-                # GRVT returns data nested under 'result' key
-                ticker = ticker_response.get('result', {})
-                
-                logger.debug(f"{self.dex_name}: Ticker data type: {type(ticker)}, has funding_rate_8h_curr: {'funding_rate_8h_curr' in ticker if isinstance(ticker, dict) else 'N/A'}")
+                # GRVT SDK's fetch_ticker() already extracts the 'result' key
+                # So ticker_response IS the ticker data directly
+                ticker = ticker_response
                 
                 # Get funding_rate_8h_curr (8-hour funding rate)
                 funding_rate_8h = ticker.get('funding_rate_8h_curr')
                 
-                logger.debug(f"{self.dex_name}: funding_rate_8h value: {funding_rate_8h} (type: {type(funding_rate_8h)})")
-                
                 if funding_rate_8h is None:
-                    logger.warning(
-                        f"{self.dex_name}: No funding rate for {instrument}, ticker keys: {list(ticker.keys()) if isinstance(ticker, dict) else 'N/A'}"
+                    logger.debug(
+                        f"{self.dex_name}: No funding rate for {instrument}"
                     )
                     return None
                 
@@ -235,17 +228,16 @@ class GrvtAdapter(BaseDEXAdapter):
                 # Normalize symbol
                 normalized_symbol = self.normalize_symbol(base)
                 
-                logger.info(
-                    f"{self.dex_name}: SUCCESS {instrument} ({base}) -> "
+                logger.debug(
+                    f"{self.dex_name}: {instrument} ({base}) -> "
                     f"{normalized_symbol}: {funding_rate} (raw: {funding_rate_8h}%)"
                 )
                 
                 return (normalized_symbol, funding_rate)
             
             except Exception as e:
-                logger.error(
-                    f"{self.dex_name}: EXCEPTION for {instrument}: {type(e).__name__}: {e}",
-                    exc_info=True  # This will log the full traceback
+                logger.debug(
+                    f"{self.dex_name}: Error fetching ticker for {instrument}: {e}"
                 )
                 return None
     
