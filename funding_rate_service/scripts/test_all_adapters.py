@@ -20,7 +20,7 @@ import argparse
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from collection.adapters import LighterAdapter, ParadexAdapter, GrvtAdapter
+from collection.adapters import LighterAdapter, GrvtAdapter
 from utils.logger import logger
 
 
@@ -100,7 +100,6 @@ async def main():
     # Define adapters to test
     adapters = {
         'lighter': (LighterAdapter, 'Lighter'),
-        'paradex': (ParadexAdapter, 'Paradex'),
         'grvt': (GrvtAdapter, 'GRVT'),
     }
     
