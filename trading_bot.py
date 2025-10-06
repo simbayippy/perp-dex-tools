@@ -225,8 +225,20 @@ class TradingBot:
                     market_data = await self.strategy.get_market_data()
                     
                     if await self.strategy.should_execute(market_data):
-                        strategy_result = await self.strategy.execute_strategy(market_data)
-                        await self._handle_strategy_result(strategy_result)
+                        # For grid strategy, use the complete cycle method
+                        if self.config.strategy == 'grid' and hasattr(self.strategy, 'execute_grid_cycle'):
+                            success, error_message = await self.strategy.execute_grid_cycle()
+                            if not success and self.risk_manager and error_message:
+                                # Check if this was a margin failure
+                                if 'margin' in error_message.lower():
+                                    self.risk_manager.record_margin_failure()
+                            elif success and self.risk_manager:
+                                # Record successful order
+                                self.risk_manager.record_successful_order()
+                        else:
+                            # For other strategies, use the standard flow
+                            strategy_result = await self.strategy.execute_strategy(market_data)
+                            await self._handle_strategy_result(strategy_result)
                     else:
                         await asyncio.sleep(1)  # Brief wait if strategy says not to execute
                         

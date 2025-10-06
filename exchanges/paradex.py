@@ -190,11 +190,8 @@ class ParadexClient(BaseExchangeClient):
                     return
 
                 if order_id and status:
-                    # Determine order type based on side
-                    if side == self.config.close_order_side:
-                        order_type = "CLOSE"
-                    else:
-                        order_type = "OPEN"
+                    # Let strategy determine order type
+                    order_type = "ORDER"
 
                     # Map Paradex status to our status
                     status_map = {
@@ -422,13 +419,9 @@ class ParadexClient(BaseExchangeClient):
             raise Exception(f"[OPEN] [{order_id}] Unexpected order status: {order_status}")
 
     async def _get_active_close_orders(self, contract_id: str) -> int:
-        """Get active close orders for a contract using official SDK."""
+        """Get active orders count for a contract."""
         active_orders = await self.get_active_orders(contract_id)
-        active_close_orders = 0
-        for order in active_orders:
-            if order.side == self.config.close_order_side:
-                active_close_orders += 1
-        return active_close_orders
+        return len(active_orders)
 
     async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
         """Place a close order with Paradex using official SDK."""

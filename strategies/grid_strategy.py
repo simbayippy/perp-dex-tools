@@ -5,8 +5,9 @@ Implements the original grid trading logic as a modular strategy.
 
 import time
 import random
+import asyncio
 from decimal import Decimal
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple, Optional
 
 from .base_strategy import BaseStrategy, StrategyResult, StrategyAction, OrderParams, MarketData
 
@@ -66,31 +67,36 @@ class GridStrategy(BaseStrategy):
             return False
     
     async def execute_strategy(self, market_data: MarketData) -> StrategyResult:
-        """Execute grid strategy."""
+        """Execute grid strategy.
+        
+        Grid strategy flow:
+        1. Place open order (buy/sell at market price)
+        2. Wait for fill
+        3. Place close order with take-profit
+        4. Repeat
+        """
         try:
-            # Create order parameters for grid trading
             direction = self.get_parameter('direction')
             quantity = self.config.quantity
             
-            # Create the open order
-            order_params = OrderParams(
-                side=direction,
-                quantity=quantity,
-                order_type="limit",  # Grid uses limit orders
-                exchange=self.config.exchange,
-                contract_id=self.config.contract_id,
-                metadata={
-                    "strategy": "grid",
-                    "order_type": "open",
-                    "direction": direction
-                }
-            )
+            # Place open order first (this will be executed by TradingBot)
+            # The actual flow is:
+            # 1. This method returns "place open order"
+            # 2. TradingBot executes it via place_open_order()
+            # 3. Websocket callback or polling detects fill
+            # 4. On fill, we need to place the close order
+            
+            # Since we can't handle the full flow here (websocket callbacks happen in exchange client),
+            # we need to use the exchange client's place_open_order which already handles the full flow
+            
+            # For now, signal that we want to place an open order
+            # The close order logic needs to be handled differently in the new architecture
             
             return StrategyResult(
                 action=StrategyAction.PLACE_ORDER,
-                orders=[order_params],
-                message=f"Grid {direction} order: {quantity} @ market",
-                wait_time=1  # Brief wait after order placement
+                orders=[],  # Will use direct exchange client call
+                message=f"Grid strategy executing {direction} order",
+                wait_time=0
             )
             
         except Exception as e:
@@ -100,6 +106,85 @@ class GridStrategy(BaseStrategy):
                 message=f"Grid strategy error: {e}",
                 wait_time=5
             )
+    
+    async def execute_grid_cycle(self) -> Tuple[bool, Optional[str]]:
+        """Execute a complete grid trading cycle (open + close order).
+        
+        This is called directly by TradingBot to maintain the original grid logic.
+        Returns (success, error_message) tuple.
+        """
+        try:
+            direction = self.get_parameter('direction')
+            quantity = self.config.quantity
+            boost_mode = self.get_parameter('boost_mode', False)
+            
+            # Place open order (the exchange client handles waiting for fill)
+            self.logger.log(f"Placing {direction} order: {quantity}", "INFO")
+            open_result = await self.exchange_client.place_open_order(
+                self.config.contract_id,
+                quantity,
+                direction
+            )
+            
+            if not open_result.success:
+                error_msg = open_result.error_message or "Unknown error"
+                self.logger.log(f"Open order failed: {error_msg}", "ERROR")
+                return False, error_msg
+            
+            # Get the filled price and quantity
+            filled_price = open_result.price
+            filled_quantity = open_result.filled_size or quantity
+            
+            # If boost mode, place market order to close
+            if boost_mode:
+                close_side = self._get_close_order_side()
+                close_result = await self.exchange_client.place_market_order(
+                    contract_id=self.config.contract_id,
+                    quantity=filled_quantity,
+                    side=close_side
+                )
+                
+                if close_result.success:
+                    self.logger.log(f"Boost mode: Market close order executed", "INFO")
+                    self.record_successful_order()
+                    return True, None
+                else:
+                    return False, close_result.error_message
+            
+            # Normal mode: place limit close order with take-profit
+            else:
+                # Create close order with take-profit
+                close_order_params = await self.create_close_order(
+                    filled_price=filled_price,
+                    filled_quantity=filled_quantity
+                )
+                
+                close_result = await self.exchange_client.place_close_order(
+                    contract_id=close_order_params.contract_id,
+                    quantity=close_order_params.quantity,
+                    price=close_order_params.price,
+                    side=close_order_params.side
+                )
+                
+                # Small delay for Lighter exchange
+                if self.config.exchange == "lighter":
+                    await asyncio.sleep(1)
+                
+                if close_result.success:
+                    self.logger.log(
+                        f"Close order placed: {close_order_params.side} {close_order_params.quantity} @ {close_order_params.price}",
+                        "INFO"
+                    )
+                    self.record_successful_order()
+                    return True, None
+                else:
+                    error_msg = close_result.error_message or "Failed to place close order"
+                    self.logger.log(f"Close order failed: {error_msg}", "ERROR")
+                    return False, error_msg
+                
+        except Exception as e:
+            self.logger.log(f"Error in grid cycle: {e}", "ERROR")
+            return False, str(e)
     
     async def _update_active_orders(self):
         """Update active close orders."""

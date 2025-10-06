@@ -188,10 +188,8 @@ class EdgeXClient(BaseExchangeClient):
                         side = order.get('side', '').lower()
                         filled_size = order.get('cumMatchSize')
 
-                        if side == self.config.close_order_side:
-                            order_type = "CLOSE"
-                        else:
-                            order_type = "OPEN"
+                        # Let strategy determine order type
+                        order_type = "ORDER"
 
                         # edgex returns TWO filled events for the same order; take the first one
                         if status == "FILLED" and len(data.get('collateral', [])):

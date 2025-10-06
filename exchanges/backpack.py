@@ -244,9 +244,8 @@ class BackpackClient(BaseExchangeClient):
                 self.logger.log(f"Unexpected order side: {side}", "ERROR")
                 sys.exit(1)
 
-            # Check if this is a close order (opposite side from bot direction)
-            is_close_order = (order_side == self.config.close_order_side)
-            order_type = "CLOSE" if is_close_order else "OPEN"
+            # Let strategy determine order type
+            order_type = "ORDER"
 
             if event_type == 'orderFill' and quantity == fill_quantity:
                 if self._order_update_handler:
