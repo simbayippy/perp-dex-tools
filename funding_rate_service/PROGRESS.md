@@ -64,7 +64,7 @@ Implemented in `collection/adapters/`:
   - Handles multipliers (1000PEPE -> PEPE)
   - **Latency**: ~100-300ms
   
-- [x] `paradex_adapter.py` - **Paradex ✅ (SDK Verified)**
+- [x] `paradex_adapter.py` - **Paradex ✅ (SDK Verified) BUT WE CANNOT USE DUE TO DEPENDEENCY ISSUE**
   - Uses official Paradex Python SDK
   - Markets summary endpoint with funding rates
   - Symbol format: BTC-USD-PERP -> BTC
@@ -80,6 +80,8 @@ Implemented in `collection/adapters/`:
   - **Latency**: ~1-3s (10 concurrent, ~60 markets) - **83% faster!**
   
 - [ ] `edgex.py` - EdgeX adapter (future)
+- [ ] `aster.py` - Aster adapter (future)
+- [ ] `backpack.py` - backpack adapter (future)
 - [ ] `hyperliquid.py` - Hyperliquid adapter (future)
 
 ### 2.3 Collection Orchestrator - **✅ COMPLETE**

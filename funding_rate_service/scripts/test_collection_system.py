@@ -3,13 +3,17 @@
 Test script for the complete collection system
 
 This script tests:
-1. Lighter adapter (standalone)
+1. Multiple DEX adapters (Lighter, GRVT) - standalone
 2. Collection orchestrator (with database)
 3. End-to-end data flow
 
 Usage:
-    # Test adapter only (no database needed)
+    # Test adapters only (no database needed)
     python scripts/test_collection_system.py --adapter-only
+    
+    # Test specific adapter only
+    python scripts/test_collection_system.py --adapter-only --adapter lighter
+    python scripts/test_collection_system.py --adapter-only --adapter grvt
     
     # Test full system (requires database)
     python scripts/test_collection_system.py
@@ -23,23 +27,23 @@ import argparse
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from collection.adapters.lighter_adapter import LighterAdapter
+from collection.adapters import LighterAdapter, GrvtAdapter
 from collection.orchestrator import CollectionOrchestrator
 from database.connection import database
 from core.mappers import dex_mapper, symbol_mapper
 from utils.logger import logger
 
 
-async def test_adapter_only():
-    """Test just the Lighter adapter (no database)"""
+async def test_single_adapter(adapter_class, adapter_name, test_symbols):
+    """Test a single adapter (no database)"""
     print("\n" + "="*70)
-    print("TEST 1: Lighter Adapter (Standalone)")
+    print(f"TEST: {adapter_name} Adapter (Standalone)")
     print("="*70 + "\n")
     
-    adapter = LighterAdapter()
+    adapter = adapter_class()
     
     try:
-        print("📡 Fetching funding rates from Lighter...")
+        print(f"📡 Fetching funding rates from {adapter_name}...")
         rates, latency_ms = await adapter.fetch_with_metrics()
         
         print(f"\n✅ Success!")
@@ -65,31 +69,52 @@ async def test_adapter_only():
         
         # Test symbol normalization
         print(f"\n🔄 Symbol Normalization Test:")
-        test_symbols = ["BTC-PERP", "ETH-PERP", "1000PEPE-PERP", "SOL-USD"]
         for dex_symbol in test_symbols:
             normalized = adapter.normalize_symbol(dex_symbol)
             reverse = adapter.get_dex_symbol_format(normalized)
             print(f"   {dex_symbol:<18} -> {normalized:<10} -> {reverse}")
         
-        print("\n✅ Adapter test passed!\n")
+        print(f"\n✅ {adapter_name} adapter test passed!\n")
         return True
         
     except Exception as e:
-        print(f"\n❌ Adapter test failed: {e}")
-        logger.exception("Adapter test failed")
+        print(f"\n❌ {adapter_name} adapter test failed: {e}")
+        logger.exception(f"{adapter_name} adapter test failed")
         return False
     
     finally:
         await adapter.close()
 
 
+async def test_adapters_only(adapter_filter=None):
+    """Test all adapters or a specific one (no database)"""
+    adapters_to_test = {
+        'lighter': (LighterAdapter, 'Lighter', ["BTC-PERP", "ETH-PERP", "1000PEPE-PERP"]),
+        'grvt': (GrvtAdapter, 'GRVT', ["BTC_USDT_Perp", "ETH_USDT_Perp", "SOL_USDT_Perp"]),
+    }
+    
+    # Filter if specific adapter requested
+    if adapter_filter:
+        if adapter_filter not in adapters_to_test:
+            print(f"❌ Unknown adapter: {adapter_filter}")
+            return False
+        adapters_to_test = {adapter_filter: adapters_to_test[adapter_filter]}
+    
+    results = []
+    for adapter_key, (adapter_class, adapter_name, test_symbols) in adapters_to_test.items():
+        result = await test_single_adapter(adapter_class, adapter_name, test_symbols)
+        results.append((adapter_name, result))
+    
+    return all(result for _, result in results)
+
+
 async def test_full_system():
     """Test the complete system with database"""
     print("\n" + "="*70)
-    print("TEST 2: Complete Collection System (with Database)")
+    print("TEST: Complete Collection System (with Database)")
     print("="*70 + "\n")
     
-    adapter = None
+    adapters = []
     
     try:
         # Connect to database
@@ -103,12 +128,17 @@ async def test_full_system():
         await symbol_mapper.load_from_db(database)
         print(f"✅ Loaded {len(dex_mapper)} DEXs and {len(symbol_mapper)} symbols\n")
         
-        # Create adapter
-        adapter = LighterAdapter()
+        # Create adapters for both Lighter and GRVT
+        print("🔧 Initializing adapters...")
+        adapters = [
+            LighterAdapter(),
+            GrvtAdapter(),
+        ]
+        print(f"✅ Initialized {len(adapters)} adapters (Lighter, GRVT)\n")
         
         # Create orchestrator
         print("🎭 Creating orchestrator...")
-        orchestrator = CollectionOrchestrator(database, adapters=[adapter])
+        orchestrator = CollectionOrchestrator(database, adapters=adapters)
         print("✅ Orchestrator ready\n")
         
         # Run collection
@@ -161,7 +191,8 @@ async def test_full_system():
         return False
     
     finally:
-        if adapter:
+        # Close all adapters
+        for adapter in adapters:
             await adapter.close()
         await database.disconnect()
         print("="*70 + "\n")
@@ -173,7 +204,13 @@ async def main():
     parser.add_argument(
         '--adapter-only',
         action='store_true',
-        help='Test only the adapter (no database needed)'
+        help='Test only the adapters (no database needed)'
+    )
+    parser.add_argument(
+        '--adapter',
+        choices=['lighter', 'grvt', 'all'],
+        default='all',
+        help='Which adapter to test (only with --adapter-only)'
     )
     args = parser.parse_args()
     
@@ -183,16 +220,16 @@ async def main():
     
     results = []
     
-    # Test 1: Adapter only
-    adapter_result = await test_adapter_only()
-    results.append(('Adapter Test', adapter_result))
-    
-    # Test 2: Full system (only if not adapter-only mode)
-    if not args.adapter_only:
-        system_result = await test_full_system()
-        results.append(('System Test', system_result))
-    else:
+    # Test adapters (standalone)
+    if args.adapter_only:
+        adapter_filter = None if args.adapter == 'all' else args.adapter
+        adapter_result = await test_adapters_only(adapter_filter)
+        results.append(('Adapter Tests', adapter_result))
         print("\n⏭️  Skipping system test (--adapter-only mode)\n")
+    else:
+        # Test full system with database
+        system_result = await test_full_system()
+        results.append(('Full System Test', system_result))
     
     # Summary
     print("="*70)
