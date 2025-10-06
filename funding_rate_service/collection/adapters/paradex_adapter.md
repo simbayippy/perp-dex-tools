@@ -1,3 +1,4 @@
+# THIS CANT BE RUN DUE TO DEPENDENCE ISSUES
 """
 Paradex DEX Adapter
 
