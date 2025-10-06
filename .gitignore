@@ -3,6 +3,7 @@
 
 # lighter sdk
 /lighter-python
+/existing-repos
 
 *.csv
 bnbenv

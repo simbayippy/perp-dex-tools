@@ -1,0 +1,37 @@
+# Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Database
+asyncpg==0.29.0
+databases[postgresql]==0.8.0
+psycopg2-binary==2.9.9
+
+# Cache
+redis==5.0.1
+aioredis==2.0.1
+
+# HTTP Client
+aiohttp==3.9.1
+httpx==0.26.0
+
+# Utilities
+python-dotenv==1.0.0
+tenacity==8.2.3
+
+# Logging
+loguru==0.7.2
+
+# Development
+pytest==7.4.4
+pytest-asyncio==0.23.3
+pytest-cov==4.1.0
+ruff==0.1.14
+black==23.12.1
+mypy==1.8.0
+
+# WebSocket
+websockets==12.0
+
