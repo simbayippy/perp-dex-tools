@@ -1,7 +1,6 @@
 """
 Core business logic components
 """
-
 from core.mappers import DEXMapper, SymbolMapper
 from core.fee_calculator import (
     FeeCalculator,
@@ -9,15 +8,13 @@ from core.fee_calculator import (
     TradingCosts,
     fee_calculator
 )
-from core.opportunity_finder import (
-    OpportunityFinder,
-    opportunity_finder,
-    init_opportunity_finder
-)
-from core.historical_analyzer import (
-    HistoricalAnalyzer,
-    historical_analyzer,
-    init_historical_analyzer
+from core.opportunity_finder import OpportunityFinder
+from core.historical_analyzer import HistoricalAnalyzer
+from core.dependencies import (
+    ServiceContainer,
+    services,
+    get_opportunity_finder,
+    get_historical_analyzer
 )
 
 __all__ = [
@@ -33,12 +30,13 @@ __all__ = [
     
     # Opportunity Finder
     "OpportunityFinder",
-    "opportunity_finder",
-    "init_opportunity_finder",
     
     # Historical Analyzer
     "HistoricalAnalyzer",
-    "historical_analyzer",
-    "init_historical_analyzer",
+    
+    # Dependencies (new pattern)
+    "ServiceContainer",
+    "services",
+    "get_opportunity_finder",
+    "get_historical_analyzer",
 ]
-
