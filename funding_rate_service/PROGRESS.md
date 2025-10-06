@@ -110,20 +110,47 @@ Created `collection/orchestrator.py`:
 
 ---
 
-## 📅 Phase 3: Business Logic - **PENDING**
+## ✅ Phase 3: Business Logic - **COMPLETE**
 
-### 3.1 Fee Calculator
-File: `core/fee_calculator.py`
-- Calculate trading fees for opportunities
-- Support maker/taker fees
-- Handle fee tiers
+### 3.1 Fee Calculator ✅
+Created `core/fee_calculator.py`:
+- ✅ Calculate trading fees for funding rate arbitrage
+- ✅ Support maker/taker fees (4 transactions: open + close on both DEXs)
+- ✅ Calculate net profit after fees
+- ✅ Annualized APY calculations
+- ✅ Absolute profit calculations (USD)
+- ✅ Compare opportunities by profitability
+- ✅ Default fee structures for Lighter, GRVT, EdgeX, Hyperliquid
+- ✅ Dynamic fee structure management
 
-### 3.2 Opportunity Finder
-File: `core/opportunity_finder.py`
-- Find arbitrage opportunities
-- Calculate profitability after fees
-- Apply filters (OI, volume, spread)
-- Rank opportunities
+**Key Features:**
+- Trading cost breakdown (entry, exit, total fees in bps)
+- Net rate and APY after fees
+- Profitability detection
+- Position sizing support
+- Global `fee_calculator` instance ready to use
+
+### 3.2 Opportunity Finder ✅
+Created `core/opportunity_finder.py`:
+- ✅ Find arbitrage opportunities from latest funding rates
+- ✅ Calculate profitability after fees (uses FeeCalculator)
+- ✅ Comprehensive filtering:
+  - By symbol, DEX (include/exclude)
+  - By minimum divergence and profit
+  - By volume (min/max 24h volume)
+  - By Open Interest (min/max OI, OI ratio)
+  - By spread (max spread in bps)
+- ✅ Rank opportunities by multiple criteria
+- ✅ Find best opportunity
+- ✅ Compare specific DEX pairs
+- ✅ OI imbalance detection (long_heavy/short_heavy/balanced)
+
+**Key Features:**
+- Fetches latest rates with market data from DB
+- Creates opportunities for all DEX pairs per symbol
+- Applies filters during opportunity creation (efficient)
+- Sorts by any field (default: net profit)
+- Global `opportunity_finder` instance (initialized with dependencies)
 
 ---
 
@@ -155,11 +182,11 @@ Need to create in `tasks/`:
 |-------|--------|----------|
 | Phase 1: Data Models & Repositories | ✅ Complete | 100% |
 | Phase 2: Data Collection | ✅ Complete | 100% |
-| Phase 3: Business Logic | ⏳ Pending | 0% |
+| Phase 3: Business Logic | ✅ Complete | 100% |
 | Phase 4: API Endpoints | ⏳ Pending | 0% |
 | Phase 5: Background Tasks | ⏳ Pending | 0% |
 
-**Overall Progress: ~50%** 🎉
+**Overall Progress: ~60%** 🎉
 
 ---
 
@@ -228,9 +255,11 @@ Need to create in `tasks/`:
 - `models/system.py`
 - `models/history.py`
 
-### Core (2 files)
+### Core (4 files)
 - `core/__init__.py`
 - `core/mappers.py`
+- `core/fee_calculator.py` ⭐ NEW!
+- `core/opportunity_finder.py` ⭐ NEW!
 
 ### Database Repositories (5 files)
 - `database/repositories/__init__.py`
@@ -251,67 +280,83 @@ Need to create in `tasks/`:
 - `collection/adapters/README.md` ⭐
 - `collection/adapters/SDK_VERIFICATION.md` ⭐
 
-### Scripts (3 test files)
+### Scripts (4 test files)
 - `scripts/test_lighter_adapter.py`
 - `scripts/test_collection_system.py`
 - `scripts/test_all_adapters.py` ⭐
+- `scripts/test_phase3.py` ⭐ NEW!
 
 ### Documentation (1 file)
 - `INSTALL.md`
 
-**Total: 30 new files created** (includes EdgeX adapter)
+**Total: 32 new files created** (includes Phase 3: Business Logic)
 
 ---
 
-## 🎉 Phase 2 Complete - Data Collection System Working!
+## 🎉 Phase 3 Complete - Business Logic Ready!
 
-The **complete data collection layer** is now implemented and ready to use!
+The **complete business logic layer** is now implemented and ready to use!
 
-### ✅ What's Working Now
+### ✅ What's Working Now (Phase 1-3)
 
-1. **Lighter Adapter** - Fetches real funding rates from Lighter
-2. **Collection Orchestrator** - Coordinates collection and database storage
-3. **Dynamic Symbol Discovery** - Auto-creates symbols as they're discovered
-4. **Database Integration** - Stores rates in both historical and latest tables
-5. **Mapper Updates** - Auto-updates ID↔Name mappings
-6. **Error Handling** - Graceful failures, detailed logging
-7. **Collection Metrics** - Tracks latency, success rates
+**Data Layer:**
+1. **Pydantic Models** - Complete data validation and serialization
+2. **Mappers** - Fast ID ↔ Name lookups for DEXs and symbols
+3. **Repositories** - Clean database abstraction layer
+
+**Collection Layer:**
+4. **4 DEX Adapters** - Lighter, GRVT, EdgeX (+ Paradex ready)
+5. **Collection Orchestrator** - Parallel data collection from multiple DEXs
+6. **Dynamic Symbol Discovery** - Auto-creates symbols as they're discovered
+7. **Database Integration** - Stores rates in both historical and latest tables
+
+**Business Logic (NEW!):**
+8. **Fee Calculator** - Calculate trading costs and net profitability
+9. **Opportunity Finder** - Find profitable arbitrage opportunities
+10. **Comprehensive Filtering** - By symbol, DEX, volume, OI, spread, profit
+11. **Ranking System** - Sort opportunities by any metric
 
 ### 🧪 Testing
 
 ```bash
-# Install Lighter SDK (if not done)
-cd ../lighter-python && pip install -e .
-
-# Install dependencies
-cd ../funding_rate_service
+# Install dependencies (if not done)
+cd funding_rate_service
 pip install -r requirements.txt
 
 # Setup database (if not done)
 python scripts/init_db.py
 python scripts/seed_dexes.py
 
-# Test adapter only (no database)
-python scripts/test_collection_system.py --adapter-only
-
-# Test full system (with database)
+# Test Phase 1-2: Data collection
 python scripts/test_collection_system.py
+
+# Test Phase 3: Business logic
+# Fee calculator only (no database needed)
+python scripts/test_phase3.py --fees-only
+
+# Full test with opportunity finder (requires database with funding rates)
+python scripts/test_phase3.py
+
+# Test with specific symbol
+python scripts/test_phase3.py --symbol BTC
 ```
 
-### 🎯 Next Steps: Phase 3 - Business Logic
+### 🎯 Next Steps: Phase 4 - API Endpoints
 
-Now that data is flowing, implement:
+Now that the business logic is complete, create the API layer:
 
-1. **Fee Calculator** (`core/fee_calculator.py`)
-   - Calculate trading fees for opportunities
-   - Handle maker/taker fees
-   - Support fee tiers
+1. **FastAPI Application Setup** (`main.py`)
+   - Initialize FastAPI app
+   - Setup dependency injection
+   - Configure CORS, middleware
 
-2. **Opportunity Finder** (`core/opportunity_finder.py`)
-   - Find arbitrage opportunities from collected rates
-   - Calculate profitability after fees
-   - Filter by OI, volume, spread
-   - Rank opportunities
+2. **API Routes** (`api/routes/`)
+   - `funding_rates.py` - Get latest/historical rates
+   - `opportunities.py` - Find and filter opportunities
+   - `dexes.py` - DEX metadata and health
+   - `health.py` - Service health checks
 
-This will enable you to **find profitable funding arb opportunities** from the data being collected!
+3. **Request/Response Models** (already have Pydantic models!)
+
+This will enable you to **access funding arb opportunities via REST API**!
 
