@@ -1,50 +1,4 @@
-# Funding Rate Arbitrage System Architecture Summary
-
-## System Overview
-
-Two-service architecture for funding rate arbitrage trading:
-
-1. **./funding_rate_service** - Pure market data provider
-2. **perp_dex_tools** (client) - Trading strategy and execution
-
----
-
-## Funding Rate Service (Current + Minimal Additions)
-
-### Current Capabilities ✓
-- Collects funding rates from multiple DEXs every minute
-- Stores historical rates in database
-- `/opportunities` - Analyzes and ranks arbitrage opportunities
-- `/funding-rates` - Query rates by DEX/symbol
-- Fee calculation and net profitability analysis
-
-### Required Addition
-```python
-GET /funding-rates/compare?symbol={symbol}&dex1={dex1}&dex2={dex2}
-
-Response:
-{
-    "symbol": "BTC",
-    "dex1": {
-        "name": "lighter",
-        "funding_rate": 0.0001,
-        "next_funding_time": "2025-10-07T16:00:00Z",
-        "timestamp": "2025-10-07T15:55:32Z"
-    },
-    "dex2": {
-        "name": "hyperliquid", 
-        "funding_rate": 0.0008,
-        "next_funding_time": "2025-10-07T16:00:00Z",
-        "timestamp": "2025-10-07T15:55:30Z"
-    },
-    "divergence": 0.0007,
-    "divergence_direction": "dex2_higher"
-}
-```
-
-**Purpose**: Check current funding rates for open positions to determine if rebalancing is needed.
-
----
+# Funding Rate Arbitrage Rebalancing Strategies
 
 ## Position Opening Logic: Who Decides?
 
@@ -87,7 +41,7 @@ for opp in opportunities:
 
 ---
 
-## Client Service (perp_dex_tools) Implementation
+## Client Service  Implementation
 
 ### Core Components
 
@@ -305,48 +259,3 @@ REBALANCE_CONFIG = {
 ```
 
 ---
-
-## Data Flow Diagram
-
-```
-[Funding Rate Service]
-    ↓ (every minute)
-Collects funding rates from DEXs
-    ↓
-Stores in database
-    ↓
-Calculates opportunities
-    ↓
-Exposes API
-
-[Client - perp_dex_tools]
-    ↓ (every minute)
-Polls /opportunities → Decides if/when to open new positions
-Polls /compare → Checks open positions for rebalancing
-    ↓
-Applies rebalancing strategy
-    ↓
-Executes trades via DEX APIs
-    ↓
-Updates position tracker
-```
-
----
-
-## Key Principles
-
-1. **Funding service = Stateless market data**
-   - No knowledge of your positions
-   - No trading logic
-   - Just facts about current rates and opportunities
-
-2. **Client = Stateful strategy executor**
-   - Tracks YOUR positions
-   - YOUR rebalancing rules
-   - YOUR risk management
-   - Executes YOUR trades
-
-3. **Clear separation**
-   - Service can be reused for different strategies
-   - Client contains all personal trading logic
-   - Easy to test each component independently
