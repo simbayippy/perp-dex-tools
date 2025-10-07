@@ -129,19 +129,19 @@ CREATE TABLE IF NOT EXISTS opportunities (
     net_profit_percent NUMERIC(15, 10) NOT NULL,
     annualized_apy NUMERIC(10, 4),
     
-    long_volume_24h NUMERIC(20, 2),
-    short_volume_24h NUMERIC(20, 2),
+    long_dex_volume_24h NUMERIC(20, 2),
+    short_dex_volume_24h NUMERIC(20, 2),
     min_volume_24h NUMERIC(20, 2),
     
-    long_oi_usd NUMERIC(20, 2),
-    short_oi_usd NUMERIC(20, 2),
+    long_dex_oi_usd NUMERIC(20, 2),
+    short_dex_oi_usd NUMERIC(20, 2),
     min_oi_usd NUMERIC(20, 2),
     max_oi_usd NUMERIC(20, 2),
     oi_ratio NUMERIC(10, 4),
     oi_imbalance VARCHAR(20),
     
-    long_spread_bps INTEGER,
-    short_spread_bps INTEGER,
+    long_dex_spread_bps INTEGER,
+    short_dex_spread_bps INTEGER,
     avg_spread_bps INTEGER,
     
     discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

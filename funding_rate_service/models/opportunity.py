@@ -35,17 +35,29 @@ class ArbitrageOpportunity(BaseModel):
         description="Annualized APY assuming 8h funding periods"
     )
     
-    # Volume metrics
-    long_volume_24h: Optional[Decimal] = None
-    short_volume_24h: Optional[Decimal] = None
+    # Volume metrics (per DEX)
+    long_dex_volume_24h: Optional[Decimal] = Field(
+        None,
+        description="24h volume on the long DEX (where you go long)"
+    )
+    short_dex_volume_24h: Optional[Decimal] = Field(
+        None,
+        description="24h volume on the short DEX (where you go short)"
+    )
     min_volume_24h: Optional[Decimal] = Field(
         None, 
         description="Minimum volume between the two DEXs"
     )
     
     # OPEN INTEREST METRICS (key for low OI farming strategy!)
-    long_oi_usd: Optional[Decimal] = Field(None, description="Long DEX open interest in USD")
-    short_oi_usd: Optional[Decimal] = Field(None, description="Short DEX open interest in USD")
+    long_dex_oi_usd: Optional[Decimal] = Field(
+        None,
+        description="Open interest on the long DEX in USD"
+    )
+    short_dex_oi_usd: Optional[Decimal] = Field(
+        None,
+        description="Open interest on the short DEX in USD"
+    )
     min_oi_usd: Optional[Decimal] = Field(
         None, 
         description="Minimum OI (for low OI detection - use this for filtering!)"
@@ -53,17 +65,23 @@ class ArbitrageOpportunity(BaseModel):
     max_oi_usd: Optional[Decimal] = Field(None, description="Maximum OI")
     oi_ratio: Optional[Decimal] = Field(
         None, 
-        description="OI ratio (long/short) - detects imbalances"
+        description="OI ratio (long_dex/short_dex) - detects imbalances"
     )
     oi_imbalance: Optional[str] = Field(
         None, 
         description="'long_heavy', 'short_heavy', or 'balanced'"
     )
     
-    # Liquidity metrics
-    long_spread_bps: Optional[int] = Field(None, description="Long DEX spread in basis points")
-    short_spread_bps: Optional[int] = Field(None, description="Short DEX spread in basis points")
-    avg_spread_bps: Optional[int] = Field(None, description="Average spread")
+    # Liquidity metrics (per DEX)
+    long_dex_spread_bps: Optional[int] = Field(
+        None,
+        description="Spread on the long DEX in basis points"
+    )
+    short_dex_spread_bps: Optional[int] = Field(
+        None,
+        description="Spread on the short DEX in basis points"
+    )
+    avg_spread_bps: Optional[int] = Field(None, description="Average spread across both DEXs")
     
     # Timestamps
     discovered_at: datetime

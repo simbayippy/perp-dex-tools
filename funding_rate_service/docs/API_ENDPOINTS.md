@@ -250,17 +250,17 @@ Get arbitrage opportunities with comprehensive filtering.
       "estimated_fees": 0.00006,
       "net_profit_percent": 0.00009,
       "annualized_apy": 9.855,
-      "long_volume_24h": 1500000.0, // nullable
-      "short_volume_24h": 2000000.0, // nullable
+      "long_dex_volume_24h": 1500000.0, // nullable - volume on the long DEX
+      "short_dex_volume_24h": 2000000.0, // nullable - volume on the short DEX
       "min_volume_24h": 1500000.0, // nullable
-      "long_oi_usd": 5000000.0, // nullable
-      "short_oi_usd": 6000000.0, // nullable
+      "long_dex_oi_usd": 5000000.0, // nullable - OI on the long DEX
+      "short_dex_oi_usd": 6000000.0, // nullable - OI on the short DEX
       "min_oi_usd": 5000000.0, // nullable
       "max_oi_usd": 6000000.0, // nullable
-      "oi_ratio": 0.833, // nullable
+      "oi_ratio": 0.833, // nullable - long_dex_oi / short_dex_oi
       "oi_imbalance": "short_heavy", // nullable
-      "long_spread_bps": 5, // nullable
-      "short_spread_bps": 4, // nullable
+      "long_dex_spread_bps": 5, // nullable - spread on the long DEX
+      "short_dex_spread_bps": 4, // nullable - spread on the short DEX
       "avg_spread_bps": 4.5, // nullable
       "discovered_at": "2024-10-06T12:00:00"
     }
