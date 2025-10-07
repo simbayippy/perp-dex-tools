@@ -113,11 +113,12 @@ class AsterFundingAdapter(BaseFundingAdapter):
                                   market_data.get('funding_rate'))
                     
                     if funding_rate is None:
-                        # Debug: log available fields to help troubleshoot
-                        available_fields = list(market_data.keys())
-                        logger.debug(
-                            f"{self.dex_name}: No funding rate for {symbol}. Available fields: {available_fields}"
-                        )
+                        # Debug: log available fields for first few symbols only
+                        if len(rates_dict) < 2:
+                            available_fields = list(market_data.keys())
+                            logger.debug(
+                                f"{self.dex_name}: No funding rate for {symbol}. Available fields: {available_fields}"
+                            )
                         continue
                     
                     # Normalize symbol (e.g., "BTCUSDT" -> "BTC")
@@ -128,10 +129,12 @@ class AsterFundingAdapter(BaseFundingAdapter):
                     
                     rates_dict[normalized_symbol] = funding_rate_decimal
                     
-                    logger.debug(
-                        f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
-                        f"{funding_rate_decimal}"
-                    )
+                    # Log details for first few symbols only to avoid spam
+                    if len(rates_dict) <= 3:
+                        logger.debug(
+                            f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
+                            f"{funding_rate_decimal}"
+                        )
                 
                 except Exception as e:
                     logger.error(
@@ -245,11 +248,13 @@ class AsterFundingAdapter(BaseFundingAdapter):
                     if data:  # Only add if we have some data
                         market_data[normalized_symbol] = data
                         
-                        logger.debug(
-                            f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
-                            f"volume={data.get('volume_24h', 'N/A')}, "
-                            f"oi={data.get('open_interest', 'N/A')}"
-                        )
+                        # Log details for first few symbols only to avoid spam
+                        if len(market_data) <= 3:
+                            logger.debug(
+                                f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
+                                f"volume={data.get('volume_24h', 'N/A')}, "
+                                f"oi={data.get('open_interest', 'N/A')}"
+                            )
                 
                 except Exception as e:
                     logger.error(

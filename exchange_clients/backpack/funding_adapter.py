@@ -102,43 +102,40 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             
             rates_dict = {}
             
-            # Use Backpack's funding interval rates endpoint to get the most recent funding rates
-            # This provides historical funding rates, with the most recent being effectively current
+            # Use Backpack's get_all_mark_prices endpoint to get ALL funding rates in one call
+            # This is much faster than calling get_funding_interval_rates for each symbol individually
             
-            # Get funding rates for all perpetual symbols
-            for symbol in perp_symbols:
+            mark_prices_data = self.public_client.get_all_mark_prices()
+            
+            if not mark_prices_data:
+                logger.warning(f"{self.dex_name}: No mark prices data returned")
+                return {}
+            
+            # Handle both single dict and list response
+            if isinstance(mark_prices_data, dict):
+                mark_prices_list = [mark_prices_data]
+            elif isinstance(mark_prices_data, list):
+                mark_prices_list = mark_prices_data
+            else:
+                logger.warning(f"{self.dex_name}: Unexpected mark prices data format: {type(mark_prices_data)}")
+                return {}
+            
+            # Extract funding rates from mark prices data
+            for mark_data in mark_prices_list:
                 try:
-                    # Use the funding interval rates endpoint (historical data)
-                    funding_data = self.public_client.get_funding_interval_rates(symbol, limit=1)
+                    symbol = mark_data.get('symbol', '')
                     
-                    if not funding_data:
-                        logger.debug(f"{self.dex_name}: No funding data for {symbol}")
+                    # Only process perpetual markets (ending with _PERP)
+                    if not symbol.endswith('_PERP'):
                         continue
                     
-                    # Handle both single dict and list response
-                    if isinstance(funding_data, list) and len(funding_data) > 0:
-                        latest_funding = funding_data[0]  # Get the most recent funding rate
-                    elif isinstance(funding_data, dict):
-                        latest_funding = funding_data
-                    else:
-                        logger.debug(f"{self.dex_name}: Unexpected funding data format for {symbol}: {type(funding_data)}")
-                        continue
-                    
-                    # Debug: log the structure of the funding data for first few symbols only
-                    if len(rates_dict) < 2:  # Only log for first 2 symbols to avoid spam
-                        logger.debug(f"{self.dex_name}: Funding data structure for {symbol}: {latest_funding}")
-                    
-                    # Get funding rate - try multiple possible field names
-                    funding_rate = (latest_funding.get('fundingRate') or 
-                                  latest_funding.get('rate') or 
-                                  latest_funding.get('funding_rate') or
-                                  latest_funding.get('r') or
-                                  latest_funding.get('f'))  # WebSocket uses 'f' for funding rate
+                    # Get funding rate from mark prices response
+                    funding_rate = mark_data.get('fundingRate')
                     
                     if funding_rate is None:
                         # Debug: log available fields for first few symbols only
                         if len(rates_dict) < 2:
-                            available_fields = list(latest_funding.keys())
+                            available_fields = list(mark_data.keys())
                             logger.debug(
                                 f"{self.dex_name}: No funding rate for {symbol}. Available fields: {available_fields}"
                             )
@@ -161,7 +158,7 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                 
                 except Exception as e:
                     logger.error(
-                        f"{self.dex_name}: Error fetching funding rate for {symbol}: {e}"
+                        f"{self.dex_name}: Error parsing mark price data for {mark_data.get('symbol', 'unknown')}: {e}"
                     )
                     continue
             
