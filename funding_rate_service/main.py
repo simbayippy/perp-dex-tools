@@ -16,7 +16,7 @@ from core.fee_calculator import fee_calculator
 from core.opportunity_finder import OpportunityFinder
 from core.historical_analyzer import HistoricalAnalyzer
 from core.dependencies import services
-from api.routes import funding_rates, opportunities, dexes, health
+from api.routes import funding_rates, opportunities, dexes, health, tasks
 from utils.logger import logger
 
 
@@ -75,7 +75,7 @@ async def lifespan(app: FastAPI):
         services.set_historical_analyzer(historical_analyzer)
         logger.info("✅ Historical analyzer initialized")
         
-        logger.info("🚀 Funding Rate Service started successfully!")
+        logger.info("🚀 Funding Rate Service API started successfully!")
         
         yield
         
@@ -85,10 +85,10 @@ async def lifespan(app: FastAPI):
     
     finally:
         # Shutdown
-        logger.info("Shutting down Funding Rate Service...")
+        logger.info("Shutting down Funding Rate Service API...")
         await database.disconnect()
         logger.info("✅ Database disconnected")
-        logger.info("👋 Funding Rate Service stopped")
+        logger.info("👋 Funding Rate Service API stopped")
 
 
 # Create FastAPI app
@@ -150,6 +150,12 @@ app.include_router(
     health.router,
     prefix=API_PREFIX,
     tags=["Health"]
+)
+
+app.include_router(
+    tasks.router,
+    prefix=API_PREFIX,
+    tags=["Background Tasks"]
 )
 
 

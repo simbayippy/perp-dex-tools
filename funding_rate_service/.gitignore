@@ -3,7 +3,6 @@
 venv/
 env/
 
-/tasks/
 
 # Python
 __pycache__/

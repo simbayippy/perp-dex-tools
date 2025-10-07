@@ -21,6 +21,9 @@ httpx>=0.26.0
 python-dotenv==1.0.0
 tenacity==8.2.3
 
+# Background Tasks
+apscheduler==3.10.4
+
 # Logging
 loguru==0.7.2
 
