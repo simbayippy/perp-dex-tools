@@ -62,22 +62,37 @@ class FeeCalculator:
     # Default fee structures for common DEXs
     DEFAULT_FEES: Dict[str, FeeStructure] = {
         'lighter': FeeStructure(
-            maker_fee=Decimal('0.0000'),  # 
-            taker_fee=Decimal('0.0000'),  # 
+            maker_fee=Decimal('0.0000'),  # 0%
+            taker_fee=Decimal('0.0000'),  # 0%
             name='lighter'
         ),
         'grvt': FeeStructure(
-            maker_fee=Decimal('0.0002'),  # 0.02%
-            taker_fee=Decimal('0.0005'),  # 0.05%
+            maker_fee=Decimal('-0.0001'),  # -0.01% (rebate!)
+            taker_fee=Decimal('0.00055'),  # 0.055%
             name='grvt'
         ),
         'edgex': FeeStructure(
-            maker_fee=Decimal('0.0002'),  # 0.02%
-            taker_fee=Decimal('0.00055'), # 0.055%
+            maker_fee=Decimal('0.00015'),  # 0.015%
+            taker_fee=Decimal('0.00038'),  # 0.038%
             name='edgex'
         ),
+        'paradex': FeeStructure(
+            maker_fee=Decimal('0.00003'),  # 0.003%
+            taker_fee=Decimal('0.0002'),   # 0.02%
+            name='paradex'
+        ),
+        'backpack': FeeStructure(
+            maker_fee=Decimal('0.0002'),   # 0.02%
+            taker_fee=Decimal('0.0005'),   # 0.05%
+            name='backpack'
+        ),
+        'aster': FeeStructure(
+            maker_fee=Decimal('0.00005'),   # 0.005%
+            taker_fee=Decimal('0.0004'),   # 0.04%
+            name='aster'
+        ),
         'hyperliquid': FeeStructure(
-            maker_fee=Decimal('0.00020'),  # 0.02%
+            maker_fee=Decimal('0.00015'),  # 0.015%
             taker_fee=Decimal('0.00045'),  # 0.045%
             name='hyperliquid'
         ),
