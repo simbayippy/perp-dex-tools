@@ -2,10 +2,10 @@
 DEX adapters for data collection
 """
 
-from collection.adapters.lighter_adapter import LighterAdapter
+from exchange_clients.lighter import LighterFundingAdapter as LighterAdapter
+from exchange_clients.grvt import GrvtFundingAdapter as GrvtAdapter
+from exchange_clients.edgex import EdgeXFundingAdapter as EdgeXAdapter
 # from collection.adapters.paradex_adapter import ParadexAdapter
-from collection.adapters.grvt_adapter import GrvtAdapter
-from collection.adapters.edgex_adapter import EdgeXAdapter
 
 __all__ = [
     "LighterAdapter",
