@@ -56,6 +56,11 @@ class EdgeXAdapter(BaseDEXAdapter):
         self.max_concurrent_requests = max_concurrent_requests
         self.delay_between_batches = delay_between_batches
         
+        # Cache for ticker data to avoid duplicate API calls
+        # When fetch_funding_rates() is called, it caches tickers
+        # Then fetch_market_data() can reuse the cached data
+        self._ticker_cache: Dict[str, dict] = {}
+        
         logger.info(
             f"EdgeX adapter initialized (max_concurrent={max_concurrent_requests}, "
             f"batch_delay={delay_between_batches}s)"
@@ -65,16 +70,22 @@ class EdgeXAdapter(BaseDEXAdapter):
         """
         Fetch all funding rates from EdgeX
         
+        OPTIMIZED: Uses getTicker endpoint which provides BOTH funding rates and market data.
+        Caches ticker responses for later use by fetch_market_data() to avoid duplicate API calls.
+        
         Process:
         1. GET /api/v1/public/metadata - get all contracts
-        2. For each contract: GET /api/v1/public/funding/getLatestFundingRate
-        3. Parse and normalize symbols
+        2. For each contract: GET /api/v1/public/quote/getTicker (has funding rate + volume + OI)
+        3. Extract funding rates and cache full ticker data
         
         Returns:
             Dict mapping normalized symbols to funding rates
         """
         try:
             logger.debug(f"{self.dex_name}: Fetching contract metadata...")
+            
+            # Clear ticker cache for fresh data
+            self._ticker_cache = {}
             
             # Step 1: Fetch all contracts
             metadata_response = await self._make_request("/api/v1/public/meta/getMetaData")
@@ -111,14 +122,14 @@ class EdgeXAdapter(BaseDEXAdapter):
             
             logger.info(
                 f"{self.dex_name}: Found {len(perpetual_contracts)} perpetual contracts, "
-                f"fetching funding rates in batches (max {self.max_concurrent_requests} concurrent, "
-                f"{self.delay_between_batches}s delay between batches)..."
+                f"fetching tickers (funding + market data) in batches "
+                f"(max {self.max_concurrent_requests} concurrent, {self.delay_between_batches}s delay)..."
             )
             
-            # Step 2: Fetch funding rates in batches with delays to avoid rate limiting
-            results = await self._fetch_in_batches(perpetual_contracts)
+            # Step 2: Fetch tickers (which have both funding rates AND market data) in batches
+            results = await self._fetch_tickers_in_batches(perpetual_contracts)
             
-            # Step 3: Collect results
+            # Step 3: Extract funding rates and cache full ticker data
             rates_dict = {}
             successful = 0
             failed = 0
@@ -126,17 +137,19 @@ class EdgeXAdapter(BaseDEXAdapter):
             for result in results:
                 if isinstance(result, Exception):
                     failed += 1
-                    logger.debug(f"{self.dex_name}: Funding rate fetch failed: {result}")
+                    logger.debug(f"{self.dex_name}: Ticker fetch failed: {result}")
                 elif result is not None:
-                    symbol, rate = result
+                    symbol, rate, ticker_data = result
                     rates_dict[symbol] = rate
+                    self._ticker_cache[symbol] = ticker_data  # Cache for market data reuse
                     successful += 1
                 else:
                     failed += 1
             
             logger.info(
                 f"{self.dex_name}: Successfully fetched {successful} funding rates "
-                f"({failed} failed) from {len(perpetual_contracts)} contracts"
+                f"({failed} failed) from {len(perpetual_contracts)} contracts. "
+                f"Ticker data cached for market data extraction."
             )
             
             return rates_dict
@@ -145,15 +158,15 @@ class EdgeXAdapter(BaseDEXAdapter):
             logger.error(f"{self.dex_name}: Failed to fetch funding rates: {e}")
             raise
     
-    async def _fetch_in_batches(self, contracts: list) -> list:
+    async def _fetch_tickers_in_batches(self, contracts: list) -> list:
         """
-        Fetch funding rates in batches with delays to avoid rate limiting
+        Fetch tickers (with funding rates + market data) in batches with delays
         
         Args:
             contracts: List of contract dicts with 'contract_id' and 'contract_name'
             
         Returns:
-            List of results (tuples or exceptions)
+            List of results (tuples of symbol, rate, ticker_data or exceptions)
         """
         all_results = []
         semaphore = asyncio.Semaphore(self.max_concurrent_requests)
@@ -163,13 +176,13 @@ class EdgeXAdapter(BaseDEXAdapter):
             batch = contracts[i:i + self.max_concurrent_requests]
             
             logger.debug(
-                f"{self.dex_name}: Processing batch {i // self.max_concurrent_requests + 1} "
+                f"{self.dex_name}: Processing ticker batch {i // self.max_concurrent_requests + 1} "
                 f"({len(batch)} contracts)"
             )
             
             # Fetch this batch
             tasks = [
-                self._fetch_single_funding_rate(
+                self._fetch_single_ticker(
                     contract['contract_id'],
                     contract['contract_name'],
                     semaphore
@@ -190,72 +203,72 @@ class EdgeXAdapter(BaseDEXAdapter):
         
         return all_results
     
-    async def _fetch_single_funding_rate(
+    async def _fetch_single_ticker(
         self, 
         contract_id: str, 
         contract_name: str,
         semaphore: asyncio.Semaphore
-    ) -> Optional[tuple[str, Decimal]]:
+    ) -> Optional[tuple[str, Decimal, dict]]:
         """
-        Fetch funding rate for a single contract
+        Fetch ticker (funding rate + market data) for a single contract
         
         Args:
             contract_id: EdgeX contract ID
-            contract_name: EdgeX contract name (e.g., "BTCUSD")
+            contract_name: EdgeX contract name (e.g., "BTCUSDT")
             semaphore: Concurrency limiter
             
         Returns:
-            Tuple of (normalized_symbol, funding_rate) or None if failed
+            Tuple of (normalized_symbol, funding_rate, ticker_data) or None if failed
         """
         async with semaphore:
             try:
-                # Fetch latest funding rate for this contract
+                # Fetch ticker for this contract (has funding rate, volume, OI, etc.)
                 response = await self._make_request(
-                    "/api/v1/public/funding/getLatestFundingRate",
+                    "/api/v1/public/quote/getTicker",
                     params={'contractId': contract_id}
                 )
                 
                 if response.get('code') != 'SUCCESS':
                     logger.debug(
-                        f"{self.dex_name}: Failed to fetch funding rate for {contract_name}: "
+                        f"{self.dex_name}: Failed to fetch ticker for {contract_name}: "
                         f"{response.get('msg', 'Unknown error')}"
                     )
                     return None
                 
-                # Extract funding rate data
+                # Extract ticker data
                 data_list = response.get('data', [])
                 if not data_list or len(data_list) == 0:
                     logger.debug(
-                        f"{self.dex_name}: No funding rate data for {contract_name}"
+                        f"{self.dex_name}: No ticker data for {contract_name}"
                     )
                     return None
                 
-                funding_data = data_list[0]
+                ticker = data_list[0]
                 
                 # Extract funding rate
-                funding_rate_str = funding_data.get('fundingRate')
+                funding_rate_str = ticker.get('fundingRate')
                 if funding_rate_str is None:
                     logger.debug(
-                        f"{self.dex_name}: No funding rate field for {contract_name}"
+                        f"{self.dex_name}: No funding rate in ticker for {contract_name}"
                     )
                     return None
                 
-                # Convert to Decimal
                 funding_rate = Decimal(str(funding_rate_str))
                 
-                # Normalize symbol
+                # Normalize symbol (BTCUSDT -> BTC)
                 normalized_symbol = self.normalize_symbol(contract_name)
                 
                 logger.debug(
-                    f"{self.dex_name}: {contract_name} (ID: {contract_id}) -> "
-                    f"{normalized_symbol}: {funding_rate}"
+                    f"{self.dex_name}: {contract_name} -> {normalized_symbol}: "
+                    f"funding_rate={funding_rate}, volume=${ticker.get('value', 'N/A')}, "
+                    f"OI={ticker.get('openInterest', 'N/A')}"
                 )
                 
-                return (normalized_symbol, funding_rate)
+                return (normalized_symbol, funding_rate, ticker)
             
             except Exception as e:
                 logger.debug(
-                    f"{self.dex_name}: Error fetching funding rate for {contract_name}: {e}"
+                    f"{self.dex_name}: Error fetching ticker for {contract_name}: {e}"
                 )
                 return None
     
@@ -263,8 +276,8 @@ class EdgeXAdapter(BaseDEXAdapter):
         """
         Fetch market data (volume, OI) from EdgeX
         
-        Uses the getTicker endpoint to fetch 24h volume and open interest.
-        Fetches in batches with delays to avoid rate limiting (same as funding rates).
+        OPTIMIZED: Prefers cached ticker data from fetch_funding_rates() to avoid duplicate API calls.
+        If cache is empty, falls back to fetching tickers directly (independent operation).
         
         Returns:
             Dictionary mapping normalized symbols to market data
@@ -279,9 +292,21 @@ class EdgeXAdapter(BaseDEXAdapter):
             Exception: If fetching fails after retries
         """
         try:
-            logger.debug(f"{self.dex_name}: Fetching contract metadata for market data...")
+            # Fast path: Use cached tickers if available
+            if self._ticker_cache:
+                logger.debug(
+                    f"{self.dex_name}: Using cached tickers for market data "
+                    f"({len(self._ticker_cache)} symbols, no API calls needed)..."
+                )
+                return self._extract_market_data_from_cache()
             
-            # Step 1: Fetch all contracts (reuse same logic as funding rates)
+            # Slow path: Cache is empty, fetch tickers directly
+            logger.info(
+                f"{self.dex_name}: Ticker cache is empty. "
+                f"Fetching tickers directly for market data (this will be slower)..."
+            )
+            
+            # Step 1: Fetch all contracts
             metadata_response = await self._make_request("/api/v1/public/meta/getMetaData")
             
             if metadata_response.get('code') != 'SUCCESS':
@@ -315,13 +340,13 @@ class EdgeXAdapter(BaseDEXAdapter):
             
             logger.info(
                 f"{self.dex_name}: Found {len(perpetual_contracts)} perpetual contracts, "
-                f"fetching market data in batches (max {self.max_concurrent_requests} concurrent)..."
+                f"fetching tickers in batches for market data..."
             )
             
-            # Step 2: Fetch market data in batches
-            results = await self._fetch_market_data_in_batches(perpetual_contracts)
+            # Step 2: Fetch tickers in batches
+            results = await self._fetch_tickers_in_batches(perpetual_contracts)
             
-            # Step 3: Collect results
+            # Step 3: Extract market data and populate cache
             market_data_dict = {}
             successful = 0
             failed = 0
@@ -329,17 +354,20 @@ class EdgeXAdapter(BaseDEXAdapter):
             for result in results:
                 if isinstance(result, Exception):
                     failed += 1
-                    logger.debug(f"{self.dex_name}: Market data fetch failed: {result}")
+                    logger.debug(f"{self.dex_name}: Ticker fetch failed: {result}")
                 elif result is not None:
-                    symbol, data = result
-                    market_data_dict[symbol] = data
+                    symbol, rate, ticker = result
+                    # Cache the ticker for future use
+                    self._ticker_cache[symbol] = ticker
+                    # Extract market data
+                    market_data_dict[symbol] = self._extract_market_data_from_ticker(ticker)
                     successful += 1
                 else:
                     failed += 1
             
             logger.info(
                 f"{self.dex_name}: Successfully fetched market data for {successful} symbols "
-                f"({failed} failed) from {len(perpetual_contracts)} contracts"
+                f"({failed} failed). Tickers cached for future calls."
             )
             
             return market_data_dict
@@ -348,134 +376,73 @@ class EdgeXAdapter(BaseDEXAdapter):
             logger.error(f"{self.dex_name}: Failed to fetch market data: {e}")
             raise
     
-    async def _fetch_market_data_in_batches(self, contracts: list) -> list:
+    def _extract_market_data_from_cache(self) -> Dict[str, Dict[str, Decimal]]:
         """
-        Fetch market data in batches with delays to avoid rate limiting
+        Extract market data from cached tickers
         
-        Args:
-            contracts: List of contract dicts with 'contract_id' and 'contract_name'
-            
         Returns:
-            List of results (tuples or exceptions)
+            Dictionary mapping normalized symbols to market data
         """
-        all_results = []
-        semaphore = asyncio.Semaphore(self.max_concurrent_requests)
+        market_data_dict = {}
+        successful = 0
         
-        # Process contracts in batches
-        for i in range(0, len(contracts), self.max_concurrent_requests):
-            batch = contracts[i:i + self.max_concurrent_requests]
-            
-            logger.debug(
-                f"{self.dex_name}: Processing market data batch "
-                f"{i // self.max_concurrent_requests + 1} ({len(batch)} contracts)"
-            )
-            
-            # Fetch this batch
-            tasks = [
-                self._fetch_single_market_data(
-                    contract['contract_id'],
-                    contract['contract_name'],
-                    semaphore
-                )
-                for contract in batch
-            ]
-            
-            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-            all_results.extend(batch_results)
-            
-            # Add delay between batches (except for the last batch)
-            if i + self.max_concurrent_requests < len(contracts):
-                await asyncio.sleep(self.delay_between_batches)
-        
-        return all_results
-    
-    async def _fetch_single_market_data(
-        self, 
-        contract_id: str, 
-        contract_name: str,
-        semaphore: asyncio.Semaphore
-    ) -> Optional[tuple[str, Dict[str, Decimal]]]:
-        """
-        Fetch market data for a single contract
-        
-        Args:
-            contract_id: EdgeX contract ID
-            contract_name: EdgeX contract name (e.g., "BTCUSDT")
-            semaphore: Concurrency limiter
-            
-        Returns:
-            Tuple of (normalized_symbol, market_data_dict) or None if failed
-        """
-        async with semaphore:
+        for normalized_symbol, ticker in self._ticker_cache.items():
             try:
-                # Fetch ticker data for this contract
-                response = await self._make_request(
-                    "/api/v1/public/quote/getTicker",
-                    params={'contractId': contract_id}
-                )
+                market_data_dict[normalized_symbol] = self._extract_market_data_from_ticker(ticker)
                 
-                if response.get('code') != 'SUCCESS':
-                    logger.debug(
-                        f"{self.dex_name}: Failed to fetch ticker for {contract_name}: "
-                        f"{response.get('msg', 'Unknown error')}"
-                    )
-                    return None
-                
-                # Extract ticker data
-                data_list = response.get('data', [])
-                if not data_list or len(data_list) == 0:
-                    logger.debug(
-                        f"{self.dex_name}: No ticker data for {contract_name}"
-                    )
-                    return None
-                
-                ticker = data_list[0]
-                
-                # Extract 24h trading value (already in USD)
-                volume_24h_str = ticker.get('value')
-                if volume_24h_str is None:
-                    logger.debug(
-                        f"{self.dex_name}: No volume data for {contract_name}"
-                    )
-                    volume_24h = None
-                else:
-                    volume_24h = Decimal(str(volume_24h_str))
-                
-                # Extract open interest (in contracts)
-                open_interest_contracts = ticker.get('openInterest')
-                index_price = ticker.get('indexPrice') or ticker.get('lastPrice')
-                
-                if open_interest_contracts is None or index_price is None:
-                    logger.debug(
-                        f"{self.dex_name}: Missing OI or price for {contract_name}"
-                    )
-                    open_interest_usd = None
-                else:
-                    # Convert OI to USD: contracts * index_price
-                    open_interest_usd = Decimal(str(open_interest_contracts)) * Decimal(str(index_price))
-                
-                # Normalize symbol
-                normalized_symbol = self.normalize_symbol(contract_name)
-                
-                market_data = {
-                    "volume_24h": volume_24h,
-                    "open_interest": open_interest_usd
-                }
-                
-                vol_str = f"${volume_24h:,.2f}" if volume_24h else "N/A"
-                oi_str = f"${open_interest_usd:,.2f}" if open_interest_usd else "N/A"
+                vol = market_data_dict[normalized_symbol].get('volume_24h')
+                oi = market_data_dict[normalized_symbol].get('open_interest')
+                vol_str = f"${vol:,.2f}" if vol else "N/A"
+                oi_str = f"${oi:,.2f}" if oi else "N/A"
                 logger.debug(
-                    f"{self.dex_name}: {contract_name} -> {normalized_symbol}: "
-                    f"Volume={vol_str}, OI={oi_str}"
+                    f"{self.dex_name}: {normalized_symbol}: Volume={vol_str}, OI={oi_str}"
                 )
                 
-                return (normalized_symbol, market_data)
+                successful += 1
             
             except Exception as e:
-                logger.debug(
-                    f"{self.dex_name}: Error fetching market data for {contract_name}: {e}"
+                logger.error(
+                    f"{self.dex_name}: Error extracting market data for {normalized_symbol}: {e}"
                 )
-                return None
+                continue
+        
+        logger.info(
+            f"{self.dex_name}: Successfully extracted market data for {successful} symbols from cache"
+        )
+        
+        return market_data_dict
+    
+    def _extract_market_data_from_ticker(self, ticker: dict) -> Dict[str, Decimal]:
+        """
+        Extract volume and OI from a single ticker response
+        
+        Args:
+            ticker: Ticker data dict from EdgeX API
+            
+        Returns:
+            Dict with volume_24h and open_interest
+        """
+        # Extract 24h trading value (already in USD)
+        volume_24h_str = ticker.get('value')
+        if volume_24h_str is None:
+            volume_24h = None
+        else:
+            volume_24h = Decimal(str(volume_24h_str))
+        
+        # Extract open interest (in contracts)
+        open_interest_contracts = ticker.get('openInterest')
+        index_price = ticker.get('indexPrice') or ticker.get('lastPrice')
+        
+        if open_interest_contracts is None or index_price is None:
+            open_interest_usd = None
+        else:
+            # Convert OI to USD: contracts * index_price
+            open_interest_usd = Decimal(str(open_interest_contracts)) * Decimal(str(index_price))
+        
+        return {
+            "volume_24h": volume_24h,
+            "open_interest": open_interest_usd
+        }
     
     def normalize_symbol(self, dex_symbol: str) -> str:
         """
