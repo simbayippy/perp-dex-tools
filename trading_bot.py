@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional, Dict, Any
 
-from exchanges import ExchangeFactory
+from exchange_clients.factory import ExchangeFactory
 from helpers import TradingLogger
 from helpers.lark_bot import LarkBot
 from helpers.telegram_bot import TelegramBot

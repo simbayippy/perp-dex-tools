@@ -11,7 +11,7 @@ import sys
 import dotenv
 from decimal import Decimal
 from trading_bot import TradingBot, TradingConfig
-from exchanges import ExchangeFactory
+from exchange_clients.factory import ExchangeFactory
 from strategies import StrategyFactory
 
 
@@ -59,6 +59,10 @@ def parse_arguments():
                         help='Grid: Enable random timing variation')
     parser.add_argument('--dynamic-profit', action='store_true',
                         help='Grid: Enable dynamic profit-taking')
+    parser.add_argument('--stop-price', type=Decimal,
+                        help='Grid: Stop trading and close positions if price goes below this (for buy) or above this (for sell)')
+    parser.add_argument('--pause-price', type=Decimal,
+                        help='Grid: Pause trading (no new orders) if price reaches this level')
     
     # Funding arbitrage specific parameters (for convenience)
     parser.add_argument('--target-exposure', type=Decimal,
@@ -163,6 +167,10 @@ async def main():
             strategy_params['random_timing'] = True
         if args.dynamic_profit:
             strategy_params['dynamic_profit'] = True
+        if args.stop_price is not None:
+            strategy_params['stop_price'] = args.stop_price
+        if args.pause_price is not None:
+            strategy_params['pause_price'] = args.pause_price
     
     # Add convenience parameters for funding arbitrage strategy
     elif args.strategy == 'funding_arbitrage':

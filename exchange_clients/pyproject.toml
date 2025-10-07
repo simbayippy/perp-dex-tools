@@ -1,0 +1,61 @@
+[project]
+name = "exchange-clients"
+version = "1.0.0"
+description = "Shared exchange clients for trading and funding rate collection"
+requires-python = ">=3.10"
+authors = [
+    {name = "perp-dex-tools"}
+]
+
+dependencies = [
+    "aiohttp>=3.8.0",
+    "websockets>=10.0",
+    "tenacity>=8.0.0",
+]
+
+[project.optional-dependencies]
+lighter = [
+    "lighter-sdk @ git+https://github.com/elliottech/lighter-python.git@d0009799970aad54ebb940aa3dc90cbc00028c54",
+    "eth-account>=0.8.0",
+]
+grvt = [
+    "grvt-pysdk",
+]
+edgex = [
+    "edgex-python-sdk @ git+https://github.com/your-quantguy/edgex-python-sdk.git@07425f7522be5845399264682580c88019ab9e52",
+    "httpx>=0.24.0",
+]
+backpack = [
+    "bpx-py==2.0.11",
+    "cryptography>=41.0.0",
+]
+paradex = [
+    # Note: paradex-py currently has dependency conflicts
+    # "paradex-py",
+]
+aster = [
+    "aster-connector-python @ git+https://github.com/asterdex/aster-connector-python.git@4d1829b551e15483621edd0658c72fc77f37da55",
+]
+all = [
+    # All exchange SDKs
+    "lighter-sdk @ git+https://github.com/elliottech/lighter-python.git@d0009799970aad54ebb940aa3dc90cbc00028c54",
+    "eth-account>=0.8.0",
+    "grvt-pysdk",
+    "edgex-python-sdk @ git+https://github.com/your-quantguy/edgex-python-sdk.git@07425f7522be5845399264682580c88019ab9e52",
+    "httpx>=0.24.0",
+    "bpx-py==2.0.11",
+    "cryptography>=41.0.0",
+    "aster-connector-python @ git+https://github.com/asterdex/aster-connector-python.git@4d1829b551e15483621edd0658c72fc77f37da55",
+    # "paradex-py",  # Commented out due to dependency conflicts
+]
+
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = {find = {where = ["."]}}
+
+[tool.setuptools.package-data]
+exchange_clients = ["py.typed"]
+

@@ -1,0 +1,3 @@
+[submodule "funding_rate_service/sdks/paradex-py"]
+	path = funding_rate_service/sdks/paradex-py
+	url = https://github.com/tradeparadex/paradex-py.git
