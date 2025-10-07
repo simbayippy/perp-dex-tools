@@ -7,17 +7,10 @@ ecdsa>=0.17.0
 requests>=2.32.0
 
 # Exchange Client Library
-# IMPORTANT: Install the shared exchange library with exchange SDKs:
-#
-# Option 1: Install all exchanges (may have dependency conflicts):
+# IMPORTANT: Install the shared exchange library with all exchange SDKs:
 #   pip install -e './exchange_clients[all]'
 #
-# Option 2: Install specific exchanges (recommended to avoid conflicts):
-#   pip install -e './exchange_clients[lighter,grvt,edgex,backpack,aster]'
-#
-# Option 3: Install exchanges separately if conflicts occur:
-#   pip install -e './exchange_clients[lighter]'
-#   pip install -e './exchange_clients[paradex]'  # Install separately due to eth-account conflict
+# Or install only specific exchanges you need:
+#   pip install -e './exchange_clients[lighter,grvt,edgex,backpack]'
 #
 # Available exchanges: lighter, grvt, edgex, backpack, paradex, aster
-# Note: lighter + paradex may conflict due to eth-account/eth-wallet dependencies

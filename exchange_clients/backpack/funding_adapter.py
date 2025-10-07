@@ -82,9 +82,7 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             logger.debug(f"{self.dex_name}: Fetching funding rates...")
             
             # Fetch all mark prices which includes funding rates
-            mark_prices_data = await asyncio.get_event_loop().run_in_executor(
-                None, self.public_client.get_all_mark_prices
-            )
+            mark_prices_data = self.public_client.get_all_mark_prices()
             
             if not mark_prices_data:
                 logger.warning(f"{self.dex_name}: No mark prices data returned")
@@ -165,13 +163,9 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             logger.debug(f"{self.dex_name}: Fetching market data...")
             
             # Fetch tickers for volume data and open interest for OI data
-            tickers_data = await asyncio.get_event_loop().run_in_executor(
-                None, self.public_client.get_tickers
-            )
+            tickers_data = self.public_client.get_tickers()
             
-            open_interest_data = await asyncio.get_event_loop().run_in_executor(
-                None, self.public_client.get_open_interest
-            )
+            open_interest_data = self.public_client.get_open_interest()
             
             if not tickers_data:
                 logger.warning(f"{self.dex_name}: No tickers data returned")

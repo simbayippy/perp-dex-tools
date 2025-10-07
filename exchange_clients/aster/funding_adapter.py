@@ -8,8 +8,6 @@ This adapter is read-only and focused solely on data collection.
 from typing import Dict, Optional
 from decimal import Decimal
 import re
-import asyncio
-import aiohttp
 
 from exchange_clients.base import BaseFundingAdapter
 from utils.logger import logger
@@ -83,9 +81,7 @@ class AsterFundingAdapter(BaseFundingAdapter):
             logger.debug(f"{self.dex_name}: Fetching funding rates...")
             
             # Fetch mark prices for all symbols which includes funding rates
-            mark_prices_data = await asyncio.get_event_loop().run_in_executor(
-                None, self.aster_client.mark_price
-            )
+            mark_prices_data = self.aster_client.mark_price()
             
             if not mark_prices_data:
                 logger.warning(f"{self.dex_name}: No mark prices data returned")
@@ -111,12 +107,16 @@ class AsterFundingAdapter(BaseFundingAdapter):
                     if not symbol.endswith('USDT'):
                         continue
                     
-                    # Get funding rate
-                    funding_rate = market_data.get('lastFundingRate')
+                    # Get funding rate - try multiple possible field names
+                    funding_rate = (market_data.get('lastFundingRate') or 
+                                  market_data.get('fundingRate') or 
+                                  market_data.get('funding_rate'))
                     
                     if funding_rate is None:
+                        # Debug: log available fields to help troubleshoot
+                        available_fields = list(market_data.keys())
                         logger.debug(
-                            f"{self.dex_name}: No funding rate for {symbol}"
+                            f"{self.dex_name}: No funding rate for {symbol}. Available fields: {available_fields}"
                         )
                         continue
                     
@@ -166,13 +166,9 @@ class AsterFundingAdapter(BaseFundingAdapter):
             logger.debug(f"{self.dex_name}: Fetching market data...")
             
             # Fetch 24hr ticker data for volume and mark prices for open interest
-            ticker_data = await asyncio.get_event_loop().run_in_executor(
-                None, self.aster_client.ticker_24hr_price_change
-            )
+            ticker_data = self.aster_client.ticker_24hr_price_change()
             
-            mark_prices_data = await asyncio.get_event_loop().run_in_executor(
-                None, self.aster_client.mark_price
-            )
+            mark_prices_data = self.aster_client.mark_price()
             
             if not ticker_data:
                 logger.warning(f"{self.dex_name}: No ticker data returned")
@@ -215,12 +211,27 @@ class AsterFundingAdapter(BaseFundingAdapter):
                     # Normalize symbol
                     normalized_symbol = self.normalize_symbol(symbol)
                     
-                    # Get volume (24h)
-                    volume_24h = ticker.get('volume') or ticker.get('baseVolume')
+                    # Get volume (24h) - try multiple possible field names
+                    volume_24h = (ticker.get('volume') or 
+                                ticker.get('baseVolume') or 
+                                ticker.get('quoteVolume'))
+                    
+                    # Debug: log available ticker fields for first few symbols
+                    if len(market_data) < 3:  # Only log for first few to avoid spam
+                        ticker_fields = list(ticker.keys())
+                        logger.debug(f"{self.dex_name}: Ticker fields for {symbol}: {ticker_fields}")
                     
                     # Get open interest from mark prices if available
+                    # Note: Aster may not provide open interest data
                     mark_data = mark_prices_lookup.get(symbol, {})
-                    open_interest = mark_data.get('openInterest')
+                    open_interest = (mark_data.get('openInterest') or 
+                                   mark_data.get('openInterestValue') or 
+                                   mark_data.get('open_interest'))
+                    
+                    # Debug: log mark price fields for first few symbols
+                    if len(market_data) < 3 and mark_data:
+                        mark_fields = list(mark_data.keys())
+                        logger.debug(f"{self.dex_name}: Mark price fields for {symbol}: {mark_fields}")
                     
                     # Create market data entry
                     data = {}

@@ -30,16 +30,14 @@ backpack = [
     "cryptography>=41.0.0",
 ]
 paradex = [
-    # Note: paradex-py may conflict with lighter's eth-account dependency
-    # Install separately if conflicts occur: pip install -e './exchange_clients[paradex]'
-    "paradex-py",
+    # Note: paradex-py currently has dependency conflicts
+    # "paradex-py",
 ]
 aster = [
     "aster-connector-python @ git+https://github.com/asterdex/aster-connector-python.git@4d1829b551e15483621edd0658c72fc77f37da55",
 ]
 all = [
-    # All exchange SDKs - WARNING: May have dependency conflicts
-    # If conflicts occur, install exchanges separately
+    # All exchange SDKs
     "lighter-sdk @ git+https://github.com/elliottech/lighter-python.git@d0009799970aad54ebb940aa3dc90cbc00028c54",
     "eth-account>=0.8.0",
     "grvt-pysdk",
@@ -48,7 +46,7 @@ all = [
     "bpx-py==2.0.11",
     "cryptography>=41.0.0",
     "aster-connector-python @ git+https://github.com/asterdex/aster-connector-python.git@4d1829b551e15483621edd0658c72fc77f37da55",
-    "paradex-py",  # May conflict with lighter's eth-account
+    # "paradex-py",  # Commented out due to dependency conflicts
 ]
 
 [build-system]
