@@ -1,36 +1,29 @@
 """
 Backpack DEX Funding Adapter
 
-Fetches funding rates and market data from Backpack using the official bpx-py SDK.
+Fetches funding rates and market data from Backpack using direct API calls.
 This adapter is read-only and focused solely on data collection.
 """
 
 from typing import Dict, Optional
 from decimal import Decimal
-import re
+import aiohttp
 import asyncio
 
 from exchange_clients.base import BaseFundingAdapter
 from utils.logger import logger
-
-# Import Backpack SDK
-try:
-    from bpx.public import Public
-    BPX_SDK_AVAILABLE = True
-except ImportError:
-    BPX_SDK_AVAILABLE = False
-    logger.warning("Backpack SDK (bpx-py) not available. Install with: pip install bpx-py")
 
 
 class BackpackFundingAdapter(BaseFundingAdapter):
     """
     Backpack funding rate adapter
     
-    This adapter uses the official bpx-py SDK to fetch funding rates
-    and market data for all available perpetual markets on Backpack.
+    This adapter uses direct API calls to fetch funding rates and market data 
+    for all available perpetual markets on Backpack.
     
     Key features:
-    - Uses Backpack API to fetch funding rates and market data
+    - Uses direct HTTP calls to Backpack API (no SDK dependency)
+    - Single API call to get ALL funding rates at once
     - Normalizes symbols from Backpack format to standard format
     - No authentication required (public endpoints)
     - Returns funding rates and volume/OI data
@@ -48,28 +41,46 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             api_base_url: Backpack API base URL
             timeout: Request timeout in seconds
         """
-        if not BPX_SDK_AVAILABLE:
-            raise ImportError(
-                "Backpack SDK (bpx-py) is required. Install with: pip install bpx-py"
-            )
-        
         super().__init__(
             dex_name="backpack",
             api_base_url=api_base_url,
             timeout=timeout
         )
         
-        # Initialize Backpack public client (read-only, no credentials needed)
-        self.public_client = Public()
+        # HTTP session for API calls
+        self.session: Optional[aiohttp.ClientSession] = None
         
-        logger.info(f"Backpack adapter initialized")
+        logger.info(f"Backpack adapter initialized with direct API calls")
+    
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create HTTP session"""
+        if self.session is None or self.session.closed:
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            self.session = aiohttp.ClientSession(timeout=timeout)
+        return self.session
+    
+    async def _make_request(self, endpoint: str, params: Optional[Dict] = None) -> Dict:
+        """Make HTTP request to Backpack API"""
+        session = await self._get_session()
+        url = f"{self.api_base_url}/{endpoint}"
+        
+        try:
+            async with session.get(url, params=params) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"HTTP {response.status}: {error_text}")
+        except Exception as e:
+            logger.error(f"{self.dex_name}: Request failed for {endpoint}: {e}")
+            raise
     
     async def fetch_funding_rates(self) -> Dict[str, Decimal]:
         """
         Fetch all funding rates from Backpack
         
-        Backpack provides funding rates through their get_all_mark_prices endpoint
-        which includes current funding rate information for each perpetual market.
+        Uses the /api/v1/markPrices endpoint to get ALL funding rates in a single call.
+        This is much faster than calling individual endpoints per symbol.
         
         Returns:
             Dictionary mapping normalized symbols to funding rates
@@ -81,47 +92,22 @@ class BackpackFundingAdapter(BaseFundingAdapter):
         try:
             logger.debug(f"{self.dex_name}: Fetching funding rates...")
             
-            # First, get all markets to find perpetual symbols
-            markets_data = self.public_client.get_markets()
-            if not markets_data:
-                logger.warning(f"{self.dex_name}: No markets data returned")
-                return {}
-            
-            # Find all perpetual markets
-            perp_symbols = []
-            for market in markets_data:
-                symbol = market.get('symbol', '')
-                if symbol.endswith('_PERP'):
-                    perp_symbols.append(symbol)
-            
-            if not perp_symbols:
-                logger.warning(f"{self.dex_name}: No perpetual markets found")
-                return {}
-            
-            logger.debug(f"{self.dex_name}: Found {len(perp_symbols)} perpetual markets: {perp_symbols[:5]}...")
-            
-            rates_dict = {}
-            
-            # Use Backpack's get_all_mark_prices endpoint to get ALL funding rates in one call
-            # This is much faster than calling get_funding_interval_rates for each symbol individually
-            
-            mark_prices_data = self.public_client.get_all_mark_prices()
+            # Get ALL mark prices (including funding rates) in one call
+            mark_prices_data = await self._make_request("api/v1/markPrices")
             
             if not mark_prices_data:
                 logger.warning(f"{self.dex_name}: No mark prices data returned")
                 return {}
             
-            # Handle both single dict and list response
-            if isinstance(mark_prices_data, dict):
-                mark_prices_list = [mark_prices_data]
-            elif isinstance(mark_prices_data, list):
-                mark_prices_list = mark_prices_data
-            else:
-                logger.warning(f"{self.dex_name}: Unexpected mark prices data format: {type(mark_prices_data)}")
+            # Ensure we have a list
+            if not isinstance(mark_prices_data, list):
+                logger.warning(f"{self.dex_name}: Expected list, got {type(mark_prices_data)}")
                 return {}
             
+            rates_dict = {}
+            
             # Extract funding rates from mark prices data
-            for mark_data in mark_prices_list:
+            for mark_data in mark_prices_data:
                 try:
                     symbol = mark_data.get('symbol', '')
                     
@@ -165,7 +151,7 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             # If no funding rates found, log a helpful message
             if not rates_dict:
                 logger.warning(
-                    f"{self.dex_name}: No funding rates found from {len(perp_symbols)} perpetual markets. "
+                    f"{self.dex_name}: No funding rates found from {len(mark_prices_data)} mark price entries. "
                     f"This may indicate an API issue or change in data format."
                 )
             
@@ -195,10 +181,11 @@ class BackpackFundingAdapter(BaseFundingAdapter):
         try:
             logger.debug(f"{self.dex_name}: Fetching market data...")
             
-            # Fetch tickers for volume data and open interest for OI data
-            tickers_data = self.public_client.get_tickers()
+            # Fetch tickers for volume data (based on API documentation)
+            tickers_data = await self._make_request("api/v1/tickers")
             
-            open_interest_data = self.public_client.get_open_interest()
+            # Fetch open interest data (separate endpoint)
+            open_interest_data = await self._make_request("api/v1/openInterest")
             
             if not tickers_data:
                 logger.warning(f"{self.dex_name}: No tickers data returned")
@@ -292,7 +279,7 @@ class BackpackFundingAdapter(BaseFundingAdapter):
         - "BTC_USDC_PERP" -> "BTC"  (note: uses USDC, not USD)
         - "ETH_USDC_PERP" -> "ETH"
         - "SOL_USDC_PERP" -> "SOL"
-        - "PEPE_USDC_PERP" -> "PEPE"
+        - "kPEPE_USDC_PERP" -> "PEPE" (removes k prefix for 1000x tokens)
         
         Args:
             dex_symbol: Backpack-specific symbol format
@@ -300,24 +287,23 @@ class BackpackFundingAdapter(BaseFundingAdapter):
         Returns:
             Normalized symbol (e.g., "BTC")
         """
-        # Remove "_USDC_PERP" suffix (Backpack uses underscores and USDC)
+        # Remove "_USDC_PERP" suffix
         normalized = dex_symbol.upper()
-        
-        # Remove perpetual suffixes in order of specificity
         normalized = normalized.replace('_USDC_PERP', '')
         normalized = normalized.replace('_PERP', '')
         normalized = normalized.replace('_USDC', '')
+        normalized = normalized.replace('_USD', '')  # fallback
         
-        # Handle any edge cases with multipliers (similar to other exchanges)
-        # Match pattern: starts with digits followed by letters
-        match = re.match(r'^(\d+)([A-Z]+)$', normalized)
-        if match:
-            multiplier, symbol = match.groups()
-            logger.debug(
-                f"{self.dex_name}: Symbol has multiplier: {dex_symbol} -> "
-                f"{symbol} (multiplier: {multiplier})"
-            )
-            normalized = symbol
+        # Handle 1000x tokens (e.g., "kPEPE" -> "PEPE", "kSHIB" -> "SHIB")
+        if normalized.startswith('K') and len(normalized) > 1:
+            # Check if it's a known 1000x token pattern
+            base_symbol = normalized[1:]  # Remove 'k' prefix
+            if base_symbol in ['PEPE', 'SHIB', 'BONK']:  # Known 1000x tokens
+                logger.debug(
+                    f"{self.dex_name}: Converting 1000x token: {dex_symbol} -> "
+                    f"{base_symbol} (removed k prefix)"
+                )
+                normalized = base_symbol
         
         # Clean up any remaining special characters
         normalized = normalized.strip('-_/')
@@ -334,12 +320,16 @@ class BackpackFundingAdapter(BaseFundingAdapter):
         Returns:
             Backpack-specific format (e.g., "BTC_USDC_PERP")
         """
-        # Backpack uses "{SYMBOL}_USDC_PERP" format
+        # Handle special cases for 1000x tokens
+        if normalized_symbol.upper() in ['PEPE', 'SHIB', 'BONK']:
+            return f"k{normalized_symbol.upper()}_USDC_PERP"
+        
+        # Standard format: {SYMBOL}_USDC_PERP
         return f"{normalized_symbol.upper()}_USDC_PERP"
     
     async def close(self) -> None:
-        """Close the API client"""
-        # bpx-py SDK doesn't require explicit cleanup
-        logger.debug(f"{self.dex_name}: Adapter closed")
+        """Close the HTTP session"""
+        if self.session and not self.session.closed:
+            await self.session.close()
+            logger.debug(f"{self.dex_name}: HTTP session closed")
         await super().close()
-
