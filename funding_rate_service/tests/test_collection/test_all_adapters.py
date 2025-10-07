@@ -28,7 +28,7 @@ sys.path.insert(0, str(project_root / "funding_rate_service"))  # For funding_ra
 from exchange_clients.lighter import LighterFundingAdapter
 from exchange_clients.grvt import GrvtFundingAdapter
 from exchange_clients.edgex import EdgeXFundingAdapter
-from exchange_clients.paradex import ParadexFundingAdapter
+# from exchange_clients.paradex import ParadexFundingAdapter
 from exchange_clients.backpack import BackpackFundingAdapter
 from exchange_clients.aster import AsterFundingAdapter
 from utils.logger import logger
@@ -73,7 +73,7 @@ async def test_adapter(adapter_class, name):
             'lighter': ["BTC-PERP", "ETH-PERP", "1000PEPE-PERP"],
             'grvt': ["BTC", "ETH", "SOL"],
             'edgex': ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
-            'paradex': ["BTC-USD-PERP", "ETH-USD-PERP", "SOL-USD-PERP"],
+            # 'paradex': ["BTC-USD-PERP", "ETH-USD-PERP", "SOL-USD-PERP"],
             'backpack': ["BTC_USDC_PERP", "ETH_USDC_PERP", "SOL_USDC_PERP"],
             'aster': ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
         }
@@ -141,7 +141,7 @@ async def main():
         'lighter': (LighterFundingAdapter, 'Lighter'),
         'grvt': (GrvtFundingAdapter, 'GRVT'),
         'edgex': (EdgeXFundingAdapter, 'EdgeX'),
-        'paradex': (ParadexFundingAdapter, 'Paradex'),
+        # 'paradex': (ParadexFundingAdapter, 'Paradex'),
         'backpack': (BackpackFundingAdapter, 'Backpack'),
         'aster': (AsterFundingAdapter, 'Aster'),
     }
