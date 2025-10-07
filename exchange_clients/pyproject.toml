@@ -16,7 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 lighter = [
     # Lighter SDK from git (specific commit)
-    "lighter @ git+https://github.com/elliottech/lighter-python.git@d0009799970aad54ebb940aa3dc90cbc00028c54",
+    "lighter-sdk @ git+https://github.com/elliottech/lighter-python.git@d0009799970aad54ebb940aa3dc90cbc00028c54",
     "eth-account>=0.8.0",
 ]
 grvt = [
@@ -25,7 +25,7 @@ grvt = [
 ]
 edgex = [
     # Forked EdgeX SDK with post_only limit order support (for trading client)
-    "edgex-sdk @ git+https://github.com/your-quantguy/edgex-python-sdk.git@07425f7522be5845399264682580c88019ab9e52",
+    "edgex-python-sdk @ git+https://github.com/your-quantguy/edgex-python-sdk.git@07425f7522be5845399264682580c88019ab9e52",
     "httpx>=0.24.0",
 ]
 all = [
@@ -33,7 +33,7 @@ all = [
     "lighter @ git+https://github.com/elliottech/lighter-python.git@d0009799970aad54ebb940aa3dc90cbc00028c54",
     "eth-account>=0.8.0",
     "grvt-pysdk",
-    "edgex-sdk @ git+https://github.com/your-quantguy/edgex-python-sdk.git@07425f7522be5845399264682580c88019ab9e52",
+    "edgex-python-sdk @ git+https://github.com/your-quantguy/edgex-python-sdk.git@07425f7522be5845399264682580c88019ab9e52",
     "httpx>=0.24.0",
 ]
 
