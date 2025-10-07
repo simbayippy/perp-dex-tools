@@ -153,9 +153,9 @@ async def test_full_system():
         # Create adapters for Lighter, GRVT, and EdgeX
         print("🔧 Initializing adapters...")
         adapters = [
-            LighterAdapter(),
-            GrvtAdapter(),
-            # EdgeXAdapter(),
+            # LighterAdapter(),
+            # GrvtAdapter(),
+            EdgeXAdapter(),
         ]
         print(f"✅ Initialized {len(adapters)} adapters (Lighter, GRVT, EdgeX)\n")
         

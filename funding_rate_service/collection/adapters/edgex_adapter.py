@@ -263,14 +263,219 @@ class EdgeXAdapter(BaseDEXAdapter):
         """
         Fetch market data (volume, OI) from EdgeX
         
-        TODO: Implement using EdgeX API
-        For now, returns empty dict to maintain compatibility.
+        Uses the getTicker endpoint to fetch 24h volume and open interest.
+        Fetches in batches with delays to avoid rate limiting (same as funding rates).
         
         Returns:
             Dictionary mapping normalized symbols to market data
+            Example: {
+                "BTC": {
+                    "volume_24h": Decimal("50821443.74"),
+                    "open_interest": Decimal("10683.72")
+                }
+            }
+            
+        Raises:
+            Exception: If fetching fails after retries
         """
-        logger.warning(f"{self.dex_name}: fetch_market_data not yet implemented")
-        return {}
+        try:
+            logger.debug(f"{self.dex_name}: Fetching contract metadata for market data...")
+            
+            # Step 1: Fetch all contracts (reuse same logic as funding rates)
+            metadata_response = await self._make_request("/api/v1/public/meta/getMetaData")
+            
+            if metadata_response.get('code') != 'SUCCESS':
+                logger.error(
+                    f"{self.dex_name}: Metadata fetch failed: "
+                    f"{metadata_response.get('msg', 'Unknown error')}"
+                )
+                return {}
+            
+            contract_list = metadata_response.get('data', {}).get('contractList', [])
+            
+            if not contract_list:
+                logger.warning(f"{self.dex_name}: No contracts found in metadata")
+                return {}
+            
+            # Filter to perpetual contracts
+            perpetual_contracts = []
+            for contract in contract_list:
+                contract_name = contract.get('contractName', '')
+                enable_trade = contract.get('enableTrade', False)
+                
+                if enable_trade and ('USDT' in contract_name or 'USD' in contract_name):
+                    perpetual_contracts.append({
+                        'contract_id': contract.get('contractId'),
+                        'contract_name': contract_name,
+                    })
+            
+            if not perpetual_contracts:
+                logger.warning(f"{self.dex_name}: No perpetual contracts found")
+                return {}
+            
+            logger.info(
+                f"{self.dex_name}: Found {len(perpetual_contracts)} perpetual contracts, "
+                f"fetching market data in batches (max {self.max_concurrent_requests} concurrent)..."
+            )
+            
+            # Step 2: Fetch market data in batches
+            results = await self._fetch_market_data_in_batches(perpetual_contracts)
+            
+            # Step 3: Collect results
+            market_data_dict = {}
+            successful = 0
+            failed = 0
+            
+            for result in results:
+                if isinstance(result, Exception):
+                    failed += 1
+                    logger.debug(f"{self.dex_name}: Market data fetch failed: {result}")
+                elif result is not None:
+                    symbol, data = result
+                    market_data_dict[symbol] = data
+                    successful += 1
+                else:
+                    failed += 1
+            
+            logger.info(
+                f"{self.dex_name}: Successfully fetched market data for {successful} symbols "
+                f"({failed} failed) from {len(perpetual_contracts)} contracts"
+            )
+            
+            return market_data_dict
+        
+        except Exception as e:
+            logger.error(f"{self.dex_name}: Failed to fetch market data: {e}")
+            raise
+    
+    async def _fetch_market_data_in_batches(self, contracts: list) -> list:
+        """
+        Fetch market data in batches with delays to avoid rate limiting
+        
+        Args:
+            contracts: List of contract dicts with 'contract_id' and 'contract_name'
+            
+        Returns:
+            List of results (tuples or exceptions)
+        """
+        all_results = []
+        semaphore = asyncio.Semaphore(self.max_concurrent_requests)
+        
+        # Process contracts in batches
+        for i in range(0, len(contracts), self.max_concurrent_requests):
+            batch = contracts[i:i + self.max_concurrent_requests]
+            
+            logger.debug(
+                f"{self.dex_name}: Processing market data batch "
+                f"{i // self.max_concurrent_requests + 1} ({len(batch)} contracts)"
+            )
+            
+            # Fetch this batch
+            tasks = [
+                self._fetch_single_market_data(
+                    contract['contract_id'],
+                    contract['contract_name'],
+                    semaphore
+                )
+                for contract in batch
+            ]
+            
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+            all_results.extend(batch_results)
+            
+            # Add delay between batches (except for the last batch)
+            if i + self.max_concurrent_requests < len(contracts):
+                await asyncio.sleep(self.delay_between_batches)
+        
+        return all_results
+    
+    async def _fetch_single_market_data(
+        self, 
+        contract_id: str, 
+        contract_name: str,
+        semaphore: asyncio.Semaphore
+    ) -> Optional[tuple[str, Dict[str, Decimal]]]:
+        """
+        Fetch market data for a single contract
+        
+        Args:
+            contract_id: EdgeX contract ID
+            contract_name: EdgeX contract name (e.g., "BTCUSDT")
+            semaphore: Concurrency limiter
+            
+        Returns:
+            Tuple of (normalized_symbol, market_data_dict) or None if failed
+        """
+        async with semaphore:
+            try:
+                # Fetch ticker data for this contract
+                response = await self._make_request(
+                    "/api/v1/public/quote/getTicker",
+                    params={'contractId': contract_id}
+                )
+                
+                if response.get('code') != 'SUCCESS':
+                    logger.debug(
+                        f"{self.dex_name}: Failed to fetch ticker for {contract_name}: "
+                        f"{response.get('msg', 'Unknown error')}"
+                    )
+                    return None
+                
+                # Extract ticker data
+                data_list = response.get('data', [])
+                if not data_list or len(data_list) == 0:
+                    logger.debug(
+                        f"{self.dex_name}: No ticker data for {contract_name}"
+                    )
+                    return None
+                
+                ticker = data_list[0]
+                
+                # Extract 24h trading value (already in USD)
+                volume_24h_str = ticker.get('value')
+                if volume_24h_str is None:
+                    logger.debug(
+                        f"{self.dex_name}: No volume data for {contract_name}"
+                    )
+                    volume_24h = None
+                else:
+                    volume_24h = Decimal(str(volume_24h_str))
+                
+                # Extract open interest (in contracts)
+                open_interest_contracts = ticker.get('openInterest')
+                index_price = ticker.get('indexPrice') or ticker.get('lastPrice')
+                
+                if open_interest_contracts is None or index_price is None:
+                    logger.debug(
+                        f"{self.dex_name}: Missing OI or price for {contract_name}"
+                    )
+                    open_interest_usd = None
+                else:
+                    # Convert OI to USD: contracts * index_price
+                    open_interest_usd = Decimal(str(open_interest_contracts)) * Decimal(str(index_price))
+                
+                # Normalize symbol
+                normalized_symbol = self.normalize_symbol(contract_name)
+                
+                market_data = {
+                    "volume_24h": volume_24h,
+                    "open_interest": open_interest_usd
+                }
+                
+                vol_str = f"${volume_24h:,.2f}" if volume_24h else "N/A"
+                oi_str = f"${open_interest_usd:,.2f}" if open_interest_usd else "N/A"
+                logger.debug(
+                    f"{self.dex_name}: {contract_name} -> {normalized_symbol}: "
+                    f"Volume={vol_str}, OI={oi_str}"
+                )
+                
+                return (normalized_symbol, market_data)
+            
+            except Exception as e:
+                logger.debug(
+                    f"{self.dex_name}: Error fetching market data for {contract_name}: {e}"
+                )
+                return None
     
     def normalize_symbol(self, dex_symbol: str) -> str:
         """
