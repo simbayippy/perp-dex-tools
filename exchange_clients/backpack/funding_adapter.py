@@ -228,7 +228,7 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                     # Normalize symbol
                     normalized_symbol = self.normalize_symbol(symbol)
                     
-                    # Get volume (24h) - based on API docs, field is "volume"
+                    # Get volume (24h) - based on API docs, field is "quoteVolume"
                     volume_24h =  ticker.get('quoteVolume')
                     
                     # Get open interest from lookup - based on API docs, field is "openInterest"
