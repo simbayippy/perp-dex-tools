@@ -13,8 +13,8 @@ import asyncio
 import sys
 from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add funding_rate_service directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from collection.adapters.lighter_adapter import LighterAdapter
 from utils.logger import logger
