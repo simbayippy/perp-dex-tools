@@ -166,23 +166,56 @@ Get statistical analysis of funding rates (average, median, volatility, percenti
 
 ### `GET /opportunities`
 Get arbitrage opportunities with comprehensive filtering.
-- `?symbol=<symbol>` - Filter by symbol
-- `?long_dex=<dex>` - Filter by long DEX
-- `?short_dex=<dex>` - Filter by short DEX
-- `?include_dexes=<dex1,dex2>` - Include only these DEXs
-- `?exclude_dexes=<dex1,dex2>` - Exclude these DEXs
-- `?min_divergence=0.0001` - Minimum divergence (default: 0.0005, i.e., 0.01%)
+
+**Symbol Filter:**
+- `?symbol=<symbol>` - Filter by symbol (e.g., BTC)
+
+**DEX Filters (position-agnostic):**
+- `?dex=<dex>` - Show opportunities involving this DEX (long or short side)
+- `?dex_pair=<dex1,dex2>` - Show only opportunities between these two DEXs (any direction)
+- `?dexes=<dex1,dex2,dex3>` - Show opportunities involving ANY of these DEXs
+- `?whitelist_dexes=<dex1,dex2>` - Only show opportunities where BOTH sides are from this list
+- `?exclude_dexes=<dex1,dex2>` - Exclude opportunities involving any of these DEXs
+
+**Profitability Filters:**
+- `?min_divergence=0.0001` - Minimum divergence (default: 0.0001, i.e., 0.01%)
 - `?min_profit=0` - Minimum net profit percent (default: 0)
+
+**Volume Filters:**
 - `?min_volume=<amount>` - Minimum 24h volume USD (default: none)
 - `?max_volume=<amount>` - Maximum 24h volume USD
+
+**Open Interest Filters:**
 - `?min_oi=<amount>` - Minimum open interest USD
 - `?max_oi=<amount>` - Maximum open interest USD (for low OI farming)
 - `?oi_ratio_min=<ratio>` - Minimum OI ratio (long/short)
 - `?oi_ratio_max=<ratio>` - Maximum OI ratio (long/short)
+
+**Liquidity Filters:**
 - `?max_spread=<bps>` - Maximum spread in basis points
+
+**Sorting & Pagination:**
 - `?limit=10` - Number of results (default: 10, max: 100)
 - `?sort_by=net_profit_percent` - Sort field (default: net_profit_percent)
 - `?sort_desc=true` - Sort descending (default: true)
+
+**Common Use Cases:**
+```bash
+# All Lighter opportunities
+?dex=lighter
+
+# Only Lighter vs GRVT
+?dex_pair=lighter,grvt
+
+# Only trades between trusted DEXs
+?whitelist_dexes=lighter,grvt,hyperliquid
+
+# Anything except EdgeX
+?exclude_dexes=edgex
+
+# BTC opportunities on Lighter but not against EdgeX
+?symbol=BTC&dex=lighter&exclude_dexes=edgex
+```
 
 **Response:**
 ```json

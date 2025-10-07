@@ -22,12 +22,15 @@ router = APIRouter()
 @router.get("/opportunities", response_model=Dict[str, Any])
 async def get_opportunities(
     finder: OpportunityFinder = Depends(get_opportunity_finder),
-    # Symbol and DEX filters
+    # Symbol filter
     symbol: Optional[str] = Query(None, description="Filter by symbol"),
-    long_dex: Optional[str] = Query(None, description="Filter by long DEX"),
-    short_dex: Optional[str] = Query(None, description="Filter by short DEX"),
-    include_dexes: Optional[str] = Query(None, description="Comma-separated list of DEXs to include"),
-    exclude_dexes: Optional[str] = Query(None, description="Comma-separated list of DEXs to exclude"),
+    
+    # DEX filters (position-agnostic)
+    dex: Optional[str] = Query(None, description="Show opportunities involving this DEX (long or short)"),
+    dex_pair: Optional[str] = Query(None, description="Two DEXs separated by comma (e.g., 'lighter,grvt')"),
+    dexes: Optional[str] = Query(None, description="Comma-separated list - show opps involving ANY of these"),
+    whitelist_dexes: Optional[str] = Query(None, description="Comma-separated list - BOTH sides must be from this list"),
+    exclude_dexes: Optional[str] = Query(None, description="Comma-separated list - exclude opps with these DEXs"),
     
     # Profitability filters
     min_divergence: Optional[Decimal] = Query(Decimal('0.0001'), description="Minimum divergence"),
@@ -61,17 +64,25 @@ async def get_opportunities(
     - Volume-based filtering
     """
     try:
-        # Parse include/exclude DEXs
-        include_dexes_list = [d.strip() for d in include_dexes.split(',')] if include_dexes else None
-        exclude_dexes_list = [d.strip() for d in exclude_dexes.split(',')] if exclude_dexes else None
+        # Parse DEX filters
+        dex_pair_list = None
+        if dex_pair:
+            dex_pair_list = [d.strip().lower() for d in dex_pair.split(',')]
+            if len(dex_pair_list) != 2:
+                raise HTTPException(status_code=400, detail="dex_pair must contain exactly 2 DEXs")
+        
+        dexes_list = [d.strip().lower() for d in dexes.split(',')] if dexes else None
+        whitelist_dexes_list = [d.strip().lower() for d in whitelist_dexes.split(',')] if whitelist_dexes else None
+        exclude_dexes_list = [d.strip().lower() for d in exclude_dexes.split(',')] if exclude_dexes else None
         
         # Create filter
         filters = OpportunityFilter(
             symbol=symbol.upper() if symbol else None,
-            long_dex=long_dex.lower() if long_dex else None,
-            short_dex=short_dex.lower() if short_dex else None,
-            include_dexes=[d.lower() for d in include_dexes_list] if include_dexes_list else None,
-            exclude_dexes=[d.lower() for d in exclude_dexes_list] if exclude_dexes_list else None,
+            dex=dex.lower() if dex else None,
+            dex_pair=dex_pair_list,
+            dexes=dexes_list,
+            whitelist_dexes=whitelist_dexes_list,
+            exclude_dexes=exclude_dexes_list,
             min_divergence=min_divergence,
             min_profit_percent=min_profit,
             min_volume_24h=min_volume,
@@ -139,10 +150,11 @@ async def get_opportunities(
 @router.get("/opportunities/best", response_model=Dict[str, Any])
 async def get_best_opportunity(
     finder: OpportunityFinder = Depends(get_opportunity_finder),
-    # Same filters as above
+    # Filters
     symbol: Optional[str] = Query(None, description="Filter by symbol"),
-    include_dexes: Optional[str] = Query(None, description="Comma-separated list of DEXs to include"),
-    exclude_dexes: Optional[str] = Query(None, description="Comma-separated list of DEXs to exclude"),
+    dex: Optional[str] = Query(None, description="Show opportunities involving this DEX"),
+    whitelist_dexes: Optional[str] = Query(None, description="Comma-separated list - BOTH sides must be from this list"),
+    exclude_dexes: Optional[str] = Query(None, description="Comma-separated list - exclude opps with these DEXs"),
     min_profit: Optional[Decimal] = Query(Decimal('0'), description="Minimum net profit percent"),
     max_oi: Optional[Decimal] = Query(None, description="Maximum open interest (for low OI farming)")
 ) -> Dict[str, Any]:
@@ -152,15 +164,16 @@ async def get_best_opportunity(
     Perfect for automated trading bots that want the top opportunity
     """
     try:
-        # Parse include/exclude DEXs
-        include_dexes_list = [d.strip() for d in include_dexes.split(',')] if include_dexes else None
-        exclude_dexes_list = [d.strip() for d in exclude_dexes.split(',')] if exclude_dexes else None
+        # Parse DEX filters
+        whitelist_dexes_list = [d.strip().lower() for d in whitelist_dexes.split(',')] if whitelist_dexes else None
+        exclude_dexes_list = [d.strip().lower() for d in exclude_dexes.split(',')] if exclude_dexes else None
         
         # Create filter
         filters = OpportunityFilter(
             symbol=symbol.upper() if symbol else None,
-            include_dexes=[d.lower() for d in include_dexes_list] if include_dexes_list else None,
-            exclude_dexes=[d.lower() for d in exclude_dexes_list] if exclude_dexes_list else None,
+            dex=dex.lower() if dex else None,
+            whitelist_dexes=whitelist_dexes_list,
+            exclude_dexes=exclude_dexes_list,
             min_profit_percent=min_profit,
             max_oi_usd=max_oi,
             limit=1  # Only get the best one

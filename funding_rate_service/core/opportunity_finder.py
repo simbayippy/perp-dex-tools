@@ -264,13 +264,29 @@ class OpportunityFinder:
         if costs.net_rate < filters.min_profit_percent:
             return None
         
-        # Apply DEX filters
-        if filters.long_dex and dex_long != filters.long_dex:
+        # Apply DEX filters (position-agnostic)
+        
+        # Single DEX filter (must be on one side)
+        if filters.dex and not (dex_long == filters.dex or dex_short == filters.dex):
             return None
-        if filters.short_dex and dex_short != filters.short_dex:
+        
+        # DEX pair filter (must be exactly these two DEXs in any order)
+        if filters.dex_pair:
+            if not (
+                (dex_long in filters.dex_pair and dex_short in filters.dex_pair) and
+                dex_long != dex_short
+            ):
+                return None
+        
+        # DEXes filter (at least one DEX must be involved)
+        if filters.dexes and not (dex_long in filters.dexes or dex_short in filters.dexes):
             return None
-        if filters.include_dexes and (dex_long not in filters.include_dexes or dex_short not in filters.include_dexes):
+        
+        # Whitelist filter (both DEXs must be in whitelist)
+        if filters.whitelist_dexes and not (dex_long in filters.whitelist_dexes and dex_short in filters.whitelist_dexes):
             return None
+        
+        # Exclude filter (neither DEX should be in exclude list)
         if filters.exclude_dexes and (dex_long in filters.exclude_dexes or dex_short in filters.exclude_dexes):
             return None
         
@@ -458,14 +474,25 @@ class OpportunityFinder:
             query += " AND s.symbol = :symbol"
             params["symbol"] = filters.symbol
         
-        # Add DEX filters
-        if filters.include_dexes:
-            # For IN clause with multiple values, we need to build it differently
-            placeholders = ','.join([f":include_dex_{i}" for i in range(len(filters.include_dexes))])
-            query += f" AND d.name IN ({placeholders})"
-            for i, dex in enumerate(filters.include_dexes):
-                params[f"include_dex_{i}"] = dex
+        # Add DEX filters at database level (for efficiency)
+        # Note: Most filtering happens in _create_opportunity, but we can optimize here
         
+        # Single DEX filter - can't optimize at DB level (need to check pairs)
+        # DEX pair filter - can optimize: only fetch these two DEXs
+        if filters.dex_pair:
+            placeholders = ','.join([f":dex_pair_{i}" for i in range(len(filters.dex_pair))])
+            query += f" AND d.name IN ({placeholders})"
+            for i, dex in enumerate(filters.dex_pair):
+                params[f"dex_pair_{i}"] = dex
+        
+        # Whitelist filter - only fetch from whitelist
+        elif filters.whitelist_dexes:
+            placeholders = ','.join([f":whitelist_{i}" for i in range(len(filters.whitelist_dexes))])
+            query += f" AND d.name IN ({placeholders})"
+            for i, dex in enumerate(filters.whitelist_dexes):
+                params[f"whitelist_{i}"] = dex
+        
+        # Exclude filter - exclude at DB level
         if filters.exclude_dexes:
             placeholders = ','.join([f":exclude_dex_{i}" for i in range(len(filters.exclude_dexes))])
             query += f" AND d.name NOT IN ({placeholders})"

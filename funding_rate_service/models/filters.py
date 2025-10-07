@@ -14,17 +14,29 @@ class OpportunityFilter(BaseModel):
     This allows users to find opportunities based on specific criteria,
     especially useful for low OI farming strategies.
     """
-    # DEX filters
+    # Symbol filter
     symbol: Optional[str] = None
-    long_dex: Optional[str] = None
-    short_dex: Optional[str] = None
-    include_dexes: Optional[List[str]] = Field(
+    
+    # DEX filters (position-agnostic)
+    dex: Optional[str] = Field(
+        default=None,
+        description="Show opportunities involving this DEX (long or short side)"
+    )
+    dex_pair: Optional[List[str]] = Field(
+        default=None,
+        description="Show only opportunities between these two DEXs (any direction)"
+    )
+    dexes: Optional[List[str]] = Field(
+        default=None,
+        description="Show opportunities involving any of these DEXs"
+    )
+    whitelist_dexes: Optional[List[str]] = Field(
         default=None, 
-        description="Only include these DEXs (comma-separated in API)"
+        description="Only show opportunities where BOTH sides are from this list"
     )
     exclude_dexes: Optional[List[str]] = Field(
         default=None, 
-        description="Exclude these DEXs"
+        description="Exclude opportunities involving any of these DEXs"
     )
     
     # Profitability filters
