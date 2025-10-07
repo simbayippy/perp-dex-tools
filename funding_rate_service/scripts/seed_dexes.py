@@ -56,6 +56,22 @@ INITIAL_DEXES = [
         'maker_fee': 0.00015,  # 0.015%
         'taker_fee': 0.00045,  # 0.045%
     },
+    {
+        'name': 'backpack',
+        'display_name': 'Backpack',
+        'api_base_url': 'https://api.backpack.exchange',
+        'websocket_url': 'wss://ws.backpack.exchange',
+        'maker_fee': 0.0002,   # 0.02%
+        'taker_fee': 0.0005,   # 0.05%
+    },
+    {
+        'name': 'aster',
+        'display_name': 'Aster',
+        'api_base_url': 'https://fapi.asterdex.com',
+        'websocket_url': 'wss://fstream.asterdex.com',
+        'maker_fee': 0.00005,   # 0.005%
+        'taker_fee': 0.0004,   # 0.04%
+    },
 ]
 
 
