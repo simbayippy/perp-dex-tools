@@ -20,6 +20,7 @@ httpx>=0.26.0
 # Utilities
 python-dotenv==1.0.0
 tenacity==8.2.3
+pytz>=2025.2
 
 # Background Tasks
 apscheduler==3.10.4
