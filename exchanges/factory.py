@@ -3,19 +3,19 @@ Exchange factory for creating exchange clients dynamically.
 """
 
 from typing import Dict, Any, Type
-from .base import BaseExchangeClient
+from exchange_clients.base import BaseExchangeClient
 
 
 class ExchangeFactory:
     """Factory class for creating exchange clients."""
 
     _registered_exchanges = {
-        'edgex': 'exchanges.edgex.EdgeXClient',
+        'edgex': 'exchange_clients.edgex.EdgeXClient',
         'backpack': 'exchanges.backpack.BackpackClient',
         'paradex': 'exchanges.paradex.ParadexClient',
         'aster': 'exchanges.aster.AsterClient',
-        'lighter': 'exchanges.lighter.LighterClient',
-        'grvt': 'exchanges.grvt.GrvtClient',
+        'lighter': 'exchange_clients.lighter.LighterClient',
+        'grvt': 'exchange_clients.grvt.GrvtClient',
     }
 
     @classmethod

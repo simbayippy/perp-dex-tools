@@ -1,0 +1,41 @@
+[project]
+name = "exchange-clients"
+version = "1.0.0"
+description = "Shared exchange clients for trading and funding rate collection"
+requires-python = ">=3.10"
+authors = [
+    {name = "perp-dex-tools"}
+]
+
+dependencies = [
+    "asyncio-compat",
+    "aiohttp>=3.8.0",
+    "websockets>=10.0",
+    "tenacity>=8.0.0",
+]
+
+[project.optional-dependencies]
+lighter = [
+    "lighter-python>=0.5.0",
+    "eth-account>=0.8.0",
+]
+grvt = [
+    "ccxt>=4.0.0",
+]
+edgex = [
+    "httpx>=0.24.0",
+]
+all = [
+    "lighter-python>=0.5.0",
+    "eth-account>=0.8.0",
+    "ccxt>=4.0.0",
+    "httpx>=0.24.0",
+]
+
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["exchange_clients", "exchange_clients.lighter", "exchange_clients.grvt", "exchange_clients.edgex"]
+

@@ -1,5 +1,5 @@
 """
-Lighter exchange client implementation.
+Lighter exchange client implementation for trading execution.
 """
 
 import os
@@ -9,7 +9,7 @@ import logging
 from decimal import Decimal
 from typing import Dict, Any, List, Optional, Tuple
 
-from .base import BaseExchangeClient, OrderResult, OrderInfo, query_retry
+from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry
 from helpers.logger import TradingLogger
 
 # Import official Lighter SDK for API client
@@ -700,3 +700,4 @@ class LighterClient(BaseExchangeClient):
                 success=False,
                 error_message=f"Market order exception: {e}"
             )
+
