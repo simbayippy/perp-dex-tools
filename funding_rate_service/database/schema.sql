@@ -138,9 +138,11 @@ CREATE TABLE IF NOT EXISTS opportunities (
     min_oi_usd NUMERIC(20, 2),
     max_oi_usd NUMERIC(20, 2),
     oi_ratio NUMERIC(10, 4),
+    oi_imbalance VARCHAR(20),
     
     long_spread_bps INTEGER,
     short_spread_bps INTEGER,
+    avg_spread_bps INTEGER,
     
     discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     valid_until TIMESTAMP,

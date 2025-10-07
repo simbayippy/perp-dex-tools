@@ -218,7 +218,7 @@ async def test_full_system():
             # Show sample market data
             sample_query = """
                 SELECT 
-                    s.normalized_name,
+                    s.symbol,
                     ds.volume_24h,
                     ds.open_interest_usd,
                     d.name as dex_name
@@ -240,7 +240,7 @@ async def test_full_system():
                 for row in sample_data:
                     vol_str = f"${row['volume_24h']:,.2f}" if row['volume_24h'] else "N/A"
                     oi_str = f"${row['open_interest_usd']:,.2f}" if row['open_interest_usd'] else "N/A"
-                    print(f"   {row['dex_name']:<10} {row['normalized_name']:<10} {vol_str:<20} {oi_str:<20}")
+                    print(f"   {row['dex_name']:<10} {row['symbol']:<10} {vol_str:<20} {oi_str:<20}")
                 print(f"   {'-'*70}")
         else:
             print("   ⚠️  No recent market data found (may not be implemented yet)")
