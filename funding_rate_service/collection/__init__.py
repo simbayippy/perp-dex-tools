@@ -2,11 +2,11 @@
 Data collection layer for funding rates
 """
 
-from collection.base_adapter import BaseDEXAdapter
+from exchange_clients.base import BaseFundingAdapter
 from collection.orchestrator import CollectionOrchestrator
 
 __all__ = [
-    "BaseDEXAdapter",
+    "BaseFundingAdapter",
     "CollectionOrchestrator",
 ]
 

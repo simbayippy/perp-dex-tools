@@ -28,7 +28,9 @@ import argparse
 # Add funding_rate_service directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from collection.adapters import LighterAdapter, GrvtAdapter, EdgeXAdapter
+from exchange_clients.lighter import LighterFundingAdapter
+from exchange_clients.grvt import GrvtFundingAdapter
+from exchange_clients.edgex import EdgeXFundingAdapter
 from collection.orchestrator import CollectionOrchestrator
 from database.connection import database
 from core.mappers import dex_mapper, symbol_mapper
@@ -110,9 +112,9 @@ async def test_single_adapter(adapter_class, adapter_name, test_symbols):
 async def test_adapters_only(adapter_filter=None):
     """Test all adapters or a specific one (no database)"""
     adapters_to_test = {
-        'lighter': (LighterAdapter, 'Lighter', ["BTC-PERP", "ETH-PERP", "1000PEPE-PERP"]),
-        'grvt': (GrvtAdapter, 'GRVT', ["BTC_USDT_Perp", "ETH_USDT_Perp", "SOL_USDT_Perp"]),
-        'edgex': (EdgeXAdapter, 'EdgeX', ["BTCUSDT", "ETHUSDT", "SOLUSDT"]),
+        'lighter': (LighterFundingAdapter, 'Lighter', ["BTC-PERP", "ETH-PERP", "1000PEPE-PERP"]),
+        'grvt': (GrvtFundingAdapter, 'GRVT', ["BTC_USDT_Perp", "ETH_USDT_Perp", "SOL_USDT_Perp"]),
+        'edgex': (EdgeXFundingAdapter, 'EdgeX', ["BTCUSDT", "ETHUSDT", "SOLUSDT"]),
     }
     
     # Filter if specific adapter requested
@@ -153,9 +155,9 @@ async def test_full_system():
         # Create adapters for Lighter, GRVT, and EdgeX
         print("🔧 Initializing adapters...")
         adapters = [
-            LighterAdapter(),
-            GrvtAdapter(),
-            EdgeXAdapter(),
+            LighterFundingAdapter(),
+            GrvtFundingAdapter(),
+            EdgeXFundingAdapter(),
         ]
         print(f"✅ Initialized {len(adapters)} adapters (Lighter, GRVT, EdgeX)\n")
         

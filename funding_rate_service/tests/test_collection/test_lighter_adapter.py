@@ -16,7 +16,7 @@ from pathlib import Path
 # Add funding_rate_service directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from collection.adapters.lighter_adapter import LighterAdapter
+from exchange_clients.lighter import LighterFundingAdapter
 from utils.logger import logger
 
 
@@ -27,7 +27,7 @@ async def main():
     print("="*60 + "\n")
     
     # Create adapter
-    adapter = LighterAdapter(
+    adapter = LighterFundingAdapter(
         api_base_url="https://mainnet.zklighter.elliot.ai"
     )
     

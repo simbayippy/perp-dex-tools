@@ -13,7 +13,7 @@ from datetime import datetime
 
 from databases import Database
 
-from collection.base_adapter import BaseDEXAdapter
+from exchange_clients.base import BaseFundingAdapter
 from database.repositories import (
     DEXRepository,
     SymbolRepository,
@@ -44,7 +44,7 @@ class CollectionOrchestrator:
     def __init__(
         self,
         db: Database,
-        adapters: Optional[List[BaseDEXAdapter]] = None
+        adapters: Optional[List[BaseFundingAdapter]] = None
     ):
         """
         Initialize orchestrator
@@ -63,7 +63,7 @@ class CollectionOrchestrator:
         
         logger.info(f"CollectionOrchestrator initialized with {len(self.adapters)} adapters")
     
-    def add_adapter(self, adapter: BaseDEXAdapter) -> None:
+    def add_adapter(self, adapter: BaseFundingAdapter) -> None:
         """Add a DEX adapter"""
         self.adapters.append(adapter)
         logger.info(f"Added adapter: {adapter.dex_name}")
@@ -157,7 +157,7 @@ class CollectionOrchestrator:
     
     async def _collect_from_adapter(
         self,
-        adapter: BaseDEXAdapter,
+        adapter: BaseFundingAdapter,
         include_market_data: bool = True
     ) -> Dict[str, any]:
         """
@@ -320,7 +320,7 @@ class CollectionOrchestrator:
         self,
         dex_id: int,
         market_data: Dict[str, Dict[str, Decimal]],
-        adapter: BaseDEXAdapter
+        adapter: BaseFundingAdapter
     ) -> None:
         """
         Store market data (volume, OI) in dex_symbols table

@@ -4,14 +4,19 @@ This directory contains DEX-specific adapters for fetching funding rates.
 
 ## Overview
 
-Each adapter extends `BaseDEXAdapter` and implements:
+**Note:** All adapters have been migrated to the shared `exchange_clients` library.
+
+Each adapter extends `BaseFundingAdapter` (from `exchange_clients.base`) and implements:
 - `fetch_funding_rates()` - Fetch all funding rates for the DEX
+- `fetch_market_data()` - Fetch volume and open interest data
 - `normalize_symbol()` - Convert DEX-specific symbol format to standard
 - `get_dex_symbol_format()` - Convert standard format back to DEX-specific
 
 ## Implemented Adapters
 
-### ✅ Lighter (`lighter_adapter.py`)
+All adapters are now in `exchange_clients/` (shared library):
+
+### ✅ Lighter (`exchange_clients/lighter/funding_adapter.py`)
 - **SDK**: `lighter-python` (official Python SDK)
 - **API Method**: `FundingApi.funding_rates()`
 - **Symbol Format**: `BTC-PERP`, `ETH-PERP`, `1000PEPE-PERP`
@@ -30,7 +35,7 @@ Each adapter extends `BaseDEXAdapter` and implements:
   - Returns market summaries with `funding_rate` field
   - Filters perpetual markets by `-USD-PERP` suffix
 
-### ✅ GRVT (`grvt_adapter.py`)
+### ✅ GRVT (`exchange_clients/grvt/funding_adapter.py`)
 - **SDK**: `grvt-pysdk` (CCXT-compatible SDK)
 - **API Method**: `GrvtCcxt.fetch_markets()` + `fetch_ticker()` (parallel)
 - **Symbol Format**: `BTC_USDT_Perp`, `ETH_USDT_Perp`
@@ -77,13 +82,15 @@ python scripts/test_all_adapters.py --adapter lighter
 
 ```python
 from collection.orchestrator import CollectionOrchestrator
-from collection.adapters import LighterAdapter, ParadexAdapter, GrvtAdapter
+from exchange_clients.lighter import LighterFundingAdapter
+from exchange_clients.grvt import GrvtFundingAdapter
+from exchange_clients.edgex import EdgeXFundingAdapter
 
 # Initialize adapters
 adapters = [
-    LighterAdapter(),
-    ParadexAdapter(),
-    GrvtAdapter()
+    LighterFundingAdapter(),
+    GrvtFundingAdapter(),
+    EdgeXFundingAdapter()
 ]
 
 # Create orchestrator
@@ -137,13 +144,15 @@ All adapters normalize symbols to a common format:
 
 To add a new DEX adapter:
 
-1. **Create new file**: `{dex_name}_adapter.py`
+1. **Create new directory**: `exchange_clients/{dex_name}/`
 
-2. **Extend BaseDEXAdapter**:
+2. **Create funding adapter**: `exchange_clients/{dex_name}/funding_adapter.py`
+
+3. **Extend BaseFundingAdapter**:
 ```python
-from collection.base_adapter import BaseDEXAdapter
+from exchange_clients.base import BaseFundingAdapter
 
-class NewDEXAdapter(BaseDEXAdapter):
+class NewDEXFundingAdapter(BaseFundingAdapter):
     def __init__(self, ...):
         super().__init__(dex_name="newdex", api_base_url="...", ...)
     
@@ -160,16 +169,18 @@ class NewDEXAdapter(BaseDEXAdapter):
         pass
 ```
 
-3. **Add to `__init__.py`**:
+4. **Create `__init__.py`**:
 ```python
-from collection.adapters.newdex_adapter import NewDEXAdapter
+from .funding_adapter import NewDEXFundingAdapter
 
-__all__ = [..., "NewDEXAdapter"]
+__all__ = ['NewDEXFundingAdapter']
 ```
 
-4. **Update seed data**: Add to `scripts/seed_dexes.py`
+5. **Update seed data**: Add to `scripts/seed_dexes.py`
 
-5. **Test**: Create standalone test and integration test
+6. **Test**: Create standalone test and integration test
+
+7. **Optional**: Create trading client at `exchange_clients/{dex_name}/client.py`
 
 See `ADDING_EXCHANGES.md` in the root docs for more details.
 
@@ -212,18 +223,36 @@ All adapters include:
 
 ## Dependencies
 
-```python
-# requirements.txt
-git+https://github.com/elliottech/lighter-python.git@...
-paradex-py>=0.1.0
-grvt-pysdk
+All exchange SDKs are now managed in `exchange_clients/pyproject.toml`:
+
+```toml
+[project.optional-dependencies]
+lighter = ["lighter-sdk @ git+...", "eth-account>=0.8.0"]
+grvt = ["grvt-pysdk"]
+edgex = ["edgex-python-sdk @ git+...", "httpx>=0.24.0"]
+all = [...]  # All exchange deps
 ```
+
+Install with:
+```bash
+pip install -e './exchange_clients[all]'
+```
+
+### ✅ EdgeX (`exchange_clients/edgex/funding_adapter.py`)
+- **SDK**: Forked `edgex-python-sdk` (for trading client only)
+- **API Method**: Public HTTP endpoints (funding adapter uses direct HTTP)
+- **Symbol Format**: `BTCUSDT`, `ETHUSDT`, `1000PEPEUSDT`
+- **Normalized**: `BTC`, `ETH`, `PEPE`
+- **Notes**:
+  - Funding adapter uses HTTP-only (no SDK required)
+  - Trading client uses forked SDK with post_only support
+  - Handles multiplier prefixes (1000PEPE → PEPE)
 
 ## Future Additions
 
 Planned adapters:
-- [ ] EdgeX
 - [ ] Hyperliquid
 - [ ] Vertex
 - [ ] Orderly Network
+- [ ] Paradex (dependency issues resolved)
 

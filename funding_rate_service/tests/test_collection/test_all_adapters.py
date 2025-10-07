@@ -20,7 +20,9 @@ import argparse
 # Add funding_rate_service directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from collection.adapters import LighterAdapter, GrvtAdapter, EdgeXAdapter
+from exchange_clients.lighter import LighterFundingAdapter
+from exchange_clients.grvt import GrvtFundingAdapter
+from exchange_clients.edgex import EdgeXFundingAdapter
 from utils.logger import logger
 
 
@@ -126,9 +128,9 @@ async def main():
     
     # Define adapters to test
     adapters = {
-        'lighter': (LighterAdapter, 'Lighter'),
-        'grvt': (GrvtAdapter, 'GRVT'),
-        'edgex': (EdgeXAdapter, 'EdgeX'),
+        'lighter': (LighterFundingAdapter, 'Lighter'),
+        'grvt': (GrvtFundingAdapter, 'GRVT'),
+        'edgex': (EdgeXFundingAdapter, 'EdgeX'),
     }
     
     # Determine which adapters to test
