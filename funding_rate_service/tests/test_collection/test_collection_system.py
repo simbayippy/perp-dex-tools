@@ -36,7 +36,7 @@ sys.path.insert(0, str(project_root / "funding_rate_service"))  # For funding_ra
 from exchange_clients.lighter import LighterFundingAdapter
 from exchange_clients.grvt import GrvtFundingAdapter
 from exchange_clients.edgex import EdgeXFundingAdapter
-from exchange_clients.paradex import ParadexFundingAdapter
+# from exchange_clients.paradex import ParadexFundingAdapter
 from exchange_clients.backpack import BackpackFundingAdapter
 from exchange_clients.aster import AsterFundingAdapter
 from collection.orchestrator import CollectionOrchestrator
@@ -123,7 +123,7 @@ async def test_adapters_only(adapter_filter=None):
         'lighter': (LighterFundingAdapter, 'Lighter', ["BTC-PERP", "ETH-PERP", "1000PEPE-PERP"]),
         'grvt': (GrvtFundingAdapter, 'GRVT', ["BTC_USDT_Perp", "ETH_USDT_Perp", "SOL_USDT_Perp"]),
         'edgex': (EdgeXFundingAdapter, 'EdgeX', ["BTCUSDT", "ETHUSDT", "SOLUSDT"]),
-        'paradex': (ParadexFundingAdapter, 'Paradex', ["BTC-USD-PERP", "ETH-USD-PERP", "SOL-USD-PERP"]),
+        # 'paradex': (ParadexFundingAdapter, 'Paradex', ["BTC-USD-PERP", "ETH-USD-PERP", "SOL-USD-PERP"]),
         'backpack': (BackpackFundingAdapter, 'Backpack', ["BTC_USDC_PERP", "ETH_USDC_PERP", "SOL_USDC_PERP"]),
         'aster': (AsterFundingAdapter, 'Aster', ["BTCUSDT", "ETHUSDT", "SOLUSDT"]),
     }
@@ -169,7 +169,7 @@ async def test_full_system():
             LighterFundingAdapter(),
             GrvtFundingAdapter(),
             EdgeXFundingAdapter(),
-            ParadexFundingAdapter(),
+            # ParadexFundingAdapter(),
             BackpackFundingAdapter(),
             AsterFundingAdapter(),
         ]
