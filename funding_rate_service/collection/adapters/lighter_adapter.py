@@ -152,26 +152,37 @@ class LighterAdapter(BaseDEXAdapter):
     
     async def fetch_market_data(self) -> Dict[str, Dict[str, Decimal]]:
         """
-        Fetch complete market data including OI using order_book_details
+        Fetch complete market data (volume + OI) from Lighter
         
-        This is slower but includes open interest.
-        Use sparingly due to API rate limits.
+        Uses the OrderApi.order_book_details() endpoint which returns complete
+        market statistics including 24h volume AND open interest for all markets.
+        
+        Note: Called once per minute (same as funding rates), so performance is fine.
         
         Returns:
-            Dictionary mapping normalized symbols to complete market data
+            Dictionary mapping normalized symbols to market data
+            Example: {
+                "BTC": {
+                    "volume_24h": Decimal("1500000.0"),
+                    "open_interest": Decimal("5000000.0")
+                }
+            }
+            
+        Raises:
+            Exception: If fetching fails after retries
         """
         await self._ensure_client()
         
         try:
-            logger.debug(f"{self.dex_name}: Fetching detailed market data with OI...")
+            logger.debug(f"{self.dex_name}: Fetching market data (volume + OI)...")
             
-            # Get order book details (has OI)
+            # Use order_book_details endpoint which includes both volume AND OI
             order_book_details_response = await self.order_api.order_book_details(
                 _request_timeout=self.timeout
             )
             
             if not order_book_details_response or not order_book_details_response.order_book_details:
-                logger.warning(f"{self.dex_name}: No order book details returned")
+                logger.warning(f"{self.dex_name}: No market data returned")
                 return {}
             
             # Parse response
@@ -181,7 +192,7 @@ class LighterAdapter(BaseDEXAdapter):
                     # Normalize symbol
                     normalized_symbol = self.normalize_symbol(market.symbol)
                     
-                    # Extract data
+                    # Extract volume and OI (both available in order_book_details)
                     volume_24h = Decimal(str(market.daily_quote_token_volume))
                     open_interest = Decimal(str(market.open_interest))
                     
@@ -197,18 +208,18 @@ class LighterAdapter(BaseDEXAdapter):
                 
                 except Exception as e:
                     logger.error(
-                        f"{self.dex_name}: Error parsing detailed market data for {market.symbol}: {e}"
+                        f"{self.dex_name}: Error parsing market data for {market.symbol}: {e}"
                     )
                     continue
             
             logger.info(
-                f"{self.dex_name}: Successfully fetched detailed market data for {len(market_data)} symbols"
+                f"{self.dex_name}: Successfully fetched market data for {len(market_data)} symbols"
             )
             
             return market_data
         
         except Exception as e:
-            logger.error(f"{self.dex_name}: Failed to fetch detailed market data: {e}")
+            logger.error(f"{self.dex_name}: Failed to fetch market data: {e}")
             raise
     
     def normalize_symbol(self, dex_symbol: str) -> str:

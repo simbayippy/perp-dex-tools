@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS dex_symbols (
     best_ask NUMERIC(20, 8),
     spread_bps INTEGER,
     
-    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     UNIQUE(dex_id, symbol_id)
 );

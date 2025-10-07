@@ -82,7 +82,6 @@ async def main():
         
         # Test market data fetching
         print(f"\n📊 Testing market data (volume, OI) fetching:")
-        print("   Note: Using exchange_stats (fast, no OI)...")
         market_data = await adapter.fetch_market_data()
         
         if market_data:
