@@ -451,27 +451,31 @@ class OpportunityFinder:
             WHERE d.is_active = TRUE
         """
         
-        params = []
+        params = {}
         
         # Add symbol filter
         if filters.symbol:
-            query += " AND s.symbol = $1"
-            params.append(filters.symbol)
+            query += " AND s.symbol = :symbol"
+            params["symbol"] = filters.symbol
         
         # Add DEX filters
         if filters.include_dexes:
-            placeholders = ','.join([f"${i+len(params)+1}" for i in range(len(filters.include_dexes))])
+            # For IN clause with multiple values, we need to build it differently
+            placeholders = ','.join([f":include_dex_{i}" for i in range(len(filters.include_dexes))])
             query += f" AND d.name IN ({placeholders})"
-            params.extend(filters.include_dexes)
+            for i, dex in enumerate(filters.include_dexes):
+                params[f"include_dex_{i}"] = dex
         
         if filters.exclude_dexes:
-            placeholders = ','.join([f"${i+len(params)+1}" for i in range(len(filters.exclude_dexes))])
+            placeholders = ','.join([f":exclude_dex_{i}" for i in range(len(filters.exclude_dexes))])
             query += f" AND d.name NOT IN ({placeholders})"
-            params.extend(filters.exclude_dexes)
+            for i, dex in enumerate(filters.exclude_dexes):
+                params[f"exclude_dex_{i}"] = dex
         
         # Execute query
         try:
-            rows = await self.db.fetch_all(query, *params)
+            logger.debug(f"Executing query with params: {params}")
+            rows = await self.db.fetch_all(query, values=params)
             
             # Convert to list of dicts
             results = []
@@ -486,11 +490,13 @@ class OpportunityFinder:
                     'updated_at': row['updated_at']
                 })
             
-            logger.debug(f"Fetched {len(results)} funding rates from database")
+            logger.debug(f"Fetched {len(results)} funding rates from database for symbol={filters.symbol}")
             return results
         
         except Exception as e:
-            logger.error(f"Error fetching rates from database: {e}")
+            logger.error(f"Error fetching rates from database: {e}", exc_info=True)
+            logger.error(f"Query: {query}")
+            logger.error(f"Params: {params}")
             return []
 
 
