@@ -183,7 +183,7 @@ class SymbolRepository:
                 updates.append("spread_bps = :spread_bps")
                 params["spread_bps"] = spread_bps
             
-            updates.append("last_updated = NOW()")
+            updates.append("updated_at = NOW()")
             
             query = f"""
                 UPDATE dex_symbols 
