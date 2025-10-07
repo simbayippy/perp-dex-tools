@@ -247,34 +247,3 @@ async def get_opportunities_for_symbol(
         logger.error(f"Error finding opportunities for {symbol}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.get("/opportunities/compare", response_model=Dict[str, Any])
-async def compare_dex_opportunities(
-    dex1: str = Query(..., description="First DEX"),
-    dex2: str = Query(..., description="Second DEX"),
-    finder: OpportunityFinder = Depends(get_opportunity_finder),
-    symbol: Optional[str] = Query(None, description="Filter by symbol")
-) -> Dict[str, Any]:
-    """
-    Compare opportunities between two specific DEXs
-    
-    Shows rate differences and recommendations for each symbol
-    """
-    try:
-        comparisons = await finder.compare_dexes(
-            dex1=dex1.lower(),
-            dex2=dex2.lower(),
-            symbol=symbol.upper() if symbol else None
-        )
-        
-        return {
-            "dex1": dex1,
-            "dex2": dex2,
-            "opportunities": comparisons,
-            "count": len(comparisons),
-            "generated_at": datetime.utcnow().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"Error comparing {dex1} vs {dex2}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))

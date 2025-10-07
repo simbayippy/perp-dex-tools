@@ -317,6 +317,117 @@ async def get_funding_rate_stats(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/funding-rates/compare")
+async def compare_funding_rates(
+    symbol: str = Query(..., description="Symbol to compare (e.g., BTC)"),
+    dex1: str = Query(..., description="First DEX name"),
+    dex2: str = Query(..., description="Second DEX name")
+) -> Dict[str, Any]:
+    """
+    Compare current funding rates between two DEXs for a specific symbol
+    
+    Perfect for position monitoring - quickly see rate divergence between your positions
+    on different exchanges and decide if it's time to exit or rebalance.
+    """
+    try:
+        # Normalize inputs
+        symbol_upper = symbol.upper()
+        dex1_lower = dex1.lower()
+        dex2_lower = dex2.lower()
+        
+        # Verify DEXs exist
+        dex1_id = dex_mapper.get_id(dex1_lower)
+        dex2_id = dex_mapper.get_id(dex2_lower)
+        
+        if dex1_id is None:
+            raise HTTPException(status_code=404, detail=f"DEX '{dex1}' not found")
+        if dex2_id is None:
+            raise HTTPException(status_code=404, detail=f"DEX '{dex2}' not found")
+        
+        # Verify symbol exists
+        symbol_id = symbol_mapper.get_id(symbol_upper)
+        if symbol_id is None:
+            raise HTTPException(status_code=404, detail=f"Symbol '{symbol}' not found")
+        
+        # Fetch rates for both DEXs
+        query = """
+            SELECT 
+                d.name as dex_name,
+                lfr.funding_rate,
+                lfr.next_funding_time,
+                lfr.updated_at
+            FROM latest_funding_rates lfr
+            JOIN dexes d ON lfr.dex_id = d.id
+            WHERE lfr.symbol_id = :symbol_id 
+            AND lfr.dex_id IN (:dex1_id, :dex2_id)
+        """
+        
+        rows = await database.fetch_all(
+            query,
+            values={
+                "symbol_id": symbol_id,
+                "dex1_id": dex1_id,
+                "dex2_id": dex2_id
+            }
+        )
+        
+        # Parse results
+        rates_by_dex = {}
+        for row in rows:
+            rates_by_dex[row['dex_name']] = {
+                "name": row['dex_name'],
+                "funding_rate": float(row['funding_rate']),
+                "next_funding_time": row['next_funding_time'].isoformat() if row['next_funding_time'] else None,
+                "timestamp": row['updated_at'].isoformat()
+            }
+        
+        # Check if we got both rates
+        if dex1_lower not in rates_by_dex:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No funding rate found for {symbol} on {dex1}"
+            )
+        if dex2_lower not in rates_by_dex:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No funding rate found for {symbol} on {dex2}"
+            )
+        
+        # Calculate divergence
+        rate1 = rates_by_dex[dex1_lower]['funding_rate']
+        rate2 = rates_by_dex[dex2_lower]['funding_rate']
+        divergence = abs(rate2 - rate1)
+        divergence_bps = divergence * 10000  # Convert to basis points
+        
+        # Determine recommendations (long the lower rate, short the higher rate)
+        if rate1 < rate2:
+            long_recommendation = dex1_lower
+            short_recommendation = dex2_lower
+            estimated_net_profit_8h = rate2 - rate1  # Profit from rate difference
+        else:
+            long_recommendation = dex2_lower
+            short_recommendation = dex1_lower
+            estimated_net_profit_8h = rate1 - rate2
+        
+        return {
+            "symbol": symbol_upper,
+            "dex1": rates_by_dex[dex1_lower],
+            "dex2": rates_by_dex[dex2_lower],
+            "divergence": divergence,
+            "divergence_bps": round(divergence_bps, 2),
+            "long_recommendation": long_recommendation,
+            "short_recommendation": short_recommendation,
+            "estimated_net_profit_8h": estimated_net_profit_8h,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error comparing funding rates: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _parse_period(period: str) -> int:
     """
     Parse period string to days

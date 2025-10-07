@@ -70,6 +70,39 @@ Get funding rate for a specific DEX and symbol pair.
 }
 ```
 
+### `GET /funding-rates/compare`
+Compare current funding rates between two DEXs for a specific symbol. Perfect for position monitoring - quickly see rate divergence between your positions on different exchanges.
+
+Query Parameters:
+- `symbol` (required) - Symbol to compare (e.g., BTC)
+- `dex1` (required) - First DEX name
+- `dex2` (required) - Second DEX name
+
+**Response:**
+```json
+{
+  "symbol": "BTC",
+  "dex1": {
+    "name": "lighter",
+    "funding_rate": 0.0001,
+    "next_funding_time": "2025-10-07T16:00:00Z",
+    "timestamp": "2025-10-07T15:55:32Z"
+  },
+  "dex2": {
+    "name": "hyperliquid",
+    "funding_rate": 0.0008,
+    "next_funding_time": "2025-10-07T16:00:00Z",
+    "timestamp": "2025-10-07T15:55:30Z"
+  },
+  "divergence": 0.0007,
+  "divergence_bps": 7.0,
+  "long_recommendation": "lighter",
+  "short_recommendation": "hyperliquid",
+  "estimated_net_profit_8h": 0.0007,
+  "timestamp": "2025-10-07T15:55:32Z"
+}
+```
+
 ### `GET /history/funding-rates/{dex}/{symbol}`
 Get historical funding rates.
 - `?period=7d` - Period: 7d, 30d, 90d (default: 7d)
@@ -132,7 +165,7 @@ Get statistical analysis of funding rates (average, median, volatility, percenti
 ## Opportunities
 
 ### `GET /opportunities`
-Get arbitrage opportunities with filtering.
+Get arbitrage opportunities with comprehensive filtering.
 - `?symbol=<symbol>` - Filter by symbol
 - `?long_dex=<dex>` - Filter by long DEX
 - `?short_dex=<dex>` - Filter by short DEX
@@ -165,18 +198,18 @@ Get arbitrage opportunities with filtering.
       "estimated_fees": 0.00006,
       "net_profit_percent": 0.00009,
       "annualized_apy": 9.855,
-      "long_volume_24h": 1500000.0,
-      "short_volume_24h": 2000000.0,
-      "min_volume_24h": 1500000.0,
-      "long_oi_usd": 5000000.0,
-      "short_oi_usd": 6000000.0,
-      "min_oi_usd": 5000000.0,
-      "max_oi_usd": 6000000.0,
-      "oi_ratio": 0.833,
-      "oi_imbalance": "short_heavy",
-      "long_spread_bps": 5,
-      "short_spread_bps": 4,
-      "avg_spread_bps": 4.5,
+      "long_volume_24h": 1500000.0, // nullable
+      "short_volume_24h": 2000000.0, // nullable
+      "min_volume_24h": 1500000.0, // nullable
+      "long_oi_usd": 5000000.0, // nullable
+      "short_oi_usd": 6000000.0, // nullable
+      "min_oi_usd": 5000000.0, // nullable
+      "max_oi_usd": 6000000.0, // nullable
+      "oi_ratio": 0.833, // nullable
+      "oi_imbalance": "short_heavy", // nullable
+      "long_spread_bps": 5, // nullable
+      "short_spread_bps": 4, // nullable
+      "avg_spread_bps": 4.5, // nullable
       "discovered_at": "2024-10-06T12:00:00"
     }
   ],
@@ -214,9 +247,9 @@ Get the single best opportunity (highest net profit).
     "estimated_fees": 0.00006,
     "net_profit_percent": 0.00009,
     "annualized_apy": 9.855,
-    "min_volume_24h": 1500000.0,
-    "min_oi_usd": 5000000.0,
-    "oi_imbalance": "short_heavy",
+    "min_volume_24h": 1500000.0, // nullable
+    "min_oi_usd": 5000000.0, // nullable
+    "oi_imbalance": "short_heavy", // nullable
     "discovered_at": "2024-10-06T12:00:00"
   },
   "rank": 1,
@@ -225,7 +258,7 @@ Get the single best opportunity (highest net profit).
 ```
 
 ### `GET /opportunities/symbol/{symbol}`
-Get opportunities for a specific symbol.
+Get opportunities for a specific symbol. **Note:** This endpoint is functional, but consider using the base `/opportunities` endpoint with `?symbol=<symbol>` filter instead for consistency.
 - `?min_profit=0` - Minimum net profit percent
 - `?limit=10` - Number of results (default: 10, max: 100)
 
@@ -250,30 +283,6 @@ Get opportunities for a specific symbol.
 }
 ```
 
-### `GET /opportunities/compare`
-Compare opportunities between two DEXs.
-- `?dex1=<name>` - First DEX (required)
-- `?dex2=<name>` - Second DEX (required)
-- `?symbol=<symbol>` - Filter by symbol
-
-**Response:**
-```json
-{
-  "dex1": "hyperliquid",
-  "dex2": "dydx",
-  "opportunities": [
-    {
-      "symbol": "BTC",
-      "dex1_rate": 0.0001,
-      "dex2_rate": 0.00025,
-      "divergence": 0.00015,
-      "recommendation": "long hyperliquid, short dydx"
-    }
-  ],
-  "count": 1,
-  "generated_at": "2024-10-06T12:00:00"
-}
-```
 
 ## DEXes
 
@@ -467,7 +476,3 @@ Simple ping endpoint.
   "status": "ok"
 }
 ```
-
----
-
-
