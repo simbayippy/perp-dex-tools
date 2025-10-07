@@ -102,12 +102,11 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             
             rates_dict = {}
             
-            # Note: Backpack's REST API doesn't seem to provide current funding rates
-            # The funding rates are available via WebSocket markPrice stream with field "f"
-            # For now, we'll try the funding interval rates endpoint which gives historical rates
+            # Use Backpack's funding interval rates endpoint to get the most recent funding rates
+            # This provides historical funding rates, with the most recent being effectively current
             
-            # Try to get historical funding rates for each perpetual symbol
-            for symbol in perp_symbols[:3]:  # Limit to first 3 for testing to avoid rate limits
+            # Get funding rates for all perpetual symbols
+            for symbol in perp_symbols:
                 try:
                     # Use the funding interval rates endpoint (historical data)
                     funding_data = self.public_client.get_funding_interval_rates(symbol, limit=1)
@@ -125,8 +124,9 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                         logger.debug(f"{self.dex_name}: Unexpected funding data format for {symbol}: {type(funding_data)}")
                         continue
                     
-                    # Debug: log the structure of the funding data
-                    logger.debug(f"{self.dex_name}: Funding data structure for {symbol}: {latest_funding}")
+                    # Debug: log the structure of the funding data for first few symbols only
+                    if len(rates_dict) < 2:  # Only log for first 2 symbols to avoid spam
+                        logger.debug(f"{self.dex_name}: Funding data structure for {symbol}: {latest_funding}")
                     
                     # Get funding rate - try multiple possible field names
                     funding_rate = (latest_funding.get('fundingRate') or 
@@ -136,11 +136,12 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                                   latest_funding.get('f'))  # WebSocket uses 'f' for funding rate
                     
                     if funding_rate is None:
-                        # Debug: log available fields to help troubleshoot
-                        available_fields = list(latest_funding.keys())
-                        logger.debug(
-                            f"{self.dex_name}: No funding rate for {symbol}. Available fields: {available_fields}"
-                        )
+                        # Debug: log available fields for first few symbols only
+                        if len(rates_dict) < 2:
+                            available_fields = list(latest_funding.keys())
+                            logger.debug(
+                                f"{self.dex_name}: No funding rate for {symbol}. Available fields: {available_fields}"
+                            )
                         continue
                     
                     # Normalize symbol (e.g., "BTC_USDC_PERP" -> "BTC")
@@ -151,10 +152,12 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                     
                     rates_dict[normalized_symbol] = funding_rate_decimal
                     
-                    logger.debug(
-                        f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
-                        f"{funding_rate_decimal}"
-                    )
+                    # Log details for first few symbols only to avoid spam
+                    if len(rates_dict) <= 3:
+                        logger.debug(
+                            f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
+                            f"{funding_rate_decimal}"
+                        )
                 
                 except Exception as e:
                     logger.error(
@@ -165,8 +168,8 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             # If no funding rates found, log a helpful message
             if not rates_dict:
                 logger.warning(
-                    f"{self.dex_name}: No funding rates found. Note: Backpack's current funding rates "
-                    f"may only be available via WebSocket markPrice stream, not REST API."
+                    f"{self.dex_name}: No funding rates found from {len(perp_symbols)} perpetual markets. "
+                    f"This may indicate an API issue or change in data format."
                 )
             
             logger.info(
@@ -260,11 +263,13 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                     if data:  # Only add if we have some data
                         market_data[normalized_symbol] = data
                         
-                        logger.debug(
-                            f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
-                            f"volume={data.get('volume_24h', 'N/A')}, "
-                            f"oi={data.get('open_interest', 'N/A')}"
-                        )
+                        # Log details for first few symbols only to avoid spam
+                        if len(market_data) <= 3:
+                            logger.debug(
+                                f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
+                                f"volume={data.get('volume_24h', 'N/A')}, "
+                                f"oi={data.get('open_interest', 'N/A')}"
+                            )
                 
                 except Exception as e:
                     logger.error(
