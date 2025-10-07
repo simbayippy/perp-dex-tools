@@ -1,4 +1,4 @@
-.PHONY: help install clean activate
+.PHONY: help install clean
 
 # Default Python version
 PYTHON := python3
@@ -15,13 +15,12 @@ help: ## Display this help message
 	@echo "$(GREEN)perp-dex-tools - Simple Installation$(NC)"
 	@echo ""
 	@echo "Usage:"
-	@echo "  $(YELLOW)make install$(NC)   - Install all dependencies"
-	@echo "  $(YELLOW)make activate$(NC)  - Activate virtual environment"
-	@echo "  $(YELLOW)make clean$(NC)     - Remove virtual environment"
-	@echo "  $(YELLOW)make help$(NC)      - Show this help"
+	@echo "  $(YELLOW)make install$(NC)  - Install all dependencies"
+	@echo "  $(YELLOW)make clean$(NC)    - Remove virtual environment"
+	@echo "  $(YELLOW)make help$(NC)     - Show this help"
 
 install: ## Install all dependencies
-	@echo "$(YELLOW)1. Creating virtual environment...$(NC)"
+	@echo "$(YELLOW)1. Creating and activating virtual environment...$(NC)"
 	@test -d $(VENV) || $(PYTHON) -m venv $(VENV)
 	@$(PIP) install --upgrade pip
 	@echo "$(YELLOW)2. Installing funding service dependencies (includes pytz)...$(NC)"
@@ -29,9 +28,8 @@ install: ## Install all dependencies
 	@echo "$(YELLOW)3. Installing exchange clients with all SDKs...$(NC)"
 	@$(PIP) install -e './exchange_clients[all]'
 	@echo "$(GREEN)✅ Installation complete!$(NC)"
-
-activate: ## Activate virtual environment
-	@echo "$(YELLOW)Run this command to activate the virtual environment:$(NC)"
+	@echo ""
+	@echo "$(YELLOW)To activate the virtual environment:$(NC)"
 	@echo "  source $(VENV)/bin/activate"
 
 clean: ## Remove virtual environment
