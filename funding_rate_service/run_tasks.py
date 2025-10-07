@@ -26,6 +26,7 @@ sys.path.insert(0, str(project_root / "funding_rate_service"))
 
 from tasks.scheduler import TaskScheduler
 from database.connection import database
+from database.migration_manager import run_startup_migrations
 from core.mappers import dex_mapper, symbol_mapper
 from utils.logger import logger
 
@@ -78,6 +79,13 @@ class TaskRunner:
             logger.info("Connecting to database...")
             await database.connect()
             logger.info("✅ Database connected")
+            
+            # Run database migrations
+            logger.info("Checking database migrations...")
+            migration_success = await run_startup_migrations(database)
+            if not migration_success:
+                raise Exception("Database migration failed")
+            logger.info("✅ Database migrations completed")
             
             # Load mappers
             logger.info("Loading mappers...")
@@ -187,6 +195,12 @@ class TaskRunner:
         try:
             # Connect to database
             await database.connect()
+            
+            # Run database migrations
+            migration_success = await run_startup_migrations(database)
+            if not migration_success:
+                raise Exception("Database migration failed")
+            
             await dex_mapper.load_from_db(database)
             await symbol_mapper.load_from_db(database)
             

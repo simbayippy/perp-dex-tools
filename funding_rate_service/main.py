@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from database.connection import database
+from database.migration_manager import run_startup_migrations
 from core.mappers import dex_mapper, symbol_mapper
 from core.fee_calculator import fee_calculator
 from core.opportunity_finder import OpportunityFinder
@@ -46,6 +47,13 @@ async def lifespan(app: FastAPI):
         logger.info("Connecting to database...")
         await database.connect()
         logger.info("✅ Database connected")
+        
+        # Run database migrations
+        logger.info("Checking database migrations...")
+        migration_success = await run_startup_migrations(database)
+        if not migration_success:
+            raise Exception("Database migration failed")
+        logger.info("✅ Database migrations completed")
         
         # Load mappers
         logger.info("Loading mappers...")
