@@ -29,7 +29,7 @@ install-all: venv install-trading install-exchange-clients install-funding verif
 	@echo "  source $(VENV)/bin/activate"
 	@echo ""
 	@echo "$(YELLOW)To run the trading bot:$(NC)"
-	@echo "  python runbot.py --exchange lighter --ticker BTC --quantity 0.01 --direction buy"
+	@echo "  python runbot.py --env-file .env --exchange lighter --ticker BTC --quantity 0.00273 --take-profit 0 --max-orders 50 --wait-time 20 --grid-step 0.06"
 	@echo ""
 	@echo "$(YELLOW)To run the funding rate service:$(NC)"
 	@echo "  cd funding_rate_service && uvicorn main:app --reload"
