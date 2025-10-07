@@ -41,9 +41,12 @@ async def run_migration(migration_file: str):
         print(f"📄 Reading migration file...")
         migration_sql = migration_path.read_text()
         
-        # Execute migration
+        # Execute migration using raw connection (supports multiple statements)
         print(f"⚙️  Executing migration...\n")
-        await database.execute(migration_sql)
+        async with database.connection() as conn:
+            # Get the raw asyncpg connection
+            raw_conn = conn.raw_connection
+            await raw_conn.execute(migration_sql)
         
         print("\n✅ Migration completed successfully!")
         
