@@ -117,11 +117,11 @@ class SymbolRepository:
         
         # Create new
         insert_query = """
-            INSERT INTO dex_symbols (dex_id, symbol_id, dex_symbol_format, last_updated)
+            INSERT INTO dex_symbols (dex_id, symbol_id, dex_symbol_format, updated_at)
             VALUES (:dex_id, :symbol_id, :format, NOW())
             ON CONFLICT (dex_id, symbol_id) DO UPDATE 
             SET dex_symbol_format = EXCLUDED.dex_symbol_format,
-                last_updated = NOW()
+                updated_at = NOW()
             RETURNING id
         """
         new_id = await self.db.fetch_val(
