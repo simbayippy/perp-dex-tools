@@ -10,6 +10,9 @@ Usage:
     
     # Test specific adapter
     python scripts/test_all_adapters.py --adapter lighter
+    python scripts/test_all_adapters.py --adapter paradex
+    python scripts/test_all_adapters.py --adapter backpack
+    python scripts/test_all_adapters.py --adapter aster
 """
 
 import asyncio
@@ -25,6 +28,9 @@ sys.path.insert(0, str(project_root / "funding_rate_service"))  # For funding_ra
 from exchange_clients.lighter import LighterFundingAdapter
 from exchange_clients.grvt import GrvtFundingAdapter
 from exchange_clients.edgex import EdgeXFundingAdapter
+from exchange_clients.paradex import ParadexFundingAdapter
+from exchange_clients.backpack import BackpackFundingAdapter
+from exchange_clients.aster import AsterFundingAdapter
 from utils.logger import logger
 
 
@@ -65,9 +71,11 @@ async def test_adapter(adapter_class, name):
         print(f"\n🔄 Symbol Normalization Test:")
         test_symbols = {
             'lighter': ["BTC-PERP", "ETH-PERP", "1000PEPE-PERP"],
-            'paradex': ["BTC-USD-PERP", "ETH-USD-PERP", "SOL-USD-PERP"],
             'grvt': ["BTC", "ETH", "SOL"],
-            'edgex': ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+            'edgex': ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+            'paradex': ["BTC-USD-PERP", "ETH-USD-PERP", "SOL-USD-PERP"],
+            'backpack': ["BTC_USDC_PERP", "ETH_USDC_PERP", "SOL_USDC_PERP"],
+            'aster': ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
         }
         
         for test_sym in test_symbols.get(name.lower(), ["BTC-PERP", "ETH-PERP"]):
@@ -118,7 +126,7 @@ async def main():
     parser = argparse.ArgumentParser(description='Test DEX adapters')
     parser.add_argument(
         '--adapter',
-        choices=['lighter', 'paradex', 'grvt', 'edgex', 'all'],
+        choices=['lighter', 'grvt', 'edgex', 'paradex', 'backpack', 'aster', 'all'],
         default='all',
         help='Which adapter to test'
     )
@@ -133,6 +141,9 @@ async def main():
         'lighter': (LighterFundingAdapter, 'Lighter'),
         'grvt': (GrvtFundingAdapter, 'GRVT'),
         'edgex': (EdgeXFundingAdapter, 'EdgeX'),
+        'paradex': (ParadexFundingAdapter, 'Paradex'),
+        'backpack': (BackpackFundingAdapter, 'Backpack'),
+        'aster': (AsterFundingAdapter, 'Aster'),
     }
     
     # Determine which adapters to test

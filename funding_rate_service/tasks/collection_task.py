@@ -14,10 +14,9 @@ from database.connection import database
 from exchange_clients.lighter import LighterFundingAdapter
 from exchange_clients.grvt import GrvtFundingAdapter
 from exchange_clients.edgex import EdgeXFundingAdapter
+from exchange_clients.paradex import ParadexFundingAdapter
 from exchange_clients.backpack import BackpackFundingAdapter
 from exchange_clients.aster import AsterFundingAdapter
-# Note: Paradex commented out due to dependency conflicts
-# from exchange_clients.paradex import ParadexFundingAdapter
 from utils.logger import logger
 
 
@@ -65,9 +64,9 @@ class CollectionTask(BaseTask):
             ("Lighter", LighterFundingAdapter),
             ("GRVT", GrvtFundingAdapter), 
             ("EdgeX", EdgeXFundingAdapter),
+            ("Paradex", ParadexFundingAdapter),
             ("Backpack", BackpackFundingAdapter),
             ("Aster", AsterFundingAdapter),
-            # ("Paradex", ParadexFundingAdapter),  # Disabled due to dependency conflicts
         ]
         
         for name, adapter_class in adapter_configs:

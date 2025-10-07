@@ -12,6 +12,12 @@ def normalize_symbol(symbol: str) -> str:
     """
     Normalize Aster symbol format to standard format
     
+    Aster symbols follow the pattern (confirmed from SDK examples):
+    - "BTCUSDT" -> "BTC"  (similar to Binance format, no separators)
+    - "ETHUSDT" -> "ETH"
+    - "SOLUSDT" -> "SOL"
+    - "PEPEUSDT" -> "PEPE"
+    
     Args:
         symbol: Aster symbol format (e.g., "BTCUSDT")
         
@@ -19,7 +25,9 @@ def normalize_symbol(symbol: str) -> str:
         Normalized symbol (e.g., "BTC")
     """
     normalized = symbol.upper()
-    normalized = normalized.replace('USDT', '').replace('USD', '')
+    # Remove perpetual suffixes in order of specificity
+    normalized = normalized.replace('USDT', '')
+    normalized = normalized.replace('USDC', '')  # fallback
     normalized = normalized.strip('-_/')
     return normalized
 

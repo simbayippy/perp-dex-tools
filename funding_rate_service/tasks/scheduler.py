@@ -104,7 +104,7 @@ class TaskScheduler:
         # Offset by 30 seconds to avoid collision with collection
         self.scheduler.add_job(
             func=self._run_opportunity_job,
-            trigger=IntervalTrigger(minutes=2, start_date=datetime.utcnow().replace(second=30)),
+            trigger=IntervalTrigger(minutes=5, start_date=datetime.utcnow().replace(second=30)),
             id='opportunity_job',
             name='Opportunity Analysis',
             replace_existing=True

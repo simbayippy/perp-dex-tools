@@ -3,7 +3,7 @@
 Test script for the complete collection system
 
 This script tests:
-1. Multiple DEX adapters (Lighter, GRVT, EdgeX) - standalone
+1. Multiple DEX adapters (Lighter, GRVT, EdgeX, Paradex, Backpack, Aster) - standalone
 2. Collection orchestrator (with database)
 3. End-to-end data flow
 
@@ -15,6 +15,9 @@ Usage:
     python scripts/test_collection_system.py --adapter-only --adapter lighter
     python scripts/test_collection_system.py --adapter-only --adapter grvt
     python scripts/test_collection_system.py --adapter-only --adapter edgex
+    python scripts/test_collection_system.py --adapter-only --adapter paradex
+    python scripts/test_collection_system.py --adapter-only --adapter backpack
+    python scripts/test_collection_system.py --adapter-only --adapter aster
     
     # Test full system (requires database)
     python scripts/test_collection_system.py
@@ -33,6 +36,9 @@ sys.path.insert(0, str(project_root / "funding_rate_service"))  # For funding_ra
 from exchange_clients.lighter import LighterFundingAdapter
 from exchange_clients.grvt import GrvtFundingAdapter
 from exchange_clients.edgex import EdgeXFundingAdapter
+from exchange_clients.paradex import ParadexFundingAdapter
+from exchange_clients.backpack import BackpackFundingAdapter
+from exchange_clients.aster import AsterFundingAdapter
 from collection.orchestrator import CollectionOrchestrator
 from database.connection import database
 from core.mappers import dex_mapper, symbol_mapper
@@ -117,6 +123,9 @@ async def test_adapters_only(adapter_filter=None):
         'lighter': (LighterFundingAdapter, 'Lighter', ["BTC-PERP", "ETH-PERP", "1000PEPE-PERP"]),
         'grvt': (GrvtFundingAdapter, 'GRVT', ["BTC_USDT_Perp", "ETH_USDT_Perp", "SOL_USDT_Perp"]),
         'edgex': (EdgeXFundingAdapter, 'EdgeX', ["BTCUSDT", "ETHUSDT", "SOLUSDT"]),
+        'paradex': (ParadexFundingAdapter, 'Paradex', ["BTC-USD-PERP", "ETH-USD-PERP", "SOL-USD-PERP"]),
+        'backpack': (BackpackFundingAdapter, 'Backpack', ["BTC_USDC_PERP", "ETH_USDC_PERP", "SOL_USDC_PERP"]),
+        'aster': (AsterFundingAdapter, 'Aster', ["BTCUSDT", "ETHUSDT", "SOLUSDT"]),
     }
     
     # Filter if specific adapter requested
@@ -154,14 +163,17 @@ async def test_full_system():
         await symbol_mapper.load_from_db(database)
         print(f"✅ Loaded {len(dex_mapper)} DEXs and {len(symbol_mapper)} symbols\n")
         
-        # Create adapters for Lighter, GRVT, and EdgeX
+        # Create adapters for all DEXs
         print("🔧 Initializing adapters...")
         adapters = [
             LighterFundingAdapter(),
             GrvtFundingAdapter(),
             EdgeXFundingAdapter(),
+            ParadexFundingAdapter(),
+            BackpackFundingAdapter(),
+            AsterFundingAdapter(),
         ]
-        print(f"✅ Initialized {len(adapters)} adapters (Lighter, GRVT, EdgeX)\n")
+        print(f"✅ Initialized {len(adapters)} adapters (Lighter, GRVT, EdgeX, Paradex, Backpack, Aster)\n")
         
         # Create orchestrator
         print("🎭 Creating orchestrator...")
@@ -280,7 +292,7 @@ async def main():
     )
     parser.add_argument(
         '--adapter',
-        choices=['lighter', 'grvt', 'edgex', 'all'],
+        choices=['lighter', 'grvt', 'edgex', 'paradex', 'backpack', 'aster', 'all'],
         default='all',
         help='Which adapter to test (only with --adapter-only)'
     )
