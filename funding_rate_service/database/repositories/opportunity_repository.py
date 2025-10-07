@@ -28,12 +28,12 @@ class OpportunityRepository:
         estimated_fees: Decimal,
         net_profit_percent: Decimal,
         annualized_apy: Optional[Decimal] = None,
-        long_volume_24h: Optional[Decimal] = None,
-        short_volume_24h: Optional[Decimal] = None,
-        long_oi_usd: Optional[Decimal] = None,
-        short_oi_usd: Optional[Decimal] = None,
-        long_spread_bps: Optional[int] = None,
-        short_spread_bps: Optional[int] = None,
+        long_dex_volume_24h: Optional[Decimal] = None,
+        short_dex_volume_24h: Optional[Decimal] = None,
+        long_dex_oi_usd: Optional[Decimal] = None,
+        short_dex_oi_usd: Optional[Decimal] = None,
+        long_dex_spread_bps: Optional[int] = None,
+        short_dex_spread_bps: Optional[int] = None,
         valid_until: Optional[datetime] = None,
         metadata: Optional[Dict] = None
     ) -> int:
@@ -45,39 +45,39 @@ class OpportunityRepository:
         """
         # Calculate derived metrics
         min_volume = None
-        if long_volume_24h and short_volume_24h:
-            min_volume = min(long_volume_24h, short_volume_24h)
+        if long_dex_volume_24h and short_dex_volume_24h:
+            min_volume = min(long_dex_volume_24h, short_dex_volume_24h)
         
         min_oi = None
         max_oi = None
         oi_ratio = None
-        if long_oi_usd and short_oi_usd:
-            min_oi = min(long_oi_usd, short_oi_usd)
-            max_oi = max(long_oi_usd, short_oi_usd)
-            if short_oi_usd > 0:
-                oi_ratio = long_oi_usd / short_oi_usd
+        if long_dex_oi_usd and short_dex_oi_usd:
+            min_oi = min(long_dex_oi_usd, short_dex_oi_usd)
+            max_oi = max(long_dex_oi_usd, short_dex_oi_usd)
+            if short_dex_oi_usd > 0:
+                oi_ratio = long_dex_oi_usd / short_dex_oi_usd
         
         avg_spread = None
-        if long_spread_bps is not None and short_spread_bps is not None:
-            avg_spread = (long_spread_bps + short_spread_bps) // 2
+        if long_dex_spread_bps is not None and short_dex_spread_bps is not None:
+            avg_spread = (long_dex_spread_bps + short_dex_spread_bps) // 2
         
         query = """
             INSERT INTO opportunities (
                 symbol_id, long_dex_id, short_dex_id,
                 long_rate, short_rate, divergence,
                 estimated_fees, net_profit_percent, annualized_apy,
-                long_volume_24h, short_volume_24h, min_volume_24h,
-                long_oi_usd, short_oi_usd, min_oi_usd, max_oi_usd, oi_ratio,
-                long_spread_bps, short_spread_bps, avg_spread_bps,
+                long_dex_volume_24h, short_dex_volume_24h, min_volume_24h,
+                long_dex_oi_usd, short_dex_oi_usd, min_oi_usd, max_oi_usd, oi_ratio,
+                long_dex_spread_bps, short_dex_spread_bps, avg_spread_bps,
                 discovered_at, valid_until, metadata
             )
             VALUES (
                 :symbol_id, :long_dex_id, :short_dex_id,
                 :long_rate, :short_rate, :divergence,
                 :estimated_fees, :net_profit_percent, :annualized_apy,
-                :long_volume_24h, :short_volume_24h, :min_volume_24h,
-                :long_oi_usd, :short_oi_usd, :min_oi_usd, :max_oi_usd, :oi_ratio,
-                :long_spread_bps, :short_spread_bps, :avg_spread_bps,
+                :long_dex_volume_24h, :short_dex_volume_24h, :min_volume_24h,
+                :long_dex_oi_usd, :short_dex_oi_usd, :min_oi_usd, :max_oi_usd, :oi_ratio,
+                :long_dex_spread_bps, :short_dex_spread_bps, :avg_spread_bps,
                 NOW(), :valid_until, :metadata
             )
             RETURNING id
@@ -95,16 +95,16 @@ class OpportunityRepository:
                 "estimated_fees": estimated_fees,
                 "net_profit_percent": net_profit_percent,
                 "annualized_apy": annualized_apy,
-                "long_volume_24h": long_volume_24h,
-                "short_volume_24h": short_volume_24h,
+                "long_dex_volume_24h": long_dex_volume_24h,
+                "short_dex_volume_24h": short_dex_volume_24h,
                 "min_volume_24h": min_volume,
-                "long_oi_usd": long_oi_usd,
-                "short_oi_usd": short_oi_usd,
+                "long_dex_oi_usd": long_dex_oi_usd,
+                "short_dex_oi_usd": short_dex_oi_usd,
                 "min_oi_usd": min_oi,
                 "max_oi_usd": max_oi,
                 "oi_ratio": oi_ratio,
-                "long_spread_bps": long_spread_bps,
-                "short_spread_bps": short_spread_bps,
+                "long_dex_spread_bps": long_dex_spread_bps,
+                "short_dex_spread_bps": short_dex_spread_bps,
                 "avg_spread_bps": avg_spread,
                 "valid_until": valid_until,
                 "metadata": metadata
@@ -141,16 +141,16 @@ class OpportunityRepository:
                 o.estimated_fees,
                 o.net_profit_percent,
                 o.annualized_apy,
-                o.long_volume_24h,
-                o.short_volume_24h,
+                o.long_dex_volume_24h,
+                o.short_dex_volume_24h,
                 o.min_volume_24h,
-                o.long_oi_usd,
-                o.short_oi_usd,
+                o.long_dex_oi_usd,
+                o.short_dex_oi_usd,
                 o.min_oi_usd,
                 o.max_oi_usd,
                 o.oi_ratio,
-                o.long_spread_bps,
-                o.short_spread_bps,
+                o.long_dex_spread_bps,
+                o.short_dex_spread_bps,
                 o.avg_spread_bps,
                 o.discovered_at,
                 o.valid_until,
