@@ -22,7 +22,7 @@ help: ## Display this help message
 
 ##@ Setup & Installation
 
-install-all: venv install-trading install-exchange-clients install-funding verify ## 🚀 Install everything (recommended for first-time setup)
+install-all: venv install-funding install-trading install-exchange-clients verify ## 🚀 Install everything (recommended for first-time setup)
 	@echo "$(GREEN)✅ All dependencies installed successfully!$(NC)"
 	@echo ""
 	@echo "$(YELLOW)To activate the virtual environment:$(NC)"
@@ -39,11 +39,11 @@ setup: install-all ## Alias for install-all
 venv: ## Create Python virtual environment
 	@echo "$(YELLOW)Creating virtual environment...$(NC)"
 	@test -d $(VENV) || $(PYTHON) -m venv $(VENV)
+	@$(PIP) install --upgrade pip setuptools wheel
 	@echo "$(GREEN)✅ Virtual environment created at ./$(VENV)$(NC)"
 
 install-trading: venv ## Install trading client dependencies (root requirements.txt)
 	@echo "$(YELLOW)Installing trading client dependencies...$(NC)"
-	@$(PIP) install --upgrade pip setuptools wheel
 	@$(PIP) install -r requirements.txt
 	@echo "$(GREEN)✅ Trading client dependencies installed$(NC)"
 
@@ -52,8 +52,8 @@ install-exchange-clients: venv ## Install exchange clients library with all SDKs
 	@$(PIP) install -e './exchange_clients[all]'
 	@echo "$(GREEN)✅ Exchange clients library installed$(NC)"
 
-install-funding: venv ## Install funding rate service dependencies
-	@echo "$(YELLOW)Installing funding rate service dependencies...$(NC)"
+install-funding: venv ## Install funding rate service dependencies (includes pytz)
+	@echo "$(YELLOW)Installing funding rate service dependencies (includes pytz)...$(NC)"
 	@$(PIP) install -r funding_rate_service/requirements.txt
 	@echo "$(GREEN)✅ Funding rate service dependencies installed$(NC)"
 
@@ -91,9 +91,16 @@ test: ## Run tests
 	@$(PYTHON_VENV) -m pytest tests/ -v
 	@echo "$(GREEN)✅ Tests completed$(NC)"
 
-verify: ## Verify installation by checking exchange factory
+verify: ## Verify installation by checking exchange factory and SDKs
 	@echo "$(YELLOW)Verifying installation...$(NC)"
-	@$(PYTHON_VENV) -c "from exchange_clients.factory import ExchangeFactory; print('Available exchanges:', ExchangeFactory.get_supported_exchanges()); print('✅ Installation verified!')"
+	@$(PYTHON_VENV) -c "from exchange_clients.factory import ExchangeFactory; print('Available exchanges:', ExchangeFactory.get_supported_exchanges())"
+	@echo "$(YELLOW)Testing SDK imports...$(NC)"
+	@$(PYTHON_VENV) -c "try:\n    import aster; print('✅ Aster SDK installed')\nexcept ImportError: print('❌ Aster SDK missing')"
+	@$(PYTHON_VENV) -c "try:\n    import bpx; print('✅ Backpack SDK installed')\nexcept ImportError: print('❌ Backpack SDK missing')"
+	@$(PYTHON_VENV) -c "try:\n    import lighter; print('✅ Lighter SDK installed')\nexcept ImportError: print('❌ Lighter SDK missing')"
+	@$(PYTHON_VENV) -c "try:\n    import grvt; print('✅ GRVT SDK installed')\nexcept ImportError: print('❌ GRVT SDK missing')"
+	@$(PYTHON_VENV) -c "try:\n    import edgex; print('✅ EdgeX SDK installed')\nexcept ImportError: print('❌ EdgeX SDK missing')"
+	@echo "$(GREEN)✅ Installation verification completed!$(NC)"
 
 format: ## Format code with black
 	@echo "$(YELLOW)Formatting code...$(NC)"
