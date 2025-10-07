@@ -80,6 +80,54 @@ async def main():
             reverse = adapter.get_dex_symbol_format(normalized)
             print(f"   {dex_symbol:<15} -> {normalized:<10} -> {reverse}")
         
+        # Test market data fetching
+        print(f"\n📊 Testing market data (volume, OI) fetching:")
+        print("   Note: Using exchange_stats (fast, no OI)...")
+        market_data = await adapter.fetch_market_data()
+        
+        if market_data:
+            print(f"   ✅ Fetched market data for {len(market_data)} symbols\n")
+            print("-"*70)
+            print(f"{'Symbol':<10} {'Volume 24h (USD)':<20} {'Open Interest':<20}")
+            print("-"*70)
+            
+            for symbol, data in list(sorted(market_data.items()))[:10]:
+                volume = data.get('volume_24h')
+                oi = data.get('open_interest')
+                volume_str = f"${volume:,.2f}" if volume else "N/A"
+                oi_str = f"${oi:,.2f}" if oi else "N/A"
+                print(f"{symbol:<10} {volume_str:<20} {oi_str:<20}")
+            
+            if len(market_data) > 10:
+                print(f"... and {len(market_data) - 10} more symbols")
+            print("-"*70)
+            
+            # Test detailed market data with OI
+            print(f"\n📊 Testing detailed market data (with OI):")
+            print("   Note: Using order_book_details (slower, includes OI)...")
+            detailed_market_data = await adapter.fetch_market_data_with_oi()
+            
+            if detailed_market_data:
+                print(f"   ✅ Fetched detailed market data for {len(detailed_market_data)} symbols\n")
+                print("-"*70)
+                print(f"{'Symbol':<10} {'Volume 24h (USD)':<20} {'Open Interest (USD)':<20}")
+                print("-"*70)
+                
+                for symbol, data in list(sorted(detailed_market_data.items()))[:10]:
+                    volume = data.get('volume_24h')
+                    oi = data.get('open_interest')
+                    volume_str = f"${volume:,.2f}" if volume else "N/A"
+                    oi_str = f"${oi:,.2f}" if oi else "N/A"
+                    print(f"{symbol:<10} {volume_str:<20} {oi_str:<20}")
+                
+                if len(detailed_market_data) > 10:
+                    print(f"... and {len(detailed_market_data) - 10} more symbols")
+                print("-"*70)
+            else:
+                print("   ⚠️  No detailed market data returned")
+        else:
+            print("   ⚠️  No market data returned")
+        
         print("\n✅ All tests passed!\n")
         
     except Exception as e:

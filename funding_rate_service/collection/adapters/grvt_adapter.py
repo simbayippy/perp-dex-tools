@@ -241,6 +241,19 @@ class GrvtAdapter(BaseDEXAdapter):
                 )
                 return None
     
+    async def fetch_market_data(self) -> Dict[str, Dict[str, Decimal]]:
+        """
+        Fetch market data (volume, OI) from GRVT
+        
+        TODO: Implement using GRVT CCXT SDK
+        For now, returns empty dict to maintain compatibility.
+        
+        Returns:
+            Dictionary mapping normalized symbols to market data
+        """
+        logger.warning(f"{self.dex_name}: fetch_market_data not yet implemented")
+        return {}
+    
     def normalize_symbol(self, dex_symbol: str) -> str:
         """
         Normalize GRVT symbol format to standard format

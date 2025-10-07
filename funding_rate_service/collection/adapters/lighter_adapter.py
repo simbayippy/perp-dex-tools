@@ -15,7 +15,7 @@ from utils.logger import logger
 # Import Lighter SDK
 try:
     import lighter
-    from lighter import ApiClient, Configuration, FundingApi
+    from lighter import ApiClient, Configuration, FundingApi, OrderApi
     LIGHTER_SDK_AVAILABLE = True
 except ImportError:
     LIGHTER_SDK_AVAILABLE = False
@@ -62,6 +62,7 @@ class LighterAdapter(BaseDEXAdapter):
         # Initialize Lighter API client
         self.api_client: Optional[ApiClient] = None
         self.funding_api: Optional[FundingApi] = None
+        self.order_api: Optional[OrderApi] = None
         
         logger.info(f"Lighter adapter initialized with URL: {api_base_url}")
     
@@ -71,6 +72,7 @@ class LighterAdapter(BaseDEXAdapter):
             configuration = Configuration(host=self.api_base_url)
             self.api_client = ApiClient(configuration=configuration)
             self.funding_api = FundingApi(self.api_client)
+            self.order_api = OrderApi(self.api_client)
             logger.debug(f"{self.dex_name}: API client initialized")
     
     async def fetch_funding_rates(self) -> Dict[str, Decimal]:
@@ -146,6 +148,141 @@ class LighterAdapter(BaseDEXAdapter):
         
         except Exception as e:
             logger.error(f"{self.dex_name}: Failed to fetch funding rates: {e}")
+            raise
+    
+    async def fetch_market_data(self) -> Dict[str, Dict[str, Decimal]]:
+        """
+        Fetch market data (volume, OI) from Lighter
+        
+        Uses the OrderApi.exchange_stats() endpoint which returns market statistics
+        including 24h volume and open interest for all markets.
+        
+        Returns:
+            Dictionary mapping normalized symbols to market data
+            Example: {
+                "BTC": {
+                    "volume_24h": Decimal("1500000.0"),
+                    "open_interest": Decimal("5000000.0")
+                }
+            }
+            
+        Raises:
+            Exception: If fetching fails after retries
+        """
+        await self._ensure_client()
+        
+        try:
+            logger.debug(f"{self.dex_name}: Fetching market data...")
+            
+            # Call Lighter SDK to get exchange stats
+            exchange_stats_response = await self.order_api.exchange_stats(
+                _request_timeout=self.timeout
+            )
+            
+            if not exchange_stats_response or not exchange_stats_response.order_book_stats:
+                logger.warning(f"{self.dex_name}: No market data returned")
+                return {}
+            
+            # Parse response
+            market_data = {}
+            for market in exchange_stats_response.order_book_stats:
+                try:
+                    # Normalize symbol
+                    normalized_symbol = self.normalize_symbol(market.symbol)
+                    
+                    # Extract volume and OI
+                    # daily_quote_token_volume is in USD
+                    volume_24h = Decimal(str(market.daily_quote_token_volume))
+                    
+                    # Note: Lighter's exchange_stats doesn't include OI
+                    # We need to use order_book_details for OI
+                    # For now, set to None and fetch separately if needed
+                    
+                    market_data[normalized_symbol] = {
+                        "volume_24h": volume_24h,
+                        "open_interest": None  # Will be fetched separately
+                    }
+                    
+                    logger.debug(
+                        f"{self.dex_name}: {market.symbol} -> {normalized_symbol}: "
+                        f"Volume=${volume_24h:,.2f}"
+                    )
+                
+                except Exception as e:
+                    logger.error(
+                        f"{self.dex_name}: Error parsing market data for {market.symbol}: {e}"
+                    )
+                    continue
+            
+            logger.info(
+                f"{self.dex_name}: Successfully fetched market data for {len(market_data)} symbols"
+            )
+            
+            return market_data
+        
+        except Exception as e:
+            logger.error(f"{self.dex_name}: Failed to fetch market data: {e}")
+            raise
+    
+    async def fetch_market_data_with_oi(self) -> Dict[str, Dict[str, Decimal]]:
+        """
+        Fetch complete market data including OI using order_book_details
+        
+        This is slower but includes open interest.
+        Use sparingly due to API rate limits.
+        
+        Returns:
+            Dictionary mapping normalized symbols to complete market data
+        """
+        await self._ensure_client()
+        
+        try:
+            logger.debug(f"{self.dex_name}: Fetching detailed market data with OI...")
+            
+            # Get order book details (has OI)
+            order_book_details_response = await self.order_api.order_book_details(
+                _request_timeout=self.timeout
+            )
+            
+            if not order_book_details_response or not order_book_details_response.order_book_details:
+                logger.warning(f"{self.dex_name}: No order book details returned")
+                return {}
+            
+            # Parse response
+            market_data = {}
+            for market in order_book_details_response.order_book_details:
+                try:
+                    # Normalize symbol
+                    normalized_symbol = self.normalize_symbol(market.symbol)
+                    
+                    # Extract data
+                    volume_24h = Decimal(str(market.daily_quote_token_volume))
+                    open_interest = Decimal(str(market.open_interest))
+                    
+                    market_data[normalized_symbol] = {
+                        "volume_24h": volume_24h,
+                        "open_interest": open_interest
+                    }
+                    
+                    logger.debug(
+                        f"{self.dex_name}: {market.symbol} -> {normalized_symbol}: "
+                        f"Volume=${volume_24h:,.2f}, OI=${open_interest:,.2f}"
+                    )
+                
+                except Exception as e:
+                    logger.error(
+                        f"{self.dex_name}: Error parsing detailed market data for {market.symbol}: {e}"
+                    )
+                    continue
+            
+            logger.info(
+                f"{self.dex_name}: Successfully fetched detailed market data for {len(market_data)} symbols"
+            )
+            
+            return market_data
+        
+        except Exception as e:
+            logger.error(f"{self.dex_name}: Failed to fetch detailed market data: {e}")
             raise
     
     def normalize_symbol(self, dex_symbol: str) -> str:

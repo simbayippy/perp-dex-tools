@@ -71,6 +71,32 @@ async def test_adapter(adapter_class, name):
             reverse = adapter.get_dex_symbol_format(normalized)
             print(f"   {test_sym:<18} -> {normalized:<10} -> {reverse}")
         
+        # Test market data fetching
+        print(f"\n📊 Market Data Test:")
+        try:
+            market_data = await adapter.fetch_market_data()
+            
+            if market_data:
+                print(f"   ✅ Fetched market data for {len(market_data)} symbols")
+                print(f"\n{'-'*70}")
+                print(f"{'Symbol':<10} {'Volume 24h (USD)':<25} {'Open Interest (USD)':<25}")
+                print(f"{'-'*70}")
+                
+                for symbol, data in list(sorted(market_data.items()))[:5]:
+                    volume = data.get('volume_24h')
+                    oi = data.get('open_interest')
+                    volume_str = f"${volume:,.2f}" if volume else "N/A"
+                    oi_str = f"${oi:,.2f}" if oi else "N/A"
+                    print(f"{symbol:<10} {volume_str:<25} {oi_str:<25}")
+                
+                if len(market_data) > 5:
+                    print(f"... and {len(market_data) - 5} more symbols")
+                print(f"{'-'*70}")
+            else:
+                print(f"   ⚠️  No market data returned (may not be implemented yet)")
+        except Exception as e:
+            print(f"   ⚠️  Market data fetch failed (non-critical): {e}")
+        
         print(f"\n✅ {name} adapter test passed!\n")
         return True, len(rates)
         

@@ -164,6 +164,22 @@ Get statistical analysis of funding rates (average, median, volatility, percenti
 
 ## Opportunities
 
+**⚠️ Important: About Spread Costs**
+
+The opportunities endpoint provides estimated profitability based on:
+- ✅ Funding rate divergence
+- ✅ Maker/taker fees (from DEX fee structures)
+- ❌ **NOT including real-time spread costs**
+
+**Why?** Spreads change every second and would be stale immediately. For accurate execution:
+1. Use this API for **opportunity discovery** (filtering by volume/OI/profitability)
+2. Fetch **real-time spread** from your trading client before executing
+3. Recalculate final profitability: `actual_profit = api_profit - (spread × 4 crossings)`
+
+**Example:** An opportunity showing 0.04% profit with 0.02% spread costs = Actually 0% profit!
+
+---
+
 ### `GET /opportunities`
 Get arbitrage opportunities with comprehensive filtering.
 
@@ -206,6 +222,9 @@ Get arbitrage opportunities with comprehensive filtering.
 
 # Only Lighter vs GRVT
 ?dex_pair=lighter,grvt
+
+# Any of these dexes
+?dexes=lighter,grvt,edgex
 
 # Only trades between trusted DEXs
 ?whitelist_dexes=lighter,grvt,hyperliquid

@@ -68,7 +68,7 @@ class CollectionOrchestrator:
         self.adapters.append(adapter)
         logger.info(f"Added adapter: {adapter.dex_name}")
     
-    async def collect_all_rates(self) -> Dict[str, any]:
+    async def collect_all_rates(self, include_market_data: bool = True) -> Dict[str, any]:
         """
         Collect funding rates from all adapters
         
@@ -76,6 +76,10 @@ class CollectionOrchestrator:
         1. Runs all adapters in parallel
         2. Stores results in database
         3. Handles failures gracefully
+        4. Optionally fetches market data (volume, OI)
+        
+        Args:
+            include_market_data: If True, also fetch volume/OI (default: True)
         
         Returns:
             Dictionary with collection summary:
@@ -102,7 +106,7 @@ class CollectionOrchestrator:
         
         # Collect from all adapters in parallel
         tasks = {
-            adapter.dex_name: self._collect_from_adapter(adapter)
+            adapter.dex_name: self._collect_from_adapter(adapter, include_market_data)
             for adapter in self.adapters
         }
         
@@ -153,13 +157,15 @@ class CollectionOrchestrator:
     
     async def _collect_from_adapter(
         self,
-        adapter: BaseDEXAdapter
+        adapter: BaseDEXAdapter,
+        include_market_data: bool = True
     ) -> Dict[str, any]:
         """
-        Collect funding rates from a single adapter
+        Collect funding rates and market data from a single adapter
         
         Args:
             adapter: DEX adapter instance
+            include_market_data: If True, also fetch volume/OI
             
         Returns:
             Dictionary with collection result
@@ -247,6 +253,27 @@ class CollectionOrchestrator:
                     )
                     continue
             
+            # Collect market data (volume, OI) if enabled
+            if include_market_data:
+                try:
+                    logger.debug(f"{dex_name}: Fetching market data (volume, OI)...")
+                    market_data = await adapter.fetch_market_data()
+                    
+                    if market_data:
+                        await self._store_market_data(
+                            dex_id,
+                            market_data,
+                            adapter
+                        )
+                        logger.info(
+                            f"{dex_name}: Updated market data for {len(market_data)} symbols"
+                        )
+                except Exception as e:
+                    # Market data failure shouldn't fail the whole collection
+                    logger.warning(
+                        f"{dex_name}: Failed to fetch/store market data (non-critical): {e}"
+                    )
+            
             # Update DEX last fetch status
             await self.dex_repo.update_last_fetch(dex_id, success=True)
             
@@ -288,6 +315,63 @@ class CollectionOrchestrator:
                 )
             
             raise
+    
+    async def _store_market_data(
+        self,
+        dex_id: int,
+        market_data: Dict[str, Dict[str, Decimal]],
+        adapter: BaseDEXAdapter
+    ) -> None:
+        """
+        Store market data (volume, OI) in dex_symbols table
+        
+        Args:
+            dex_id: DEX ID
+            market_data: Dictionary mapping symbols to market data
+            adapter: Adapter instance (for symbol normalization)
+        """
+        for normalized_symbol, data in market_data.items():
+            try:
+                # Get symbol ID (should exist from funding rate collection)
+                symbol_id = symbol_mapper.get_id(normalized_symbol)
+                if symbol_id is None:
+                    # Symbol doesn't exist yet, create it
+                    symbol_id = await self.symbol_repo.get_or_create(normalized_symbol)
+                    symbol_mapper.add(symbol_id, normalized_symbol)
+                
+                # Update dex_symbols with market data
+                volume_24h = data.get('volume_24h')
+                open_interest = data.get('open_interest')
+                
+                query = """
+                    UPDATE dex_symbols
+                    SET 
+                        volume_24h = :volume_24h,
+                        open_interest_usd = :open_interest,
+                        updated_at = NOW()
+                    WHERE dex_id = :dex_id AND symbol_id = :symbol_id
+                """
+                
+                await self.db.execute(
+                    query,
+                    values={
+                        "dex_id": dex_id,
+                        "symbol_id": symbol_id,
+                        "volume_24h": volume_24h,
+                        "open_interest": open_interest
+                    }
+                )
+                
+                logger.debug(
+                    f"Updated market data for {normalized_symbol}: "
+                    f"Volume=${volume_24h}, OI=${open_interest}"
+                )
+                
+            except Exception as e:
+                logger.error(
+                    f"Error storing market data for {normalized_symbol}: {e}"
+                )
+                continue
     
     async def _log_collection_start(self, dex_name: str) -> int:
         """

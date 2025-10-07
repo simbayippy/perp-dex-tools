@@ -61,6 +61,32 @@ class BaseDEXAdapter(ABC):
         pass
     
     @abstractmethod
+    async def fetch_market_data(self) -> Dict[str, Dict[str, Decimal]]:
+        """
+        Fetch market data (volume, open interest) for all symbols
+        
+        Returns:
+            Dictionary mapping normalized symbols to market data
+            Example: {
+                "BTC": {
+                    "volume_24h": Decimal("1500000.0"),
+                    "open_interest": Decimal("5000000.0")
+                },
+                "ETH": {...}
+            }
+            
+        Note:
+            - volume_24h should be in USD
+            - open_interest should be in USD
+            - Both fields are optional (can be None)
+            - Spread is NOT included here (too volatile, fetch client-side)
+            
+        Raises:
+            Exception: If fetching fails after retries
+        """
+        pass
+    
+    @abstractmethod
     def normalize_symbol(self, dex_symbol: str) -> str:
         """
         Normalize DEX-specific symbol format to standard format

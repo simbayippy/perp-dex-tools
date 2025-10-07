@@ -75,6 +75,26 @@ async def test_single_adapter(adapter_class, adapter_name, test_symbols):
             reverse = adapter.get_dex_symbol_format(normalized)
             print(f"   {dex_symbol:<18} -> {normalized:<10} -> {reverse}")
         
+        # Test market data fetching
+        print(f"\n📊 Market Data Test:")
+        try:
+            market_data = await adapter.fetch_market_data()
+            
+            if market_data:
+                print(f"   ✅ Fetched market data for {len(market_data)} symbols")
+                
+                # Show sample
+                for symbol, data in list(sorted(market_data.items()))[:3]:
+                    volume = data.get('volume_24h')
+                    oi = data.get('open_interest')
+                    volume_str = f"${volume:,.2f}" if volume else "N/A"
+                    oi_str = f"${oi:,.2f}" if oi else "N/A"
+                    print(f"      {symbol}: Vol={volume_str}, OI={oi_str}")
+            else:
+                print(f"   ⚠️  No market data returned (may not be implemented yet)")
+        except Exception as e:
+            print(f"   ⚠️  Market data fetch failed (non-critical): {e}")
+        
         print(f"\n✅ {adapter_name} adapter test passed!\n")
         return True
         
@@ -171,14 +191,59 @@ async def test_full_system():
         
         # Verify data was stored
         print(f"\n🔍 Verifying data storage...")
+        
+        # Check funding rates
         query = "SELECT COUNT(*) FROM funding_rates WHERE time >= NOW() - INTERVAL '1 minute'"
         recent_rates = await database.fetch_val(query)
-        print(f"   Found {recent_rates} rates in database (last minute)")
+        print(f"   Funding rates: {recent_rates} (last minute)")
         
         if recent_rates > 0:
-            print("✅ Data successfully stored in database!")
+            print("   ✅ Funding rates successfully stored!")
         else:
-            print("⚠️  No recent data found in database")
+            print("   ⚠️  No recent funding rates found")
+        
+        # Check market data
+        market_data_query = """
+            SELECT COUNT(*) 
+            FROM dex_symbols 
+            WHERE (volume_24h IS NOT NULL OR open_interest_usd IS NOT NULL)
+            AND updated_at >= NOW() - INTERVAL '1 minute'
+        """
+        recent_market_data = await database.fetch_val(market_data_query)
+        print(f"   Market data: {recent_market_data} symbols updated (last minute)")
+        
+        if recent_market_data > 0:
+            print("   ✅ Market data successfully stored!")
+            
+            # Show sample market data
+            sample_query = """
+                SELECT 
+                    s.normalized_name,
+                    ds.volume_24h,
+                    ds.open_interest_usd,
+                    d.name as dex_name
+                FROM dex_symbols ds
+                JOIN symbols s ON ds.symbol_id = s.id
+                JOIN dexes d ON ds.dex_id = d.id
+                WHERE (ds.volume_24h IS NOT NULL OR ds.open_interest_usd IS NOT NULL)
+                AND ds.updated_at >= NOW() - INTERVAL '1 minute'
+                ORDER BY ds.volume_24h DESC NULLS LAST
+                LIMIT 5
+            """
+            sample_data = await database.fetch_all(sample_query)
+            
+            if sample_data:
+                print(f"\n   Sample market data:")
+                print(f"   {'-'*70}")
+                print(f"   {'DEX':<10} {'Symbol':<10} {'Volume 24h':<20} {'OI (USD)':<20}")
+                print(f"   {'-'*70}")
+                for row in sample_data:
+                    vol_str = f"${row['volume_24h']:,.2f}" if row['volume_24h'] else "N/A"
+                    oi_str = f"${row['open_interest_usd']:,.2f}" if row['open_interest_usd'] else "N/A"
+                    print(f"   {row['dex_name']:<10} {row['normalized_name']:<10} {vol_str:<20} {oi_str:<20}")
+                print(f"   {'-'*70}")
+        else:
+            print("   ⚠️  No recent market data found (may not be implemented yet)")
         
         # Show updated mapper stats
         print(f"\n📚 Updated Mappers:")
