@@ -358,42 +358,43 @@ class GrvtAdapter(BaseDEXAdapter):
                 
                 ticker = ticker_response
                 
-                # Extract open interest
-                # GRVT returns as string with precision, need to convert
-                open_interest_raw = ticker.get('open_interest')
-                if open_interest_raw is None:
-                    logger.debug(
-                        f"{self.dex_name}: No open interest for {instrument}"
-                    )
-                    return None
+                # Extract open interest (in base currency/contracts)
+                # GRVT returns as decimal string like '970645.0'
+                # To get USD value: open_interest * mark_price
+                open_interest_contracts = ticker.get('open_interest')
+                mark_price = ticker.get('mark_price')
                 
-                # Convert open interest from raw value
-                # GRVT uses fixed-point precision (typically 10^10 for many values)
-                # NOTE: These precision factors may need adjustment based on actual data
-                # Test with real data and adjust if values seem incorrect
-                open_interest = Decimal(str(open_interest_raw)) / Decimal('10000000000')  # 10^10 precision
+                if open_interest_contracts is None or mark_price is None:
+                    logger.debug(
+                        f"{self.dex_name}: Missing OI or mark price for {instrument}"
+                    )
+                    # Return None to skip this symbol
+                    open_interest_usd = None
+                else:
+                    # Convert to USD: contracts * mark_price
+                    open_interest_usd = Decimal(str(open_interest_contracts)) * Decimal(str(mark_price))
                 
                 # Extract 24h volume in quote currency (USDT)
-                # buy_volume_q and sell_volume_q are in quote currency (USDT)
-                # They also use fixed-point precision
-                buy_volume_q = ticker.get('buy_volume_q', '0')
-                sell_volume_q = ticker.get('sell_volume_q', '0')
+                # Fields are: buy_volume_24h_q and sell_volume_24h_q
+                # Already in USDT, no conversion needed
+                buy_volume_q = ticker.get('buy_volume_24h_q', '0')
+                sell_volume_q = ticker.get('sell_volume_24h_q', '0')
                 
-                # Total volume = buy + sell, adjust for GRVT's fixed-point precision
-                # NOTE: Precision factor may need adjustment - verify with actual data
-                volume_24h = (Decimal(str(buy_volume_q)) + Decimal(str(sell_volume_q))) / Decimal('100')
+                # Total volume = buy + sell (already in USD)
+                volume_24h = Decimal(str(buy_volume_q)) + Decimal(str(sell_volume_q))
                 
                 # Normalize symbol
                 normalized_symbol = self.normalize_symbol(base)
                 
                 market_data = {
                     "volume_24h": volume_24h,
-                    "open_interest": open_interest
+                    "open_interest": open_interest_usd
                 }
                 
+                oi_str = f"${open_interest_usd:,.2f}" if open_interest_usd else "N/A"
                 logger.debug(
                     f"{self.dex_name}: {instrument} ({base}) -> {normalized_symbol}: "
-                    f"Volume=${volume_24h:,.2f}, OI={open_interest:,.2f}"
+                    f"Volume=${volume_24h:,.2f}, OI={oi_str}"
                 )
                 
                 return (normalized_symbol, market_data)
