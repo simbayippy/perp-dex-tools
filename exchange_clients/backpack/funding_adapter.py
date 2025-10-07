@@ -81,39 +81,60 @@ class BackpackFundingAdapter(BaseFundingAdapter):
         try:
             logger.debug(f"{self.dex_name}: Fetching funding rates...")
             
-            # Fetch all mark prices which includes funding rates
-            mark_prices_data = self.public_client.get_all_mark_prices()
-            
-            if not mark_prices_data:
-                logger.warning(f"{self.dex_name}: No mark prices data returned")
+            # First, get all markets to find perpetual symbols
+            markets_data = self.public_client.get_markets()
+            if not markets_data:
+                logger.warning(f"{self.dex_name}: No markets data returned")
                 return {}
             
-            # Extract funding rates
+            # Find all perpetual markets
+            perp_symbols = []
+            for market in markets_data:
+                symbol = market.get('symbol', '')
+                if symbol.endswith('_PERP'):
+                    perp_symbols.append(symbol)
+            
+            if not perp_symbols:
+                logger.warning(f"{self.dex_name}: No perpetual markets found")
+                return {}
+            
+            logger.debug(f"{self.dex_name}: Found {len(perp_symbols)} perpetual markets")
+            
+            # Extract funding rates from tickers (which includes current funding rates)
+            tickers_data = self.public_client.get_tickers()
+            if not tickers_data:
+                logger.warning(f"{self.dex_name}: No tickers data returned")
+                return {}
+            
             rates_dict = {}
             
             # Handle both single dict and list of dicts response
-            if isinstance(mark_prices_data, dict):
-                mark_prices_list = [mark_prices_data]
-            elif isinstance(mark_prices_data, list):
-                mark_prices_list = mark_prices_data
+            if isinstance(tickers_data, dict):
+                tickers_list = [tickers_data]
+            elif isinstance(tickers_data, list):
+                tickers_list = tickers_data
             else:
-                logger.warning(f"{self.dex_name}: Unexpected mark prices data format: {type(mark_prices_data)}")
+                logger.warning(f"{self.dex_name}: Unexpected tickers data format: {type(tickers_data)}")
                 return {}
             
-            for market_data in mark_prices_list:
+            for ticker_data in tickers_list:
                 try:
-                    symbol = market_data.get('symbol', '')
+                    symbol = ticker_data.get('symbol', '')
                     
                     # Only process perpetual markets (ending with _PERP)
                     if not symbol.endswith('_PERP'):
                         continue
                     
-                    # Get funding rate
-                    funding_rate = market_data.get('fundingRate')
+                    # Get funding rate - try multiple possible field names
+                    funding_rate = (ticker_data.get('fundingRate') or 
+                                  ticker_data.get('lastFundingRate') or 
+                                  ticker_data.get('funding_rate'))
                     
                     if funding_rate is None:
+                        # Debug: log available fields to help troubleshoot
+                        available_fields = list(ticker_data.keys())
                         logger.debug(
-                            f"{self.dex_name}: No funding rate for {symbol}"
+                            f"{self.dex_name}: No funding rate for {symbol}. Available fields: {available_fields}"
                         )
                         continue
                     
@@ -132,7 +153,7 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                 
                 except Exception as e:
                     logger.error(
-                        f"{self.dex_name}: Error parsing rate for {market_data.get('symbol', 'unknown')}: {e}"
+                        f"{self.dex_name}: Error parsing rate for {ticker_data.get('symbol', 'unknown')}: {e}"
                     )
                     continue
             
