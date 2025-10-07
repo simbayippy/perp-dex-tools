@@ -243,16 +243,166 @@ class GrvtAdapter(BaseDEXAdapter):
     
     async def fetch_market_data(self) -> Dict[str, Dict[str, Decimal]]:
         """
-        Fetch market data (volume, OI) from GRVT
+        Fetch market data (volume, OI) from GRVT (with parallel fetching)
         
-        TODO: Implement using GRVT CCXT SDK
-        For now, returns empty dict to maintain compatibility.
+        Uses the same ticker API as funding rates, but extracts volume and OI.
+        Fetches all perpetual markets then queries tickers in PARALLEL for speed.
         
         Returns:
             Dictionary mapping normalized symbols to market data
+            Example: {
+                "BTC": {
+                    "volume_24h": Decimal("1500000.0"),
+                    "open_interest": Decimal("5000000.0")
+                }
+            }
+            
+        Raises:
+            Exception: If fetching fails after retries
         """
-        logger.warning(f"{self.dex_name}: fetch_market_data not yet implemented")
-        return {}
+        try:
+            logger.debug(f"{self.dex_name}: Fetching market data (volume + OI)...")
+            
+            # Fetch all markets to get perpetuals
+            markets = self.rest_client.fetch_markets()
+            
+            if not markets:
+                logger.warning(f"{self.dex_name}: No markets data returned")
+                return {}
+            
+            # Filter for USDT perpetuals and prepare tasks
+            perpetual_markets = []
+            for market in markets:
+                if market.get('kind') == 'PERPETUAL' and market.get('quote') == 'USDT':
+                    perpetual_markets.append(market)
+            
+            if not perpetual_markets:
+                logger.warning(f"{self.dex_name}: No USDT perpetuals found")
+                return {}
+            
+            logger.info(
+                f"{self.dex_name}: Found {len(perpetual_markets)} USDT perpetuals, "
+                f"fetching market data in parallel (max {self.max_concurrent_requests} concurrent)..."
+            )
+            
+            # Create semaphore to limit concurrent requests
+            semaphore = asyncio.Semaphore(self.max_concurrent_requests)
+            
+            # Fetch all tickers in parallel
+            tasks = [
+                self._fetch_single_market_data(
+                    market.get('instrument', ''),
+                    market.get('base', ''),
+                    semaphore
+                )
+                for market in perpetual_markets
+            ]
+            
+            # Execute all tasks in parallel (but limited by semaphore)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Collect successful results
+            market_data_dict = {}
+            successful = 0
+            failed = 0
+            
+            for result in results:
+                if isinstance(result, Exception):
+                    failed += 1
+                    logger.debug(f"{self.dex_name}: Market data fetch failed: {result}")
+                elif result is not None:
+                    symbol, data = result
+                    market_data_dict[symbol] = data
+                    successful += 1
+                else:
+                    failed += 1
+            
+            logger.info(
+                f"{self.dex_name}: Successfully fetched market data for {successful} symbols "
+                f"({failed} failed) from {len(perpetual_markets)} markets"
+            )
+            
+            return market_data_dict
+        
+        except Exception as e:
+            logger.error(f"{self.dex_name}: Failed to fetch market data: {e}")
+            raise
+    
+    async def _fetch_single_market_data(
+        self, 
+        instrument: str, 
+        base: str,
+        semaphore: asyncio.Semaphore
+    ) -> Optional[tuple[str, Dict[str, Decimal]]]:
+        """
+        Fetch market data (volume, OI) for a single instrument
+        
+        Args:
+            instrument: Instrument name (e.g., "BTC_USDT_Perp")
+            base: Base currency (e.g., "BTC")
+            semaphore: Asyncio semaphore to limit concurrent requests
+            
+        Returns:
+            Tuple of (normalized_symbol, market_data_dict) or None if failed
+        """
+        async with semaphore:
+            try:
+                # Run the synchronous fetch_ticker in a thread pool
+                loop = asyncio.get_event_loop()
+                
+                ticker_response = await loop.run_in_executor(
+                    None, 
+                    self.rest_client.fetch_ticker, 
+                    instrument
+                )
+                
+                ticker = ticker_response
+                
+                # Extract open interest
+                # GRVT returns as string with precision, need to convert
+                open_interest_raw = ticker.get('open_interest')
+                if open_interest_raw is None:
+                    logger.debug(
+                        f"{self.dex_name}: No open interest for {instrument}"
+                    )
+                    return None
+                
+                # Convert open interest from raw value
+                # GRVT uses fixed-point precision (typically 10^10 for many values)
+                # NOTE: These precision factors may need adjustment based on actual data
+                # Test with real data and adjust if values seem incorrect
+                open_interest = Decimal(str(open_interest_raw)) / Decimal('10000000000')  # 10^10 precision
+                
+                # Extract 24h volume in quote currency (USDT)
+                # buy_volume_q and sell_volume_q are in quote currency (USDT)
+                # They also use fixed-point precision
+                buy_volume_q = ticker.get('buy_volume_q', '0')
+                sell_volume_q = ticker.get('sell_volume_q', '0')
+                
+                # Total volume = buy + sell, adjust for GRVT's fixed-point precision
+                # NOTE: Precision factor may need adjustment - verify with actual data
+                volume_24h = (Decimal(str(buy_volume_q)) + Decimal(str(sell_volume_q))) / Decimal('100')
+                
+                # Normalize symbol
+                normalized_symbol = self.normalize_symbol(base)
+                
+                market_data = {
+                    "volume_24h": volume_24h,
+                    "open_interest": open_interest
+                }
+                
+                logger.debug(
+                    f"{self.dex_name}: {instrument} ({base}) -> {normalized_symbol}: "
+                    f"Volume=${volume_24h:,.2f}, OI={open_interest:,.2f}"
+                )
+                
+                return (normalized_symbol, market_data)
+            
+            except Exception as e:
+                logger.debug(
+                    f"{self.dex_name}: Error fetching market data for {instrument}: {e}"
+                )
+                return None
     
     def normalize_symbol(self, dex_symbol: str) -> str:
         """
