@@ -6,11 +6,3 @@ pycryptodome>=3.15.0
 ecdsa>=0.17.0
 requests>=2.32.0
 
-# Exchange Client Library
-# IMPORTANT: Install the shared exchange library with all exchange SDKs:
-#   pip install -e './exchange_clients[all]'
-#
-# Or install only specific exchanges you need:
-#   pip install -e './exchange_clients[lighter,grvt,edgex,backpack]'
-#
-# Available exchanges: lighter, grvt, edgex, backpack, paradex, aster
