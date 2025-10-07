@@ -126,8 +126,8 @@ async def main():
     
     # Define adapters to test
     adapters = {
-        # 'lighter': (LighterAdapter, 'Lighter'),
-        # 'grvt': (GrvtAdapter, 'GRVT'),
+        'lighter': (LighterAdapter, 'Lighter'),
+        'grvt': (GrvtAdapter, 'GRVT'),
         'edgex': (EdgeXAdapter, 'EdgeX'),
     }
     
