@@ -17,13 +17,15 @@ import sys
 from pathlib import Path
 import argparse
 
-# Add project root directory to path (for exchange_clients and funding_rate_service)
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+# Add both project root (for exchange_clients) and funding_rate_service (for internal imports)
+project_root = Path(__file__).parent.parent.parent.parent
+sys.path.insert(0, str(project_root))  # For exchange_clients
+sys.path.insert(0, str(project_root / "funding_rate_service"))  # For funding_rate_service internal imports
 
 from exchange_clients.lighter import LighterFundingAdapter
 from exchange_clients.grvt import GrvtFundingAdapter
 from exchange_clients.edgex import EdgeXFundingAdapter
-from funding_rate_service.utils.logger import logger
+from utils.logger import logger
 
 
 async def test_adapter(adapter_class, name):
