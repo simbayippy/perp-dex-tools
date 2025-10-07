@@ -10,11 +10,15 @@ Key endpoints:
 """
 
 import asyncio
+import logging
 from typing import Dict, Optional
 from decimal import Decimal
 import re
 
 from exchange_clients.base import BaseFundingAdapter
+
+# Initialize logger for this module
+logger = logging.getLogger(__name__)
 
 
 class EdgeXFundingAdapter(BaseFundingAdapter):
