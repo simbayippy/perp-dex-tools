@@ -43,7 +43,7 @@ class OpportunityFilter(BaseModel):
     
     # Volume filters
     min_volume_24h: Optional[Decimal] = Field(
-        default=Decimal('100000'), 
+        default=None, 
         description="Minimum 24h volume in USD"
     )
     max_volume_24h: Optional[Decimal] = Field(

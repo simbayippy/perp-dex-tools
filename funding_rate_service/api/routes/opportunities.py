@@ -30,11 +30,11 @@ async def get_opportunities(
     exclude_dexes: Optional[str] = Query(None, description="Comma-separated list of DEXs to exclude"),
     
     # Profitability filters
-    min_divergence: Optional[Decimal] = Query(Decimal('0.0005'), description="Minimum divergence, default is 0.05%"),
+    min_divergence: Optional[Decimal] = Query(Decimal('0.0001'), description="Minimum divergence"),
     min_profit: Optional[Decimal] = Query(Decimal('0'), description="Minimum net profit percent"),
     
     # Volume filters
-    min_volume: Optional[Decimal] = Query(Decimal('1000000'), description="Minimum 24h volume in USD"),
+    min_volume: Optional[Decimal] = Query(None, description="Minimum 24h volume in USD"),
     max_volume: Optional[Decimal] = Query(None, description="Maximum 24h volume in USD"),
     
     # OI filters (for low OI farming!)
@@ -124,7 +124,7 @@ async def get_opportunities(
                 "symbol": symbol,
                 "min_divergence": float(min_divergence),
                 "min_profit_percent": float(min_profit),
-                "min_volume_24h": float(min_volume),
+                "min_volume_24h": float(min_volume) if min_volume else None,
                 "max_oi_usd": float(max_oi) if max_oi else None,
                 "limit": limit
             },

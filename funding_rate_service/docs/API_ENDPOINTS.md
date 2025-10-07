@@ -171,9 +171,9 @@ Get arbitrage opportunities with comprehensive filtering.
 - `?short_dex=<dex>` - Filter by short DEX
 - `?include_dexes=<dex1,dex2>` - Include only these DEXs
 - `?exclude_dexes=<dex1,dex2>` - Exclude these DEXs
-- `?min_divergence=0.0001` - Minimum divergence (default: 0.0001)
+- `?min_divergence=0.0001` - Minimum divergence (default: 0.0005, i.e., 0.01%)
 - `?min_profit=0` - Minimum net profit percent (default: 0)
-- `?min_volume=100000` - Minimum 24h volume USD (default: 100000)
+- `?min_volume=<amount>` - Minimum 24h volume USD (default: none)
 - `?max_volume=<amount>` - Maximum 24h volume USD
 - `?min_oi=<amount>` - Minimum open interest USD
 - `?max_oi=<amount>` - Maximum open interest USD (for low OI farming)
