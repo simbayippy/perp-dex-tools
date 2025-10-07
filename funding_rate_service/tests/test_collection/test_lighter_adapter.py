@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from exchange_clients.lighter import LighterFundingAdapter
-from utils.logger import logger
+from funding_rate_service.utils.logger import logger
 
 
 async def main():

@@ -31,10 +31,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from exchange_clients.lighter import LighterFundingAdapter
 from exchange_clients.grvt import GrvtFundingAdapter
 from exchange_clients.edgex import EdgeXFundingAdapter
-from collection.orchestrator import CollectionOrchestrator
-from database.connection import database
-from core.mappers import dex_mapper, symbol_mapper
-from utils.logger import logger
+from funding_rate_service.collection.orchestrator import CollectionOrchestrator
+from funding_rate_service.database.connection import database
+from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
+from funding_rate_service.utils.logger import logger
 
 
 async def test_single_adapter(adapter_class, adapter_name, test_symbols):
