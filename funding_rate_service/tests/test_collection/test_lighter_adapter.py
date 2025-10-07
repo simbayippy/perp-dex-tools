@@ -13,8 +13,8 @@ import asyncio
 import sys
 from pathlib import Path
 
-# Add funding_rate_service directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# Add project root directory to path (for exchange_clients and funding_rate_service)
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from exchange_clients.lighter import LighterFundingAdapter
 from utils.logger import logger
