@@ -15,18 +15,26 @@ dependencies = [
 
 [project.optional-dependencies]
 lighter = [
-    # Lighter SDK from git (specific commit)
     "lighter-sdk @ git+https://github.com/elliottech/lighter-python.git@d0009799970aad54ebb940aa3dc90cbc00028c54",
     "eth-account>=0.8.0",
 ]
 grvt = [
-    # GRVT SDK (uses CCXT internally)
     "grvt-pysdk",
 ]
 edgex = [
-    # Forked EdgeX SDK with post_only limit order support (for trading client)
     "edgex-python-sdk @ git+https://github.com/your-quantguy/edgex-python-sdk.git@07425f7522be5845399264682580c88019ab9e52",
     "httpx>=0.24.0",
+]
+backpack = [
+    "bpx-py==2.0.11",
+    "cryptography>=41.0.0",
+]
+paradex = [
+    # Note: paradex-py currently has dependency conflicts
+    # "paradex-py",
+]
+aster = [
+    # Aster currently uses direct API calls (no SDK required)
 ]
 all = [
     # All exchange SDKs
@@ -35,6 +43,9 @@ all = [
     "grvt-pysdk",
     "edgex-python-sdk @ git+https://github.com/your-quantguy/edgex-python-sdk.git@07425f7522be5845399264682580c88019ab9e52",
     "httpx>=0.24.0",
+    "bpx-py==2.0.11",
+    "cryptography>=41.0.0",
+    # "paradex-py",  # Commented out due to dependency conflicts
 ]
 
 [build-system]

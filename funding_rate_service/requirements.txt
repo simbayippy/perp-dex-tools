@@ -35,11 +35,6 @@ mypy==1.8.0
 # WebSocket
 websockets>=15.0
 
-# DEX SDKs
-
-# Lighter SDK
-git+https://github.com/elliottech/lighter-python.git@d0009799970aad54ebb940aa3dc90cbc00028c54
-# GRVT SDK 
-grvt-pysdk
-# Paradex SDK (depednecy issue)  
-# paradex-py 
+# Exchange SDKs
+# NOTE: All exchange SDKs are now managed by exchange_clients/pyproject.toml
+# Install the exchange_clients library with: pip install -e '../exchange_clients[all]' 
