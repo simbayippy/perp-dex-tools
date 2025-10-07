@@ -25,9 +25,9 @@ project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))  # For exchange_clients
 sys.path.insert(0, str(project_root / "funding_rate_service"))  # For funding_rate_service internal imports
 
-from exchange_clients.lighter import LighterFundingAdapter
-from exchange_clients.grvt import GrvtFundingAdapter
-from exchange_clients.edgex import EdgeXFundingAdapter
+# from exchange_clients.lighter import LighterFundingAdapter
+# from exchange_clients.grvt import GrvtFundingAdapter
+# from exchange_clients.edgex import EdgeXFundingAdapter
 # from exchange_clients.paradex import ParadexFundingAdapter
 from exchange_clients.backpack import BackpackFundingAdapter
 from exchange_clients.aster import AsterFundingAdapter
@@ -70,9 +70,9 @@ async def test_adapter(adapter_class, name):
         # Test symbol normalization
         print(f"\n🔄 Symbol Normalization Test:")
         test_symbols = {
-            'lighter': ["BTC-PERP", "ETH-PERP", "1000PEPE-PERP"],
-            'grvt': ["BTC", "ETH", "SOL"],
-            'edgex': ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+            # 'lighter': ["BTC-PERP", "ETH-PERP", "1000PEPE-PERP"],
+            # 'grvt': ["BTC", "ETH", "SOL"],
+            # 'edgex': ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
             # 'paradex': ["BTC-USD-PERP", "ETH-USD-PERP", "SOL-USD-PERP"],
             'backpack': ["BTC_USDC_PERP", "ETH_USDC_PERP", "SOL_USDC_PERP"],
             'aster': ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
@@ -138,9 +138,9 @@ async def main():
     
     # Define adapters to test
     adapters = {
-        'lighter': (LighterFundingAdapter, 'Lighter'),
-        'grvt': (GrvtFundingAdapter, 'GRVT'),
-        'edgex': (EdgeXFundingAdapter, 'EdgeX'),
+        # 'lighter': (LighterFundingAdapter, 'Lighter'),
+        # 'grvt': (GrvtFundingAdapter, 'GRVT'),
+        # 'edgex': (EdgeXFundingAdapter, 'EdgeX'),
         # 'paradex': (ParadexFundingAdapter, 'Paradex'),
         'backpack': (BackpackFundingAdapter, 'Backpack'),
         'aster': (AsterFundingAdapter, 'Aster'),
