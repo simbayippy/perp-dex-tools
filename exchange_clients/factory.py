@@ -11,9 +11,9 @@ class ExchangeFactory:
 
     _registered_exchanges = {
         'edgex': 'exchange_clients.edgex.EdgeXClient',
-        'backpack': 'exchanges.backpack.BackpackClient',
-        'paradex': 'exchanges.paradex.ParadexClient',
-        'aster': 'exchanges.aster.AsterClient',
+        'backpack': 'exchange_clients.backpack.BackpackClient',
+        'paradex': 'exchange_clients.paradex.ParadexClient',
+        'aster': 'exchange_clients.aster.AsterClient',
         'lighter': 'exchange_clients.lighter.LighterClient',
         'grvt': 'exchange_clients.grvt.GrvtClient',
     }

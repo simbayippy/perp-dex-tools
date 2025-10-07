@@ -4,33 +4,51 @@ This document explains how to add support for new exchanges to the modular tradi
 
 ## Overview
 
-The trading bot has been modularized to support multiple exchanges through a plugin-like architecture. Each exchange is implemented as a separate client that inherits from `BaseExchangeClient`. The bot currently supports EdgeX, Backpack, Paradex, and GRVT exchanges.
+The trading bot uses a shared exchange library architecture. Each exchange is implemented as a separate module under `exchange_clients/` with both trading client and funding rate adapter components. All exchange clients inherit from `BaseExchangeClient`, and funding adapters inherit from `BaseFundingAdapter`. The bot currently supports EdgeX, Backpack, Paradex, Aster, Lighter, and GRVT exchanges.
 
 ## Architecture
 
 ```
-exchanges/
-├── __init__.py          # Module initialization
-├── base.py              # Base exchange client interface
-├── edgex.py             # EdgeX exchange implementation
-├── backpack.py          # Backpack exchange implementation
-├── paradex.py           # Paradex exchange implementation
-├── aster.py             # Aster exchange implementation
-├── factory.py           # Exchange factory for dynamic selection
-└── your_exchange.py     # Your new exchange implementation
+exchange_clients/
+├── __init__.py              # Package initialization
+├── base.py                  # Base interfaces (BaseExchangeClient, BaseFundingAdapter)
+├── factory.py               # Exchange factory for dynamic selection
+├── pyproject.toml           # Dependency management with optional exchange SDKs
+├── your_exchange/
+│   ├── __init__.py          # Module exports
+│   ├── client.py            # Trading client implementation
+│   ├── funding_adapter.py   # Funding rate collection adapter
+│   └── common.py            # Shared utilities for the exchange
+└── edgex/                   # Example: EdgeX implementation
+    ├── __init__.py
+    ├── client.py
+    ├── funding_adapter.py
+    └── common.py
 ```
 
 ## Steps to Add a New Exchange
 
-### 1. Create Exchange Client
+### 1. Create Exchange Directory Structure
 
-Create a new file `exchanges/your_exchange.py` that implements the `BaseExchangeClient` interface:
+First, create a new directory for your exchange under `exchange_clients/`:
+
+```bash
+mkdir -p exchange_clients/your_exchange
+touch exchange_clients/your_exchange/__init__.py
+touch exchange_clients/your_exchange/client.py
+touch exchange_clients/your_exchange/funding_adapter.py
+touch exchange_clients/your_exchange/common.py
+```
+
+### 2. Implement Trading Client
+
+Create `exchange_clients/your_exchange/client.py` that implements the `BaseExchangeClient` interface:
 
 ```python
 import os
 from decimal import Decimal
 from typing import Dict, Any, List, Optional, Tuple
-from .base import BaseExchangeClient, OrderResult, OrderInfo, query_retry
+from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry
 from helpers.logger import TradingLogger
 
 class YourExchangeClient(BaseExchangeClient):
@@ -229,39 +247,133 @@ class YourExchangeClient(BaseExchangeClient):
         raise ValueError(f"Contract not found for ticker: {ticker}")
 ```
 
-### 2. Register the Exchange
+### 3. Implement Funding Rate Adapter
 
-Add your exchange to the factory in `exchanges/factory.py`:
+Create `exchange_clients/your_exchange/funding_adapter.py` that implements the `BaseFundingAdapter` interface:
 
 ```python
-from .your_exchange import YourExchangeClient
+import logging
+from typing import List, Dict, Any
+from decimal import Decimal
+from exchange_clients.base import BaseFundingAdapter
 
+logger = logging.getLogger(__name__)
+
+class YourExchangeFundingAdapter(BaseFundingAdapter):
+    """Funding rate adapter for YourExchange."""
+    
+    def __init__(self):
+        super().__init__()
+        # Initialize your exchange-specific client for funding rate collection
+        self.exchange_name = "your_exchange"
+    
+    async def get_funding_rates(self) -> List[Dict[str, Any]]:
+        """Fetch current funding rates for all perpetual contracts."""
+        try:
+            # Implement funding rate fetching logic
+            funding_data = await self._fetch_funding_data()
+            
+            results = []
+            for item in funding_data:
+                results.append({
+                    'exchange': self.exchange_name,
+                    'symbol': self._normalize_symbol(item['symbol']),
+                    'funding_rate': Decimal(str(item['funding_rate'])),
+                    'next_funding_time': item['next_funding_time'],
+                    'mark_price': Decimal(str(item.get('mark_price', 0))),
+                    'index_price': Decimal(str(item.get('index_price', 0)))
+                })
+            
+            return results
+        except Exception as e:
+            logger.error(f"Error fetching funding rates from {self.exchange_name}: {e}")
+            return []
+    
+    def _normalize_symbol(self, symbol: str) -> str:
+        """Normalize exchange-specific symbol to standard format."""
+        # Example: Convert "BTCUSDT" to "BTC-USDT-PERP"
+        return symbol.replace('USDT', '-USDT-PERP')
+    
+    async def _fetch_funding_data(self) -> List[Dict[str, Any]]:
+        """Fetch raw funding data from exchange API."""
+        # Implement exchange-specific API call
+        pass
+```
+
+### 4. Create Module Exports
+
+Update `exchange_clients/your_exchange/__init__.py` to export your implementations:
+
+```python
+"""
+YourExchange exchange client module.
+
+This module provides trading and funding rate collection functionality for YourExchange.
+"""
+
+from .client import YourExchangeClient
+from .funding_adapter import YourExchangeFundingAdapter
+
+__all__ = ['YourExchangeClient', 'YourExchangeFundingAdapter']
+```
+
+### 5. Add SDK Dependencies (Optional)
+
+If your exchange requires a specific SDK, add it to `exchange_clients/pyproject.toml`:
+
+```toml
+[project.optional-dependencies]
+your_exchange = [
+    "your-exchange-sdk>=1.0.0",
+    # Or for git-based SDKs:
+    # "your-exchange-sdk @ git+https://github.com/your-org/sdk.git@commit-hash",
+]
+
+# Update the 'all' group
+all = [
+    # ... existing dependencies ...
+    "your-exchange-sdk>=1.0.0",
+]
+```
+
+### 6. Register the Exchange
+
+Add your exchange to the factory in `exchange_clients/factory.py`:
+
+```python
 class ExchangeFactory:
+    """Factory class for creating exchange clients."""
+
     _registered_exchanges = {
-        'edgex': EdgeXClient,
-        'backpack': BackpackClient,
-        'paradex': ParadexClient,
-        'aster': AsterClient,
-        'your_exchange': YourExchangeClient,  # Add this line
+        'edgex': 'exchange_clients.edgex.EdgeXClient',
+        'backpack': 'exchange_clients.backpack.BackpackClient',
+        'paradex': 'exchange_clients.paradex.ParadexClient',
+        'aster': 'exchange_clients.aster.AsterClient',
+        'lighter': 'exchange_clients.lighter.LighterClient',
+        'grvt': 'exchange_clients.grvt.GrvtClient',
+        'your_exchange': 'exchange_clients.your_exchange.YourExchangeClient',  # Add this line
     }
 ```
 
-### 3. Update Module Imports
+### 7. Install Dependencies
 
-Add your exchange to `exchanges/__init__.py`:
+Install the exchange client library with your exchange's optional dependencies:
 
-```python
-from .your_exchange import YourExchangeClient
+```bash
+# Install with your exchange's dependencies
+pip install -e './exchange_clients[your_exchange]'
 
-__all__ = ['BaseExchangeClient', 'EdgeXClient', 'BackpackClient', 'ParadexClient', 'AsterClient', 'YourExchangeClient', 'ExchangeFactory']
+# Or install with all exchange dependencies
+pip install -e './exchange_clients[all]'
 ```
 
-### 4. Test Your Implementation
+### 8. Test Your Implementation
 
 Test your exchange client:
 
 ```python
-from exchanges import ExchangeFactory
+from exchange_clients.factory import ExchangeFactory
+from decimal import Decimal
 
 # Test exchange creation
 config = {
@@ -280,18 +392,35 @@ client = ExchangeFactory.create_exchange('your_exchange', config)
 print(f"Created {client.get_exchange_name()} client")
 ```
 
+Test your funding rate adapter:
+
+```python
+from exchange_clients.your_exchange import YourExchangeFundingAdapter
+import asyncio
+
+async def test_funding_adapter():
+    adapter = YourExchangeFundingAdapter()
+    rates = await adapter.get_funding_rates()
+    for rate in rates:
+        print(f"{rate['symbol']}: {rate['funding_rate']}")
+
+asyncio.run(test_funding_adapter())
+```
+
 ## Required Methods
 
-All exchange clients must implement these methods from `BaseExchangeClient`:
+### BaseExchangeClient Interface
 
-### Core Methods
+All exchange trading clients must implement these methods from `BaseExchangeClient`:
+
+#### Core Methods
 
 - `_validate_config()` - Validate exchange-specific configuration
 - `connect()` - Establish connection to exchange
 - `disconnect()` - Clean up connections
 - `get_exchange_name()` - Return exchange name
 
-### Order Management
+#### Order Management
 
 - `place_open_order(contract_id, quantity, direction)` - Place opening orders
 - `place_close_order(contract_id, quantity, price, side)` - Place closing orders
@@ -299,12 +428,27 @@ All exchange clients must implement these methods from `BaseExchangeClient`:
 - `get_order_info(order_id)` - Get order details
 - `get_active_orders(contract_id)` - Get all active orders
 
-### Data Retrieval
+#### Data Retrieval
 
 - `get_account_positions()` - Get account positions
 - `setup_order_update_handler(handler)` - Set up real-time order updates
 - `fetch_bbo_prices(contract_id)` - Get best bid/offer prices
 - `get_contract_attributes()` - Get contract ID and tick size for ticker
+
+### BaseFundingAdapter Interface
+
+All funding rate adapters must implement these methods from `BaseFundingAdapter`:
+
+#### Required Methods
+
+- `get_funding_rates()` - Fetch current funding rates for all perpetual contracts
+  - Returns: `List[Dict[str, Any]]` with keys:
+    - `exchange`: Exchange name (str)
+    - `symbol`: Normalized symbol (str)
+    - `funding_rate`: Current funding rate (Decimal)
+    - `next_funding_time`: Next funding timestamp (datetime or str)
+    - `mark_price`: Current mark price (Decimal)
+    - `index_price`: Current index price (Decimal)
 
 ## Data Structures
 
@@ -423,8 +567,13 @@ python runbot.py --exchange your_exchange --ticker BTC --quantity 0.01 --directi
 
 Here's a simplified example of how you might implement Binance Futures:
 
+**File: `exchange_clients/binance/client.py`**
 ```python
+import os
 import ccxt
+from decimal import Decimal
+from typing import Dict, Any
+from exchange_clients.base import BaseExchangeClient, OrderResult
 
 class BinanceFuturesClient(BaseExchangeClient):
     def __init__(self, config: Dict[str, Any]):
@@ -457,4 +606,51 @@ class BinanceFuturesClient(BaseExchangeClient):
             return OrderResult(success=False, error_message=str(e))
 ```
 
-This modular approach makes it easy to add new exchanges while maintaining a consistent interface for the trading bot.
+**File: `exchange_clients/binance/funding_adapter.py`**
+```python
+import ccxt.async_support as ccxt
+from typing import List, Dict, Any
+from decimal import Decimal
+from exchange_clients.base import BaseFundingAdapter
+import logging
+
+logger = logging.getLogger(__name__)
+
+class BinanceFundingAdapter(BaseFundingAdapter):
+    def __init__(self):
+        super().__init__()
+        self.client = ccxt.binance({'options': {'defaultType': 'future'}})
+        self.exchange_name = "binance"
+    
+    async def get_funding_rates(self) -> List[Dict[str, Any]]:
+        try:
+            markets = await self.client.fetch_markets()
+            results = []
+            
+            for market in markets:
+                if market.get('type') == 'swap' and market.get('quote') == 'USDT':
+                    funding_rate = await self.client.fetch_funding_rate(market['symbol'])
+                    results.append({
+                        'exchange': self.exchange_name,
+                        'symbol': market['symbol'],
+                        'funding_rate': Decimal(str(funding_rate['fundingRate'])),
+                        'next_funding_time': funding_rate['fundingTimestamp'],
+                        'mark_price': Decimal(str(funding_rate.get('markPrice', 0))),
+                        'index_price': Decimal(str(funding_rate.get('indexPrice', 0)))
+                    })
+            
+            return results
+        except Exception as e:
+            logger.error(f"Error fetching Binance funding rates: {e}")
+            return []
+```
+
+**File: `exchange_clients/binance/__init__.py`**
+```python
+from .client import BinanceFuturesClient
+from .funding_adapter import BinanceFundingAdapter
+
+__all__ = ['BinanceFuturesClient', 'BinanceFundingAdapter']
+```
+
+This modular approach with a shared library makes it easy to add new exchanges while maintaining consistent interfaces for both trading and funding rate collection.

@@ -16,7 +16,7 @@ from bpx.public import Public
 from bpx.account import Account
 from bpx.constants.enums import OrderTypeEnum, TimeInForceEnum
 
-from .base import BaseExchangeClient, OrderResult, OrderInfo, query_retry
+from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry
 from helpers.logger import TradingLogger
 
 

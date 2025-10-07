@@ -9,7 +9,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, Any, List, Optional, Tuple
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 
-from .base import BaseExchangeClient, OrderResult, OrderInfo
+from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo
 from helpers.logger import TradingLogger
 
 

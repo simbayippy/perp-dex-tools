@@ -11,7 +11,7 @@ import sys
 import dotenv
 from decimal import Decimal
 from trading_bot import TradingBot, TradingConfig
-from exchanges import ExchangeFactory
+from exchange_clients.factory import ExchangeFactory
 from strategies import StrategyFactory
 
 

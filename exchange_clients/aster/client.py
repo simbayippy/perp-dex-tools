@@ -15,7 +15,7 @@ import aiohttp
 import websockets
 import sys
 
-from .base import BaseExchangeClient, OrderResult, OrderInfo, query_retry
+from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry
 from helpers.logger import TradingLogger
 
 

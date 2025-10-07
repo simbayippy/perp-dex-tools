@@ -32,6 +32,7 @@ This document outlines the complete structure of the `perp-dex-tools` repository
 ├── /exchange_clients/                 # 🔥 SHARED EXCHANGE LIBRARY
 │   ├── __init__.py
 │   ├── base.py                        # BaseExchangeClient & BaseFundingAdapter interfaces
+│   ├── factory.py                     # ExchangeFactory (dynamic loading)
 │   ├── pyproject.toml                 # Dependency management
 │   │
 │   ├── /lighter/                      # Lighter DEX implementation
@@ -47,18 +48,29 @@ This document outlines the complete structure of the `perp-dex-tools` repository
 │   │   ├── funding_adapter.py         # Funding rate collection adapter
 │   │   └── common.py                  # Shared utilities
 │   │
-│   └── /edgex/                        # EdgeX DEX implementation
+│   ├── /edgex/                        # EdgeX DEX implementation
+│   │   ├── __init__.py
+│   │   ├── client.py                  # Trading execution client
+│   │   ├── funding_adapter.py         # Funding rate collection adapter
+│   │   └── common.py                  # Shared utilities
+│   │
+│   ├── /aster/                        # Aster DEX implementation
+│   │   ├── __init__.py
+│   │   ├── client.py                  # Trading execution client
+│   │   ├── funding_adapter.py         # Funding rate collection adapter
+│   │   └── common.py                  # Shared utilities
+│   │
+│   ├── /backpack/                     # Backpack DEX implementation
+│   │   ├── __init__.py
+│   │   ├── client.py                  # Trading execution client
+│   │   ├── funding_adapter.py         # Funding rate collection adapter
+│   │   └── common.py                  # Shared utilities
+│   │
+│   └── /paradex/                      # Paradex DEX implementation
 │       ├── __init__.py
 │       ├── client.py                  # Trading execution client
 │       ├── funding_adapter.py         # Funding rate collection adapter
 │       └── common.py                  # Shared utilities
-│
-├── /exchanges/                        # 🎯 LEGACY EXCHANGE CLIENTS (Non-migrated)
-│   ├── __init__.py
-│   ├── factory.py                     # ExchangeFactory (dynamic loading)
-│   ├── paradex.py                     # Paradex DEX client
-│   ├── backpack.py                    # Backpack client
-│   └── aster.py                       # Aster client
 │
 ├── /strategies/                       # 🧠 TRADING STRATEGY LAYER
 │   ├── __init__.py
@@ -205,7 +217,7 @@ This document outlines the complete structure of the `perp-dex-tools` repository
 |-----------|---------|-----------|
 | **Entry Point** | CLI for running trading strategies | `runbot.py` |
 | **Orchestrator** | Coordinates strategies + exchanges | `trading_bot.py` |
-| **Exchanges** | Execute trades on DEXs | `/exchanges/lighter.py`, etc. |
+| **Exchange Clients** | Execute trades on DEXs | `/exchange_clients/lighter/client.py`, etc. |
 | **Strategies** | Trading decision logic | `/strategies/grid_strategy.py`, etc. |
 | **Helpers** | Logging, notifications, risk mgmt | `/helpers/logger.py`, etc. |
 
@@ -311,7 +323,8 @@ python scripts/seed_dexes.py  # Seed DEX data
 
 **Total Repository:**
 - **Trading Client Core:** ~15 Python files
-- **Exchanges:** 7 exchange implementations
+- **Exchange Clients Library:** 6 exchange implementations (Lighter, GRVT, EdgeX, Aster, Backpack, Paradex)
+  - Each with: client.py, funding_adapter.py, common.py, __init__.py
 - **Strategies:** 2 strategies (grid, funding arb)
 - **Funding Rate Service:** ~50+ Python files
 - **Tests:** ~15 test files
@@ -319,8 +332,9 @@ python scripts/seed_dexes.py  # Seed DEX data
 
 **Total Lines of Code (estimated):**
 - Trading Client: ~3,000 lines
+- Exchange Clients Library: ~2,500 lines
 - Funding Rate Service: ~5,000 lines
-- **Total: ~8,000 lines**
+- **Total: ~10,500 lines**
 
 ---
 
@@ -404,15 +418,18 @@ We successfully refactored the codebase to eliminate code duplication between th
 
 ### What Changed:
 - ✅ **Created `/exchange_clients/`** - Shared library for all exchange implementations
-- ✅ **Migrated 3 exchanges:** Lighter, GRVT, EdgeX
+- ✅ **Migrated ALL 6 exchanges:** Lighter, GRVT, EdgeX, Aster, Backpack, Paradex
 - ✅ **Dual interfaces:** Each exchange now has both `client.py` (trading) and `funding_adapter.py` (data collection)
 - ✅ **Eliminated duplication:** Single implementation per exchange instead of 2
 - ✅ **Isolated dependencies:** Per-exchange dependencies via `pyproject.toml`
-- ✅ **Updated all imports:** Factory, adapters, and test files now use new structure
+- ✅ **Moved factory:** `exchanges/factory.py` → `exchange_clients/factory.py`
+- ✅ **Updated all imports:** Factory, adapters, runbot.py, trading_bot.py, and test files now use new structure
+- ✅ **Deleted old `/exchanges/` directory** - migration complete!
 
 ### Benefits:
-- **50% less code** for migrated exchanges (no duplication)
+- **50% less code** for all exchanges (no duplication)
 - **Consistent behavior** between trading and data collection
 - **Easier maintenance** - update once, works everywhere
 - **Better dependency management** - install only what you need
+- **Cleaner architecture** - single source of truth for each exchange
 
