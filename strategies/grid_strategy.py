@@ -53,10 +53,48 @@ class GridStrategy(BaseStrategy):
         self.logger.log(f"  - Direction: {self.get_parameter('direction')}", "INFO")
         self.logger.log(f"  - Max Orders: {self.get_parameter('max_orders')}", "INFO")
         self.logger.log(f"  - Wait Time: {self.get_parameter('wait_time')}s", "INFO")
+        
+        # Log safety parameters if set
+        stop_price = self.get_parameter('stop_price')
+        if stop_price is not None:
+            self.logger.log(f"  - Stop Price: {stop_price} (will stop if {'below' if self.get_parameter('direction') == 'buy' else 'above'})", "WARNING")
+        
+        pause_price = self.get_parameter('pause_price')
+        if pause_price is not None:
+            self.logger.log(f"  - Pause Price: {pause_price} (will pause if {'above' if self.get_parameter('direction') == 'buy' else 'below'})", "INFO")
     
     async def should_execute(self, market_data: MarketData) -> bool:
         """Determine if grid strategy should execute."""
         try:
+            # Check stop price - critical safety check first
+            stop_price = self.get_parameter('stop_price')
+            if stop_price is not None:
+                current_price = (market_data.best_bid + market_data.best_ask) / 2
+                direction = self.get_parameter('direction')
+                
+                # For buy (long): stop if price falls below stop_price
+                # For sell (short): stop if price rises above stop_price
+                if (direction == 'buy' and current_price < stop_price) or \
+                   (direction == 'sell' and current_price > stop_price):
+                    self.logger.log(f"⚠️ STOP PRICE TRIGGERED! Current: {current_price}, Stop: {stop_price}", "WARNING")
+                    self.logger.log(f"Canceling all orders and stopping strategy...", "WARNING")
+                    # Cancel all active orders
+                    await self._cancel_all_orders()
+                    return False
+            
+            # Check pause price - temporary pause
+            pause_price = self.get_parameter('pause_price')
+            if pause_price is not None:
+                current_price = (market_data.best_bid + market_data.best_ask) / 2
+                direction = self.get_parameter('direction')
+                
+                # For buy (long): pause if price rises above pause_price
+                # For sell (short): pause if price falls below pause_price
+                if (direction == 'buy' and current_price > pause_price) or \
+                   (direction == 'sell' and current_price < pause_price):
+                    self.logger.log(f"⏸️ PAUSE PRICE REACHED! Current: {current_price}, Pause: {pause_price}", "INFO")
+                    return False
+            
             # Update active orders
             await self._update_active_orders()
             
@@ -351,3 +389,25 @@ class GridStrategy(BaseStrategy):
                 "strategy": "grid",
                 "error": str(e)
             }
+    
+    async def _cancel_all_orders(self):
+        """Cancel all active orders (used when stop price is triggered)."""
+        try:
+            active_close_orders = self.get_strategy_state("active_close_orders", [])
+            self.logger.log(f"Canceling {len(active_close_orders)} active orders...", "INFO")
+            
+            for order in active_close_orders:
+                try:
+                    order_id = order.get('order_id')
+                    if order_id:
+                        await self.cancel_order(order_id)
+                        self.logger.log(f"Canceled order {order_id}", "INFO")
+                except Exception as e:
+                    self.logger.log(f"Error canceling order {order.get('order_id')}: {e}", "ERROR")
+            
+            # Clear active close orders from state
+            self.update_strategy_state("active_close_orders", [])
+            self.logger.log("All orders canceled", "INFO")
+            
+        except Exception as e:
+            self.logger.log(f"Error in _cancel_all_orders: {e}", "ERROR")
