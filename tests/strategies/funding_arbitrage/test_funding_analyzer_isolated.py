@@ -7,7 +7,7 @@ This avoids dependency issues with funding_rate_service imports.
 
 import pytest
 from decimal import Decimal
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 # ============================================================================
 # ISOLATED FUNDING RATE ANALYZER (copied from implementation)
