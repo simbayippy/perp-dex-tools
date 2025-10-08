@@ -222,11 +222,11 @@ class TradingBot:
 
                 # Strategy-based execution (universal interface)
                 try:
-                    market_data = await self.strategy.get_market_data()
-                    
-                    if await self.strategy.should_execute(market_data):
+                    # For strategies that need market data, they can fetch it internally
+                    # This simplifies the interface and allows strategies to get their own data
+                    if await self.strategy.should_execute(None):
                         # All strategies use the same interface
-                        strategy_result = await self.strategy.execute_strategy(market_data)
+                        strategy_result = await self.strategy.execute_strategy(None)
                         await self._handle_strategy_result(strategy_result)
                     else:
                         await asyncio.sleep(1)  # Brief wait if strategy says not to execute

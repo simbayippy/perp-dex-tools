@@ -280,21 +280,6 @@ class BaseStrategy(ABC):
         self.logger.log(f"Strategy '{self.get_strategy_name()}' cleanup completed", "INFO")
     
     # Helper methods for common operations
-    async def get_market_data(self) -> MarketData:
-        """Get current market data."""
-        try:
-            best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(self.config.contract_id)
-            
-            return MarketData(
-                ticker=self.config.ticker,
-                best_bid=best_bid,
-                best_ask=best_ask,
-                mid_price=(best_bid + best_ask) / 2,
-                timestamp=time.time()
-            )
-        except Exception as e:
-            self.logger.log(f"Error getting market data: {e}", "ERROR")
-            raise
     
     async def get_current_position(self) -> Decimal:
         """Get current position size."""

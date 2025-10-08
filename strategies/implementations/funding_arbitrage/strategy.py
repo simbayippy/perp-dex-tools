@@ -514,14 +514,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
             long_client = self.exchange_clients.get(long_dex)
             short_client = self.exchange_clients.get(short_dex)
             
-            # 🔧 TEMPORARY FIX: If same DEX for both sides, use the same client
-            if long_client is None and short_client is None and long_dex == short_dex:
-                # Try to get any available client (for single-DEX testing)
-                available_clients = list(self.exchange_clients.values())
-                if available_clients:
-                    long_client = short_client = available_clients[0]
-                    self.logger.log(f"DEBUG: Using same client for both sides: {type(long_client).__name__}")
-            
             if long_client is None:
                 self.logger.log(f"ERROR: No exchange client found for long_dex: {long_dex}")
                 return
