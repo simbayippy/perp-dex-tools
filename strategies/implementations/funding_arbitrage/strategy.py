@@ -571,11 +571,76 @@ class FundingArbitrageStrategy(StatefulStrategy):
         }
     
     # ========================================================================
+    # Abstract Method Implementations (Required by BaseStrategy)
+    # ========================================================================
+    
+    async def _initialize_strategy(self):
+        """Strategy-specific initialization logic."""
+        # Initialize position and state managers
+        await self.position_manager.initialize()
+        await self.state_manager.initialize()
+        
+        self.logger.log("FundingArbitrageStrategy initialized successfully")
+    
+    async def should_execute(self, market_data) -> bool:
+        """
+        Determine if strategy should execute based on market conditions.
+        
+        For funding arbitrage, we always check for opportunities.
+        """
+        return True
+    
+    async def execute_strategy(self, market_data):
+        """
+        Execute the funding arbitrage strategy.
+        
+        This is the main entry point called by the trading bot.
+        """
+        from strategies.base_strategy import StrategyResult, StrategyAction
+        
+        try:
+            # Run the 3-phase execution loop
+            await self._monitor_existing_positions()
+            await self._check_exit_conditions() 
+            await self._discover_new_opportunities()
+            
+            return StrategyResult(
+                action=StrategyAction.WAIT,
+                success=True,
+                message="Funding arbitrage cycle completed"
+            )
+            
+        except Exception as e:
+            self.logger.log(f"Strategy execution failed: {e}")
+            return StrategyResult(
+                action=StrategyAction.NONE,
+                success=False,
+                message=f"Execution error: {e}"
+            )
+    
+    def get_strategy_name(self) -> str:
+        """Get the strategy name."""
+        return "funding_arbitrage"
+    
+    def get_required_parameters(self) -> List[str]:
+        """Get list of required strategy parameters."""
+        return [
+            "target_exposure",
+            "min_profit_rate", 
+            "exchanges"
+        ]
+    
+    # ========================================================================
     # Cleanup
     # ========================================================================
     
     async def cleanup(self):
-        """Cleanup with API client closure"""
-        await self.funding_api.close()
+        """Cleanup strategy resources."""
+        # Close position and state managers
+        if hasattr(self, 'position_manager'):
+            await self.position_manager.close()
+        if hasattr(self, 'state_manager'):
+            await self.state_manager.close()
+        
         await super().cleanup()
 
