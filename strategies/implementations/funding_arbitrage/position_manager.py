@@ -11,7 +11,7 @@ Extends base position manager with funding-specific logic:
 ⭐ Uses PostgreSQL via funding_rate_service database ⭐
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from decimal import Decimal
 from datetime import datetime
 from uuid import UUID
