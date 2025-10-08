@@ -183,7 +183,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
             symbols=[trading_config.ticker],
             max_positions=strategy_params.get('max_positions', 5),
             max_position_size_usd=Decimal(str(getattr(trading_config, 'target_exposure', 100.0))),
-            min_profit=Decimal(str(getattr(trading_config, 'min_profit_rate', 0.001))),
+            min_profit=Decimal(str(getattr(trading_config, 'min_profit_rate', 0.0001))),
             max_oi_usd=Decimal(str(strategy_params.get('max_oi_usd', 1000000.0))),
             max_new_positions_per_cycle=strategy_params.get('max_new_positions_per_cycle', 2),
             # Required database URL from funding_rate_service settings
@@ -444,6 +444,9 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 symbol=None,  # Don't filter by symbol - look at all opportunities
                 limit=10
             )
+            
+            # 🔍 DEBUG: Log the filters being used
+            self.logger.log(f"DEBUG: Filters - min_profit: {self.config.min_profit}, max_oi_usd: {self.config.max_oi_usd}, whitelist_dexes: {self.config.exchanges}")
             
             opportunities = await self.opportunity_finder.find_opportunities(filters)
             
