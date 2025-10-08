@@ -19,9 +19,18 @@ from .models import FundingArbPosition, OpportunityData
 from .funding_analyzer import FundingRateAnalyzer
 
 # Direct imports from funding_rate_service (internal calls, no HTTP)
-from funding_rate_service.core.opportunity_finder import OpportunityFinder
-from funding_rate_service.database.repositories import FundingRateRepository
-from funding_rate_service.database.connection import database
+# Make imports conditional to avoid config loading issues during import
+try:
+    from funding_rate_service.core.opportunity_finder import OpportunityFinder
+    from funding_rate_service.database.repositories import FundingRateRepository
+    from funding_rate_service.database.connection import database
+    FUNDING_SERVICE_AVAILABLE = True
+except ImportError as e:
+    # For testing or when funding service config is not available
+    OpportunityFinder = None
+    FundingRateRepository = None
+    database = None
+    FUNDING_SERVICE_AVAILABLE = False
 
 from typing import Dict, Any, List, Tuple
 from decimal import Decimal
@@ -73,6 +82,12 @@ class FundingArbitrageStrategy(StatefulStrategy):
         self.fee_calculator = FeeCalculator()
         
         # ⭐ Direct internal services (no HTTP, shared database)
+        if not FUNDING_SERVICE_AVAILABLE:
+            raise RuntimeError(
+                "Funding rate service is not available. "
+                "Please ensure the funding_rate_service is properly configured and the database is accessible."
+            )
+        
         from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
         self.opportunity_finder = OpportunityFinder(
             database=database,
