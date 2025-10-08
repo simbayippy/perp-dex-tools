@@ -81,7 +81,14 @@ class FundingArbitrageStrategy(StatefulStrategy):
             exchange_clients = exchange_client
         else:
             # Single exchange client - create dict using the primary exchange name
-            primary_exchange = getattr(exchange_client, 'exchange_name', funding_config.exchange)
+            # Try to get exchange name from client, fallback to config
+            if hasattr(exchange_client, 'get_exchange_name'):
+                try:
+                    primary_exchange = exchange_client.get_exchange_name()
+                except:
+                    primary_exchange = funding_config.exchange
+            else:
+                primary_exchange = funding_config.exchange
             exchange_clients = {primary_exchange: exchange_client}
         
         super().__init__(funding_config, exchange_client)
@@ -143,49 +150,48 @@ class FundingArbitrageStrategy(StatefulStrategy):
         # Tracking
         self.cumulative_funding = {}  # {position_id: Decimal}
     
-    def _convert_trading_config(self, trading_config) -> FundingArbConfig:
-        """
-        Convert TradingConfig to FundingArbConfig.
-        
-        Args:
-            trading_config: TradingConfig from runbot.py
-            
-        Returns:
-            FundingArbConfig with converted parameters
-        """
-        from funding_rate_service.config import settings
-        
-        # Extract strategy parameters
-        params = trading_config.strategy_params or {}
-        
-        # Convert to FundingArbConfig
-        return FundingArbConfig(
-            # Required parameters
-            exchanges=params.get('exchanges', ['lighter']),
-            
-            # Position limits
-            max_positions=params.get('max_positions', 10),
-            max_position_size_usd=params.get('target_exposure', Decimal('1000')),
-            max_total_exposure_usd=params.get('max_total_exposure_usd', Decimal('50000')),
-            
-            # Profitability thresholds  
-            min_profit=params.get('min_profit_rate', Decimal('0.001')),
-            profitability_horizon_hours=params.get('profitability_horizon_hours', 24),
-            
-            # Filtering
-            max_oi_usd=params.get('max_oi_usd', Decimal('500000')),
-            
-            # Database connection
-            database_url=settings.database_url,
-            
-            # General settings (from TradingConfig)
-            exchange=trading_config.exchange,
-            ticker=trading_config.ticker,
-        )
     
     def get_strategy_name(self) -> str:
         return "Funding Rate Arbitrage"
-    
+
+    def _convert_trading_config(self, trading_config) -> FundingArbConfig:
+        """
+        Convert TradingConfig from runbot.py to FundingArbConfig.
+        
+        Args:
+            trading_config: TradingConfig object from runbot.py
+            
+        Returns:
+            FundingArbConfig object for the strategy
+        """
+        # Extract strategy-specific parameters from strategy_params
+        strategy_params = getattr(trading_config, 'strategy_params', {})
+        
+        # Parse exchanges from strategy_params or use single exchange
+        exchanges_str = strategy_params.get('exchanges', trading_config.exchange)
+        if isinstance(exchanges_str, str):
+            exchanges = [ex.strip() for ex in exchanges_str.split(',')]
+        else:
+            exchanges = [trading_config.exchange]
+        
+        from .config import RiskManagementConfig, BridgeSettings
+        
+        return FundingArbConfig(
+            exchange=trading_config.exchange,  # Primary exchange
+            exchanges=exchanges,  # All exchanges for arbitrage
+            symbols=[trading_config.ticker],
+            target_exposure=getattr(trading_config, 'target_exposure', 100.0),
+            min_profit=getattr(trading_config, 'min_profit_rate', 0.001),
+            max_positions=strategy_params.get('max_positions', 5),
+            max_oi_usd=strategy_params.get('max_oi_usd', 1000000.0),
+            max_new_positions_per_cycle=strategy_params.get('max_new_positions_per_cycle', 2),
+            dry_run=strategy_params.get('dry_run', False),
+            # Risk management defaults
+            risk_management=RiskManagementConfig(),
+            # Bridge settings defaults  
+            bridge_settings=BridgeSettings()
+        )
+ 
     # ========================================================================
     # Main Execution Loop
     # ========================================================================
@@ -718,4 +724,4 @@ class FundingArbitrageStrategy(StatefulStrategy):
             await self.state_manager.close()
         
         await super().cleanup()
-
+    
