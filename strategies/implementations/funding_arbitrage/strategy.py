@@ -133,6 +133,13 @@ class FundingArbitrageStrategy(StatefulStrategy):
             min_liquidity_score=0.6
         )
         
+        # ⭐ Position and state management (database-backed)
+        from .position_manager import FundingArbPositionManager
+        from .state_manager import FundingArbStateManager
+        
+        self.position_manager = FundingArbPositionManager()
+        self.state_manager = FundingArbStateManager()
+        
         # Tracking
         self.cumulative_funding = {}  # {position_id: Decimal}
     
