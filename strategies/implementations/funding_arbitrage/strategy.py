@@ -441,7 +441,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 min_profit_percent=self.config.min_profit,
                 max_oi_usd=self.config.max_oi_usd,
                 whitelist_dexes=self.config.exchanges if self.config.exchanges else None,
-                symbol=self.config.symbols[0] if self.config.symbols and len(self.config.symbols) == 1 else None,
+                symbol=None,  # Don't filter by symbol - look at all opportunities
                 limit=10
             )
             
