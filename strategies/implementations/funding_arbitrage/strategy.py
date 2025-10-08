@@ -184,7 +184,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
             max_positions=strategy_params.get('max_positions', 5),
             max_position_size_usd=Decimal(str(getattr(trading_config, 'target_exposure', 100.0))),
             min_profit=Decimal(str(getattr(trading_config, 'min_profit_rate', 0.0001))),
-            max_oi_usd=Decimal(str(strategy_params.get('max_oi_usd', 1000000.0))),
+            max_oi_usd=Decimal(str(strategy_params.get('max_oi_usd', 10000000.0))),  # 10M default
             max_new_positions_per_cycle=strategy_params.get('max_new_positions_per_cycle', 2),
             # Required database URL from funding_rate_service settings
             database_url=settings.database_url,
