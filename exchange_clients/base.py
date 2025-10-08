@@ -110,6 +110,44 @@ class BaseExchangeClient(ABC):
         pass
 
     @abstractmethod
+    async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
+        """
+        Fetch best bid and offer prices for a contract.
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            
+        Returns:
+            Tuple of (best_bid, best_ask)
+            
+        Raises:
+            Exception: If fetching fails
+        """
+        pass
+
+    @abstractmethod
+    async def place_limit_order(
+        self, 
+        contract_id: str, 
+        quantity: Decimal, 
+        price: Decimal, 
+        side: str
+    ) -> OrderResult:
+        """
+        Place a limit order.
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            quantity: Order size
+            price: Limit price
+            side: 'buy' or 'sell'
+            
+        Returns:
+            OrderResult with order details
+        """
+        pass
+
+    @abstractmethod
     async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
         """Place an open order."""
         pass
@@ -142,6 +180,32 @@ class BaseExchangeClient(ABC):
     async def get_account_positions(self) -> Decimal:
         """Get account positions."""
         pass
+
+    async def get_order_book_depth(
+        self, 
+        contract_id: str, 
+        levels: int = 10
+    ) -> Dict[str, List[Tuple[Decimal, Decimal]]]:
+        """
+        Get order book depth (optional - not all exchanges support this).
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            levels: Number of price levels to fetch (default: 10)
+            
+        Returns:
+            Dictionary with 'bids' and 'asks' lists of (price, size) tuples
+            Example: {
+                'bids': [(Decimal('50000'), Decimal('1.5')), ...],
+                'asks': [(Decimal('50001'), Decimal('2.0')), ...]
+            }
+            
+        Raises:
+            NotImplementedError: If exchange doesn't support order book depth
+        """
+        raise NotImplementedError(
+            f"{self.get_exchange_name()} does not support order book depth queries"
+        )
 
     @abstractmethod
     def setup_order_update_handler(self, handler) -> None:
