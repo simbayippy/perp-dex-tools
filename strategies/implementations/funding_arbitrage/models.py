@@ -269,3 +269,39 @@ class OpportunityData:
         
         return True
 
+
+# ============================================================================
+# Rebalance Action (for risk management)
+# ============================================================================
+
+@dataclass
+class RebalanceAction:
+    """
+    Action to be taken by risk management system.
+    
+    Represents a decision to close, modify, or rebalance a position.
+    """
+    action_type: str  # 'close_position', 'reduce_size', 'switch_opportunity'
+    position_id: UUID
+    reason: str  # 'PROFIT_EROSION', 'DIVERGENCE_FLIP', 'BETTER_OPPORTUNITY', etc.
+    
+    # Action-specific details
+    details: Dict[str, Any] = field(default_factory=dict)
+    
+    # Execution metadata
+    created_at: datetime = field(default_factory=datetime.now)
+    executed_at: Optional[datetime] = None
+    status: str = "pending"  # 'pending', 'executing', 'completed', 'failed'
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for logging/serialization."""
+        return {
+            'action_type': self.action_type,
+            'position_id': str(self.position_id),
+            'reason': self.reason,
+            'details': self.details,
+            'created_at': self.created_at.isoformat(),
+            'executed_at': self.executed_at.isoformat() if self.executed_at else None,
+            'status': self.status
+        }
+
