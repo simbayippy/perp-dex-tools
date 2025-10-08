@@ -329,3 +329,9 @@ class FundingArbStateManager(BaseStateManager):
         if isinstance(obj, datetime):
             return obj.isoformat()
         raise TypeError(f"Type {type(obj)} not serializable")
+    
+    async def close(self):
+        """Close state manager and cleanup resources."""
+        # No specific cleanup needed for state manager
+        # Database connection is shared and managed by position manager
+        self.logger.info("State manager closed")

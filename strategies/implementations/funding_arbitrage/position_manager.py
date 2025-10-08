@@ -59,6 +59,7 @@ class FundingArbPositionManager(BasePositionManager):
         super().__init__()
         
         # In-memory cache for fast access (loaded from DB on startup)
+        self._positions: Dict[UUID, FundingArbPosition] = {}  # {position_id: position}
         self._funding_payments: Dict[UUID, List[Dict]] = {}  # {position_id: [payment_records]}
         self._cumulative_funding: Dict[UUID, Decimal] = {}   # {position_id: total_funding}
         
