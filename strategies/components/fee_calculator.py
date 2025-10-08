@@ -48,32 +48,32 @@ FEE_SCHEDULES = {
     # DEX: {'maker': fee_pct, 'taker': fee_pct}
     
     'lighter': {
-        'maker': Decimal('0.0002'),   # 0.02% maker
-        'taker': Decimal('0.0005'),   # 0.05% taker
+        'maker': Decimal('0.0000'),   # 0% maker - Zero fees
+        'taker': Decimal('0.0000'),   # 0% taker - Zero fees
     },
     'backpack': {
         'maker': Decimal('0.0002'),   # 0.02% maker
         'taker': Decimal('0.0005'),   # 0.05% taker
     },
     'grvt': {
-        'maker': Decimal('0.0002'),   # 0.02% maker
-        'taker': Decimal('0.0004'),   # 0.04% taker
+        'maker': Decimal('-0.0001'),  # -0.01% maker (rebate!)
+        'taker': Decimal('0.00055'),  # 0.055% taker
     },
     'hyperliquid': {
-        'maker': Decimal('0.00020'),  # 0.02% maker
-        'taker': Decimal('0.00035'),  # 0.035% taker
+        'maker': Decimal('0.00015'),  # 0.015% maker
+        'taker': Decimal('0.00045'),  # 0.045% taker
     },
     'paradex': {
-        'maker': Decimal('0.0002'),   # 0.02% maker (assumed)
-        'taker': Decimal('0.0005'),   # 0.05% taker (assumed)
+        'maker': Decimal('0.00003'),  # 0.003% maker
+        'taker': Decimal('0.0002'),   # 0.02% taker
     },
     'aster': {
-        'maker': Decimal('0.0002'),   # 0.02% maker (assumed)
-        'taker': Decimal('0.0005'),   # 0.05% taker (assumed)
+        'maker': Decimal('0.00005'),  # 0.005% maker
+        'taker': Decimal('0.0004'),   # 0.04% taker
     },
     'edgex': {
-        'maker': Decimal('0.0002'),   # 0.02% maker (assumed)
-        'taker': Decimal('0.0005'),   # 0.05% taker (assumed)
+        'maker': Decimal('0.00015'),  # 0.015% maker
+        'taker': Decimal('0.00038'),  # 0.038% taker
     },
 }
 
