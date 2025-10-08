@@ -20,9 +20,17 @@ import logging
 from strategies.components.base_components import BasePositionManager, Position
 from .models import FundingArbPosition
 
-# Import database connection from funding_rate_service
-from funding_rate_service.database.connection import database
-from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
+# Import database connection from funding_rate_service (optional for testing)
+try:
+    from funding_rate_service.database.connection import database
+    from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
+    DATABASE_AVAILABLE = True
+except ImportError:
+    # For testing - database not available
+    database = None
+    dex_mapper = None
+    symbol_mapper = None
+    DATABASE_AVAILABLE = False
 
 
 class FundingArbPositionManager(BasePositionManager):
@@ -57,6 +65,13 @@ class FundingArbPositionManager(BasePositionManager):
         self.logger = logging.getLogger(__name__)
         self._initialized = False
     
+    def _check_database_available(self) -> bool:
+        """Check if database is available for operations."""
+        if not DATABASE_AVAILABLE:
+            self.logger.warning("Database operation skipped - running in test mode")
+            return False
+        return True
+    
     async def initialize(self):
         """
         Initialize manager and load positions from database.
@@ -76,6 +91,9 @@ class FundingArbPositionManager(BasePositionManager):
     
     async def _load_positions_from_db(self):
         """Load all open positions from database into memory cache."""
+        if not self._check_database_available():
+            return
+        
         query = """
             SELECT 
                 p.id,

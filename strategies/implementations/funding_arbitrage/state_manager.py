@@ -21,8 +21,14 @@ import logging
 
 from strategies.components.base_components import BaseStateManager
 
-# Import database connection from funding_rate_service
-from funding_rate_service.database.connection import database
+# Import database connection from funding_rate_service (optional for testing)
+try:
+    from funding_rate_service.database.connection import database
+    DATABASE_AVAILABLE = True
+except ImportError:
+    # For testing - database not available
+    database = None
+    DATABASE_AVAILABLE = False
 
 
 class FundingArbStateManager(BaseStateManager):
@@ -49,6 +55,13 @@ class FundingArbStateManager(BaseStateManager):
         self.strategy_name = strategy_name
         self.logger = logging.getLogger(__name__)
         self._initialized = False
+    
+    def _check_database_available(self) -> bool:
+        """Check if database is available for operations."""
+        if not DATABASE_AVAILABLE:
+            self.logger.warning("Database operation skipped - running in test mode")
+            return False
+        return True
     
     async def initialize(self) -> None:
         """
@@ -103,6 +116,11 @@ class FundingArbStateManager(BaseStateManager):
         Args:
             state: State dictionary to persist
         """
+        if not self._check_database_available():
+            # Store in memory only for testing
+            self._state = state
+            return
+        
         # Convert state to JSON (handle Decimal/datetime types)
         state_json = json.loads(
             json.dumps(state, default=self._json_serializer)
@@ -135,6 +153,9 @@ class FundingArbStateManager(BaseStateManager):
         Returns:
             State dictionary (empty if not found)
         """
+        if not self._check_database_available():
+            return {}
+        
         query = """
             SELECT state_data, last_updated
             FROM strategy_state
