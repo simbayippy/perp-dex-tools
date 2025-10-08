@@ -600,4 +600,107 @@ class FundingArbPositionManager(BasePositionManager):
             'total_cumulative_pnl_usd': float(total_cumulative_pnl),
             'positions_pending_rebalance': len(await self.get_pending_rebalance_positions())
         }
+    
+    # ========================================================================
+    # BasePositionManager Interface Implementation
+    # ========================================================================
+    
+    async def add_position(self, position: Position) -> None:
+        """Add a new position (converts to FundingArbPosition if needed)."""
+        if isinstance(position, FundingArbPosition):
+            await self.create_position(position)
+        else:
+            # Convert generic Position to FundingArbPosition
+            funding_position = FundingArbPosition(
+                id=position.id,
+                symbol=position.symbol,
+                long_dex=position.long_dex or "unknown",
+                short_dex=position.short_dex or "unknown", 
+                size_usd=position.size_usd,
+                entry_long_rate=position.entry_long_rate or Decimal('0'),
+                entry_short_rate=position.entry_short_rate or Decimal('0'),
+                entry_divergence=abs((position.entry_short_rate or Decimal('0')) - (position.entry_long_rate or Decimal('0'))),
+                opened_at=position.opened_at or datetime.now(),
+                status=position.status
+            )
+            await self.create_position(funding_position)
+    
+    async def get_position(self, position_id: UUID) -> Optional[Position]:
+        """Get position by ID (returns as generic Position)."""
+        funding_position = await self.get_funding_position(position_id)
+        if not funding_position:
+            return None
+        
+        # Convert FundingArbPosition to generic Position
+        return Position(
+            id=funding_position.id,
+            symbol=funding_position.symbol,
+            size_usd=funding_position.size_usd,
+            entry_price=None,  # Not used in funding arb
+            long_dex=funding_position.long_dex,
+            short_dex=funding_position.short_dex,
+            entry_long_rate=funding_position.entry_long_rate,
+            entry_short_rate=funding_position.entry_short_rate,
+            opened_at=funding_position.opened_at,
+            status=funding_position.status
+        )
+    
+    async def get_open_positions(self) -> List[Position]:
+        """Get all open positions (returns as generic Positions)."""
+        funding_positions = await self.get_all_positions()
+        open_funding_positions = [p for p in funding_positions if p.status == "open"]
+        
+        # Convert to generic Position objects
+        return [
+            Position(
+                id=p.id,
+                symbol=p.symbol,
+                size_usd=p.size_usd,
+                entry_price=None,
+                long_dex=p.long_dex,
+                short_dex=p.short_dex,
+                entry_long_rate=p.entry_long_rate,
+                entry_short_rate=p.entry_short_rate,
+                opened_at=p.opened_at,
+                status=p.status
+            )
+            for p in open_funding_positions
+        ]
+    
+    async def update_position(self, position: Position) -> None:
+        """Update existing position."""
+        # Convert to FundingArbPosition and update
+        if isinstance(position, FundingArbPosition):
+            await self.update_funding_position(position)
+        else:
+            # Get existing funding position and update it
+            existing = await self.get_funding_position(position.id)
+            if existing:
+                existing.status = position.status
+                existing.size_usd = position.size_usd
+                # Update other fields as needed
+                await self.update_funding_position(existing)
+    
+    async def get_position_summary(
+        self,
+        position_id: UUID,
+        current_market_data: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Get position summary with current P&L."""
+        funding_position = await self.get_funding_position(position_id)
+        if not funding_position:
+            return {}
+        
+        return {
+            'position_id': str(position_id),
+            'symbol': funding_position.symbol,
+            'size_usd': float(funding_position.size_usd),
+            'status': funding_position.status,
+            'net_pnl_usd': float(funding_position.get_net_pnl()),
+            'net_pnl_pct': float(funding_position.get_net_pnl_pct()),
+            'cumulative_funding': float(funding_position.cumulative_funding),
+            'age_hours': funding_position.get_age_hours(),
+            'long_dex': funding_position.long_dex,
+            'short_dex': funding_position.short_dex
+        }
 
