@@ -72,12 +72,62 @@ This document outlines the complete structure of the `perp-dex-tools` repository
 │       ├── funding_adapter.py         # Funding rate collection adapter
 │       └── common.py                  # Shared utilities
 │
-├── /strategies/                       # 🧠 TRADING STRATEGY LAYER
-│   ├── __init__.py
-│   ├── base_strategy.py               # BaseStrategy interface
-│   ├── factory.py                     # StrategyFactory
-│   ├── grid_strategy.py               # Grid trading strategy
-│   └── funding_arbitrage_strategy.py  # Funding rate arbitrage strategy
+├── /strategies/                       # 🧠 TRADING STRATEGY LAYER (REFACTORED v2.0)
+│   ├── __init__.py                    # Strategy exports & RunnableStatus enum
+│   ├── base_strategy.py               # Enhanced BaseStrategy with event-driven lifecycle
+│   ├── factory.py                     # StrategyFactory for dynamic loading
+│   ├── grid_strategy_LEGACY.py        # Legacy grid implementation (preserved)
+│   │
+│   ├── /categories/                   # Level 2: Strategy archetypes
+│   │   ├── __init__.py
+│   │   ├── stateless_strategy.py      # Simple, single-DEX strategies
+│   │   └── stateful_strategy.py       # Complex, multi-DEX strategies
+│   │
+│   ├── /components/                   # Shared reusable components
+│   │   ├── __init__.py
+│   │   ├── base_components.py         # Component interfaces (BasePositionManager, etc.)
+│   │   ├── tracked_order.py           # Lightweight order tracking
+│   │   └── fee_calculator.py          # Trading fee calculation
+│   │
+│   ├── /execution/                    # Layer 2: Shared execution utilities
+│   │   ├── __init__.py
+│   │   ├── /core/                     # Fundamental execution utilities
+│   │   │   ├── __init__.py
+│   │   │   ├── order_executor.py      # Smart order placement (limit/market/fallback)
+│   │   │   ├── liquidity_analyzer.py  # Pre-flight liquidity checks
+│   │   │   ├── position_sizer.py      # USD ↔ contract quantity conversion
+│   │   │   └── slippage_calculator.py # Slippage estimation & tracking
+│   │   ├── /patterns/                 # Advanced execution patterns
+│   │   │   ├── __init__.py
+│   │   │   ├── atomic_multi_order.py  # 🔥 CRITICAL: Delta-neutral atomic execution
+│   │   │   └── partial_fill_handler.py # Emergency one-sided fill management
+│   │   └── /monitoring/               # Execution monitoring & analytics
+│   │       ├── __init__.py
+│   │       └── execution_tracker.py   # Execution quality metrics
+│   │
+│   └── /implementations/              # Level 3: Concrete strategies
+│       ├── __init__.py
+│       ├── /grid/                     # Grid trading strategy (migrated)
+│       │   ├── __init__.py
+│       │   ├── strategy.py            # GridStrategy implementation
+│       │   ├── config.py              # Pydantic configuration
+│       │   └── models.py              # Grid-specific data models
+│       │
+│       └── /funding_arbitrage/        # 🔥 Funding arbitrage strategy
+│           ├── __init__.py
+│           ├── strategy.py            # Main orchestrator (3-phase execution loop)
+│           ├── config.py              # Pydantic configuration models
+│           ├── models.py              # Position & opportunity data models
+│           ├── funding_analyzer.py    # Core rate analysis (from Hummingbot)
+│           ├── position_manager.py    # Position tracking with PostgreSQL persistence
+│           ├── state_manager.py       # Strategy state with PostgreSQL persistence
+│           │
+│           └── /risk_management/      # Pluggable risk management system
+│               ├── __init__.py        # Factory pattern
+│               ├── base.py            # BaseRebalanceStrategy interface
+│               ├── profit_erosion.py  # Profit erosion trigger
+│               ├── divergence_flip.py # Divergence flip trigger (urgent)
+│               └── combined.py        # Multi-strategy orchestrator
 │
 ├── /helpers/                          # 🛠️ SHARED UTILITIES
 │   ├── __init__.py
@@ -86,8 +136,19 @@ This document outlines the complete structure of the `perp-dex-tools` repository
 │   ├── lark_bot.py                    # Lark (Feishu) notifications
 │   └── risk_manager.py                # Risk management (account protection)
 │
-├── /tests/                            # Trading client tests
-│   └── test_query_retry.py
+├── /tests/                            # 🧪 COMPREHENSIVE TEST SUITE
+│   ├── __init__.py
+│   ├── conftest.py                    # Pytest configuration & fixtures
+│   ├── test_query_retry.py            # Legacy test
+│   │
+│   └── /strategies/                   # Strategy test suite
+│       ├── __init__.py
+│       └── /funding_arbitrage/        # Funding arbitrage tests
+│           ├── __init__.py
+│           ├── README.md              # Test documentation
+│           ├── test_funding_analyzer_isolated.py    # ✅ Core logic tests (isolated)
+│           ├── test_risk_management_isolated.py     # ✅ Risk management tests (isolated)
+│           └── test_basic_integration.py            # ✅ Integration tests (mocked)
 │
 └── /funding_rate_service/             # 📊 FUNDING RATE MICROSERVICE
     └── (See detailed structure below)
@@ -322,19 +383,24 @@ python scripts/seed_dexes.py  # Seed DEX data
 ## 📝 File Count Summary
 
 **Total Repository:**
-- **Trading Client Core:** ~15 Python files
+- **Trading Client Core:** ~20 Python files
 - **Exchange Clients Library:** 6 exchange implementations (Lighter, GRVT, EdgeX, Aster, Backpack, Paradex)
   - Each with: client.py, funding_adapter.py, common.py, __init__.py
-- **Strategies:** 2 strategies (grid, funding arb)
+- **Strategies (NEW ARCHITECTURE):** 
+  - **Core Framework:** 15+ files (base, categories, components, execution layer)
+  - **Grid Strategy:** 4 files (strategy, config, models, __init__)
+  - **Funding Arbitrage:** 10+ files (strategy, analyzer, managers, risk management)
 - **Funding Rate Service:** ~50+ Python files
-- **Tests:** ~15 test files
-- **Documentation:** ~10 markdown files
+- **Tests:** ~25 test files (including new strategy tests)
+- **Documentation:** ~15 markdown files
 
 **Total Lines of Code (estimated):**
-- Trading Client: ~3,000 lines
+- Trading Client: ~4,000 lines
+- **Strategies Layer (NEW):** ~3,500 lines
 - Exchange Clients Library: ~2,500 lines
 - Funding Rate Service: ~5,000 lines
-- **Total: ~10,500 lines**
+- **Tests:** ~1,500 lines
+- **Total: ~16,500 lines** (+60% growth from refactoring)
 
 ---
 
@@ -383,6 +449,80 @@ python scripts/seed_dexes.py  # Seed DEX data
 - `databases[asyncpg]` - Async PostgreSQL
 - `pydantic` - Data validation
 - **Note:** Exchange adapters now via `exchange_clients[all]`
+
+---
+
+## 🚀 Running the New Strategy Architecture
+
+### **Grid Strategy (Migrated):**
+```bash
+# Basic grid strategy (same as before, now uses new architecture)
+python runbot.py \
+  --strategy grid \
+  --exchange lighter \
+  --ticker BTC \
+  --quantity 0.1 \
+  --take-profit 0.008 \
+  --direction buy \
+  --max-orders 10
+```
+
+### **🔥 NEW: Funding Arbitrage Strategy:**
+```bash
+# Basic funding arbitrage
+python runbot.py \
+  --strategy funding_arbitrage \
+  --exchange lighter \
+  --ticker BTC \
+  --target-exposure 1000 \
+  --min-profit-rate 0.001 \
+  --exchanges lighter,backpack,edgex
+```
+
+**Advanced Parameters:**
+```bash
+# With custom risk management
+python runbot.py \
+  --strategy funding_arbitrage \
+  --exchange lighter \
+  --ticker BTC \
+  --strategy-params \
+    target_exposure=1000 \
+    min_profit_rate=0.001 \
+    max_positions=3 \
+    rebalance_strategy=combined \
+    profit_erosion_threshold=0.5 \
+    funding_check_interval=300
+```
+
+### **Strategy Parameters:**
+
+#### **Funding Arbitrage Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `target_exposure` | Decimal | **Required** | Position size per side (USD) |
+| `min_profit_rate` | Decimal | **Required** | Minimum hourly profit rate (e.g., 0.001 = 0.1%) |
+| `exchanges` | List[str] | All available | DEXes to consider for arbitrage |
+| `max_positions` | int | 5 | Maximum concurrent positions |
+| `rebalance_strategy` | str | "combined" | Risk management: "profit_erosion", "divergence_flip", "combined" |
+| `profit_erosion_threshold` | Decimal | 0.5 | Rebalance when profit drops to 50% of entry |
+| `funding_check_interval` | int | 300 | Check funding rates every N seconds |
+
+#### **Grid Strategy Parameters (Enhanced):**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `take_profit` | Decimal | **Required** | Profit percentage per trade |
+| `direction` | str | **Required** | "buy" or "sell" |
+| `max_orders` | int | 10 | Maximum active orders |
+| `wait_time` | int | 30 | Seconds between orders |
+| `grid_step` | Decimal | 0.001 | Minimum distance to next order |
+| `stop_price` | Decimal | None | Emergency stop price |
+| `pause_price` | Decimal | None | Pause trading price |
+
+### **Monitoring & Logs:**
+- **Strategy Status:** Check logs for position updates, opportunities, and execution
+- **Database:** Query `strategy_positions`, `funding_payments`, `strategy_state` tables
+- **Funding Service:** Monitor `http://localhost:8000/api/v1/opportunities` for live data
 
 ---
 
