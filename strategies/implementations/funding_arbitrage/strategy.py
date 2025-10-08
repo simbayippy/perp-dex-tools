@@ -694,13 +694,12 @@ class FundingArbitrageStrategy(StatefulStrategy):
         
         try:
             # Run the 3-phase execution loop
-            await self._monitor_existing_positions()
+            await self._monitor_positions()
             await self._check_exit_conditions() 
-            await self._discover_new_opportunities()
+            await self._scan_opportunities()
             
             return StrategyResult(
                 action=StrategyAction.WAIT,
-                success=True,
                 message="Funding arbitrage cycle completed"
             )
             
@@ -708,7 +707,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
             self.logger.log(f"Strategy execution failed: {e}")
             return StrategyResult(
                 action=StrategyAction.NONE,
-                success=False,
                 message=f"Execution error: {e}"
             )
     
