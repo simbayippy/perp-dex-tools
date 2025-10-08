@@ -2,35 +2,35 @@
 Data models for Funding Rate Service
 """
 
-from models.dex import (
+from funding_rate_service.models.dex import (
     DEXFeeStructure,
     DEXMetadata,
     DEXHealth,
     FeeType,
 )
-from models.symbol import (
+from funding_rate_service.models.symbol import (
     Symbol,
     DEXSymbol,
 )
-from models.funding_rate import (
+from funding_rate_service.models.funding_rate import (
     FundingRate,
     FundingRateResponse,
     LatestFundingRates,
     AllLatestFundingRates,
 )
-from models.opportunity import (
+from funding_rate_service.models.opportunity import (
     ArbitrageOpportunity,
     OpportunityResponse,
 )
-from models.filters import (
+from funding_rate_service.models.filters import (
     OpportunityFilter,
 )
-from models.system import (
+from funding_rate_service.models.system import (
     ServiceHealth,
     CollectionLog,
     CollectionStatus,
 )
-from models.history import (
+from funding_rate_service.models.history import (
     FundingRateHistory,
     FundingRateStats,
 )
