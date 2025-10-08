@@ -9,13 +9,13 @@ from typing import Dict, Any, List
 from datetime import datetime
 from decimal import Decimal
 
-from tasks.base_task import BaseTask
-from core.opportunity_finder import OpportunityFinder
-from core.fee_calculator import fee_calculator
-from core.mappers import dex_mapper, symbol_mapper
-from database.connection import database
-from models.filters import OpportunityFilter
-from utils.logger import logger
+from funding_rate_service.tasks.base_task import BaseTask
+from funding_rate_service.core.opportunity_finder import OpportunityFinder
+from funding_rate_service.core.fee_calculator import fee_calculator
+from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
+from funding_rate_service.database.connection import database
+from funding_rate_service.models.filters import OpportunityFilter
+from funding_rate_service.utils.logger import logger
 
 
 class OpportunityTask(BaseTask):

@@ -6,7 +6,7 @@ from typing import Optional, List, Dict, Any
 from databases import Database
 from datetime import datetime
 
-from utils.logger import logger
+from funding_rate_service.utils.logger import logger
 
 
 class SymbolRepository:

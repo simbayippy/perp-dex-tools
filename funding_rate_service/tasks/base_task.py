@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
-from utils.logger import logger
+from funding_rate_service.utils.logger import logger
 
 
 @dataclass

@@ -8,16 +8,16 @@ Runs every 60 seconds to keep data fresh for the API.
 from typing import Dict, Any, List
 from datetime import datetime
 
-from tasks.base_task import BaseTask
-from collection.orchestrator import CollectionOrchestrator
-from database.connection import database
+from funding_rate_service.tasks.base_task import BaseTask
+from funding_rate_service.collection.orchestrator import CollectionOrchestrator
+from funding_rate_service.database.connection import database
 from exchange_clients.lighter import LighterFundingAdapter
 from exchange_clients.grvt import GrvtFundingAdapter
 from exchange_clients.edgex import EdgeXFundingAdapter
 from exchange_clients.paradex import ParadexFundingAdapter
 from exchange_clients.backpack import BackpackFundingAdapter
 from exchange_clients.aster import AsterFundingAdapter
-from utils.logger import logger
+from funding_rate_service.utils.logger import logger
 
 
 class CollectionTask(BaseTask):

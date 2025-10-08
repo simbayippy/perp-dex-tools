@@ -39,10 +39,10 @@ from exchange_clients.edgex import EdgeXFundingAdapter
 # from exchange_clients.paradex import ParadexFundingAdapter
 from exchange_clients.backpack import BackpackFundingAdapter
 from exchange_clients.aster import AsterFundingAdapter
-from collection.orchestrator import CollectionOrchestrator
-from database.connection import database
-from core.mappers import dex_mapper, symbol_mapper
-from utils.logger import logger
+from funding_rate_service.collection.orchestrator import CollectionOrchestrator
+from funding_rate_service.database.connection import database
+from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
+from funding_rate_service.utils.logger import logger
 
 
 async def test_single_adapter(adapter_class, adapter_name, test_symbols):

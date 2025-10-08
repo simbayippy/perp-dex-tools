@@ -8,8 +8,8 @@ from httpx import AsyncClient
 from typing import AsyncGenerator
 
 from main import app
-from database.connection import database
-from core.mappers import dex_mapper, symbol_mapper
+from funding_rate_service.database.connection import database
+from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
 
 
 @pytest.fixture(scope="session")

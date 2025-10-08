@@ -8,7 +8,7 @@ import asyncio
 from pathlib import Path
 from typing import List
 from databases import Database
-from utils.logger import logger
+from funding_rate_service.utils.logger import logger
 
 
 class MigrationManager:

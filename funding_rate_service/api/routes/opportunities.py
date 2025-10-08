@@ -9,11 +9,11 @@ from typing import Optional, List, Dict, Any
 from decimal import Decimal
 from datetime import datetime
 
-from core.opportunity_finder import OpportunityFinder
-from core.dependencies import get_opportunity_finder
-from models.opportunity import ArbitrageOpportunity
-from models.filters import OpportunityFilter
-from utils.logger import logger
+from funding_rate_service.core.opportunity_finder import OpportunityFinder
+from funding_rate_service.core.dependencies import get_opportunity_finder
+from funding_rate_service.models.opportunity import ArbitrageOpportunity
+from funding_rate_service.models.filters import OpportunityFilter
+from funding_rate_service.utils.logger import logger
 
 
 router = APIRouter()

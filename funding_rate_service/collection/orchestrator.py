@@ -14,14 +14,14 @@ from datetime import datetime
 from databases import Database
 
 from exchange_clients.base import BaseFundingAdapter
-from database.repositories import (
+from funding_rate_service.database.repositories import (
     DEXRepository,
     SymbolRepository,
     FundingRateRepository,
 )
-from core.mappers import dex_mapper, symbol_mapper
-from models.system import CollectionStatus
-from utils.logger import logger
+from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
+from funding_rate_service.models.system import CollectionStatus
+from funding_rate_service.utils.logger import logger
 
 
 class CollectionOrchestrator:

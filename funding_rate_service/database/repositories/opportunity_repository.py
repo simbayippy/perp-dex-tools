@@ -7,8 +7,8 @@ from databases import Database
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from models.filters import OpportunityFilter
-from utils.logger import logger
+from funding_rate_service.models.filters import OpportunityFilter
+from funding_rate_service.utils.logger import logger
 
 
 class OpportunityRepository:

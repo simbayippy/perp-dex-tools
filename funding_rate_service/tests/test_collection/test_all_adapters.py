@@ -31,7 +31,7 @@ from exchange_clients.edgex import EdgeXFundingAdapter
 from exchange_clients.backpack import BackpackFundingAdapter
 from exchange_clients.aster import AsterFundingAdapter
 # from exchange_clients.paradex import ParadexFundingAdapter
-from utils.logger import logger
+from funding_rate_service.utils.logger import logger
 
 
 async def test_adapter(adapter_class, name):

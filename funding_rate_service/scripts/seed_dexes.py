@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from databases import Database
 from config import settings
-from utils.logger import logger
+from funding_rate_service.utils.logger import logger
 
 
 INITIAL_DEXES = [

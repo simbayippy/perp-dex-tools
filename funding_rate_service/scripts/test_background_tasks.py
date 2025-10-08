@@ -15,13 +15,13 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "funding_rate_service"))
 
-from tasks.collection_task import CollectionTask
-from tasks.opportunity_task import OpportunityTask
-from tasks.cleanup_task import CleanupTask
-from tasks.scheduler import TaskScheduler
-from database.connection import database
-from core.mappers import dex_mapper, symbol_mapper
-from utils.logger import logger
+from funding_rate_service.tasks.collection_task import CollectionTask
+from funding_rate_service.tasks.opportunity_task import OpportunityTask
+from funding_rate_service.tasks.cleanup_task import CleanupTask
+from funding_rate_service.tasks.scheduler import TaskScheduler
+from funding_rate_service.database.connection import database
+from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
+from funding_rate_service.utils.logger import logger
 
 
 async def test_individual_tasks():

@@ -8,9 +8,9 @@ from fastapi import APIRouter, HTTPException
 from typing import List, Dict, Any
 from datetime import datetime
 
-from database.connection import database
-from core.mappers import dex_mapper, symbol_mapper
-from utils.logger import logger
+from funding_rate_service.database.connection import database
+from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
+from funding_rate_service.utils.logger import logger
 
 
 router = APIRouter()
