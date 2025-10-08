@@ -81,6 +81,11 @@ class FundingArbPositionManager(BasePositionManager):
         if self._initialized:
             return
         
+        # Connect to database if not already connected
+        if not database.is_connected:
+            await database.connect()
+            self.logger.info("Database connection established")
+        
         # Load open positions from database
         await self._load_positions_from_db()
         
@@ -703,4 +708,10 @@ class FundingArbPositionManager(BasePositionManager):
             'long_dex': funding_position.long_dex,
             'short_dex': funding_position.short_dex
         }
+    
+    async def close(self):
+        """Close database connection and cleanup resources."""
+        if database.is_connected:
+            await database.disconnect()
+            self.logger.info("Database connection closed")
 
