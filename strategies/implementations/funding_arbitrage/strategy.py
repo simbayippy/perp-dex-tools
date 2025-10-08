@@ -508,8 +508,18 @@ class FundingArbitrageStrategy(StatefulStrategy):
             size_usd = self.config.default_position_size_usd
             
             # Get exchange clients
-            long_client = self.exchange_clients[long_dex]
-            short_client = self.exchange_clients[short_dex]
+            self.logger.log(f"DEBUG: Available exchange clients: {list(self.exchange_clients.keys())}")
+            self.logger.log(f"DEBUG: Looking for long_dex: {long_dex}, short_dex: {short_dex}")
+            
+            long_client = self.exchange_clients.get(long_dex)
+            short_client = self.exchange_clients.get(short_dex)
+            
+            if long_client is None:
+                self.logger.log(f"ERROR: No exchange client found for long_dex: {long_dex}")
+                return
+            if short_client is None:
+                self.logger.log(f"ERROR: No exchange client found for short_dex: {short_dex}")
+                return
             
             self.logger.log(
                 f"🎯 Opening {symbol}: "
