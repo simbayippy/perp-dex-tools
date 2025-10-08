@@ -174,7 +174,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
         else:
             exchanges = [trading_config.exchange]
         
-        from .config import RiskManagementConfig, BridgeSettings
+        from .config import RiskManagementConfig
         
         return FundingArbConfig(
             exchange=trading_config.exchange,  # Primary exchange
@@ -187,9 +187,8 @@ class FundingArbitrageStrategy(StatefulStrategy):
             max_new_positions_per_cycle=strategy_params.get('max_new_positions_per_cycle', 2),
             dry_run=strategy_params.get('dry_run', False),
             # Risk management defaults
-            risk_management=RiskManagementConfig(),
-            # Bridge settings defaults  
-            bridge_settings=BridgeSettings()
+            risk_management=RiskManagementConfig()
+            # Note: bridge_settings not implemented yet
         )
  
     # ========================================================================
