@@ -1,16 +1,16 @@
 """
 Core business logic components
 """
-from core.mappers import DEXMapper, SymbolMapper
-from core.fee_calculator import (
+from .mappers import DEXMapper, SymbolMapper
+from .fee_calculator import (
     FeeCalculator,
     FeeStructure,
     TradingCosts,
     fee_calculator
 )
-from core.opportunity_finder import OpportunityFinder
-from core.historical_analyzer import HistoricalAnalyzer
-from core.dependencies import (
+from .opportunity_finder import OpportunityFinder
+from .historical_analyzer import HistoricalAnalyzer
+from .dependencies import (
     ServiceContainer,
     services,
     get_opportunity_finder,
