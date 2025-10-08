@@ -189,9 +189,9 @@ async def ping():
 if __name__ == "__main__":
     import uvicorn
     
-    # Run with: python main.py
+    # Run with: python -m funding_rate_service.main
     uvicorn.run(
-        "main:app",
+        "funding_rate_service.main:app",
         host="0.0.0.0",
         port=8000,
         reload=True,  # Enable auto-reload for development
