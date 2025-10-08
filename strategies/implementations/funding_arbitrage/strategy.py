@@ -175,19 +175,23 @@ class FundingArbitrageStrategy(StatefulStrategy):
             exchanges = [trading_config.exchange]
         
         from .config import RiskManagementConfig
+        from funding_rate_service.config import settings
         
         return FundingArbConfig(
             exchange=trading_config.exchange,  # Primary exchange
             exchanges=exchanges,  # All exchanges for arbitrage
             symbols=[trading_config.ticker],
-            target_exposure=getattr(trading_config, 'target_exposure', 100.0),
-            min_profit=getattr(trading_config, 'min_profit_rate', 0.001),
             max_positions=strategy_params.get('max_positions', 5),
-            max_oi_usd=strategy_params.get('max_oi_usd', 1000000.0),
+            max_position_size_usd=Decimal(str(getattr(trading_config, 'target_exposure', 100.0))),
+            min_profit=Decimal(str(getattr(trading_config, 'min_profit_rate', 0.001))),
+            max_oi_usd=Decimal(str(strategy_params.get('max_oi_usd', 1000000.0))),
             max_new_positions_per_cycle=strategy_params.get('max_new_positions_per_cycle', 2),
-            dry_run=strategy_params.get('dry_run', False),
+            # Required database URL from funding_rate_service settings
+            database_url=settings.database_url,
             # Risk management defaults
-            risk_management=RiskManagementConfig()
+            risk_config=RiskManagementConfig(),
+            # Ticker for logging
+            ticker=trading_config.ticker
             # Note: bridge_settings not implemented yet
         )
  
