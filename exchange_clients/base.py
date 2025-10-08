@@ -177,6 +177,44 @@ class BaseExchangeClient(ABC):
         pass
 
     @abstractmethod
+    async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
+        """
+        Fetch best bid and offer prices for a contract.
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            
+        Returns:
+            Tuple of (best_bid, best_ask)
+            
+        Raises:
+            Exception: If fetching fails
+        """
+        pass
+
+    @abstractmethod
+    async def place_limit_order(
+        self, 
+        contract_id: str, 
+        quantity: Decimal, 
+        price: Decimal, 
+        side: str
+    ) -> OrderResult:
+        """
+        Place a limit order.
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            quantity: Order size
+            price: Limit price
+            side: 'buy' or 'sell'
+            
+        Returns:
+            OrderResult with order details
+        """
+        pass
+
+    @abstractmethod
     async def get_account_positions(self) -> Decimal:
         """Get account positions."""
         pass
