@@ -652,8 +652,8 @@ class FundingArbPositionManager(BasePositionManager):
     
     async def get_open_positions(self) -> List[Position]:
         """Get all open positions (returns as generic Positions)."""
-        funding_positions = await self.get_all_positions()
-        open_funding_positions = [p for p in funding_positions if p.status == "open"]
+        # Get open positions from memory (loaded from DB during initialization)
+        open_funding_positions = [p for p in self._positions.values() if p.status == "open"]
         
         # Convert to generic Position objects
         return [
