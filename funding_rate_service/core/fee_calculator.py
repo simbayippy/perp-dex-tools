@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Optional, Dict
 from dataclasses import dataclass
 
-from utils.logger import logger
+from funding_rate_service.utils.logger import logger
 
 
 @dataclass
