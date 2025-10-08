@@ -5,8 +5,8 @@ Creates strategy instances based on configuration.
 
 from typing import Dict, Type, List
 from .base_strategy import BaseStrategy
-from .grid_strategy import GridStrategy
-from .funding_arbitrage_strategy import FundingArbitrageStrategy
+from .implementations.grid import GridStrategy
+from .implementations.funding_arbitrage import FundingArbitrageStrategy
 
 
 class StrategyFactory:
