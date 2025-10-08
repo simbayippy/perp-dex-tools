@@ -62,18 +62,25 @@ class FundingArbitrageStrategy(StatefulStrategy):
     Complexity: Multi-DEX, stateful, requires careful monitoring
     """
     
-    def __init__(self, config: FundingArbConfig, exchange_clients: Dict[str, Any]):
+    def __init__(self, config, exchange_clients: Dict[str, Any]):
         """
         Initialize funding arbitrage strategy.
         
         Args:
-            config: Funding arbitrage configuration
+            config: Trading configuration (will be converted to FundingArbConfig)
             exchange_clients: Dict of {dex_name: exchange_client}
         """
-        super().__init__(config, exchange_clients)
+        # Convert TradingConfig to FundingArbConfig if needed
+        if not isinstance(config, FundingArbConfig):
+            funding_config = self._convert_trading_config(config)
+        else:
+            funding_config = config
+        
+        super().__init__(funding_config, exchange_clients)
+        self.config = funding_config  # Store the converted config
         
         # Validate we have required exchanges
-        for dex in config.exchanges:
+        for dex in funding_config.exchanges:
             if dex not in exchange_clients:
                 raise ValueError(f"Missing exchange client for: {dex}")
         
@@ -107,6 +114,46 @@ class FundingArbitrageStrategy(StatefulStrategy):
         
         # Tracking
         self.cumulative_funding = {}  # {position_id: Decimal}
+    
+    def _convert_trading_config(self, trading_config) -> FundingArbConfig:
+        """
+        Convert TradingConfig to FundingArbConfig.
+        
+        Args:
+            trading_config: TradingConfig from runbot.py
+            
+        Returns:
+            FundingArbConfig with converted parameters
+        """
+        from funding_rate_service.config import settings
+        
+        # Extract strategy parameters
+        params = trading_config.strategy_params or {}
+        
+        # Convert to FundingArbConfig
+        return FundingArbConfig(
+            # Required parameters
+            exchanges=params.get('exchanges', ['lighter']),
+            
+            # Position limits
+            max_positions=params.get('max_positions', 10),
+            max_position_size_usd=params.get('target_exposure', Decimal('1000')),
+            max_total_exposure_usd=params.get('max_total_exposure_usd', Decimal('50000')),
+            
+            # Profitability thresholds  
+            min_profit=params.get('min_profit_rate', Decimal('0.001')),
+            profitability_horizon_hours=params.get('profitability_horizon_hours', 24),
+            
+            # Filtering
+            max_oi_usd=params.get('max_oi_usd', Decimal('500000')),
+            
+            # Database connection
+            database_url=settings.database_url,
+            
+            # General settings (from TradingConfig)
+            exchange=trading_config.exchange,
+            ticker=trading_config.ticker,
+        )
     
     def get_strategy_name(self) -> str:
         return "Funding Rate Arbitrage"
