@@ -62,13 +62,13 @@ class FundingArbitrageStrategy(StatefulStrategy):
     Complexity: Multi-DEX, stateful, requires careful monitoring
     """
     
-    def __init__(self, config, exchange_clients: Dict[str, Any]):
+    def __init__(self, config, exchange_client):
         """
         Initialize funding arbitrage strategy.
         
         Args:
             config: Trading configuration (will be converted to FundingArbConfig)
-            exchange_clients: Dict of {dex_name: exchange_client}
+            exchange_client: Single exchange client or dict of exchange clients
         """
         # Convert TradingConfig to FundingArbConfig if needed
         if not isinstance(config, FundingArbConfig):
@@ -76,13 +76,34 @@ class FundingArbitrageStrategy(StatefulStrategy):
         else:
             funding_config = config
         
-        super().__init__(funding_config, exchange_clients)
-        self.config = funding_config  # Store the converted config
+        # Convert single exchange client to dict format if needed
+        if isinstance(exchange_client, dict):
+            exchange_clients = exchange_client
+        else:
+            # Single exchange client - create dict using the primary exchange name
+            primary_exchange = getattr(exchange_client, 'exchange_name', funding_config.exchange)
+            exchange_clients = {primary_exchange: exchange_client}
         
-        # Validate we have required exchanges
-        for dex in funding_config.exchanges:
-            if dex not in exchange_clients:
-                raise ValueError(f"Missing exchange client for: {dex}")
+        super().__init__(funding_config, exchange_client)
+        self.config = funding_config  # Store the converted config
+        self.exchange_clients = exchange_clients  # Store the exchange clients dict
+        
+        # For funding arbitrage, we need multiple exchanges
+        # If only one exchange client provided, log a warning but continue
+        available_exchanges = list(exchange_clients.keys())
+        required_exchanges = funding_config.exchanges
+        
+        missing_exchanges = [dex for dex in required_exchanges if dex not in exchange_clients]
+        if missing_exchanges:
+            self.logger.log(f"Warning: Missing exchange clients for: {missing_exchanges}")
+            self.logger.log(f"Available exchanges: {available_exchanges}")
+            self.logger.log("Strategy will only look for opportunities between available exchanges")
+            
+            # Update config to only use available exchanges
+            funding_config.exchanges = [dex for dex in required_exchanges if dex in exchange_clients]
+            
+            if not funding_config.exchanges:
+                raise ValueError(f"No valid exchange clients available. Required: {required_exchanges}, Available: {available_exchanges}")
         
         # ⭐ Core components from Hummingbot pattern
         self.analyzer = FundingRateAnalyzer()
