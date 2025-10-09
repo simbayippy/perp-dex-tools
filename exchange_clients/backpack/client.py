@@ -156,19 +156,23 @@ class BackpackClient(BaseExchangeClient):
         """Initialize Backpack client."""
         super().__init__(config)
 
-        # Backpack credentials from environment
+        # Backpack credentials from environment (validation happens in _validate_config)
         self.public_key = os.getenv('BACKPACK_PUBLIC_KEY')
         self.secret_key = os.getenv('BACKPACK_SECRET_KEY')
 
-        if not self.public_key or not self.secret_key:
-            raise ValueError("BACKPACK_PUBLIC_KEY and BACKPACK_SECRET_KEY must be set in environment variables")
-
         # Initialize Backpack clients using official SDK
-        self.public_client = Public()
-        self.account_client = Account(
-            public_key=self.public_key,
-            secret_key=self.secret_key
-        )
+        # Wrap in try-catch to convert SDK credential errors to MissingCredentialsError
+        try:
+            self.public_client = Public()
+            self.account_client = Account(
+                public_key=self.public_key,
+                secret_key=self.secret_key
+            )
+        except Exception as e:
+            # If SDK fails to initialize due to invalid credentials, raise as credential error
+            if 'base64' in str(e).lower() or 'invalid' in str(e).lower():
+                raise MissingCredentialsError(f"Invalid Backpack credentials format: {e}")
+            raise
 
         self._order_update_handler = None
 

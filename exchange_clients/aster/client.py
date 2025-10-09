@@ -325,15 +325,10 @@ class AsterClient(BaseExchangeClient):
         """Initialize Aster client."""
         super().__init__(config)
 
-        # Aster credentials from environment
+        # Aster credentials from environment (validation happens in _validate_config)
         self.api_key = os.getenv('ASTER_API_KEY')
         self.secret_key = os.getenv('ASTER_SECRET_KEY')
         self.base_url = 'https://fapi.asterdex.com'
-
-        if not self.api_key or not self.secret_key:
-            raise ValueError(
-                "ASTER_API_KEY and ASTER_SECRET_KEY must be set in environment variables"
-            )
 
         # Initialize logger early
         self.logger = TradingLogger(exchange="aster", ticker=self.config.ticker, log_to_console=False)

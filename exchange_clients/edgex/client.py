@@ -21,28 +21,32 @@ class EdgeXClient(BaseExchangeClient):
         """Initialize EdgeX client."""
         super().__init__(config)
 
-        # EdgeX credentials from environment
+        # EdgeX credentials from environment (validation happens in _validate_config)
         self.account_id = os.getenv('EDGEX_ACCOUNT_ID')
         self.stark_private_key = os.getenv('EDGEX_STARK_PRIVATE_KEY')
         self.base_url = os.getenv('EDGEX_BASE_URL', 'https://pro.edgex.exchange')
         self.ws_url = os.getenv('EDGEX_WS_URL', 'wss://quote.edgex.exchange')
 
-        if not self.account_id or not self.stark_private_key:
-            raise ValueError("EDGEX_ACCOUNT_ID and EDGEX_STARK_PRIVATE_KEY must be set in environment variables")
-
         # Initialize EdgeX client using official SDK
-        self.client = Client(
-            base_url=self.base_url,
-            account_id=int(self.account_id),
-            stark_private_key=self.stark_private_key
-        )
+        # Wrap in try-catch to convert SDK credential errors to MissingCredentialsError
+        try:
+            self.client = Client(
+                base_url=self.base_url,
+                account_id=int(self.account_id),
+                stark_private_key=self.stark_private_key
+            )
 
-        # Initialize WebSocket manager using official SDK
-        self.ws_manager = WebSocketManager(
-            base_url=self.ws_url,
-            account_id=int(self.account_id),
-            stark_pri_key=self.stark_private_key
-        )
+            # Initialize WebSocket manager using official SDK
+            self.ws_manager = WebSocketManager(
+                base_url=self.ws_url,
+                account_id=int(self.account_id),
+                stark_pri_key=self.stark_private_key
+            )
+        except Exception as e:
+            # If SDK fails to initialize due to invalid credentials, raise as credential error
+            if any(keyword in str(e).lower() for keyword in ['invalid', 'credential', 'auth', 'key']):
+                raise MissingCredentialsError(f"Invalid EdgeX credentials format: {e}")
+            raise
 
         # Initialize logger
         self.logger = TradingLogger(exchange="edgex", ticker=self.config.ticker, log_to_console=False)

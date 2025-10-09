@@ -22,16 +22,11 @@ class GrvtClient(BaseExchangeClient):
         """Initialize GRVT client."""
         super().__init__(config)
 
-        # GRVT credentials from environment
+        # GRVT credentials from environment (validation happens in _validate_config)
         self.trading_account_id = os.getenv('GRVT_TRADING_ACCOUNT_ID')
         self.private_key = os.getenv('GRVT_PRIVATE_KEY')
         self.api_key = os.getenv('GRVT_API_KEY')
         self.environment = os.getenv('GRVT_ENVIRONMENT', 'prod')
-
-        if not self.trading_account_id or not self.private_key or not self.api_key:
-            raise ValueError(
-                "GRVT_TRADING_ACCOUNT_ID, GRVT_PRIVATE_KEY, and GRVT_API_KEY must be set in environment variables"
-            )
 
         # Convert environment string to proper enum
         env_map = {
@@ -69,6 +64,9 @@ class GrvtClient(BaseExchangeClient):
             )
 
         except Exception as e:
+            # If SDK fails to initialize due to invalid credentials, raise as credential error
+            if any(keyword in str(e).lower() for keyword in ['invalid', 'credential', 'auth', 'key']):
+                raise MissingCredentialsError(f"Invalid GRVT credentials format: {e}")
             raise ValueError(f"Failed to initialize GRVT client: {e}")
 
     def _validate_config(self) -> None:
