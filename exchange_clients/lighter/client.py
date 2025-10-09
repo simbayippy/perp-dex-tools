@@ -286,8 +286,10 @@ class LighterClient(BaseExchangeClient):
             # Try to use the stored market_id from config first (most reliable)
             if hasattr(self.config, 'contract_id') and isinstance(self.config.contract_id, int):
                 market_id = self.config.contract_id
+                print("USING STORED MARKET ID")
                 self.logger.log(f"Using stored market_id: {market_id}", "DEBUG")
             else:
+                print("USING PASSED MARKET ID")
                 # Fallback: try to convert the passed contract_id to int
                 try:
                     market_id = int(contract_id)
