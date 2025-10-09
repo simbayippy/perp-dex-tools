@@ -3,7 +3,7 @@ Exchange factory for creating exchange clients dynamically.
 """
 
 from typing import Dict, Any, Type
-from exchange_clients.base import BaseExchangeClient
+from exchange_clients.base import BaseExchangeClient, MissingCredentialsError
 
 
 class ExchangeFactory:
@@ -136,6 +136,11 @@ class ExchangeFactory:
             try:
                 client = cls.create_exchange(exchange_name, exchange_config)
                 clients[exchange_name] = client
+            except MissingCredentialsError as e:
+                # Skip exchanges with missing credentials (always, even if primary)
+                failed_exchanges.append((exchange_name, f"Missing credentials"))
+                print(f"⚠️  Skipping {exchange_name}: Missing or invalid API credentials")
+                continue
             except Exception as e:
                 # Track failed exchanges
                 failed_exchanges.append((exchange_name, str(e)))

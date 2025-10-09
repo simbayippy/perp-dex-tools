@@ -16,7 +16,7 @@ from bpx.public import Public
 from bpx.account import Account
 from bpx.constants.enums import OrderTypeEnum, TimeInForceEnum
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry
+from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError
 from helpers.logger import TradingLogger
 
 
@@ -177,7 +177,13 @@ class BackpackClient(BaseExchangeClient):
         required_env_vars = ['BACKPACK_PUBLIC_KEY', 'BACKPACK_SECRET_KEY']
         missing_vars = [var for var in required_env_vars if not os.getenv(var)]
         if missing_vars:
-            raise ValueError(f"Missing required environment variables: {missing_vars}")
+            raise MissingCredentialsError(f"Missing required environment variables: {missing_vars}")
+        
+        # Check for placeholder values
+        if self.public_key in ['your_public_key_here', 'PLACEHOLDER', '', None]:
+            raise MissingCredentialsError("BACKPACK_PUBLIC_KEY is not configured (placeholder or empty)")
+        if self.secret_key in ['your_secret_key_here', 'PLACEHOLDER', '', None]:
+            raise MissingCredentialsError("BACKPACK_SECRET_KEY is not configured (placeholder or empty)")
 
     async def connect(self) -> None:
         """Connect to Backpack WebSocket."""

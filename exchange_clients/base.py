@@ -12,6 +12,11 @@ import aiohttp
 import asyncio
 
 
+class MissingCredentialsError(Exception):
+    """Raised when exchange credentials are missing or invalid (placeholders)."""
+    pass
+
+
 def query_retry(
     default_return: Any = None,
     exception_type: Union[Type[Exception], Tuple[Type[Exception], ...]] = (Exception,),

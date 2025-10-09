@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Dict, Any, List, Optional, Tuple
 from edgex_sdk import Client, OrderSide, WebSocketManager, CancelOrderParams, GetOrderBookDepthParams, GetActiveOrderParams
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry
+from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError
 from helpers.logger import TradingLogger
 
 
@@ -60,7 +60,13 @@ class EdgeXClient(BaseExchangeClient):
         required_env_vars = ['EDGEX_ACCOUNT_ID', 'EDGEX_STARK_PRIVATE_KEY']
         missing_vars = [var for var in required_env_vars if not os.getenv(var)]
         if missing_vars:
-            raise ValueError(f"Missing required environment variables: {missing_vars}")
+            raise MissingCredentialsError(f"Missing required environment variables: {missing_vars}")
+        
+        # Check for placeholder values
+        if self.account_id in ['your_account_id_here', 'PLACEHOLDER', '', None]:
+            raise MissingCredentialsError("EDGEX_ACCOUNT_ID is not configured (placeholder or empty)")
+        if self.stark_private_key in ['your_stark_private_key_here', 'PLACEHOLDER', '', None]:
+            raise MissingCredentialsError("EDGEX_STARK_PRIVATE_KEY is not configured (placeholder or empty)")
 
     # ---------------------------
     # Connection / Reconnect
