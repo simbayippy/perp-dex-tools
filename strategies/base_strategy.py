@@ -1,15 +1,39 @@
 """
 Base Strategy Interface
 Defines the contract that all trading strategies must implement.
+
+Enhanced with Hummingbot patterns:
+- Event-driven pattern (from ExecutorBase)
+- Status lifecycle management
+- Event listener registration
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Callable
 from enum import Enum
 import time
 from helpers.logger import TradingLogger
+
+
+# ============================================================================
+# Enums
+# ============================================================================
+
+class RunnableStatus(Enum):
+    """
+    Strategy lifecycle states.
+    
+    Pattern from Hummingbot ExecutorBase.
+    
+    Transitions:
+    NOT_STARTED → RUNNING → SHUTTING_DOWN → TERMINATED
+    """
+    NOT_STARTED = 1
+    RUNNING = 2
+    SHUTTING_DOWN = 3
+    TERMINATED = 4
 
 
 class StrategyAction(Enum):
@@ -81,17 +105,30 @@ class MarketData:
 
 
 class BaseStrategy(ABC):
-    """Base class for all trading strategies."""
+    """
+    Base class for all trading strategies.
     
-    def __init__(self, config, exchange_client):
-        """Initialize strategy with configuration and exchange client."""
+    Enhanced with Hummingbot patterns:
+    - Status lifecycle management
+    - Event listener registration
+    - Start/stop control
+    """
+    
+    def __init__(self, config, exchange_client=None):
+        """
+        Initialize strategy with configuration and exchange client.
+        
+        Args:
+            config: Strategy configuration
+            exchange_client: Single exchange client (optional, for multi-DEX use None)
+        """
         self.config = config
         self.exchange_client = exchange_client
         
         # Initialize logger
         self.logger = TradingLogger(
-            exchange=config.exchange,
-            ticker=config.ticker,
+            exchange=getattr(config, 'exchange', 'unknown'),
+            ticker=getattr(config, 'ticker', 'unknown'),
             log_to_console=False
         )
         
@@ -99,6 +136,10 @@ class BaseStrategy(ABC):
         self.is_initialized = False
         self.last_action_time = 0
         self.strategy_state = {}
+        
+        # Event-driven pattern from Hummingbot
+        self.status = RunnableStatus.NOT_STARTED
+        self._event_listeners: Dict[str, Callable] = {}
     
     async def initialize(self):
         """Initialize strategy-specific components."""
@@ -111,6 +152,90 @@ class BaseStrategy(ABC):
     async def _initialize_strategy(self):
         """Strategy-specific initialization logic."""
         pass
+    
+    # ========================================================================
+    # Event-Driven Pattern (from Hummingbot ExecutorBase)
+    # ========================================================================
+    
+    def start(self):
+        """
+        Start the strategy.
+        
+        Pattern from Hummingbot:
+        1. Register event listeners
+        2. Set status to RUNNING
+        """
+        if self.status != RunnableStatus.NOT_STARTED:
+            self.logger.log(
+                f"Cannot start strategy in status {self.status}",
+                "WARNING"
+            )
+            return
+        
+        # Register event listeners (child can override)
+        self.register_events()
+        
+        # Start running
+        self.status = RunnableStatus.RUNNING
+        
+        self.logger.log(f"Strategy '{self.get_strategy_name()}' started", "INFO")
+    
+    def stop(self):
+        """
+        Stop the strategy gracefully.
+        
+        Pattern from Hummingbot:
+        1. Set status to SHUTTING_DOWN
+        2. Unregister event listeners
+        3. Set status to TERMINATED
+        """
+        if self.status == RunnableStatus.RUNNING:
+            self.status = RunnableStatus.SHUTTING_DOWN
+            self.logger.log(f"Strategy '{self.get_strategy_name()}' shutting down...", "INFO")
+        
+        # Cleanup event listeners
+        self.unregister_events()
+        
+        self.status = RunnableStatus.TERMINATED
+        self.logger.log(f"Strategy '{self.get_strategy_name()}' terminated", "INFO")
+    
+    def register_events(self):
+        """
+        Register event listeners.
+        
+        Override in child strategy to add listeners:
+        
+        Example:
+        --------
+        def register_events(self):
+            self.add_listener('order_filled', self._on_order_filled)
+            self.add_listener('funding_payment', self._on_funding_payment)
+        """
+        pass
+    
+    def unregister_events(self):
+        """Cleanup all event listeners"""
+        self._event_listeners.clear()
+    
+    def add_listener(self, event_name: str, callback: Callable):
+        """
+        Add an event listener.
+        
+        Args:
+            event_name: Event name (e.g., 'order_filled')
+            callback: Function to call when event occurs
+        """
+        self._event_listeners[event_name] = callback
+    
+    def remove_listener(self, event_name: str):
+        """
+        Remove an event listener.
+        
+        Args:
+            event_name: Event to stop listening to
+        """
+        if event_name in self._event_listeners:
+            del self._event_listeners[event_name]
     
     @abstractmethod
     async def should_execute(self, market_data: MarketData) -> bool:
@@ -155,21 +280,6 @@ class BaseStrategy(ABC):
         self.logger.log(f"Strategy '{self.get_strategy_name()}' cleanup completed", "INFO")
     
     # Helper methods for common operations
-    async def get_market_data(self) -> MarketData:
-        """Get current market data."""
-        try:
-            best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(self.config.contract_id)
-            
-            return MarketData(
-                ticker=self.config.ticker,
-                best_bid=best_bid,
-                best_ask=best_ask,
-                mid_price=(best_bid + best_ask) / 2,
-                timestamp=time.time()
-            )
-        except Exception as e:
-            self.logger.log(f"Error getting market data: {e}", "ERROR")
-            raise
     
     async def get_current_position(self) -> Decimal:
         """Get current position size."""

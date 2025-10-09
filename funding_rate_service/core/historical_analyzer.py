@@ -10,10 +10,10 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 import statistics
 
-from database.connection import Database
-from core.mappers import DEXMapper, SymbolMapper
-from models.history import FundingRateHistory, FundingRateStats
-from utils.logger import logger
+from funding_rate_service.database.connection import Database
+from funding_rate_service.core.mappers import DEXMapper, SymbolMapper
+from funding_rate_service.models.history import FundingRateHistory, FundingRateStats
+from funding_rate_service.utils.logger import logger
 
 
 class HistoricalAnalyzer:

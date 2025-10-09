@@ -6,3 +6,6 @@ pycryptodome>=3.15.0
 ecdsa>=0.17.0
 requests>=2.32.0
 
+# Interactive Configuration (Phase 2)
+questionary>=2.0.0
+pyyaml>=6.0

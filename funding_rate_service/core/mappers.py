@@ -10,7 +10,7 @@ Loaded once at startup and kept in memory for performance.
 
 from typing import Dict, Optional
 from databases import Database
-from utils.logger import logger
+from funding_rate_service.utils.logger import logger
 
 
 class DEXMapper:

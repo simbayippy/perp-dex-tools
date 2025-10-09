@@ -70,6 +70,84 @@ class ExchangeFactory:
             raise ImportError(f"Failed to import exchange class {class_path}: {e}")
 
     @classmethod
+    def create_multiple_exchanges(
+        cls, 
+        exchange_names: list[str], 
+        config: Dict[str, Any],
+        primary_exchange: str = None
+    ) -> Dict[str, BaseExchangeClient]:
+        """
+        Create multiple exchange client instances.
+        
+        Useful for multi-DEX strategies like funding arbitrage where you need
+        to trade on multiple exchanges simultaneously.
+        
+        Args:
+            exchange_names: List of exchange names (e.g., ['lighter', 'grvt', 'backpack'])
+            config: Base configuration dictionary (will be used for all exchanges)
+            primary_exchange: Which exchange is the primary one (optional, defaults to first)
+        
+        Returns:
+            Dictionary mapping exchange names to client instances
+            e.g., {'lighter': LighterClient, 'grvt': GrvtClient}
+        
+        Raises:
+            ValueError: If any exchange is not supported
+        
+        Example:
+            >>> clients = ExchangeFactory.create_multiple_exchanges(
+            ...     exchange_names=['lighter', 'grvt'],
+            ...     config={'ticker': 'BTC', 'quantity': 100}
+            ... )
+            >>> lighter_client = clients['lighter']
+            >>> grvt_client = clients['grvt']
+        """
+        if not exchange_names:
+            raise ValueError("exchange_names list cannot be empty")
+        
+        # Validate primary exchange
+        if primary_exchange and primary_exchange not in exchange_names:
+            raise ValueError(f"Primary exchange '{primary_exchange}' not in exchange_names list")
+        
+        # Set primary to first exchange if not specified
+        if not primary_exchange:
+            primary_exchange = exchange_names[0]
+        
+        clients = {}
+        
+        for exchange_name in exchange_names:
+            # Create a config for each exchange
+            # If config is a TradingConfig object, recreate it with the new exchange
+            if hasattr(config, '__class__') and hasattr(config, 'exchange'):
+                # It's a TradingConfig-like object, create a new instance
+                from dataclasses import replace
+                exchange_config = replace(config, exchange=exchange_name)
+            elif isinstance(config, dict):
+                # It's a dict, make a copy and update exchange
+                exchange_config = config.copy()
+                exchange_config['exchange'] = exchange_name
+            else:
+                # Fallback: try to use as-is
+                exchange_config = config
+            
+            try:
+                client = cls.create_exchange(exchange_name, exchange_config)
+                clients[exchange_name] = client
+            except Exception as e:
+                # Clean up already created clients
+                for created_client in clients.values():
+                    try:
+                        # Try to disconnect if the client has a disconnect method
+                        if hasattr(created_client, 'disconnect'):
+                            import asyncio
+                            asyncio.create_task(created_client.disconnect())
+                    except:
+                        pass
+                raise ValueError(f"Failed to create exchange client for {exchange_name}: {e}")
+        
+        return clients
+
+    @classmethod
     def get_supported_exchanges(cls) -> list:
         """Get list of supported exchanges.
 

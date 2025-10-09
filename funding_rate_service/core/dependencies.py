@@ -6,8 +6,8 @@ Manages service instances and provides them to route handlers.
 
 from typing import Optional
 from fastapi import HTTPException
-from core.opportunity_finder import OpportunityFinder
-from core.historical_analyzer import HistoricalAnalyzer
+from funding_rate_service.core.opportunity_finder import OpportunityFinder
+from funding_rate_service.core.historical_analyzer import HistoricalAnalyzer
 
 
 class ServiceContainer:

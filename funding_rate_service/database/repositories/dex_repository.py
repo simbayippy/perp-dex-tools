@@ -6,8 +6,8 @@ from typing import Optional, List, Dict, Any
 from databases import Database
 from datetime import datetime
 
-from models.dex import DEXMetadata, DEXFeeStructure
-from utils.logger import logger
+from funding_rate_service.models.dex import DEXMetadata, DEXFeeStructure
+from funding_rate_service.utils.logger import logger
 
 
 class DEXRepository:

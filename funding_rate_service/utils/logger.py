@@ -4,7 +4,7 @@ Logging configuration using loguru
 
 import sys
 from loguru import logger as _logger
-from config import settings
+from funding_rate_service.config import settings
 
 
 # Remove default handler

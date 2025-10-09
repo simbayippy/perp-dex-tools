@@ -8,12 +8,12 @@ Filters by volume, OI, spread, and other criteria.
 from decimal import Decimal
 from typing import List, Optional, Dict
 from datetime import datetime
-from core.fee_calculator import FeeCalculator
-from models.opportunity import ArbitrageOpportunity
-from models.filters import OpportunityFilter
-from database.connection import Database
-from core.mappers import DEXMapper, SymbolMapper
-from utils.logger import logger
+from funding_rate_service.core.fee_calculator import FeeCalculator
+from funding_rate_service.models.opportunity import ArbitrageOpportunity
+from funding_rate_service.models.filters import OpportunityFilter
+from funding_rate_service.database.connection import Database
+from funding_rate_service.core.mappers import DEXMapper, SymbolMapper
+from funding_rate_service.utils.logger import logger
 
 
 class OpportunityFinder:

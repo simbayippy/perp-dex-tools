@@ -16,8 +16,8 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from database.connection import database
-from utils.logger import logger
+from funding_rate_service.database.connection import database
+from funding_rate_service.utils.logger import logger
 
 
 async def run_migration(migration_file: str):

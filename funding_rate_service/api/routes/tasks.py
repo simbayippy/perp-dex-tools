@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request, Query
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
-from utils.logger import logger
+from funding_rate_service.utils.logger import logger
 
 
 router = APIRouter()

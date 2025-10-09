@@ -15,10 +15,10 @@ from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR, EVENT_JOB_MISSED
 
-from tasks.collection_task import CollectionTask
-from tasks.opportunity_task import OpportunityTask
-from tasks.cleanup_task import CleanupTask
-from utils.logger import logger
+from funding_rate_service.tasks.collection_task import CollectionTask
+from funding_rate_service.tasks.opportunity_task import OpportunityTask
+from funding_rate_service.tasks.cleanup_task import CleanupTask
+from funding_rate_service.utils.logger import logger
 
 
 class TaskScheduler:

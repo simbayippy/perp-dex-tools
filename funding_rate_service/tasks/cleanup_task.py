@@ -8,9 +8,9 @@ Runs once per day to keep the database size manageable on VPS.
 from typing import Dict, Any
 from datetime import datetime, timedelta
 
-from tasks.base_task import BaseTask
-from database.connection import database
-from utils.logger import logger
+from funding_rate_service.tasks.base_task import BaseTask
+from funding_rate_service.database.connection import database
+from funding_rate_service.utils.logger import logger
 
 
 class CleanupTask(BaseTask):

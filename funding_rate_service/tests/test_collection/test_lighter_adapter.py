@@ -19,7 +19,7 @@ sys.path.insert(0, str(project_root))  # For exchange_clients
 sys.path.insert(0, str(project_root / "funding_rate_service"))  # For funding_rate_service internal imports
 
 from exchange_clients.lighter import LighterFundingAdapter
-from utils.logger import logger
+from funding_rate_service.utils.logger import logger
 
 
 async def main():

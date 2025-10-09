@@ -3,7 +3,7 @@ Database connection management
 """
 
 from databases import Database
-from config import settings
+from funding_rate_service.config import settings
 
 
 # Create database instance
