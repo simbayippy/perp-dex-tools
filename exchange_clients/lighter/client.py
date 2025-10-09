@@ -155,8 +155,34 @@ class LighterClient(BaseExchangeClient):
 
             # Start WebSocket connection in background task
             asyncio.create_task(self.ws_manager.connect())
-            # Wait a moment for connection to establish
-            await asyncio.sleep(2)
+            
+            # Wait for order book to be loaded (with timeout)
+            self.logger.log("Waiting for Lighter order book to load...", "INFO")
+            max_wait = 10  # seconds
+            elapsed = 0
+            while elapsed < max_wait:
+                await asyncio.sleep(0.5)
+                elapsed += 0.5
+                
+                # Check if order book snapshot is loaded
+                if (hasattr(self.ws_manager, 'snapshot_loaded') and 
+                    self.ws_manager.snapshot_loaded and
+                    self.ws_manager.order_book.get('bids') and 
+                    self.ws_manager.order_book.get('asks')):
+                    self.logger.log(
+                        f"Order book loaded successfully after {elapsed:.1f}s "
+                        f"({len(self.ws_manager.order_book['bids'])} bids, "
+                        f"{len(self.ws_manager.order_book['asks'])} asks)",
+                        "INFO"
+                    )
+                    break
+            
+            if elapsed >= max_wait:
+                self.logger.log(
+                    "Warning: Order book not loaded within timeout. "
+                    "Trading may be delayed until book is ready.",
+                    "WARNING"
+                )
 
         except Exception as e:
             self.logger.log(f"Error connecting to Lighter: {e}", "ERROR")

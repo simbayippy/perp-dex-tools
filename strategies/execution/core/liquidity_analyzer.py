@@ -130,6 +130,25 @@ class LiquidityAnalyzer:
                 levels=depth_levels
             )
             
+            # Validate order book is not empty
+            if not order_book.get('bids') or not order_book.get('asks'):
+                self.logger.warning(
+                    f"Order book for {symbol} is empty or not yet loaded. "
+                    "This often happens when WebSocket hasn't initialized yet."
+                )
+                return LiquidityReport(
+                    symbol=symbol,
+                    side=side,
+                    size_usd=size_usd,
+                    recommendation="reject",
+                    reason="order_book_unavailable",
+                    liquidity_score=Decimal('0'),
+                    depth_sufficient=False,
+                    expected_slippage_pct=Decimal('1.0'),
+                    spread_bps=9999,
+                    total_depth_usd=Decimal('0')
+                )
+            
             # Extract best bid/ask
             best_bid = Decimal(str(order_book['bids'][0]['price']))
             best_ask = Decimal(str(order_book['asks'][0]['price']))
