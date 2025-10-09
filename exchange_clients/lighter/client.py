@@ -75,6 +75,37 @@ class LighterClient(BaseExchangeClient):
         # Note: LIGHTER_ACCOUNT_INDEX and LIGHTER_API_KEY_INDEX have defaults of '0'
         # which are valid values, so we don't need to validate them
 
+    async def _get_market_id_for_symbol(self, symbol: str) -> Optional[int]:
+        """
+        Get Lighter market_id for a given symbol.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTC', 'ETH', 'G')
+            
+        Returns:
+            Integer market_id, or None if not found
+        """
+        try:
+            order_api = lighter.OrderApi(self.api_client)
+            order_books = await order_api.order_books()
+            
+            for market in order_books.order_books:
+                # Try exact match
+                if market.symbol == symbol:
+                    self.logger.log(f"Found market_id {market.market_id} for symbol '{symbol}'", "DEBUG")
+                    return market.market_id
+                # Try case-insensitive match
+                elif market.symbol.upper() == symbol.upper():
+                    self.logger.log(f"Found market_id {market.market_id} for symbol '{symbol}' (case-insensitive)", "DEBUG")
+                    return market.market_id
+            
+            self.logger.log(f"Symbol '{symbol}' not found in Lighter markets", "WARNING")
+            return None
+            
+        except Exception as e:
+            self.logger.log(f"Error looking up market_id for symbol '{symbol}': {e}", "ERROR")
+            return None
+    
     async def _get_market_config(self, ticker: str) -> Tuple[int, int, int]:
         """Get market configuration for a ticker using official SDK."""
         try:
@@ -283,21 +314,18 @@ class LighterClient(BaseExchangeClient):
             url = f"{self.base_url}/api/v1/orderBookOrders"
             
             # Lighter uses integer market_id for API calls
-            # Try to use the stored market_id from config first (most reliable)
-            if hasattr(self.config, 'contract_id') and isinstance(self.config.contract_id, int):
-                market_id = self.config.contract_id
-                print("USING STORED MARKET ID")
-                self.logger.log(f"Using stored market_id: {market_id}", "DEBUG")
-            else:
-                print("USING PASSED MARKET ID")
-                # Fallback: try to convert the passed contract_id to int
-                try:
-                    market_id = int(contract_id)
-                    self.logger.log(f"Converted contract_id '{contract_id}' to market_id: {market_id}", "DEBUG")
-                except (ValueError, TypeError):
+            # Try to convert contract_id to int first (if already an int ID)
+            try:
+                market_id = int(contract_id)
+                self.logger.log(f"Using contract_id as market_id: {market_id}", "DEBUG")
+            except (ValueError, TypeError):
+                # contract_id is a symbol string - look up the market_id
+                self.logger.log(f"Looking up market_id for symbol: {contract_id}", "DEBUG")
+                market_id = await self._get_market_id_for_symbol(contract_id)
+                
+                if market_id is None:
                     self.logger.log(
-                        f"Cannot convert contract_id '{contract_id}' to integer market_id. "
-                        f"Config contract_id: {getattr(self.config, 'contract_id', 'not set')}",
+                        f"Could not find market_id for symbol '{contract_id}' on Lighter",
                         "ERROR"
                     )
                     return {'bids': [], 'asks': []}
