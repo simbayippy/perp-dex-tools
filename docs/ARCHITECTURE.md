@@ -1121,7 +1121,7 @@ curl http://localhost:8000/api/v1/history/funding-rates/lighter/BTC?period=7d
 │                                                                       │
 │  Components:                                                          │
 │  ├─ FundingRateAnalyzer - Rate normalization                        │
-│  ├─ FeeCalculator - Fee calculation                                 │
+│  ├─ FundingArbFeeCalculator - Fee & profitability analysis          │
 │  ├─ PositionManager - Position tracking (DB)                        │
 │  ├─ StateManager - State persistence (DB)                           │
 │  ├─ AtomicMultiOrderExecutor - Safe execution                       │
@@ -1368,7 +1368,7 @@ TIME: 12:00:00 - Strategy wakes up
 
 [12:00:02.180] Strategy: ✅ Atomic execution successful!
 
-[12:00:02.185] FeeCalculator: Calculate entry fees
+[12:00:02.185] FundingArbFeeCalculator: Calculate entry fees
                 lighter: maker fee = 0.02% × $1,000 = $0.20
                 backpack: maker fee = 0.02% × $1,000 = $0.20
                 Total entry fees: $0.40

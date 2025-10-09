@@ -110,16 +110,15 @@ class TradeFee:
 # Fee Calculator
 # ============================================================================
 
-class FeeCalculator:
+class TradeFeeCalculator:
     """
-    Calculate trading fees across DEXes.
+    Calculate trading fees across DEXes (generic version).
     
     Pattern from Hummingbot TradeFeeBase and connector implementations.
     
-    Critical for funding arbitrage:
-    - Must account for 4 trades (open long, open short, close long, close short)
-    - Maker fees < Taker fees (use limit orders when possible)
-    - Different DEXes have different fee schedules
+    Use this for simple fee calculations in any trading strategy.
+    
+    For funding arbitrage opportunity analysis, use FundingArbFeeCalculator instead.
     """
     
     def __init__(self, fee_schedules: Dict[str, Dict[str, Decimal]] = None):

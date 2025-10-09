@@ -14,7 +14,7 @@ Reference: docs/hummingbot_patterns/funding_rate_calcs.py
 
 from decimal import Decimal
 from typing import Dict, Tuple, Optional, List
-from strategies.components import FeeCalculator
+from strategies.components import TradeFeeCalculator
 
 
 # ============================================================================
@@ -133,7 +133,7 @@ class FundingRateAnalyzer:
         dex2_name: str,
         funding_rates: Dict[str, Decimal],
         position_size: Decimal,
-        fee_calculator: FeeCalculator,
+        fee_calculator: TradeFeeCalculator,
         profitability_horizon_hours: int = 24
     ) -> Decimal:
         """
@@ -156,7 +156,7 @@ class FundingRateAnalyzer:
             dex2_name: Second DEX
             funding_rates: {dex_name: funding_rate}
             position_size: Position size in USD
-            fee_calculator: FeeCalculator instance
+            fee_calculator: TradeFeeCalculator instance
             profitability_horizon_hours: Calculate profit over N hours (default 24)
         
         Returns:
@@ -209,7 +209,7 @@ class FundingRateAnalyzer:
         symbol: str,
         funding_rates: Dict[str, Decimal],
         position_size: Decimal,
-        fee_calculator: FeeCalculator,
+        fee_calculator: TradeFeeCalculator,
         profitability_horizon_hours: int = 24
     ) -> Tuple[Optional[str], Optional[str], Decimal]:
         """
@@ -228,7 +228,7 @@ class FundingRateAnalyzer:
             symbol: Trading pair (e.g., 'BTC')
             funding_rates: {dex_name: funding_rate}
             position_size: Position size in USD
-            fee_calculator: FeeCalculator instance
+            fee_calculator: TradeFeeCalculator instance
             profitability_horizon_hours: Calculate over N hours
         
         Returns:

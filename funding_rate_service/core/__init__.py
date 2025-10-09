@@ -3,7 +3,7 @@ Core business logic components
 """
 from .mappers import DEXMapper, SymbolMapper
 from .fee_calculator import (
-    FeeCalculator,
+    FundingArbFeeCalculator,
     FeeStructure,
     TradingCosts,
     fee_calculator
@@ -23,7 +23,7 @@ __all__ = [
     "SymbolMapper",
     
     # Fee Calculator
-    "FeeCalculator",
+    "FundingArbFeeCalculator",
     "FeeStructure",
     "TradingCosts",
     "fee_calculator",

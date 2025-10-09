@@ -133,7 +133,7 @@ Created `core/fee_calculator.py`:
 ### 3.2 Opportunity Finder ✅
 Created `core/opportunity_finder.py`:
 - ✅ Find arbitrage opportunities from latest funding rates
-- ✅ Calculate profitability after fees (uses FeeCalculator)
+- ✅ Calculate profitability after fees (uses FundingArbFeeCalculator)
 - ✅ Comprehensive filtering:
   - By symbol, DEX (include/exclude)
   - By minimum divergence and profit

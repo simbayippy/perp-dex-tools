@@ -13,7 +13,7 @@ Pattern: Stateful strategy with multi-DEX support
 
 from strategies.categories.stateful_strategy import StatefulStrategy
 from strategies.base_strategy import StrategyResult, StrategyAction
-from strategies.components import FeeCalculator, InMemoryPositionManager
+from strategies.components import InMemoryPositionManager
 from .config import FundingArbConfig
 from .models import FundingArbPosition, OpportunityData
 from .funding_analyzer import FundingRateAnalyzer
@@ -133,7 +133,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
         
         # ⭐ Core components from Hummingbot pattern
         self.analyzer = FundingRateAnalyzer()
-        self.fee_calculator = FeeCalculator()
         
         # ⭐ Direct internal services (no HTTP, shared database)
         if not FUNDING_SERVICE_AVAILABLE:
@@ -142,7 +141,11 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 "Please ensure the funding_rate_service is properly configured and the database is accessible."
             )
         
+        # Import the correct FeeCalculator from funding_rate_service
+        from funding_rate_service.core.fee_calculator import FundingArbFeeCalculator
         from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
+        
+        self.fee_calculator = FundingArbFeeCalculator()
         self.opportunity_finder = OpportunityFinder(
             database=database,
             fee_calculator=self.fee_calculator,

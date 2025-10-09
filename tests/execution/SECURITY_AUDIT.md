@@ -740,7 +740,7 @@ async def test_db_reconnect_during_position_create():
 | PositionManager | ✅ YES | 🔴 HIGH | 🟢 LOW |
 | OrderExecutor | ⚠️ MEDIUM | 🟡 MEDIUM | 🟢 LOW |
 | LiquidityAnalyzer | ⚠️ MEDIUM | 🟡 MEDIUM | 🟢 LOW |
-| FeeCalculator | ✅ YES | 🟠 HIGH | 🟢 LOW |
+| FundingArbFeeCalculator | ✅ YES | 🟠 HIGH | 🟢 LOW |
 | Exit Logic | ✅ YES | 🟠 HIGH | 🟢 LOW |
 
 ---
