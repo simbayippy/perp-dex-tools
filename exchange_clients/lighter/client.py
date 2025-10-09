@@ -352,10 +352,10 @@ class LighterClient(BaseExchangeClient):
                     )
                     return {'bids': [], 'asks': []}
 
-            if levels < 100:
-                # API max is 100 for lighter, while default is set to 20
-                # so we use the highest of the 2
-                levels = 100 #lighter specific
+            # if levels < 100:
+            #     # API max is 100 for lighter, while default is set to 20
+            #     # so we use the highest of the 2
+            #     levels = 100 #lighter specific
 
             params = {
                 'market_id': market_id,
