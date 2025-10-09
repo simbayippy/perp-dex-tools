@@ -71,7 +71,8 @@ class TradingBot:
             if is_multi_exchange:
                 # Multi-exchange mode (for funding arbitrage, etc.)
                 # Get list of exchanges from strategy params
-                exchange_list = config.strategy_params.get('exchanges', [config.exchange])
+                # Check both 'scan_exchanges' (from YAML) and 'exchanges' (from CLI) for backward compat
+                exchange_list = config.strategy_params.get('scan_exchanges') or config.strategy_params.get('exchanges', [config.exchange])
                 if isinstance(exchange_list, str):
                     exchange_list = [ex.strip() for ex in exchange_list.split(',')]
                 

@@ -169,9 +169,12 @@ class FundingArbitrageStrategy(StatefulStrategy):
         strategy_params = getattr(trading_config, 'strategy_params', {})
         
         # Parse exchanges from strategy_params or use single exchange
-        exchanges_str = strategy_params.get('exchanges', trading_config.exchange)
+        # Check both 'scan_exchanges' (from YAML) and 'exchanges' (from CLI) for backward compat
+        exchanges_str = strategy_params.get('scan_exchanges') or strategy_params.get('exchanges', trading_config.exchange)
         if isinstance(exchanges_str, str):
             exchanges = [ex.strip() for ex in exchanges_str.split(',')]
+        elif isinstance(exchanges_str, list):
+            exchanges = exchanges_str
         else:
             exchanges = [trading_config.exchange]
         

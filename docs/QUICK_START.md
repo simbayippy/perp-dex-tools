@@ -2,6 +2,12 @@
 
 Essential commands to get started with the trading bot after installation.
 
+```bash
+1. python -m trading_config.config_builder 
+2. python -m funding_rate_service.main
+3. python runbot.py --config configs/funding_arb_test.yml
+```
+
 ---
 
 ## 📋 Available Commands

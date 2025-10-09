@@ -279,7 +279,7 @@ def _config_dict_to_trading_config(strategy_name: str, config_dict: dict) -> Tra
         quantity = config_dict.get("quantity", Decimal("100"))
     elif strategy_name == "funding_arbitrage":
         exchange = config_dict.get("primary_exchange", "lighter")
-        ticker = "BTC"  # Funding arb scans all tickers
+        ticker = "ALL"  # Funding arb scans all tickers (not limited to one)
         quantity = Decimal("1")  # Placeholder, not used
     else:
         exchange = "lighter"
