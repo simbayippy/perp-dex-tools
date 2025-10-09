@@ -116,16 +116,19 @@ class ExchangeFactory:
         clients = {}
         
         for exchange_name in exchange_names:
-            # Create a copy of config for each exchange
-            # Handle both dict and TradingConfig object
-            if hasattr(config, '__dict__'):
-                # It's a dataclass or object, convert to dict
-                exchange_config = vars(config).copy()
-            else:
-                # It's already a dict
+            # Create a config for each exchange
+            # If config is a TradingConfig object, recreate it with the new exchange
+            if hasattr(config, '__class__') and hasattr(config, 'exchange'):
+                # It's a TradingConfig-like object, create a new instance
+                from dataclasses import replace
+                exchange_config = replace(config, exchange=exchange_name)
+            elif isinstance(config, dict):
+                # It's a dict, make a copy and update exchange
                 exchange_config = config.copy()
-            
-            exchange_config['exchange'] = exchange_name
+                exchange_config['exchange'] = exchange_name
+            else:
+                # Fallback: try to use as-is
+                exchange_config = config
             
             try:
                 client = cls.create_exchange(exchange_name, exchange_config)
