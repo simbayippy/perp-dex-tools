@@ -105,6 +105,11 @@ class FundingArbConfig(BaseModel):
         description="Max new positions to open per cycle"
     )
     
+    default_position_size_usd: Decimal = Field(
+        default=Decimal("1000"),
+        description="Default size for each position in USD"
+    )
+    
     max_position_size_usd: Decimal = Field(
         default=Decimal("10000"),
         description="Max size per position in USD"
