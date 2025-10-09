@@ -243,6 +243,52 @@ class GrvtClient(BaseExchangeClient):
 
         return best_bid, best_ask
 
+    async def get_order_book_depth(
+        self, 
+        contract_id: str, 
+        levels: int = 10
+    ) -> Dict[str, List[Dict[str, Decimal]]]:
+        """
+        Get order book depth from GRVT.
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            levels: Number of price levels to fetch (default: 10)
+            
+        Returns:
+            Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
+        """
+        try:
+            # Get order book from GRVT REST client
+            order_book = self.rest_client.fetch_order_book(contract_id, limit=levels)
+
+            if not order_book or 'bids' not in order_book or 'asks' not in order_book:
+                self.logger.log("Unable to get order book from GRVT", "WARNING")
+                return {'bids': [], 'asks': []}
+
+            # Extract bids and asks
+            # GRVT format (via ccxt): [{'price': '50000', 'amount': '1.5'}, ...]
+            bids_raw = order_book.get('bids', [])
+            asks_raw = order_book.get('asks', [])
+
+            # Convert to standardized format (limit to requested levels)
+            bids = [{'price': Decimal(str(bid['price'])), 
+                    'size': Decimal(str(bid.get('amount', bid.get('size', 0))))} 
+                   for bid in bids_raw[:levels]]
+            asks = [{'price': Decimal(str(ask['price'])), 
+                    'size': Decimal(str(ask.get('amount', ask.get('size', 0))))} 
+                   for ask in asks_raw[:levels]]
+
+            return {
+                'bids': bids,
+                'asks': asks
+            }
+
+        except Exception as e:
+            self.logger.log(f"Error fetching order book depth: {e}", "ERROR")
+            # Return empty order book on error
+            return {'bids': [], 'asks': []}
+
     async def place_limit_order(
         self,
         contract_id: str,

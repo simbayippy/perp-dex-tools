@@ -464,6 +464,47 @@ class AsterClient(BaseExchangeClient):
 
         return best_bid, best_ask
 
+    async def get_order_book_depth(
+        self, 
+        contract_id: str, 
+        levels: int = 10
+    ) -> Dict[str, List[Dict[str, Decimal]]]:
+        """
+        Get order book depth from Aster.
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            levels: Number of price levels to fetch (default: 10)
+            
+        Returns:
+            Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
+        """
+        try:
+            # Call Aster API: GET /fapi/v1/depth
+            result = await self._make_request('GET', '/fapi/v1/depth', {
+                'symbol': contract_id,
+                'limit': levels
+            })
+            
+            # Parse response
+            # Aster returns: {"bids": [["price", "qty"], ...], "asks": [["price", "qty"], ...]}
+            bids_raw = result.get('bids', [])
+            asks_raw = result.get('asks', [])
+            
+            # Convert to standardized format
+            bids = [{'price': Decimal(bid[0]), 'size': Decimal(bid[1])} for bid in bids_raw]
+            asks = [{'price': Decimal(ask[0]), 'size': Decimal(ask[1])} for ask in asks_raw]
+            
+            return {
+                'bids': bids,
+                'asks': asks
+            }
+            
+        except Exception as e:
+            self.logger.log(f"Error fetching order book depth: {e}", "ERROR")
+            # Return empty order book on error
+            return {'bids': [], 'asks': []}
+
     async def get_order_price(self, direction: str) -> Decimal:
         """Get the price of an order with Aster using official SDK."""
         best_bid, best_ask = await self.fetch_bbo_prices(self.config.contract_id)

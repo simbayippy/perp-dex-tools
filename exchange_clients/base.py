@@ -279,31 +279,27 @@ class BaseExchangeClient(ABC):
         """Get account positions."""
         pass
 
+    @abstractmethod
     async def get_order_book_depth(
         self, 
         contract_id: str, 
         levels: int = 10
-    ) -> Dict[str, List[Tuple[Decimal, Decimal]]]:
+    ) -> Dict[str, List[Dict[str, Decimal]]]:
         """
-        Get order book depth (optional - not all exchanges support this).
+        Get order book depth for liquidity analysis.
         
         Args:
             contract_id: Contract/symbol identifier
             levels: Number of price levels to fetch (default: 10)
             
         Returns:
-            Dictionary with 'bids' and 'asks' lists of (price, size) tuples
+            Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
             Example: {
-                'bids': [(Decimal('50000'), Decimal('1.5')), ...],
-                'asks': [(Decimal('50001'), Decimal('2.0')), ...]
+                'bids': [{'price': Decimal('50000'), 'size': Decimal('1.5')}, ...],
+                'asks': [{'price': Decimal('50001'), 'size': Decimal('2.0')}, ...]
             }
-            
-        Raises:
-            NotImplementedError: If exchange doesn't support order book depth
         """
-        raise NotImplementedError(
-            f"{self.get_exchange_name()} does not support order book depth queries"
-        )
+        pass
 
     @abstractmethod
     def setup_order_update_handler(self, handler) -> None:

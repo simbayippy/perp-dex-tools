@@ -252,6 +252,53 @@ class EdgeXClient(BaseExchangeClient):
         best_ask = Decimal(asks[0]['price']) if asks and len(asks) > 0 else 0
         return best_bid, best_ask
 
+    async def get_order_book_depth(
+        self, 
+        contract_id: str, 
+        levels: int = 10
+    ) -> Dict[str, List[Dict[str, Decimal]]]:
+        """
+        Get order book depth from EdgeX.
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            levels: Number of price levels to fetch (default: 10)
+            
+        Returns:
+            Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
+        """
+        try:
+            depth_params = GetOrderBookDepthParams(contract_id=contract_id, limit=levels)
+            order_book = await self.client.quote.get_order_book_depth(depth_params)
+            order_book_data = order_book.get('data', [])
+
+            if not order_book_data:
+                return {'bids': [], 'asks': []}
+
+            # Get the first (and should be only) order book entry
+            order_book_entry = order_book_data[0]
+
+            # Extract bids and asks from the entry
+            bids_raw = order_book_entry.get('bids', [])
+            asks_raw = order_book_entry.get('asks', [])
+
+            # Convert to standardized format
+            # EdgeX format: [{'price': '50000', 'size': '1.5'}, ...]
+            bids = [{'price': Decimal(bid['price']), 'size': Decimal(bid['size'])} 
+                   for bid in bids_raw]
+            asks = [{'price': Decimal(ask['price']), 'size': Decimal(ask['size'])} 
+                   for ask in asks_raw]
+
+            return {
+                'bids': bids,
+                'asks': asks
+            }
+
+        except Exception as e:
+            self.logger.log(f"Error fetching order book depth: {e}", "ERROR")
+            # Return empty order book on error
+            return {'bids': [], 'asks': []}
+
     async def place_limit_order(
         self,
         contract_id: str,

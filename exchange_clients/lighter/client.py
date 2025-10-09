@@ -257,6 +257,56 @@ class LighterClient(BaseExchangeClient):
 
         return best_bid, best_ask
 
+    async def get_order_book_depth(
+        self, 
+        contract_id: str, 
+        levels: int = 10
+    ) -> Dict[str, List[Dict[str, Decimal]]]:
+        """
+        Get order book depth from Lighter WebSocket (real-time maintained book).
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            levels: Number of price levels to fetch (default: 10)
+            
+        Returns:
+            Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
+        """
+        try:
+            if not hasattr(self, 'ws_manager') or not self.ws_manager:
+                self.logger.log("WebSocket manager not initialized", "WARNING")
+                return {'bids': [], 'asks': []}
+
+            async with self.ws_manager.order_book_lock:
+                bids_dict = self.ws_manager.order_book.get("bids", {})
+                asks_dict = self.ws_manager.order_book.get("asks", {})
+
+                if not bids_dict or not asks_dict:
+                    self.logger.log("Order book not yet loaded from WebSocket", "WARNING")
+                    return {'bids': [], 'asks': []}
+
+                # Convert to list format sorted by price
+                # Bids: highest price first (descending)
+                sorted_bids = sorted(bids_dict.items(), reverse=True)[:levels]
+                # Asks: lowest price first (ascending)
+                sorted_asks = sorted(asks_dict.items())[:levels]
+
+                # Convert to standardized format
+                bids = [{'price': Decimal(str(price)), 'size': Decimal(str(size))} 
+                       for price, size in sorted_bids]
+                asks = [{'price': Decimal(str(price)), 'size': Decimal(str(size))} 
+                       for price, size in sorted_asks]
+
+                return {
+                    'bids': bids,
+                    'asks': asks
+                }
+
+        except Exception as e:
+            self.logger.log(f"Error fetching order book depth: {e}", "ERROR")
+            # Return empty order book on error
+            return {'bids': [], 'asks': []}
+
     async def _submit_order_with_retry(self, order_params: Dict[str, Any]) -> OrderResult:
         """Submit an order with Lighter using official SDK."""
         # Ensure client is initialized

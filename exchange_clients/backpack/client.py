@@ -321,6 +321,50 @@ class BackpackClient(BaseExchangeClient):
 
         return best_bid, best_ask
 
+    async def get_order_book_depth(
+        self, 
+        contract_id: str, 
+        levels: int = 10
+    ) -> Dict[str, List[Dict[str, Decimal]]]:
+        """
+        Get order book depth from Backpack.
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            levels: Number of price levels to fetch (default: 10)
+            
+        Returns:
+            Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
+        """
+        try:
+            # Get order book from Backpack public API
+            order_book = self.public_client.get_depth(contract_id)
+
+            # Extract bids and asks
+            # Backpack format: [["price", "quantity"], ...]
+            bids_raw = order_book.get('bids', [])
+            asks_raw = order_book.get('asks', [])
+
+            # Sort and limit to requested levels
+            sorted_bids = sorted(bids_raw, key=lambda x: Decimal(x[0]), reverse=True)[:levels]
+            sorted_asks = sorted(asks_raw, key=lambda x: Decimal(x[0]))[:levels]
+
+            # Convert to standardized format
+            bids = [{'price': Decimal(bid[0]), 'size': Decimal(bid[1])} 
+                   for bid in sorted_bids]
+            asks = [{'price': Decimal(ask[0]), 'size': Decimal(ask[1])} 
+                   for ask in sorted_asks]
+
+            return {
+                'bids': bids,
+                'asks': asks
+            }
+
+        except Exception as e:
+            self.logger.log(f"Error fetching order book depth: {e}", "ERROR")
+            # Return empty order book on error
+            return {'bids': [], 'asks': []}
+
     async def place_limit_order(
         self,
         contract_id: str,
