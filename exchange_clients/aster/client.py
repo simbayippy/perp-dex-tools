@@ -485,66 +485,92 @@ class AsterClient(BaseExchangeClient):
             order_price = best_bid + self.config.tick_size
         return order_price
 
+    async def place_limit_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        price: Decimal,
+        side: str
+    ) -> OrderResult:
+        """
+        Place a limit order at a specific price on Aster.
+        
+        Args:
+            contract_id: Contract identifier
+            quantity: Order quantity
+            price: Limit price
+            side: 'buy' or 'sell'
+            
+        Returns:
+            OrderResult with order details
+        """
+        # Place limit order with post-only (GTX) for maker fees
+        order_data = {
+            'symbol': contract_id,
+            'side': side.upper(),
+            'type': 'LIMIT',
+            'quantity': str(quantity),
+            'price': str(self.round_to_tick(price)),
+            'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
+        }
+
+        result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
+        order_status = result.get('status', '')
+        order_id = result.get('orderId', '')
+
+        # Wait briefly to confirm order status
+        start_time = time.time()
+        while order_status == 'NEW' and time.time() - start_time < 2:
+            await asyncio.sleep(0.1)
+            order_info = await self.get_order_info(order_id)
+            if order_info is not None:
+                order_status = order_info.status
+
+        if order_status in ['NEW', 'PARTIALLY_FILLED']:
+            return OrderResult(
+                success=True, 
+                order_id=order_id, 
+                side=side, 
+                size=quantity, 
+                price=price, 
+                status='OPEN'
+            )
+        elif order_status == 'FILLED':
+            return OrderResult(
+                success=True, 
+                order_id=order_id, 
+                side=side, 
+                size=quantity, 
+                price=price, 
+                status='FILLED'
+            )
+        elif order_status == 'EXPIRED':
+            return OrderResult(
+                success=False, 
+                error_message='Limit order was rejected (post-only constraint)'
+            )
+        else:
+            return OrderResult(
+                success=False, 
+                error_message=f'Unknown order status: {order_status}'
+            )
+
     async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
-        """Place an open order with Aster."""
-        attempt = 0
-        while True:
-            attempt += 1
-            if attempt % 5 == 0:
-                self.logger.log(f"[OPEN] Attempt {attempt} to place order", "INFO")
-                active_orders = await self.get_active_orders(contract_id)
-                active_open_orders = 0
-                for order in active_orders:
-                    if order.side == self.config.direction:
-                        active_open_orders += 1
-                if active_open_orders > 1:
-                    self.logger.log(f"[OPEN] ERROR: Active open orders abnormal: {active_open_orders}", "ERROR")
-                    raise Exception(f"[OPEN] ERROR: Active open orders abnormal: {active_open_orders}")
-
-            best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
-
-            if best_bid <= 0 or best_ask <= 0:
-                return OrderResult(success=False, error_message='Invalid bid/ask prices')
-
-            # Determine order side and price
-            if direction == 'buy':
-                # For buy orders, place slightly below best ask to ensure execution
-                price = best_ask - self.config.tick_size
-            elif direction == 'sell':
-                # For sell orders, place slightly above best bid to ensure execution
-                price = best_bid + self.config.tick_size
-            else:
-                raise Exception(f"[OPEN] Invalid direction: {direction}")
-
-            # Place the order
-            order_data = {
-                'symbol': contract_id,
-                'side': direction.upper(),
-                'type': 'LIMIT',
-                'quantity': str(quantity),
-                'price': str(price),
-                'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
-            }
-
-            result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
-            order_status = result.get('status', '')
-            order_id = result.get('orderId', '')
-
-            start_time = time.time()
-            while order_status == 'NEW' and time.time() - start_time < 2:
-                await asyncio.sleep(0.1)
-                order_info = await self.get_order_info(order_id)
-                if order_info is not None:
-                    order_status = order_info.status
-
-            if order_status in ['NEW', 'PARTIALLY_FILLED']:
-                return OrderResult(success=True, order_id=order_id, side=direction, size=quantity, price=price, status='OPEN')
-            elif order_status == 'FILLED':
-                return OrderResult(success=True, order_id=order_id, side=direction, size=quantity, price=price, status='FILLED')
-            elif order_status == 'EXPIRED':
-                continue
-            else:
-                return OrderResult(success=False, error_message='Unknown order status: ' + order_status)
+        """
+        Aggressively open a position on Aster (uses limit order priced to fill quickly).
+        Similar to Lighter's implementation - gets aggressive price and uses place_limit_order.
+        """
+        # Get aggressive price that's likely to fill (acting like market order but with price protection)
+        order_price = await self.get_order_price(direction)
+        order_price = self.round_to_tick(order_price)
+        
+        # Use place_limit_order with the aggressive price
+        order_result = await self.place_limit_order(contract_id, quantity, order_price, direction)
+        
+        if not order_result.success:
+            raise Exception(f"[OPEN] Error placing order: {order_result.error_message}")
+        
+        return order_result
 
     async def _get_active_close_orders(self, contract_id: str) -> int:
         """Get active orders count for a contract."""
@@ -621,44 +647,53 @@ class AsterClient(BaseExchangeClient):
             else:
                 return OrderResult(success=False, error_message='Unknown order status: ' + order_status)
 
-    async def place_market_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
-        """Place a market order with Aster."""
-        # Validate direction
-        if direction.lower() not in ['buy', 'sell']:
-            return OrderResult(success=False, error_message=f'Invalid direction: {direction}')
+    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
+        """
+        Place a market order on Aster (true market order for immediate execution).
+        """
+        try:
+            # Validate side
+            if side.lower() not in ['buy', 'sell']:
+                return OrderResult(success=False, error_message=f'Invalid side: {side}')
 
-        # Place the market order
-        order_data = {
-            'symbol': contract_id,
-            'side': direction.upper(),
-            'type': 'MARKET',
-            'quantity': str(quantity)
-        }
+            # Place the market order
+            order_data = {
+                'symbol': contract_id,
+                'side': side.upper(),
+                'type': 'MARKET',
+                'quantity': str(quantity)
+            }
 
-        result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
-        order_status = result.get('status', '')
-        order_id = result.get('orderId', '')
+            result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
+            order_status = result.get('status', '')
+            order_id = result.get('orderId', '')
 
-        start_time = time.time()
-        while order_status != 'FILLED' and time.time() - start_time < 10:
-            await asyncio.sleep(0.2)
-            order_info = await self.get_order_info(order_id)
-            if order_info is not None:
-                order_status = order_info.status
+            # Wait for order to fill
+            start_time = time.time()
+            while order_status != 'FILLED' and time.time() - start_time < 10:
+                await asyncio.sleep(0.2)
+                order_info = await self.get_order_info(order_id)
+                if order_info is not None:
+                    order_status = order_info.status
 
-        if order_status != 'FILLED':
-            self.logger.log(f"Market order failed with status: {order_status}", "ERROR")
-            sys.exit(1)
-        # For market orders, we expect them to be filled immediately
-        else:
-            return OrderResult(
-                success=True,
-                order_id=order_id,
-                side=direction.lower(),
-                size=quantity,
-                price=order_info.price,
-                status='FILLED'
-            )
+            if order_status == 'FILLED':
+                return OrderResult(
+                    success=True,
+                    order_id=order_id,
+                    side=side.lower(),
+                    size=quantity,
+                    price=order_info.price if order_info else Decimal(0),
+                    status='FILLED'
+                )
+            else:
+                return OrderResult(
+                    success=False,
+                    error_message=f'Market order failed with status: {order_status}'
+                )
+                
+        except Exception as e:
+            self.logger.log(f"Error placing market order: {e}", "ERROR")
+            return OrderResult(success=False, error_message=str(e))
 
     async def cancel_order(self, order_id: str) -> OrderResult:
         """Cancel an order with Aster."""

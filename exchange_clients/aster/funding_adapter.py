@@ -10,7 +10,7 @@ from decimal import Decimal
 import re
 
 from exchange_clients.base import BaseFundingAdapter
-from utils.logger import logger
+from funding_rate_service.utils.logger import logger
 
 # Import Aster SDK
 try:

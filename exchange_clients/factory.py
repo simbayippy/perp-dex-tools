@@ -75,7 +75,7 @@ class ExchangeFactory:
         exchange_names: list[str], 
         config: Dict[str, Any],
         primary_exchange: str = None,
-        skip_unavailable: bool = True
+        skip_unavailable: bool = False
     ) -> Dict[str, BaseExchangeClient]:
         """
         Create multiple exchange client instances.
@@ -87,7 +87,7 @@ class ExchangeFactory:
             exchange_names: List of exchange names (e.g., ['lighter', 'grvt', 'backpack'])
             config: Base configuration dictionary (will be used for all exchanges)
             primary_exchange: Which exchange is the primary one (optional, defaults to first)
-            skip_unavailable: If True, skip exchanges that fail to instantiate instead of raising error
+            skip_unavailable: If True, skip exchanges that fail to instantiate instead of raising error (default: False)
         
         Returns:
             Dictionary mapping exchange names to client instances

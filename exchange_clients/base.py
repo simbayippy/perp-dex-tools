@@ -157,9 +157,24 @@ class BaseExchangeClient(ABC):
         """Place a close order."""
         pass
 
+    @abstractmethod
     async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
-        """Place a market order. Override if exchange supports it."""
-        return OrderResult(success=False, error_message="Market orders not supported by this exchange")
+        """
+        Place a market order (taker order for immediate execution).
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            quantity: Order size
+            side: 'buy' or 'sell'
+            
+        Returns:
+            OrderResult with order details
+            
+        Note:
+            If exchange doesn't support true market orders, implement using
+            aggressive limit order priced to execute immediately.
+        """
+        pass
 
     @abstractmethod
     async def cancel_order(self, order_id: str) -> OrderResult:

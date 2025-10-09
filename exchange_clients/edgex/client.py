@@ -249,6 +249,79 @@ class EdgeXClient(BaseExchangeClient):
         best_ask = Decimal(asks[0]['price']) if asks and len(asks) > 0 else 0
         return best_bid, best_ask
 
+    async def place_limit_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        price: Decimal,
+        side: str
+    ) -> OrderResult:
+        """
+        Place a limit order at a specific price on EdgeX.
+        
+        Args:
+            contract_id: Contract identifier
+            quantity: Order quantity
+            price: Limit price
+            side: 'buy' or 'sell'
+            
+        Returns:
+            OrderResult with order details
+        """
+        try:
+            # Convert side to OrderSide enum
+            order_side = OrderSide.BUY if side.lower() == 'buy' else OrderSide.SELL
+            
+            # Place limit order with post_only for maker fees
+            order_result = await self.client.create_limit_order(
+                contract_id=contract_id,
+                size=str(quantity),
+                price=str(self.round_to_tick(price)),
+                side=order_side,
+                post_only=True
+            )
+            
+            if not order_result or 'data' not in order_result:
+                return OrderResult(success=False, error_message='Failed to place limit order')
+            
+            # Extract order ID
+            order_id = order_result['data'].get('orderId')
+            if not order_id:
+                return OrderResult(success=False, error_message='No order ID in response')
+            
+            # Check order status
+            await asyncio.sleep(0.01)
+            order_info = await self.get_order_info(order_id)
+            
+            if order_info and order_info.status in ['OPEN', 'PARTIALLY_FILLED', 'FILLED']:
+                return OrderResult(
+                    success=True,
+                    order_id=order_id,
+                    side=side,
+                    size=quantity,
+                    price=price,
+                    status=order_info.status
+                )
+            elif order_info and order_info.status == 'CANCELED':
+                return OrderResult(success=False, error_message='Limit order was rejected (post-only constraint)')
+            else:
+                # Assume success if we can't verify
+                return OrderResult(
+                    success=True,
+                    order_id=order_id,
+                    side=side,
+                    size=quantity,
+                    price=price,
+                    status='OPEN'
+                )
+                
+        except Exception as e:
+            self.logger.log(f"Error placing limit order: {e}", "ERROR")
+            return OrderResult(
+                success=False,
+                error_message=f"Failed to place limit order: {str(e)}"
+            )
+
     async def get_order_price(self, direction: str) -> Decimal:
         """Get the price of an order with EdgeX using official SDK."""
         best_bid, best_ask = await self.fetch_bbo_prices(self.config.contract_id)
@@ -266,86 +339,88 @@ class EdgeXClient(BaseExchangeClient):
         return self.round_to_tick(order_price)
 
     async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
-        """Place an open order with EdgeX using official SDK with retry logic for POST_ONLY rejections."""
-        max_retries = 15
-        retry_count = 0
+        """
+        Aggressively open a position on EdgeX (uses limit order priced to fill quickly).
+        Similar to Lighter's implementation - gets aggressive price and uses place_limit_order.
+        """
+        # Get aggressive price that's likely to fill (acting like market order but with price protection)
+        order_price = await self.get_order_price(direction)
+        order_price = self.round_to_tick(order_price)
+        
+        # Use place_limit_order with the aggressive price
+        order_result = await self.place_limit_order(contract_id, quantity, order_price, direction)
+        
+        if not order_result.success:
+            raise Exception(f"[OPEN] Error placing order: {order_result.error_message}")
+        
+        return order_result
 
-        while retry_count < max_retries:
-            try:
-                best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
-
-                if best_bid <= 0 or best_ask <= 0:
-                    return OrderResult(success=False, error_message='Invalid bid/ask prices')
-
-                if direction == 'buy':
-                    # For buy orders, place slightly below best ask to ensure execution
-                    order_price = best_ask - self.config.tick_size
-                    side = OrderSide.BUY
-                else:
-                    # For sell orders, place slightly above best bid to ensure execution
-                    order_price = best_bid + self.config.tick_size
-                    side = OrderSide.SELL
-
-                # Place the order using official SDK (post-only to ensure maker order)
-                order_result = await self.client.create_limit_order(
-                    contract_id=contract_id,
-                    size=str(quantity),
-                    price=str(self.round_to_tick(order_price)),
+    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
+        """
+        Place a market order on EdgeX (uses limit order without post_only to ensure fill).
+        This acts as a true market order by using an aggressive limit price.
+        """
+        try:
+            # Get aggressive price
+            best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
+            
+            if best_bid <= 0 or best_ask <= 0:
+                return OrderResult(success=False, error_message='Invalid bid/ask prices')
+            
+            # Use very aggressive pricing to ensure immediate fill
+            if side.lower() == 'buy':
+                # Buy at ask price (or slightly above)
+                order_price = best_ask
+                order_side = OrderSide.BUY
+            else:
+                # Sell at bid price (or slightly below)
+                order_price = best_bid
+                order_side = OrderSide.SELL
+            
+            order_price = self.round_to_tick(order_price)
+            
+            # Place limit order WITHOUT post_only (allows taker execution)
+            order_result = await self.client.create_limit_order(
+                contract_id=contract_id,
+                size=str(quantity),
+                price=str(order_price),
+                side=order_side,
+                post_only=False  # Allow taker order for immediate fill
+            )
+            
+            if not order_result or 'data' not in order_result:
+                return OrderResult(success=False, error_message='Failed to place market order')
+            
+            order_id = order_result['data'].get('orderId')
+            if not order_id:
+                return OrderResult(success=False, error_message='No order ID in response')
+            
+            # Check order status
+            await asyncio.sleep(0.05)
+            order_info = await self.get_order_info(order_id)
+            
+            if order_info:
+                return OrderResult(
+                    success=True,
+                    order_id=order_id,
                     side=side,
-                    post_only=True
+                    size=quantity,
+                    price=order_price,
+                    status=order_info.status
                 )
-
-                if not order_result or 'data' not in order_result:
-                    return OrderResult(success=False, error_message='Failed to place order')
-
-                # Extract order ID from response
-                order_id = order_result['data'].get('orderId')
-                if not order_id:
-                    return OrderResult(success=False, error_message='No order ID in response')
-
-                # Check order status after a short delay to see if it was rejected
-                await asyncio.sleep(0.01)
-                order_info = await self.get_order_info(order_id)
-
-                if order_info:
-                    if order_info.status == 'CANCELED':
-                        if retry_count < max_retries - 1:
-                            retry_count += 1
-                            continue
-                        else:
-                            return OrderResult(success=False, error_message=f'Order rejected after {max_retries} attempts')
-                    elif order_info.status in ['OPEN', 'PARTIALLY_FILLED', 'FILLED']:
-                        # Order successfully placed
-                        return OrderResult(
-                            success=True,
-                            order_id=order_id,
-                            side=side.value,
-                            size=quantity,
-                            price=order_price,
-                            status=order_info.status
-                        )
-                    else:
-                        return OrderResult(success=False, error_message=f'Unexpected order status: {order_info.status}')
-                else:
-                    # Assume order is successful if we can't get info
-                    return OrderResult(
-                        success=True,
-                        order_id=order_id,
-                        side=side.value,
-                        size=quantity,
-                        price=order_price,
-                        status='OPEN'
-                    )
-
-            except Exception as e:
-                if retry_count < max_retries - 1:
-                    retry_count += 1
-                    await asyncio.sleep(0.1)  # Wait before retry
-                    continue
-                else:
-                    return OrderResult(success=False, error_message=str(e))
-
-        return OrderResult(success=False, error_message='Max retries exceeded')
+            else:
+                return OrderResult(
+                    success=True,
+                    order_id=order_id,
+                    side=side,
+                    size=quantity,
+                    price=order_price,
+                    status='FILLED'
+                )
+                
+        except Exception as e:
+            self.logger.log(f"Error placing market order: {e}", "ERROR")
+            return OrderResult(success=False, error_message=str(e))
 
     async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
         """Place a close order with EdgeX using official SDK with retry logic for POST_ONLY rejections."""
