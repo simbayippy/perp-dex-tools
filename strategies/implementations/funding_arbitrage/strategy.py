@@ -96,22 +96,40 @@ class FundingArbitrageStrategy(StatefulStrategy):
         self.config = funding_config  # Store the converted config
         # self.exchange_clients is already set by StatefulStrategy.__init__
         
-        # For funding arbitrage, we need multiple exchanges
-        # If only one exchange client provided, log a warning but continue
+        # ⭐ Exchange Client Management
+        # 
+        # IMPORTANT DISTINCTION:
+        # 1. scan_exchanges (config) - Which exchanges to consider for opportunity scanning
+        #    - These are just labels for filtering database queries
+        #    - The funding rate data comes from the database (collected by funding_rate_service)
+        #    - No trading client needed for scanning
+        #
+        # 2. exchange_clients (this dict) - Which exchanges we can actually TRADE on
+        #    - Only exchanges with fully implemented BaseExchangeClient can be here
+        #    - Currently: Only 'lighter' is fully implemented
+        #    - Others (edgex, grvt, aster, backpack) only have funding adapters
+        #
+        # The strategy will:
+        # - Scan opportunities across ALL exchanges in scan_exchanges (from database)
+        # - But only execute trades on exchanges with available trading clients
+        
         available_exchanges = list(exchange_clients.keys())
-        required_exchanges = funding_config.exchanges
+        required_exchanges = funding_config.exchanges  # These are from scan_exchanges
         
         missing_exchanges = [dex for dex in required_exchanges if dex not in exchange_clients]
         if missing_exchanges:
-            self.logger.log(f"Warning: Missing exchange clients for: {missing_exchanges}")
-            self.logger.log(f"Available exchanges: {available_exchanges}")
-            self.logger.log("Strategy will only look for opportunities between available exchanges")
+            self.logger.log(f"ℹ️  Exchanges configured for scanning: {required_exchanges}")
+            self.logger.log(f"ℹ️  Exchanges with trading clients: {available_exchanges}")
+            if missing_exchanges:
+                self.logger.log(f"⚠️  Trading not available on: {missing_exchanges} (funding data only)")
+            self.logger.log(f"✅ Will scan ALL configured exchanges but only trade on {available_exchanges}")
             
-            # Update config to only use available exchanges
-            funding_config.exchanges = [dex for dex in required_exchanges if dex in exchange_clients]
+            # Keep all exchanges in config for opportunity scanning (database queries)
+            # Don't filter them out - we want to see opportunities even if we can't trade them all yet
+            # funding_config.exchanges remains unchanged
             
-            if not funding_config.exchanges:
-                raise ValueError(f"No valid exchange clients available. Required: {required_exchanges}, Available: {available_exchanges}")
+        if not available_exchanges:
+            raise ValueError(f"No trading-capable exchange clients available. At least one exchange with full trading support is required.")
         
         # ⭐ Core components from Hummingbot pattern
         self.analyzer = FundingRateAnalyzer()
@@ -485,6 +503,26 @@ class FundingArbitrageStrategy(StatefulStrategy):
         Returns:
             True if should take this opportunity
         """
+        # ⭐ Check if we have trading clients for both sides
+        long_dex = opportunity.long_dex
+        short_dex = opportunity.short_dex
+        
+        if long_dex not in self.exchange_clients:
+            self.logger.log(
+                f"⏭️  Skipping {opportunity.symbol} opportunity: "
+                f"{long_dex} (long side) doesn't have trading support yet",
+                "INFO"
+            )
+            return False
+        
+        if short_dex not in self.exchange_clients:
+            self.logger.log(
+                f"⏭️  Skipping {opportunity.symbol} opportunity: "
+                f"{short_dex} (short side) doesn't have trading support yet",
+                "INFO"
+            )
+            return False
+        
         # Check position size limits
         # (size is based on config, not from opportunity)
         size_usd = self.config.default_position_size_usd
