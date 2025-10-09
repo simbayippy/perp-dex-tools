@@ -300,6 +300,31 @@ class BaseExchangeClient(ABC):
             }
         """
         pass
+    
+    def normalize_symbol(self, symbol: str) -> str:
+        """
+        [INTERNAL] Convert a normalized symbol to this exchange's expected format.
+        
+        ⚠️ This method is for internal use by exchange methods (get_order_book_depth,
+        place_limit_order, etc.). Callers should NOT call this directly - just pass
+        symbols to methods and let the exchange handle normalization.
+        
+        Different exchanges use different symbol naming conventions:
+        - Lighter: "BTC", "ETH", "ZORA" (base asset only)
+        - Aster: "BTCUSDT", "ETHUSDT", "ZORAUSDT" (base + quote)
+        - Backpack: "BTC_USDC", "ETH-PERP" (various formats)
+        
+        Override this method in each exchange client to handle conversion.
+        
+        Args:
+            symbol: Normalized symbol (usually just the base asset, e.g., "BTC")
+            
+        Returns:
+            Exchange-specific symbol format
+        
+        Default implementation: Return symbol as-is (no conversion needed)
+        """
+        return symbol
 
     @abstractmethod
     def setup_order_update_handler(self, handler) -> None:

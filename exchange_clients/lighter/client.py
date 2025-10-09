@@ -233,6 +233,28 @@ class LighterClient(BaseExchangeClient):
     def get_exchange_name(self) -> str:
         """Get the exchange name."""
         return "lighter"
+    
+    def normalize_symbol(self, symbol: str) -> str:
+        """
+        Convert normalized symbol to Lighter's expected format.
+        
+        Lighter accepts base asset format (e.g., "BTC", "ETH", "ZORA").
+        The market_id lookup handles both "BTC" and "BTC-PERP" formats.
+        
+        Args:
+            symbol: Normalized symbol (e.g., "BTC", "ETH", "ZORA")
+            
+        Returns:
+            Lighter-formatted symbol (base asset only, uppercase)
+        """
+        # Strip common quote currencies if present
+        symbol_upper = symbol.upper()
+        for suffix in ['USDT', 'USDC', '-PERP', 'PERP']:
+            if symbol_upper.endswith(suffix):
+                symbol_upper = symbol_upper[:-len(suffix)]
+        
+        # Clean up any trailing separators
+        return symbol_upper.strip('-_/')
 
     def setup_order_update_handler(self, handler) -> None:
         """Setup order update handler for WebSocket."""
@@ -341,9 +363,13 @@ class LighterClient(BaseExchangeClient):
                 market_id = int(contract_id)
                 self.logger.log(f"📊 [LIGHTER] Using contract_id as market_id: {market_id}", "INFO")
             except (ValueError, TypeError):
-                # contract_id is a symbol string - look up the market_id
-                self.logger.log(f"🔍 [LIGHTER] Looking up market_id for symbol: '{contract_id}'", "INFO")
-                market_id = await self._get_market_id_for_symbol(contract_id)
+                # contract_id is a symbol string - normalize it first
+                normalized_symbol = self.normalize_symbol(contract_id)
+                self.logger.log(
+                    f"🔍 [LIGHTER] Looking up market_id for symbol: '{contract_id}' → '{normalized_symbol}'",
+                    "INFO"
+                )
+                market_id = await self._get_market_id_for_symbol(normalized_symbol)
                 
                 if market_id is None:
                     self.logger.log(

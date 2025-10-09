@@ -125,6 +125,7 @@ class LiquidityAnalyzer:
         """
         try:
             # Get order book depth
+            # Note: Each exchange client handles symbol normalization internally
             order_book = await exchange_client.get_order_book_depth(
                 symbol, 
                 levels=depth_levels

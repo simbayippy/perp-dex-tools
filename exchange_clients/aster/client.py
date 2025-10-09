@@ -16,6 +16,7 @@ import websockets
 import sys
 
 from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
+from exchange_clients.aster.common import get_aster_symbol_format
 from helpers.logger import TradingLogger
 
 
@@ -441,6 +442,21 @@ class AsterClient(BaseExchangeClient):
     def get_exchange_name(self) -> str:
         """Get the exchange name."""
         return "aster"
+    
+    def normalize_symbol(self, symbol: str) -> str:
+        """
+        Convert normalized symbol to Aster's expected format.
+        
+        Uses the existing `get_aster_symbol_format()` from common.py.
+        
+        Args:
+            symbol: Normalized symbol (e.g., "BTC", "ETH", "ZORA")
+            
+        Returns:
+            Aster-formatted symbol (e.g., "BTCUSDT", "ETHUSDT", "ZORAUSDT")
+        """
+        # Use the common utility function
+        return get_aster_symbol_format(symbol)
 
     def setup_order_update_handler(self, handler) -> None:
         """Setup order update handler for WebSocket."""
@@ -457,7 +473,9 @@ class AsterClient(BaseExchangeClient):
     @query_retry(default_return=(0, 0))
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
         """Fetch best bid and ask prices from Aster."""
-        result = await self._make_request('GET', '/fapi/v1/ticker/bookTicker', {'symbol': contract_id})
+        # Normalize symbol to Aster's format
+        normalized_symbol = self.normalize_symbol(contract_id)
+        result = await self._make_request('GET', '/fapi/v1/ticker/bookTicker', {'symbol': normalized_symbol})
 
         best_bid = Decimal(result.get('bidPrice', 0))
         best_ask = Decimal(result.get('askPrice', 0))
@@ -479,22 +497,26 @@ class AsterClient(BaseExchangeClient):
         Returns:
             Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
         """
+        # Normalize symbol to Aster's format (e.g., "ZORA" → "ZORAUSDT")
+        normalized_symbol = self.normalize_symbol(contract_id)
+        
         self.logger.log(
-            f"🔍 [ASTER] get_order_book_depth() called with symbol='{contract_id}', levels={levels}",
+            f"🔍 [ASTER] get_order_book_depth() called with symbol='{contract_id}' → normalized to '{normalized_symbol}', levels={levels}",
             "INFO"
         )
-        print(f"🔍 [ASTER] Attempting to fetch order book for symbol='{contract_id}', limit={levels}")
+        print(f"🔍 [ASTER] Symbol normalization: '{contract_id}' → '{normalized_symbol}'")
+        print(f"🔍 [ASTER] Attempting to fetch order book for symbol='{normalized_symbol}', limit={levels}")
         try:
             self.logger.log(
-                f"📊 [ASTER] Fetching order book: symbol={contract_id}, limit={levels}",
+                f"📊 [ASTER] Fetching order book: symbol={normalized_symbol}, limit={levels}",
                 "INFO"
             )
             
             # Call Aster API: GET /fapi/v1/depth
             # Note: Aster expects symbols with quote currency (e.g., "BTCUSDT", not "BTC")
-            print(f"📊 [ASTER] Calling API: GET /fapi/v1/depth?symbol={contract_id}&limit={levels}")
+            print(f"📊 [ASTER] Calling API: GET /fapi/v1/depth?symbol={normalized_symbol}&limit={levels}")
             result = await self._make_request('GET', '/fapi/v1/depth', {
-                'symbol': contract_id,
+                'symbol': normalized_symbol,
                 'limit': levels
             })
             print(f"✅ [ASTER] API call successful, parsing response...")
@@ -574,9 +596,12 @@ class AsterClient(BaseExchangeClient):
         Returns:
             OrderResult with order details
         """
+        # Normalize symbol to Aster's format
+        normalized_symbol = self.normalize_symbol(contract_id)
+        
         # Place limit order with post-only (GTX) for maker fees
         order_data = {
-            'symbol': contract_id,
+            'symbol': normalized_symbol,
             'side': side.upper(),
             'type': 'LIMIT',
             'quantity': str(quantity),
@@ -722,13 +747,16 @@ class AsterClient(BaseExchangeClient):
         Place a market order on Aster (true market order for immediate execution).
         """
         try:
+            # Normalize symbol to Aster's format
+            normalized_symbol = self.normalize_symbol(contract_id)
+            
             # Validate side
             if side.lower() not in ['buy', 'sell']:
                 return OrderResult(success=False, error_message=f'Invalid side: {side}')
 
             # Place the market order
             order_data = {
-                'symbol': contract_id,
+                'symbol': normalized_symbol,
                 'side': side.upper(),
                 'type': 'MARKET',
                 'quantity': str(quantity)
