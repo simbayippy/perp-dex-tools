@@ -483,6 +483,7 @@ class AsterClient(BaseExchangeClient):
             f"🔍 [ASTER] get_order_book_depth() called with symbol='{contract_id}', levels={levels}",
             "INFO"
         )
+        print(f"🔍 [ASTER] Attempting to fetch order book for symbol='{contract_id}', limit={levels}")
         try:
             self.logger.log(
                 f"📊 [ASTER] Fetching order book: symbol={contract_id}, limit={levels}",
@@ -490,10 +491,13 @@ class AsterClient(BaseExchangeClient):
             )
             
             # Call Aster API: GET /fapi/v1/depth
+            # Note: Aster expects symbols with quote currency (e.g., "BTCUSDT", not "BTC")
+            print(f"📊 [ASTER] Calling API: GET /fapi/v1/depth?symbol={contract_id}&limit={levels}")
             result = await self._make_request('GET', '/fapi/v1/depth', {
                 'symbol': contract_id,
                 'limit': levels
             })
+            print(f"✅ [ASTER] API call successful, parsing response...")
             
             # Parse response
             # Aster returns: {"bids": [["price", "qty"], ...], "asks": [["price", "qty"], ...]}
@@ -528,6 +532,8 @@ class AsterClient(BaseExchangeClient):
             }
             
         except Exception as e:
+            print(f"❌ [ASTER] ERROR fetching order book for '{contract_id}': {e}")
+            print(f"   Hint: Aster expects symbols with quote currency (e.g., 'BTCUSDT' not 'BTC')")
             self.logger.log(f"❌ [ASTER] Error fetching order book for {contract_id}: {e}", "ERROR")
             import traceback
             self.logger.log(f"Traceback: {traceback.format_exc()}", "DEBUG")
