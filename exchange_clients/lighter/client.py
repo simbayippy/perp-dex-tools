@@ -272,7 +272,7 @@ class LighterClient(BaseExchangeClient):
         This is more reliable than WebSocket for pre-trade liquidity checks.
         
         Args:
-            contract_id: Contract/symbol identifier (market_id as string)
+            contract_id: Contract/symbol identifier (can be symbol or market_id)
             levels: Number of price levels to fetch (default: 10, max: 100)
             
         Returns:
@@ -282,13 +282,23 @@ class LighterClient(BaseExchangeClient):
             # Use REST API for order book (more reliable than WebSocket for one-time queries)
             url = f"{self.base_url}/api/v1/orderBookOrders"
             
-            # contract_id should be market_id (integer)
-            # If it's a string representation, convert it
-            try:
-                market_id = int(contract_id)
-            except (ValueError, TypeError):
-                self.logger.log(f"Invalid contract_id format: {contract_id}, expected integer", "ERROR")
-                return {'bids': [], 'asks': []}
+            # Lighter uses integer market_id for API calls
+            # Try to use the stored market_id from config first (most reliable)
+            if hasattr(self.config, 'contract_id') and isinstance(self.config.contract_id, int):
+                market_id = self.config.contract_id
+                self.logger.log(f"Using stored market_id: {market_id}", "DEBUG")
+            else:
+                # Fallback: try to convert the passed contract_id to int
+                try:
+                    market_id = int(contract_id)
+                    self.logger.log(f"Converted contract_id '{contract_id}' to market_id: {market_id}", "DEBUG")
+                except (ValueError, TypeError):
+                    self.logger.log(
+                        f"Cannot convert contract_id '{contract_id}' to integer market_id. "
+                        f"Config contract_id: {getattr(self.config, 'contract_id', 'not set')}",
+                        "ERROR"
+                    )
+                    return {'bids': [], 'asks': []}
             
             params = {
                 'market_id': market_id,
