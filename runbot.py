@@ -36,10 +36,10 @@ Launch Modes:
 
 Creating a Config File:
   # Run the interactive config builder
-  python config_builder.py
+  python -m trading_config.config_builder
   
   # OR generate examples and edit
-  python config_yaml.py
+  python -m trading_config.config_yaml
   nano configs/example_funding_arbitrage.yml
 
 Examples:
@@ -165,7 +165,7 @@ async def main():
     # MODE 1: Config File Mode
     # ========================================================================
     if args.config:
-        from config_yaml import load_config_from_yaml, validate_config_file
+        from trading_config.config_yaml import load_config_from_yaml, validate_config_file
         
         config_path = Path(args.config)
         if not config_path.exists():
@@ -205,7 +205,7 @@ async def main():
         if not args.strategy:
             print("Error: --strategy is required (or use --config)")
             print("\nTo create a config file:")
-            print("  python config_builder.py")
+            print("  python -m trading_config.config_builder")
             print("\nThen run:")
             print("  python runbot.py --config configs/your_config.yml")
             sys.exit(1)

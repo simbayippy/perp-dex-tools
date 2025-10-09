@@ -1,3 +1,4 @@
+**THIS DOC IS SLIGHTLY OUTDATED, CHECK CURRENT IMPLEMENTATION FIRST**
 # Adding New Exchanges
 
 This document explains how to add support for new exchanges to the modular trading bot.

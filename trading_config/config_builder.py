@@ -179,7 +179,7 @@ class InteractiveConfigBuilder:
         configs_dir.mkdir(exist_ok=True)
         config_path = configs_dir / filename
         
-        from config_yaml import save_config_to_yaml
+        from trading_config.config_yaml import save_config_to_yaml
         save_config_to_yaml(strategy_name, config, config_path)
         
         print(f"✓ Configuration saved to: {config_path}")
@@ -456,8 +456,8 @@ class InteractiveConfigBuilder:
             # Full path
             config_path = configs_dir / filename
             
-            # Save using YAML helper (will create in next task)
-            from config_yaml import save_config_to_yaml
+            # Save using YAML helper
+            from trading_config.config_yaml import save_config_to_yaml
             save_config_to_yaml(strategy_name, config, config_path)
             
             print(f"✓ Configuration saved to: {config_path}")
