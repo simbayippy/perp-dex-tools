@@ -3,7 +3,7 @@ Exchange factory for creating exchange clients dynamically.
 """
 
 from typing import Dict, Any, Type
-from exchange_clients.base import BaseExchangeClient
+from exchange_clients.base import BaseExchangeClient, MissingCredentialsError
 
 
 class ExchangeFactory:
@@ -74,7 +74,8 @@ class ExchangeFactory:
         cls, 
         exchange_names: list[str], 
         config: Dict[str, Any],
-        primary_exchange: str = None
+        primary_exchange: str = None,
+        skip_unavailable: bool = False
     ) -> Dict[str, BaseExchangeClient]:
         """
         Create multiple exchange client instances.
@@ -86,13 +87,14 @@ class ExchangeFactory:
             exchange_names: List of exchange names (e.g., ['lighter', 'grvt', 'backpack'])
             config: Base configuration dictionary (will be used for all exchanges)
             primary_exchange: Which exchange is the primary one (optional, defaults to first)
+            skip_unavailable: If True, skip exchanges that fail to instantiate instead of raising error (default: False)
         
         Returns:
             Dictionary mapping exchange names to client instances
             e.g., {'lighter': LighterClient, 'grvt': GrvtClient}
         
         Raises:
-            ValueError: If any exchange is not supported
+            ValueError: If any exchange is not supported (and skip_unavailable=False)
         
         Example:
             >>> clients = ExchangeFactory.create_multiple_exchanges(
@@ -114,6 +116,7 @@ class ExchangeFactory:
             primary_exchange = exchange_names[0]
         
         clients = {}
+        failed_exchanges = []
         
         for exchange_name in exchange_names:
             # Create a config for each exchange
@@ -133,17 +136,56 @@ class ExchangeFactory:
             try:
                 client = cls.create_exchange(exchange_name, exchange_config)
                 clients[exchange_name] = client
+            except MissingCredentialsError as e:
+                # Skip exchanges with missing credentials (always, even if primary)
+                failed_exchanges.append((exchange_name, f"Missing credentials"))
+                print(f"⚠️  Skipping {exchange_name}: Missing or invalid API credentials")
+                continue
             except Exception as e:
-                # Clean up already created clients
-                for created_client in clients.values():
-                    try:
-                        # Try to disconnect if the client has a disconnect method
-                        if hasattr(created_client, 'disconnect'):
-                            import asyncio
-                            asyncio.create_task(created_client.disconnect())
-                    except:
-                        pass
-                raise ValueError(f"Failed to create exchange client for {exchange_name}: {e}")
+                # Track failed exchanges
+                failed_exchanges.append((exchange_name, str(e)))
+                
+                # If this is the primary exchange, we must fail
+                if exchange_name == primary_exchange:
+                    # Clean up already created clients
+                    for created_client in clients.values():
+                        try:
+                            if hasattr(created_client, 'disconnect'):
+                                import asyncio
+                                asyncio.create_task(created_client.disconnect())
+                        except:
+                            pass
+                    raise ValueError(f"Failed to create PRIMARY exchange client for {exchange_name}: {e}")
+                
+                # If skip_unavailable is False, fail on any error
+                if not skip_unavailable:
+                    # Clean up already created clients
+                    for created_client in clients.values():
+                        try:
+                            if hasattr(created_client, 'disconnect'):
+                                import asyncio
+                                asyncio.create_task(created_client.disconnect())
+                        except:
+                            pass
+                    raise ValueError(f"Failed to create exchange client for {exchange_name}: {e}")
+                
+                # Otherwise, just log and continue
+                print(f"⚠️  Skipping {exchange_name}: {str(e)[:100]}")
+        
+        # Warn if we failed to create any clients
+        if failed_exchanges:
+            print(f"\n⚠️  Warning: {len(failed_exchanges)} exchange(s) unavailable for trading:")
+            for ex_name, error in failed_exchanges:
+                # Show shortened error for abstract class issues
+                if "abstract" in error.lower():
+                    print(f"   • {ex_name}: Trading not yet implemented (funding data only)")
+                else:
+                    print(f"   • {ex_name}: {error[:80]}")
+            print(f"\n✅ Successfully created {len(clients)} trading client(s): {list(clients.keys())}\n")
+        
+        # Ensure we have at least the primary exchange
+        if not clients:
+            raise ValueError(f"Failed to create any exchange clients. Primary exchange '{primary_exchange}' is required.")
         
         return clients
 

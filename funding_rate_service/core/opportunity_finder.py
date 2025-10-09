@@ -8,7 +8,7 @@ Filters by volume, OI, spread, and other criteria.
 from decimal import Decimal
 from typing import List, Optional, Dict
 from datetime import datetime
-from funding_rate_service.core.fee_calculator import FeeCalculator
+from funding_rate_service.core.fee_calculator import FundingArbFeeCalculator
 from funding_rate_service.models.opportunity import ArbitrageOpportunity
 from funding_rate_service.models.filters import OpportunityFilter
 from funding_rate_service.database.connection import Database
@@ -32,7 +32,7 @@ class OpportunityFinder:
     def __init__(
         self,
         database: Database,
-        fee_calculator: FeeCalculator,
+        fee_calculator: FundingArbFeeCalculator,
         dex_mapper: DEXMapper,
         symbol_mapper: SymbolMapper
     ):

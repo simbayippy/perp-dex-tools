@@ -12,7 +12,7 @@ from .base_components import (
     InMemoryStateManager
 )
 from .tracked_order import TrackedOrder, OrderData
-from .fee_calculator import FeeCalculator, TradeFee, OrderType, TradeType, PositionAction
+from .trade_fee_calculator import TradeFeeCalculator, TradeFee, OrderType, TradeType, PositionAction
 
 __all__ = [
     # Base interfaces
@@ -29,7 +29,7 @@ __all__ = [
     'OrderData',
     
     # Fee calculation
-    'FeeCalculator',
+    'TradeFeeCalculator',
     'TradeFee',
     'OrderType',
     'TradeType',

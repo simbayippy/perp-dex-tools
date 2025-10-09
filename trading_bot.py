@@ -226,12 +226,23 @@ class TradingBot:
     async def run(self):
         """Main trading loop."""
         try:
-            self.config.contract_id, self.config.tick_size = await self.exchange_client.get_contract_attributes()
+            # For single-symbol strategies (grid), get contract attributes
+            # For multi-symbol strategies (funding_arbitrage), skip this - they handle symbols dynamically
+            multi_symbol_strategies = ['funding_arbitrage']
+            
+            if self.config.strategy not in multi_symbol_strategies:
+                self.config.contract_id, self.config.tick_size = await self.exchange_client.get_contract_attributes()
+            else:
+                # Multi-symbol strategy - set placeholder values
+                self.config.contract_id = "MULTI_SYMBOL"
+                self.config.tick_size = Decimal("0.01")  # Placeholder
+                self.logger.log("Multi-symbol strategy: Contract attributes will be fetched per-symbol", "INFO")
 
             # Log current configuration
             self.logger.log("=== Trading Configuration ===", "INFO")
             self.logger.log(f"Ticker: {self.config.ticker}", "INFO")
-            self.logger.log(f"Contract ID: {self.config.contract_id}", "INFO")
+            if self.config.strategy not in multi_symbol_strategies:
+                self.logger.log(f"Contract ID: {self.config.contract_id}", "INFO")
             self.logger.log(f"Quantity: {self.config.quantity}", "INFO")
             self.logger.log(f"Exchange: {self.config.exchange}", "INFO")
             self.logger.log(f"Strategy: {self.config.strategy}", "INFO")

@@ -42,9 +42,15 @@ class TradingCosts:
         )
 
 
-class FeeCalculator:
+class FundingArbFeeCalculator:
     """
-    Calculate trading fees for funding rate arbitrage
+    Calculate trading fees and profitability for funding rate arbitrage opportunities.
+    
+    This is specialized for funding arbitrage analysis, including:
+    - Trading fee calculations (entry + exit)
+    - Funding rate profit calculations
+    - Net APY after fees
+    - Opportunity comparison and ranking
     
     Funding rate arbitrage involves:
     1. Going LONG on DEX A (pay/receive funding)
@@ -57,6 +63,9 @@ class FeeCalculator:
     For maker orders: 4 x maker_fee
     For taker orders: 4 x taker_fee
     For mixed: 2 x maker_fee + 2 x taker_fee
+    
+    Note: For simple trading fee calculations without funding analysis,
+    use TradeFeeCalculator from strategies.components instead.
     """
     
     # Default fee structures for common DEXs
@@ -108,9 +117,9 @@ class FeeCalculator:
     HOURS_PER_YEAR = Decimal('8760')  # 365 * 24
     
     def __init__(self):
-        """Initialize fee calculator"""
+        """Initialize funding arbitrage fee calculator"""
         self.fee_structures = self.DEFAULT_FEES.copy()
-        logger.info(f"FeeCalculator initialized with {len(self.fee_structures)} DEX fee structures")
+        logger.info(f"FundingArbFeeCalculator initialized with {len(self.fee_structures)} DEX fee structures")
     
     def add_fee_structure(
         self,
@@ -329,5 +338,5 @@ class FeeCalculator:
 
 
 # Global instance
-fee_calculator = FeeCalculator()
+fee_calculator = FundingArbFeeCalculator()
 

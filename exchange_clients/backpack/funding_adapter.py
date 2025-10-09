@@ -11,7 +11,7 @@ import aiohttp
 import asyncio
 
 from exchange_clients.base import BaseFundingAdapter
-from utils.logger import logger
+from funding_rate_service.utils.logger import logger
 
 
 class BackpackFundingAdapter(BaseFundingAdapter):

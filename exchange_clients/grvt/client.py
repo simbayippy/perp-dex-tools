@@ -11,7 +11,7 @@ from pysdk.grvt_ccxt import GrvtCcxt
 from pysdk.grvt_ccxt_ws import GrvtCcxtWS
 from pysdk.grvt_ccxt_env import GrvtEnv, GrvtWSEndpointType
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry
+from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
 from helpers.logger import TradingLogger
 
 
@@ -22,16 +22,11 @@ class GrvtClient(BaseExchangeClient):
         """Initialize GRVT client."""
         super().__init__(config)
 
-        # GRVT credentials from environment
+        # GRVT credentials from environment (validation happens in _validate_config)
         self.trading_account_id = os.getenv('GRVT_TRADING_ACCOUNT_ID')
         self.private_key = os.getenv('GRVT_PRIVATE_KEY')
         self.api_key = os.getenv('GRVT_API_KEY')
         self.environment = os.getenv('GRVT_ENVIRONMENT', 'prod')
-
-        if not self.trading_account_id or not self.private_key or not self.api_key:
-            raise ValueError(
-                "GRVT_TRADING_ACCOUNT_ID, GRVT_PRIVATE_KEY, and GRVT_API_KEY must be set in environment variables"
-            )
 
         # Convert environment string to proper enum
         env_map = {
@@ -69,14 +64,17 @@ class GrvtClient(BaseExchangeClient):
             )
 
         except Exception as e:
+            # If SDK fails to initialize due to invalid credentials, raise as credential error
+            if any(keyword in str(e).lower() for keyword in ['invalid', 'credential', 'auth', 'key']):
+                raise MissingCredentialsError(f"Invalid GRVT credentials format: {e}")
             raise ValueError(f"Failed to initialize GRVT client: {e}")
 
     def _validate_config(self) -> None:
         """Validate GRVT configuration."""
-        required_env_vars = ['GRVT_TRADING_ACCOUNT_ID', 'GRVT_PRIVATE_KEY', 'GRVT_API_KEY']
-        missing_vars = [var for var in required_env_vars if not os.getenv(var)]
-        if missing_vars:
-            raise ValueError(f"Missing required environment variables: {missing_vars}")
+        # Use base validation helper (reduces code duplication)
+        validate_credentials('GRVT_TRADING_ACCOUNT_ID', os.getenv('GRVT_TRADING_ACCOUNT_ID'))
+        validate_credentials('GRVT_PRIVATE_KEY', os.getenv('GRVT_PRIVATE_KEY'))
+        validate_credentials('GRVT_API_KEY', os.getenv('GRVT_API_KEY'))
 
     async def connect(self) -> None:
         """Connect to GRVT WebSocket."""
@@ -245,11 +243,26 @@ class GrvtClient(BaseExchangeClient):
 
         return best_bid, best_ask
 
-    async def place_post_only_order(self, contract_id: str, quantity: Decimal, price: Decimal,
-                                    side: str) -> OrderResult:
-        """Place a post only order with GRVT using official SDK."""
-
-        # Place the order using GRVT SDK
+    async def place_limit_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        price: Decimal,
+        side: str
+    ) -> OrderResult:
+        """
+        Place a limit order at a specific price on GRVT.
+        
+        Args:
+            contract_id: Contract identifier
+            quantity: Order quantity
+            price: Limit price
+            side: 'buy' or 'sell'
+            
+        Returns:
+            OrderResult with order details
+        """
+        # Place the order using GRVT SDK with post_only for maker fees
         order_result = self.rest_client.create_limit_order(
             symbol=contract_id,
             side=side,
@@ -257,8 +270,9 @@ class GrvtClient(BaseExchangeClient):
             price=price,
             params={'post_only': True}
         )
+        
         if not order_result:
-            raise Exception(f"[OPEN] Error placing order")
+            raise Exception(f"[LIMIT] Error placing order")
 
         client_order_id = order_result.get('metadata').get('client_order_id')
         order_status = order_result.get('state').get('status')
@@ -275,7 +289,7 @@ class GrvtClient(BaseExchangeClient):
                 order_status = order_info.status
 
         if order_status == 'PENDING':
-            raise Exception('Paradex Server Error: Order not processed after 10 seconds')
+            raise Exception('GRVT Server Error: Order not processed after 10 seconds')
         else:
             return order_info
 
@@ -293,60 +307,86 @@ class GrvtClient(BaseExchangeClient):
             raise ValueError("Invalid direction")
 
     async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
-        """Place an open order with GRVT."""
-        attempt = 0
-        while True:
-            attempt += 1
-            if attempt % 5 == 0:
-                self.logger.log(f"[OPEN] Attempt {attempt} to place order", "INFO")
-                active_orders = await self.get_active_orders(contract_id)
-                active_open_orders = 0
-                for order in active_orders:
-                    if order.side == self.config.direction:
-                        active_open_orders += 1
-                if active_open_orders > 1:
-                    self.logger.log(f"[OPEN] ERROR: Active open orders abnormal: {active_open_orders}", "ERROR")
-                    raise Exception(f"[OPEN] ERROR: Active open orders abnormal: {active_open_orders}")
+        """
+        Aggressively open a position on GRVT (uses limit order priced to fill quickly).
+        Similar to Lighter's implementation - gets aggressive price and uses place_limit_order.
+        """
+        # Get aggressive price that's likely to fill (acting like market order but with price protection)
+        order_price = await self.get_order_price(direction)
+        order_price = self.round_to_tick(order_price)
+        
+        # Use place_limit_order with the aggressive price
+        order_result = await self.place_limit_order(contract_id, quantity, order_price, direction)
+        
+        if not order_result.success:
+            raise Exception(f"[OPEN] Error placing order: {order_result.error_message}")
+        
+        return order_result
 
-            # Get current market prices
+    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
+        """
+        Place a market order on GRVT (uses limit order without post_only to ensure fill).
+        This acts as a true market order by using an aggressive limit price.
+        """
+        try:
+            # Get aggressive price
             best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
-
+            
             if best_bid <= 0 or best_ask <= 0:
                 return OrderResult(success=False, error_message='Invalid bid/ask prices')
-
-            # Determine order side and price
-            if direction == 'buy':
-                order_price = best_ask - self.config.tick_size
-            elif direction == 'sell':
-                order_price = best_bid + self.config.tick_size
+            
+            # Use very aggressive pricing to ensure immediate fill
+            if side.lower() == 'buy':
+                # Buy at ask price
+                order_price = best_ask
             else:
-                raise Exception(f"[OPEN] Invalid direction: {direction}")
+                # Sell at bid price
+                order_price = best_bid
+            
+            order_price = self.round_to_tick(order_price)
+            
+            # Place limit order WITHOUT post_only (allows taker execution)
+            order_result = self.rest_client.create_limit_order(
+                symbol=contract_id,
+                side=side,
+                amount=quantity,
+                price=order_price,
+                params={'post_only': False}  # Allow taker order for immediate fill
+            )
+            
+            if not order_result:
+                return OrderResult(success=False, error_message='Failed to place market order')
+            
+            client_order_id = order_result.get('metadata').get('client_order_id')
+            order_status = order_result.get('state').get('status')
+            
+            # Wait for order confirmation
+            order_status_start_time = time.time()
+            order_info = await self.get_order_info(client_order_id=client_order_id)
+            if order_info is not None:
+                order_status = order_info.status
 
-            # Place the order using GRVT SDK
-            try:
-                order_info = await self.place_post_only_order(contract_id, quantity, order_price, direction)
-            except Exception as e:
-                self.logger.log(f"[OPEN] Error placing order: {e}", "ERROR")
-                continue
+            while order_status in ['PENDING'] and time.time() - order_status_start_time < 10:
+                await asyncio.sleep(0.05)
+                order_info = await self.get_order_info(client_order_id=client_order_id)
+                if order_info is not None:
+                    order_status = order_info.status
 
-            order_status = order_info.status
-            order_id = order_info.order_id
-
-            if order_status == 'REJECTED':
-                continue
-            if order_status in ['OPEN', 'FILLED']:
-                return OrderResult(
-                    success=True,
-                    order_id=order_id,
-                    side=direction,
-                    size=quantity,
-                    price=order_price,
-                    status=order_status
-                )
-            elif order_status == 'PENDING':
-                raise Exception("[OPEN] Order not processed after 10 seconds")
-            else:
-                raise Exception(f"[OPEN] Unexpected order status: {order_status}")
+            if order_status == 'PENDING':
+                return OrderResult(success=False, error_message='GRVT Server Error: Order not processed after 10 seconds')
+            
+            return OrderResult(
+                success=True,
+                order_id=order_info.order_id if order_info else None,
+                side=side,
+                size=quantity,
+                price=order_price,
+                status=order_status
+            )
+                
+        except Exception as e:
+            self.logger.log(f"Error placing market order: {e}", "ERROR")
+            return OrderResult(success=False, error_message=str(e))
 
     async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
         """Place a close order with GRVT."""
@@ -379,7 +419,7 @@ class GrvtClient(BaseExchangeClient):
 
             adjusted_price = self.round_to_tick(adjusted_price)
             try:
-                order_info = await self.place_post_only_order(contract_id, quantity, adjusted_price, side)
+                order_info = await self.place_limit_order(contract_id, quantity, adjusted_price, side)
             except Exception as e:
                 self.logger.log(f"[CLOSE] Error placing order: {e}", "ERROR")
                 continue

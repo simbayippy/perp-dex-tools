@@ -13,7 +13,7 @@ Pattern: Stateful strategy with multi-DEX support
 
 from strategies.categories.stateful_strategy import StatefulStrategy
 from strategies.base_strategy import StrategyResult, StrategyAction
-from strategies.components import FeeCalculator, InMemoryPositionManager
+from strategies.components import InMemoryPositionManager
 from .config import FundingArbConfig
 from .models import FundingArbPosition, OpportunityData
 from .funding_analyzer import FundingRateAnalyzer
@@ -96,26 +96,43 @@ class FundingArbitrageStrategy(StatefulStrategy):
         self.config = funding_config  # Store the converted config
         # self.exchange_clients is already set by StatefulStrategy.__init__
         
-        # For funding arbitrage, we need multiple exchanges
-        # If only one exchange client provided, log a warning but continue
+        # ⭐ Exchange Client Management
+        # 
+        # IMPORTANT DISTINCTION:
+        # 1. scan_exchanges (config) - Which exchanges to consider for opportunity scanning
+        #    - These are just labels for filtering database queries
+        #    - The funding rate data comes from the database (collected by funding_rate_service)
+        #    - No trading client needed for scanning
+        #
+        # 2. exchange_clients (this dict) - Which exchanges we can actually TRADE on
+        #    - Only exchanges with fully implemented BaseExchangeClient can be here
+        #    - Currently: Only 'lighter' is fully implemented
+        #    - Others (edgex, grvt, aster, backpack) only have funding adapters
+        #
+        # The strategy will:
+        # - Scan opportunities across ALL exchanges in scan_exchanges (from database)
+        # - But only execute trades on exchanges with available trading clients
+        
         available_exchanges = list(exchange_clients.keys())
-        required_exchanges = funding_config.exchanges
+        required_exchanges = funding_config.exchanges  # These are from scan_exchanges
         
         missing_exchanges = [dex for dex in required_exchanges if dex not in exchange_clients]
         if missing_exchanges:
-            self.logger.log(f"Warning: Missing exchange clients for: {missing_exchanges}")
-            self.logger.log(f"Available exchanges: {available_exchanges}")
-            self.logger.log("Strategy will only look for opportunities between available exchanges")
+            self.logger.log(f"ℹ️  Exchanges configured for scanning: {required_exchanges}")
+            self.logger.log(f"ℹ️  Exchanges with trading clients: {available_exchanges}")
+            if missing_exchanges:
+                self.logger.log(f"⚠️  Trading not available on: {missing_exchanges} (funding data only)")
+            self.logger.log(f"✅ Will scan ALL configured exchanges but only trade on {available_exchanges}")
             
-            # Update config to only use available exchanges
-            funding_config.exchanges = [dex for dex in required_exchanges if dex in exchange_clients]
+            # Keep all exchanges in config for opportunity scanning (database queries)
+            # Don't filter them out - we want to see opportunities even if we can't trade them all yet
+            # funding_config.exchanges remains unchanged
             
-            if not funding_config.exchanges:
-                raise ValueError(f"No valid exchange clients available. Required: {required_exchanges}, Available: {available_exchanges}")
+        if not available_exchanges:
+            raise ValueError(f"No trading-capable exchange clients available. At least one exchange with full trading support is required.")
         
         # ⭐ Core components from Hummingbot pattern
         self.analyzer = FundingRateAnalyzer()
-        self.fee_calculator = FeeCalculator()
         
         # ⭐ Direct internal services (no HTTP, shared database)
         if not FUNDING_SERVICE_AVAILABLE:
@@ -124,7 +141,11 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 "Please ensure the funding_rate_service is properly configured and the database is accessible."
             )
         
+        # Import the correct FeeCalculator from funding_rate_service
+        from funding_rate_service.core.fee_calculator import FundingArbFeeCalculator
         from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
+        
+        self.fee_calculator = FundingArbFeeCalculator()
         self.opportunity_finder = OpportunityFinder(
             database=database,
             fee_calculator=self.fee_calculator,
@@ -441,16 +462,21 @@ class FundingArbitrageStrategy(StatefulStrategy):
             # Use opportunity finder to find opportunities
             from funding_rate_service.models.filters import OpportunityFilter
             
+            # Get list of AVAILABLE exchanges (those with valid trading clients)
+            # This filters out exchanges that were skipped due to missing credentials
+            available_exchanges = list(self.exchange_clients.keys())
+            
             filters = OpportunityFilter(
                 min_profit_percent=self.config.min_profit,
                 max_oi_usd=self.config.max_oi_usd,
-                whitelist_dexes=self.config.exchanges if self.config.exchanges else None,
+                whitelist_dexes=available_exchanges if available_exchanges else None,
                 symbol=None,  # Don't filter by symbol - look at all opportunities
                 limit=10
             )
             
             # 🔍 DEBUG: Log the filters being used
-            self.logger.log(f"DEBUG: Filters - min_profit: {self.config.min_profit}, max_oi_usd: {self.config.max_oi_usd}, whitelist_dexes: {self.config.exchanges}")
+            self.logger.log(f"DEBUG: Filters - min_profit: {self.config.min_profit}, max_oi_usd: {self.config.max_oi_usd}, "
+                          f"configured_dexes: {self.config.exchanges}, available_dexes: {available_exchanges}")
             
             opportunities = await self.opportunity_finder.find_opportunities(filters)
             
@@ -485,6 +511,28 @@ class FundingArbitrageStrategy(StatefulStrategy):
         Returns:
             True if should take this opportunity
         """
+        # ⭐ Safety check: Verify we have trading clients for both sides
+        # NOTE: This should rarely trigger since we filter at the opportunity finder level,
+        # but it's kept as a defensive safety net in case of race conditions or stale data
+        long_dex = opportunity.long_dex
+        short_dex = opportunity.short_dex
+        
+        if long_dex not in self.exchange_clients:
+            self.logger.log(
+                f"⚠️  SAFETY CHECK: Skipping {opportunity.symbol} opportunity - "
+                f"{long_dex} (long side) not in available clients (should have been filtered earlier)",
+                "WARNING"
+            )
+            return False
+        
+        if short_dex not in self.exchange_clients:
+            self.logger.log(
+                f"⚠️  SAFETY CHECK: Skipping {opportunity.symbol} opportunity - "
+                f"{short_dex} (short side) not in available clients (should have been filtered earlier)",
+                "WARNING"
+            )
+            return False
+        
         # Check position size limits
         # (size is based on config, not from opportunity)
         size_usd = self.config.default_position_size_usd

@@ -16,7 +16,7 @@ from bpx.public import Public
 from bpx.account import Account
 from bpx.constants.enums import OrderTypeEnum, TimeInForceEnum
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry
+from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
 from helpers.logger import TradingLogger
 
 
@@ -156,28 +156,31 @@ class BackpackClient(BaseExchangeClient):
         """Initialize Backpack client."""
         super().__init__(config)
 
-        # Backpack credentials from environment
+        # Backpack credentials from environment (validation happens in _validate_config)
         self.public_key = os.getenv('BACKPACK_PUBLIC_KEY')
         self.secret_key = os.getenv('BACKPACK_SECRET_KEY')
 
-        if not self.public_key or not self.secret_key:
-            raise ValueError("BACKPACK_PUBLIC_KEY and BACKPACK_SECRET_KEY must be set in environment variables")
-
         # Initialize Backpack clients using official SDK
-        self.public_client = Public()
-        self.account_client = Account(
-            public_key=self.public_key,
-            secret_key=self.secret_key
-        )
+        # Wrap in try-catch to convert SDK credential errors to MissingCredentialsError
+        try:
+            self.public_client = Public()
+            self.account_client = Account(
+                public_key=self.public_key,
+                secret_key=self.secret_key
+            )
+        except Exception as e:
+            # If SDK fails to initialize due to invalid credentials, raise as credential error
+            if 'base64' in str(e).lower() or 'invalid' in str(e).lower():
+                raise MissingCredentialsError(f"Invalid Backpack credentials format: {e}")
+            raise
 
         self._order_update_handler = None
 
     def _validate_config(self) -> None:
         """Validate Backpack configuration."""
-        required_env_vars = ['BACKPACK_PUBLIC_KEY', 'BACKPACK_SECRET_KEY']
-        missing_vars = [var for var in required_env_vars if not os.getenv(var)]
-        if missing_vars:
-            raise ValueError(f"Missing required environment variables: {missing_vars}")
+        # Use base validation helper (reduces code duplication)
+        validate_credentials('BACKPACK_PUBLIC_KEY', os.getenv('BACKPACK_PUBLIC_KEY'))
+        validate_credentials('BACKPACK_SECRET_KEY', os.getenv('BACKPACK_SECRET_KEY'))
 
     async def connect(self) -> None:
         """Connect to Backpack WebSocket."""
@@ -318,99 +321,149 @@ class BackpackClient(BaseExchangeClient):
 
         return best_bid, best_ask
 
-    async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
-        """Place an open order with Backpack using official SDK with retry logic for POST_ONLY rejections."""
-        max_retries = 15
-        retry_count = 0
-
-        while retry_count < max_retries:
-            retry_count += 1
-
-            best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
-
-            if best_bid <= 0 or best_ask <= 0:
-                return OrderResult(success=False, error_message='Invalid bid/ask prices')
-
-            if direction == 'buy':
-                # For buy orders, place slightly below best ask to ensure execution
-                order_price = best_ask - self.config.tick_size
-                side = 'Bid'
-            else:
-                # For sell orders, place slightly above best bid to ensure execution
-                order_price = best_bid + self.config.tick_size
-                side = 'Ask'
-
-            # Place the order using Backpack SDK (post-only to ensure maker order)
+    async def place_limit_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        price: Decimal,
+        side: str
+    ) -> OrderResult:
+        """
+        Place a limit order at a specific price on Backpack.
+        
+        Args:
+            contract_id: Contract identifier
+            quantity: Order quantity
+            price: Limit price
+            side: 'buy' or 'sell'
+            
+        Returns:
+            OrderResult with order details
+        """
+        try:
+            # Convert side to Backpack format
+            backpack_side = 'Bid' if side.lower() == 'buy' else 'Ask'
+            
+            # Place limit order with post_only for maker fees
             order_result = self.account_client.execute_order(
                 symbol=contract_id,
-                side=side,
+                side=backpack_side,
                 order_type=OrderTypeEnum.LIMIT,
                 quantity=str(quantity),
-                price=str(self.round_to_tick(order_price)),
+                price=str(self.round_to_tick(price)),
                 post_only=True,
                 time_in_force=TimeInForceEnum.GTC
             )
-
+            
             if not order_result:
-                return OrderResult(success=False, error_message='Failed to place order')
-
+                return OrderResult(success=False, error_message='Failed to place limit order')
+            
+            # Check if order was rejected
             if 'code' in order_result:
                 message = order_result.get('message', 'Unknown error')
-                self.logger.log(f"[OPEN] Order rejected: {message}", "WARNING")
-                continue
-
-            # Extract order ID from response
+                return OrderResult(success=False, error_message=f'Limit order rejected: {message}')
+            
+            # Extract order ID
             order_id = order_result.get('id')
             if not order_id:
-                self.logger.log(f"[OPEN] No order ID in response: {order_result}", "ERROR")
                 return OrderResult(success=False, error_message='No order ID in response')
-
-            # Order successfully placed
+            
+            # Check order status
+            await asyncio.sleep(0.01)
+            order_info = await self.get_order_info(order_id)
+            
+            if order_info and order_info.status in ['Open', 'PartiallyFilled', 'Filled']:
+                return OrderResult(
+                    success=True,
+                    order_id=order_id,
+                    side=side,
+                    size=quantity,
+                    price=price,
+                    status=order_info.status
+                )
+            elif order_info and order_info.status == 'Cancelled':
+                return OrderResult(success=False, error_message='Limit order was rejected (post-only constraint)')
+            else:
+                # Assume success if we can't verify
+                return OrderResult(
+                    success=True,
+                    order_id=order_id,
+                    side=side,
+                    size=quantity,
+                    price=price,
+                    status='Open'
+                )
+                
+        except Exception as e:
+            self.logger.log(f"Error placing limit order: {e}", "ERROR")
             return OrderResult(
-                success=True,
-                order_id=order_id,
-                side=side.lower(),
-                size=quantity,
-                price=order_price,
-                status='New'
+                success=False,
+                error_message=f"Failed to place limit order: {str(e)}"
             )
 
-        return OrderResult(success=False, error_message='Max retries exceeded')
+    async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
+        """
+        Aggressively open a position on Backpack (uses limit order priced to fill quickly).
+        Similar to Lighter's implementation - gets aggressive price and uses place_limit_order.
+        """
+        # Get aggressive price that's likely to fill (acting like market order but with price protection)
+        order_price = await self.get_order_price(direction)
+        order_price = self.round_to_tick(order_price)
+        
+        # Use place_limit_order with the aggressive price
+        order_result = await self.place_limit_order(contract_id, quantity, order_price, direction)
+        
+        if not order_result.success:
+            raise Exception(f"[OPEN] Error placing order: {order_result.error_message}")
+        
+        return order_result
 
-    async def place_market_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
-        """Place a market order with Backpack."""
-        # Validate direction
-        if direction == 'buy':
-            side = 'Bid'
-        elif direction == 'sell':
-            side = 'Ask'
-        else:
-            raise Exception(f"[OPEN] Invalid direction: {direction}")
+    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
+        """
+        Place a market order on Backpack (true market order for immediate execution).
+        """
+        try:
+            # Convert side to Backpack format
+            if side.lower() == 'buy':
+                backpack_side = 'Bid'
+            elif side.lower() == 'sell':
+                backpack_side = 'Ask'
+            else:
+                raise ValueError(f"Invalid side: {side}")
 
-        result = self.account_client.execute_order(
-            symbol=contract_id,
-            side=side,
-            order_type=OrderTypeEnum.MARKET,
-            quantity=str(quantity)
-        )
-
-        order_id = result.get('id')
-        order_status = result.get('status').upper()
-
-        if order_status != 'FILLED':
-            self.logger.log(f"Market order failed with status: {order_status}", "ERROR")
-            sys.exit(1)
-        # For market orders, we expect them to be filled immediately
-        else:
-            price = Decimal(result.get('executedQuoteQuantity', '0'))/Decimal(result.get('executedQuantity'))
-            return OrderResult(
-                success=True,
-                order_id=order_id,
-                side=direction.lower(),
-                size=quantity,
-                price=price,
-                status='FILLED'
+            result = self.account_client.execute_order(
+                symbol=contract_id,
+                side=backpack_side,
+                order_type=OrderTypeEnum.MARKET,
+                quantity=str(quantity)
             )
+
+            if not result:
+                return OrderResult(success=False, error_message='Failed to place market order')
+
+            order_id = result.get('id')
+            order_status = result.get('status', '').upper()
+
+            if order_status == 'FILLED':
+                # Calculate average fill price
+                price = Decimal(result.get('executedQuoteQuantity', '0')) / Decimal(result.get('executedQuantity', '1'))
+                return OrderResult(
+                    success=True,
+                    order_id=order_id,
+                    side=side.lower(),
+                    size=quantity,
+                    price=price,
+                    status='FILLED'
+                )
+            else:
+                return OrderResult(
+                    success=False, 
+                    error_message=f'Market order failed with status: {order_status}'
+                )
+                
+        except Exception as e:
+            self.logger.log(f"Error placing market order: {e}", "ERROR")
+            return OrderResult(success=False, error_message=str(e))
 
     async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
         """Place a close order with Backpack using official SDK with retry logic for POST_ONLY rejections."""

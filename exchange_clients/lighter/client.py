@@ -9,7 +9,7 @@ import logging
 from decimal import Decimal
 from typing import Dict, Any, List, Optional, Tuple
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry
+from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
 from helpers.logger import TradingLogger
 
 # Import official Lighter SDK for API client
@@ -34,14 +34,17 @@ class LighterClient(BaseExchangeClient):
         """Initialize Lighter client."""
         super().__init__(config)
 
-        # Lighter credentials from environment
+        # Lighter credentials from environment (validation happens in _validate_config)
         self.api_key_private_key = os.getenv('API_KEY_PRIVATE_KEY')
-        self.account_index = int(os.getenv('LIGHTER_ACCOUNT_INDEX', '0'))
-        self.api_key_index = int(os.getenv('LIGHTER_API_KEY_INDEX', '0'))
+        
+        # Get indices with defaults (will be validated in _validate_config)
+        account_index_str = os.getenv('LIGHTER_ACCOUNT_INDEX', '0')
+        api_key_index_str = os.getenv('LIGHTER_API_KEY_INDEX', '0')
+        
+        # Only convert to int if not empty (to avoid errors before validation)
+        self.account_index = int(account_index_str) if account_index_str else 0
+        self.api_key_index = int(api_key_index_str) if api_key_index_str else 0
         self.base_url = "https://mainnet.zklighter.elliot.ai"
-
-        if not self.api_key_private_key:
-            raise ValueError("API_KEY_PRIVATE_KEY must be set in environment variables")
 
         # Initialize logger
         self.logger = TradingLogger(exchange="lighter", ticker=self.config.ticker, log_to_console=False)
@@ -65,10 +68,11 @@ class LighterClient(BaseExchangeClient):
 
     def _validate_config(self) -> None:
         """Validate Lighter configuration."""
-        required_env_vars = ['API_KEY_PRIVATE_KEY', 'LIGHTER_ACCOUNT_INDEX', 'LIGHTER_API_KEY_INDEX']
-        missing_vars = [var for var in required_env_vars if not os.getenv(var)]
-        if missing_vars:
-            raise ValueError(f"Missing required environment variables: {missing_vars}")
+        # Use base validation helper (reduces code duplication)
+        validate_credentials('API_KEY_PRIVATE_KEY', os.getenv('API_KEY_PRIVATE_KEY'))
+        
+        # Note: LIGHTER_ACCOUNT_INDEX and LIGHTER_API_KEY_INDEX have defaults of '0'
+        # which are valid values, so we don't need to validate them
 
     async def _get_market_config(self, ticker: str) -> Tuple[int, int, int]:
         """Get market configuration for a ticker using official SDK."""
