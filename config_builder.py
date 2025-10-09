@@ -39,11 +39,11 @@ from strategies.implementations.grid.schema import get_grid_schema
 CUSTOM_STYLE = Style([
     ('qmark', 'fg:#673ab7 bold'),       # Question mark
     ('question', 'bold'),                # Question text
-    ('answer', 'fg:#f44336 bold'),      # User's answer
-    ('pointer', 'fg:#673ab7 bold'),     # Pointer for selections
-    ('highlighted', 'fg:#673ab7 bold'), # Highlighted choice
-    ('selected', 'fg:#cc5454'),         # Selected choice
-    ('separator', 'fg:#cc5454'),        # Separator
+    ('answer', 'fg:#00ff00 bold'),      # User's answer - GREEN!
+    ('pointer', 'fg:#00ff00 bold'),     # Pointer for selections - GREEN!
+    ('highlighted', 'fg:#00ff00 bold'), # Highlighted choice - GREEN!
+    ('selected', 'fg:#00aa00'),         # Selected choice - DARK GREEN
+    ('separator', 'fg:#666666'),        # Separator
     ('instruction', ''),                 # Instructions
     ('text', ''),                        # Plain text
     ('disabled', 'fg:#858585 italic')   # Disabled choices
