@@ -6,6 +6,7 @@ import os
 import asyncio
 import time
 import logging
+import aiohttp
 from decimal import Decimal
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -289,44 +290,63 @@ class LighterClient(BaseExchangeClient):
         levels: int = 10
     ) -> Dict[str, List[Dict[str, Decimal]]]:
         """
-        Get order book depth from Lighter WebSocket (real-time maintained book).
+        Get order book depth from Lighter REST API.
+        
+        Uses /api/v1/orderBookOrders endpoint for reliable order book data.
+        This is more reliable than WebSocket for pre-trade liquidity checks.
         
         Args:
-            contract_id: Contract/symbol identifier
-            levels: Number of price levels to fetch (default: 10)
+            contract_id: Contract/symbol identifier (market_id)
+            levels: Number of price levels to fetch (default: 10, max: 100)
             
         Returns:
             Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
         """
         try:
-            if not hasattr(self, 'ws_manager') or not self.ws_manager:
-                self.logger.log("WebSocket manager not initialized", "WARNING")
-                return {'bids': [], 'asks': []}
-
-            async with self.ws_manager.order_book_lock:
-                bids_dict = self.ws_manager.order_book.get("bids", {})
-                asks_dict = self.ws_manager.order_book.get("asks", {})
-
-                if not bids_dict or not asks_dict:
-                    self.logger.log("Order book not yet loaded from WebSocket", "WARNING")
-                    return {'bids': [], 'asks': []}
-
-                # Convert to list format sorted by price
-                # Bids: highest price first (descending)
-                sorted_bids = sorted(bids_dict.items(), reverse=True)[:levels]
-                # Asks: lowest price first (ascending)
-                sorted_asks = sorted(asks_dict.items())[:levels]
-
-                # Convert to standardized format
-                bids = [{'price': Decimal(str(price)), 'size': Decimal(str(size))} 
-                       for price, size in sorted_bids]
-                asks = [{'price': Decimal(str(price)), 'size': Decimal(str(size))} 
-                       for price, size in sorted_asks]
-
-                return {
-                    'bids': bids,
-                    'asks': asks
-                }
+            # Use REST API for order book (more reliable than WebSocket for one-time queries)
+            url = f"{self.base_url}/api/v1/orderBookOrders"
+            params = {
+                'market_id': contract_id,
+                'limit': min(levels, 100)  # API max is 100
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as response:
+                    if response.status != 200:
+                        self.logger.log(f"Failed to get order book: HTTP {response.status}", "ERROR")
+                        return {'bids': [], 'asks': []}
+                    
+                    data = await response.json()
+                    
+                    if data.get('code') != 200:
+                        self.logger.log(f"Order book API error: {data}", "ERROR")
+                        return {'bids': [], 'asks': []}
+                    
+                    # Extract bids and asks from Lighter response
+                    bids_raw = data.get('bids', [])
+                    asks_raw = data.get('asks', [])
+                    
+                    # Convert to standardized format
+                    # Lighter format: [{'price': '1243.5281', 'remaining_base_amount': '0.20'}, ...]
+                    bids = [
+                        {
+                            'price': Decimal(bid['price']), 
+                            'size': Decimal(bid['remaining_base_amount'])
+                        } 
+                        for bid in bids_raw
+                    ]
+                    asks = [
+                        {
+                            'price': Decimal(ask['price']), 
+                            'size': Decimal(ask['remaining_base_amount'])
+                        } 
+                        for ask in asks_raw
+                    ]
+                    
+                    return {
+                        'bids': bids,
+                        'asks': asks
+                    }
 
         except Exception as e:
             self.logger.log(f"Error fetching order book depth: {e}", "ERROR")

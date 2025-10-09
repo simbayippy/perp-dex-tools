@@ -137,16 +137,17 @@ class LiquidityAnalyzer:
                     "This often happens when WebSocket hasn't initialized yet."
                 )
                 return LiquidityReport(
-                    symbol=symbol,
-                    side=side,
-                    size_usd=size_usd,
-                    recommendation="reject",
-                    reason="order_book_unavailable",
-                    liquidity_score=Decimal('0'),
                     depth_sufficient=False,
                     expected_slippage_pct=Decimal('1.0'),
+                    expected_avg_price=Decimal('0'),
                     spread_bps=9999,
-                    total_depth_usd=Decimal('0')
+                    liquidity_score=0.0,
+                    recommendation="insufficient_depth",
+                    required_levels=0,
+                    total_depth_usd=Decimal('0'),
+                    mid_price=Decimal('0'),
+                    best_bid=Decimal('0'),
+                    best_ask=Decimal('0')
                 )
             
             # Extract best bid/ask
