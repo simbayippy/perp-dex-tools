@@ -298,6 +298,7 @@ class LighterClient(BaseExchangeClient):
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
         """Get orderbook using official SDK."""
         # Use WebSocket data if available
+        self.logger.log(f"Fetching BBO prices for {contract_id}")
         if (hasattr(self, 'ws_manager') and
                 self.ws_manager.best_bid and self.ws_manager.best_ask):
             best_bid = Decimal(str(self.ws_manager.best_bid))
@@ -352,10 +353,10 @@ class LighterClient(BaseExchangeClient):
                     )
                     return {'bids': [], 'asks': []}
 
-            # if levels < 100:
-            #     # API max is 100 for lighter, while default is set to 20
-            #     # so we use the highest of the 2
-            #     levels = 100 #lighter specific
+            if levels < 100:
+                # API max is 100 for lighter, while default is set to 20
+                # so we use the highest of the 2
+                levels = 100 #lighter specific
 
             params = {
                 'market_id': market_id,
