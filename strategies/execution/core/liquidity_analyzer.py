@@ -271,7 +271,7 @@ class LiquidityAnalyzer:
         
         for level in book_side:
             price = Decimal(str(level['price']))
-            quantity = Decimal(str(level['quantity']))
+            quantity = Decimal(str(level['size']))  # Changed from 'quantity' to 'size' to match order book format
             level_usd = price * quantity
             
             levels_consumed += 1
