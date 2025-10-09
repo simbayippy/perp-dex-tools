@@ -154,19 +154,26 @@ class LiquidityAnalyzer:
                     best_ask=Decimal('0')
                 )
             
-            # Log order book depth
-            self.logger.info(
-                f"Order book for {symbol}: {bids_count} bids, {asks_count} asks. "
-                f"Best bid: {order_book['bids'][0]['price']}, Best ask: {order_book['asks'][0]['price']}"
-            )
-            
             # Extract best bid/ask
             best_bid = Decimal(str(order_book['bids'][0]['price']))
             best_ask = Decimal(str(order_book['asks'][0]['price']))
             mid_price = (best_bid + best_ask) / 2
+            spread = best_ask - best_bid
+            spread_bps = int((spread / mid_price) * 10000)
+            
+            # Log order book summary
+            self.logger.info(
+                f"📊 [LIQUIDITY] {symbol}: {bids_count} bids, {asks_count} asks | "
+                f"Best: {best_bid}/{best_ask} | Spread: {spread_bps} bps"
+            )
             
             # Determine which side of book to check
             book_side = order_book['asks'] if side == 'buy' else order_book['bids']
+            side_name = "asks (selling to us)" if side == 'buy' else "bids (buying from us)"
+            
+            self.logger.info(
+                f"💰 [LIQUIDITY] Analyzing {side} order for ${size_usd} on {side_name}"
+            )
             
             # Calculate expected fill
             fill_analysis = self._analyze_order_fill(
@@ -174,6 +181,21 @@ class LiquidityAnalyzer:
                 size_usd=size_usd,
                 side=side
             )
+            
+            # Log fill analysis results
+            self.logger.info(
+                f"📈 [LIQUIDITY] Fill analysis: "
+                f"Can fill: {fill_analysis['filled_completely']}, "
+                f"Levels needed: {fill_analysis['levels_consumed']}/{len(book_side)}, "
+                f"Total available: ${fill_analysis['total_cost']:.2f}"
+            )
+            
+            if not fill_analysis['filled_completely']:
+                self.logger.warning(
+                    f"⚠️  [LIQUIDITY] INSUFFICIENT DEPTH! "
+                    f"Need ${size_usd}, only ${fill_analysis['total_cost']:.2f} available. "
+                    f"Shortfall: ${fill_analysis['remaining_usd']:.2f}"
+                )
             
             # Check if order book has enough depth
             depth_sufficient = fill_analysis['filled_completely']
@@ -209,10 +231,14 @@ class LiquidityAnalyzer:
                 liquidity_score=liquidity_score
             )
             
+            # Log final verdict
+            verdict_emoji = "✅" if recommendation in ["use_limit", "use_market"] else "❌"
             self.logger.info(
-                f"Liquidity analysis for {side} {symbol} ${size_usd}: "
-                f"score={liquidity_score:.2f}, slippage={slippage_pct*100:.3f}%, "
-                f"spread={spread_bps}bps, recommendation={recommendation}"
+                f"{verdict_emoji} [LIQUIDITY] VERDICT for {side} ${size_usd} {symbol}: "
+                f"Recommendation='{recommendation}' | "
+                f"Score={liquidity_score:.2f} | "
+                f"Slippage={slippage_pct*100:.3f}% | "
+                f"Spread={spread_bps}bps"
             )
             
             return LiquidityReport(

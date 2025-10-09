@@ -480,6 +480,11 @@ class AsterClient(BaseExchangeClient):
             Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
         """
         try:
+            self.logger.log(
+                f"📊 [ASTER] Fetching order book: symbol={contract_id}, limit={levels}",
+                "INFO"
+            )
+            
             # Call Aster API: GET /fapi/v1/depth
             result = await self._make_request('GET', '/fapi/v1/depth', {
                 'symbol': contract_id,
@@ -491,6 +496,24 @@ class AsterClient(BaseExchangeClient):
             bids_raw = result.get('bids', [])
             asks_raw = result.get('asks', [])
             
+            self.logger.log(
+                f"📊 [ASTER] Order book received: {len(bids_raw)} bids, {len(asks_raw)} asks for {contract_id}",
+                "INFO"
+            )
+            
+            if bids_raw and asks_raw:
+                self.logger.log(
+                    f"   → Best bid: {bids_raw[0][0]} (size: {bids_raw[0][1]}), "
+                    f"Best ask: {asks_raw[0][0]} (size: {asks_raw[0][1]})",
+                    "INFO"
+                )
+            elif not bids_raw and not asks_raw:
+                self.logger.log(
+                    f"⚠️  [ASTER] EMPTY order book for {contract_id}! "
+                    f"Symbol may not be listed on Aster or has zero liquidity.",
+                    "WARNING"
+                )
+            
             # Convert to standardized format
             bids = [{'price': Decimal(bid[0]), 'size': Decimal(bid[1])} for bid in bids_raw]
             asks = [{'price': Decimal(ask[0]), 'size': Decimal(ask[1])} for ask in asks_raw]
@@ -501,7 +524,9 @@ class AsterClient(BaseExchangeClient):
             }
             
         except Exception as e:
-            self.logger.log(f"Error fetching order book depth: {e}", "ERROR")
+            self.logger.log(f"❌ [ASTER] Error fetching order book for {contract_id}: {e}", "ERROR")
+            import traceback
+            self.logger.log(f"Traceback: {traceback.format_exc()}", "DEBUG")
             # Return empty order book on error
             return {'bids': [], 'asks': []}
 
