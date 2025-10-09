@@ -86,24 +86,45 @@ class LighterClient(BaseExchangeClient):
             Integer market_id, or None if not found
         """
         try:
+            self.logger.log(f"🔍 [LIGHTER] Querying all markets to find '{symbol}'...", "INFO")
             order_api = lighter.OrderApi(self.api_client)
             order_books = await order_api.order_books()
             
+            # Collect all available symbols for better error messages
+            available_symbols = []
+            
             for market in order_books.order_books:
+                available_symbols.append(market.symbol)
                 # Try exact match
                 if market.symbol == symbol:
-                    self.logger.log(f"Found market_id {market.market_id} for symbol '{symbol}'", "DEBUG")
+                    self.logger.log(
+                        f"✅ [LIGHTER] Found exact match: '{symbol}' → market_id={market.market_id}",
+                        "INFO"
+                    )
                     return market.market_id
                 # Try case-insensitive match
                 elif market.symbol.upper() == symbol.upper():
-                    self.logger.log(f"Found market_id {market.market_id} for symbol '{symbol}' (case-insensitive)", "DEBUG")
+                    self.logger.log(
+                        f"✅ [LIGHTER] Found case-insensitive match: '{symbol}' → '{market.symbol}' → market_id={market.market_id}",
+                        "INFO"
+                    )
                     return market.market_id
             
-            self.logger.log(f"Symbol '{symbol}' not found in Lighter markets", "WARNING")
+            # Symbol not found - provide helpful error message
+            self.logger.log(
+                f"❌ [LIGHTER] Symbol '{symbol}' NOT found in Lighter markets. "
+                f"Available symbols: {', '.join(available_symbols[:10])}{'...' if len(available_symbols) > 10 else ''}",
+                "WARNING"
+            )
             return None
             
         except Exception as e:
-            self.logger.log(f"Error looking up market_id for symbol '{symbol}': {e}", "ERROR")
+            self.logger.log(
+                f"❌ [LIGHTER] Error looking up market_id for symbol '{symbol}': {e}",
+                "ERROR"
+            )
+            import traceback
+            self.logger.log(f"Traceback: {traceback.format_exc()}", "ERROR")
             return None
     
     async def _get_market_config(self, ticker: str) -> Tuple[int, int, int]:
@@ -317,15 +338,16 @@ class LighterClient(BaseExchangeClient):
             # Try to convert contract_id to int first (if already an int ID)
             try:
                 market_id = int(contract_id)
-                self.logger.log(f"Using contract_id as market_id: {market_id}", "DEBUG")
+                self.logger.log(f"📊 [LIGHTER] Using contract_id as market_id: {market_id}", "INFO")
             except (ValueError, TypeError):
                 # contract_id is a symbol string - look up the market_id
-                self.logger.log(f"Looking up market_id for symbol: {contract_id}", "DEBUG")
+                self.logger.log(f"🔍 [LIGHTER] Looking up market_id for symbol: '{contract_id}'", "INFO")
                 market_id = await self._get_market_id_for_symbol(contract_id)
                 
                 if market_id is None:
                     self.logger.log(
-                        f"Could not find market_id for symbol '{contract_id}' on Lighter",
+                        f"❌ [LIGHTER] Could not find market_id for symbol '{contract_id}' on Lighter. "
+                        f"Symbol may not exist on this exchange.",
                         "ERROR"
                     )
                     return {'bids': [], 'asks': []}
@@ -335,15 +357,18 @@ class LighterClient(BaseExchangeClient):
                 'limit': min(levels, 100)  # API max is 100
             }
             
-            self.logger.log(f"Fetching order book for market_id={market_id}, limit={params['limit']}", "DEBUG")
+            self.logger.log(
+                f"📊 [LIGHTER] Fetching order book: market_id={market_id}, limit={params['limit']}",
+                "INFO"
+            )
             
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=params) as response:
                     if response.status != 200:
                         response_text = await response.text()
                         self.logger.log(
-                            f"Failed to get order book: HTTP {response.status}, "
-                            f"URL: {url}, params: {params}, response: {response_text[:200]}",
+                            f"❌ [LIGHTER] Failed to get order book: HTTP {response.status}, "
+                            f"URL: {url}, params: {params}, response: {response_text[:300]}",
                             "ERROR"
                         )
                         return {'bids': [], 'asks': []}
@@ -351,7 +376,10 @@ class LighterClient(BaseExchangeClient):
                     data = await response.json()
                     
                     if data.get('code') != 200:
-                        self.logger.log(f"Order book API error: {data}", "ERROR")
+                        self.logger.log(
+                            f"❌ [LIGHTER] Order book API error response: {data}",
+                            "ERROR"
+                        )
                         return {'bids': [], 'asks': []}
                     
                     # Extract bids and asks from Lighter response
@@ -359,9 +387,22 @@ class LighterClient(BaseExchangeClient):
                     asks_raw = data.get('asks', [])
                     
                     self.logger.log(
-                        f"Received order book: {len(bids_raw)} bids, {len(asks_raw)} asks",
-                        "DEBUG"
+                        f"📊 [LIGHTER] Order book received: {len(bids_raw)} bids, {len(asks_raw)} asks for market_id={market_id}",
+                        "INFO"
                     )
+                    
+                    if bids_raw and asks_raw:
+                        self.logger.log(
+                            f"   → Best bid: {bids_raw[0]['price']} (size: {bids_raw[0]['remaining_base_amount']}), "
+                            f"Best ask: {asks_raw[0]['price']} (size: {asks_raw[0]['remaining_base_amount']})",
+                            "INFO"
+                        )
+                    elif not bids_raw and not asks_raw:
+                        self.logger.log(
+                            f"⚠️  [LIGHTER] EMPTY order book for market_id={market_id}! "
+                            f"Market may not exist or has zero liquidity.",
+                            "WARNING"
+                        )
                     
                     # Convert to standardized format
                     # Lighter format: [{'price': '1243.5281', 'remaining_base_amount': '0.20'}, ...]
@@ -386,9 +427,9 @@ class LighterClient(BaseExchangeClient):
                     }
 
         except Exception as e:
-            self.logger.log(f"Error fetching order book depth: {e}", "ERROR")
+            self.logger.log(f"❌ [LIGHTER] Error fetching order book depth for {contract_id}: {e}", "ERROR")
             import traceback
-            self.logger.log(f"Traceback: {traceback.format_exc()}", "DEBUG")
+            self.logger.log(f"Traceback: {traceback.format_exc()}", "ERROR")
             # Return empty order book on error
             return {'bids': [], 'asks': []}
 
