@@ -684,7 +684,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
         """
         # Use synchronous call since we're in sync context
         # In real implementation, would use async properly
-        open_count = len(self.position_manager._positions_cache)
+        open_count = len(self.position_manager._positions)
         return open_count < self.config.max_positions
     
     def _calculate_total_exposure(self) -> Decimal:
@@ -694,7 +694,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
         Returns:
             Total USD exposure
         """
-        positions = self.position_manager._positions_cache.values()
+        positions = self.position_manager._positions.values()
         return sum(p.size_usd for p in positions if p.status == "open")
     
     # ========================================================================
