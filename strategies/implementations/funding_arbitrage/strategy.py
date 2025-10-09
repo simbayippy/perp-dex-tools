@@ -462,16 +462,21 @@ class FundingArbitrageStrategy(StatefulStrategy):
             # Use opportunity finder to find opportunities
             from funding_rate_service.models.filters import OpportunityFilter
             
+            # Get list of AVAILABLE exchanges (those with valid trading clients)
+            # This filters out exchanges that were skipped due to missing credentials
+            available_exchanges = list(self.exchange_clients.keys())
+            
             filters = OpportunityFilter(
                 min_profit_percent=self.config.min_profit,
                 max_oi_usd=self.config.max_oi_usd,
-                whitelist_dexes=self.config.exchanges if self.config.exchanges else None,
+                whitelist_dexes=available_exchanges if available_exchanges else None,
                 symbol=None,  # Don't filter by symbol - look at all opportunities
                 limit=10
             )
             
             # 🔍 DEBUG: Log the filters being used
-            self.logger.log(f"DEBUG: Filters - min_profit: {self.config.min_profit}, max_oi_usd: {self.config.max_oi_usd}, whitelist_dexes: {self.config.exchanges}")
+            self.logger.log(f"DEBUG: Filters - min_profit: {self.config.min_profit}, max_oi_usd: {self.config.max_oi_usd}, "
+                          f"configured_dexes: {self.config.exchanges}, available_dexes: {available_exchanges}")
             
             opportunities = await self.opportunity_finder.find_opportunities(filters)
             
@@ -506,23 +511,25 @@ class FundingArbitrageStrategy(StatefulStrategy):
         Returns:
             True if should take this opportunity
         """
-        # ⭐ Check if we have trading clients for both sides
+        # ⭐ Safety check: Verify we have trading clients for both sides
+        # NOTE: This should rarely trigger since we filter at the opportunity finder level,
+        # but it's kept as a defensive safety net in case of race conditions or stale data
         long_dex = opportunity.long_dex
         short_dex = opportunity.short_dex
         
         if long_dex not in self.exchange_clients:
             self.logger.log(
-                f"⏭️  Skipping {opportunity.symbol} opportunity: "
-                f"{long_dex} (long side) doesn't have trading support yet",
-                "INFO"
+                f"⚠️  SAFETY CHECK: Skipping {opportunity.symbol} opportunity - "
+                f"{long_dex} (long side) not in available clients (should have been filtered earlier)",
+                "WARNING"
             )
             return False
         
         if short_dex not in self.exchange_clients:
             self.logger.log(
-                f"⏭️  Skipping {opportunity.symbol} opportunity: "
-                f"{short_dex} (short side) doesn't have trading support yet",
-                "INFO"
+                f"⚠️  SAFETY CHECK: Skipping {opportunity.symbol} opportunity - "
+                f"{short_dex} (short side) not in available clients (should have been filtered earlier)",
+                "WARNING"
             )
             return False
         
