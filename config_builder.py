@@ -321,14 +321,17 @@ class InteractiveConfigBuilder:
         default_list = param.default if isinstance(param.default, list) else \
                       [x.strip() for x in str(param.default).split(',')] if param.default else []
         
+        # Ensure defaults are actually in choices
+        valid_defaults = [d for d in default_list if d in param.choices] if param.choices else default_list
+        
         result = questionary.checkbox(
             prompt,
             choices=param.choices,
-            default=default_list,
+            default=valid_defaults,
             style=CUSTOM_STYLE
         ).ask()
         
-        return result if result else default_list
+        return result if result else valid_defaults
     
     def _prompt_boolean(self, prompt: str, param: ParameterSchema) -> Optional[bool]:
         """Prompt for boolean."""
