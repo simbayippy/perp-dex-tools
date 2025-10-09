@@ -91,9 +91,10 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 primary_exchange = funding_config.exchange
             exchange_clients = {primary_exchange: exchange_client}
         
-        super().__init__(funding_config, exchange_client)
+        # Pass exchange_clients dict to StatefulStrategy
+        super().__init__(funding_config, exchange_clients)
         self.config = funding_config  # Store the converted config
-        self.exchange_clients = exchange_clients  # Store the exchange clients dict
+        # self.exchange_clients is already set by StatefulStrategy.__init__
         
         # For funding arbitrage, we need multiple exchanges
         # If only one exchange client provided, log a warning but continue

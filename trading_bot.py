@@ -62,12 +62,40 @@ class TradingBot:
         self.config = config
         self.logger = TradingLogger(config.exchange, config.ticker, log_to_console=True)
 
-        # Create exchange client
+        # Determine if strategy needs multiple exchanges
+        multi_exchange_strategies = ['funding_arbitrage']
+        is_multi_exchange = config.strategy in multi_exchange_strategies
+        
+        # Create exchange client(s)
         try:
-            self.exchange_client = ExchangeFactory.create_exchange(
-                config.exchange,
-                config
-            )
+            if is_multi_exchange:
+                # Multi-exchange mode (for funding arbitrage, etc.)
+                # Get list of exchanges from strategy params
+                exchange_list = config.strategy_params.get('exchanges', [config.exchange])
+                if isinstance(exchange_list, str):
+                    exchange_list = [ex.strip() for ex in exchange_list.split(',')]
+                
+                self.logger.log(f"Creating clients for exchanges: {exchange_list}", "INFO")
+                
+                # Create multiple exchange clients
+                self.exchange_clients = ExchangeFactory.create_multiple_exchanges(
+                    exchange_names=exchange_list,
+                    config=config,
+                    primary_exchange=config.exchange
+                )
+                
+                # Set primary exchange client for backward compatibility
+                self.exchange_client = self.exchange_clients[config.exchange]
+                
+                self.logger.log(f"Created {len(self.exchange_clients)} exchange clients", "INFO")
+            else:
+                # Single exchange mode (for grid strategy, etc.)
+                self.exchange_client = ExchangeFactory.create_exchange(
+                    config.exchange,
+                    config
+                )
+                self.exchange_clients = None  # Not used for single-exchange strategies
+                
         except ValueError as e:
             raise ValueError(f"Failed to create exchange client: {e}")
 
@@ -76,21 +104,31 @@ class TradingBot:
         self.shutdown_requested = False
         self.loop = None
 
-        # Register order callback
+        # Register order callback (only for primary exchange in multi-exchange mode)
         self._setup_websocket_handlers()
         
         # Initialize strategy
         try:
-            self.strategy = StrategyFactory.create_strategy(
-                self.config.strategy,
-                self.config,
-                self.exchange_client
-            )
+            if is_multi_exchange:
+                # Pass all exchange clients to multi-exchange strategies
+                self.strategy = StrategyFactory.create_strategy(
+                    self.config.strategy,
+                    self.config,
+                    exchange_client=self.exchange_client,  # Primary for backward compat
+                    exchange_clients=self.exchange_clients  # All clients
+                )
+            else:
+                # Pass single exchange client to single-exchange strategies
+                self.strategy = StrategyFactory.create_strategy(
+                    self.config.strategy,
+                    self.config,
+                    self.exchange_client
+                )
             self.logger.log(f"Strategy '{self.config.strategy}' created successfully", "INFO")
         except ValueError as e:
             raise ValueError(f"Failed to create strategy: {e}")
         
-        # Initialize risk manager (only for supported exchanges)
+        # Initialize risk manager (only for supported exchanges, using primary exchange)
         self.risk_manager = None
         if self.exchange_client.supports_risk_management():
             self.risk_manager = RiskManager(self.exchange_client, self.config)
@@ -108,8 +146,19 @@ class TradingBot:
             if hasattr(self, 'strategy') and self.strategy:
                 await self.strategy.cleanup()
             
-            # Disconnect from exchange
-            await self.exchange_client.disconnect()
+            # Disconnect from exchange(s)
+            if hasattr(self, 'exchange_clients') and self.exchange_clients:
+                # Multi-exchange mode: disconnect all clients
+                for exchange_name, client in self.exchange_clients.items():
+                    try:
+                        await client.disconnect()
+                        self.logger.log(f"Disconnected from {exchange_name}", "INFO")
+                    except Exception as e:
+                        self.logger.log(f"Error disconnecting from {exchange_name}: {e}", "ERROR")
+            else:
+                # Single exchange mode
+                await self.exchange_client.disconnect()
+                
             self.logger.log("Graceful shutdown completed", "INFO")
 
         except Exception as e:
@@ -196,8 +245,17 @@ class TradingBot:
 
             # Capture the running event loop for thread-safe callbacks
             self.loop = asyncio.get_running_loop()
-            # Connect to exchange
-            await self.exchange_client.connect()
+            
+            # Connect to exchange(s)
+            if self.exchange_clients:
+                # Multi-exchange mode: connect all clients
+                for exchange_name, client in self.exchange_clients.items():
+                    self.logger.log(f"Connecting to {exchange_name}...", "INFO")
+                    await client.connect()
+                    self.logger.log(f"Connected to {exchange_name}", "INFO")
+            else:
+                # Single exchange mode
+                await self.exchange_client.connect()
 
             # wait for connection to establish
             await asyncio.sleep(5)
@@ -249,7 +307,16 @@ class TradingBot:
         finally:
             # Ensure all connections are closed even if graceful shutdown fails
             try:
-                await self.exchange_client.disconnect()
+                if self.exchange_clients:
+                    # Multi-exchange mode
+                    for client in self.exchange_clients.values():
+                        try:
+                            await client.disconnect()
+                        except:
+                            pass
+                else:
+                    # Single exchange mode
+                    await self.exchange_client.disconnect()
             except Exception as e:
                 self.logger.log(f"Error disconnecting from exchange: {e}", "ERROR")
 
