@@ -73,7 +73,7 @@ class FundingArbStateManager(BaseStateManager):
             return
         
         # Load state from database
-        loaded_state = await self.load_state()
+        loaded_state = await self.load_state(self.strategy_name)
         
         if loaded_state:
             self._state = loaded_state
@@ -83,7 +83,7 @@ class FundingArbStateManager(BaseStateManager):
         else:
             # Initialize default state
             self._state = self._get_default_state()
-            await self.save_state(self._state)
+            await self.save_state(self.strategy_name, self._state)
             self.logger.info(
                 f"State manager initialized with default state for {self.strategy_name}"
             )
@@ -200,7 +200,7 @@ class FundingArbStateManager(BaseStateManager):
         """
         current_state = await self.get_state()
         current_state[key] = value
-        await self.save_state(current_state)
+        await self.save_state(self.strategy_name, current_state)
     
     async def update_performance_metric(self, metric_name: str, value: Any) -> None:
         """
@@ -216,7 +216,7 @@ class FundingArbStateManager(BaseStateManager):
             current_state['performance_metrics'] = {}
         
         current_state['performance_metrics'][metric_name] = value
-        await self.save_state(current_state)
+        await self.save_state(self.strategy_name, current_state)
     
     async def increment_metric(self, metric_name: str, amount: float = 1.0) -> None:
         """
@@ -234,7 +234,7 @@ class FundingArbStateManager(BaseStateManager):
         current_value = current_state['performance_metrics'].get(metric_name, 0.0)
         current_state['performance_metrics'][metric_name] = current_value + amount
         
-        await self.save_state(current_state)
+        await self.save_state(self.strategy_name, current_state)
     
     async def set_paused(self, paused: bool, reason: Optional[str] = None) -> None:
         """
@@ -255,7 +255,7 @@ class FundingArbStateManager(BaseStateManager):
             current_state.pop('pause_reason', None)
             current_state.pop('paused_at', None)
         
-        await self.save_state(current_state)
+        await self.save_state(self.strategy_name, current_state)
         
         self.logger.info(f"Strategy {'paused' if paused else 'resumed'}: {reason or 'No reason'}")
     
@@ -271,7 +271,7 @@ class FundingArbStateManager(BaseStateManager):
         current_state['circuit_breaker_reason'] = reason
         current_state['circuit_breaker_activated_at'] = datetime.now().isoformat()
         
-        await self.save_state(current_state)
+        await self.save_state(self.strategy_name, current_state)
         
         self.logger.critical(f"CIRCUIT BREAKER ACTIVATED: {reason}")
     
@@ -282,7 +282,7 @@ class FundingArbStateManager(BaseStateManager):
         current_state.pop('circuit_breaker_reason', None)
         current_state.pop('circuit_breaker_activated_at', None)
         
-        await self.save_state(current_state)
+        await self.save_state(self.strategy_name, current_state)
         
         self.logger.info("Circuit breaker deactivated")
     
@@ -299,7 +299,7 @@ class FundingArbStateManager(BaseStateManager):
         current_state['config_snapshot'] = config
         current_state['config_updated_at'] = datetime.now().isoformat()
         
-        await self.save_state(current_state)
+        await self.save_state(self.strategy_name, current_state)
     
     async def clear_state(self) -> None:
         """
@@ -317,7 +317,7 @@ class FundingArbStateManager(BaseStateManager):
         
         # Reset to default
         self._state = self._get_default_state()
-        await self.save_state(self._state)
+        await self.save_state(self.strategy_name, self._state)
         
         self.logger.info("State reset to default")
     
