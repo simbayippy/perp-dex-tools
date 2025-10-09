@@ -109,11 +109,12 @@ class FundingArbStateManager(BaseStateManager):
             'config_snapshot': {}
         }
     
-    async def save_state(self, state: Dict[str, Any]) -> None:
+    async def save_state(self, strategy_name: str, state: Dict[str, Any]) -> None:
         """
         Save strategy state to database.
         
         Args:
+            strategy_name: Name of the strategy (used as key)
             state: State dictionary to persist
         """
         if not self._check_database_available():
@@ -126,7 +127,7 @@ class FundingArbStateManager(BaseStateManager):
             json.dumps(state, default=self._json_serializer)
         )
         
-        # Upsert into database
+        # Upsert into database (strategy_name is used as the state_key)
         query = """
             INSERT INTO strategy_state (strategy_name, state_data, last_updated)
             VALUES (:strategy_name, :state_data, NOW())
@@ -137,7 +138,7 @@ class FundingArbStateManager(BaseStateManager):
         """
         
         await database.execute(query, values={
-            "strategy_name": self.strategy_name,
+            "strategy_name": strategy_name,
             "state_data": json.dumps(state_json)
         })
         
@@ -146,9 +147,12 @@ class FundingArbStateManager(BaseStateManager):
         
         self.logger.debug(f"State saved to database: {len(state)} keys")
     
-    async def load_state(self) -> Dict[str, Any]:
+    async def load_state(self, strategy_name: str) -> Dict[str, Any]:
         """
         Load strategy state from database.
+        
+        Args:
+            strategy_name: Name of the strategy to load state for
         
         Returns:
             State dictionary (empty if not found)
@@ -163,7 +167,7 @@ class FundingArbStateManager(BaseStateManager):
         """
         
         row = await database.fetch_one(query, values={
-            "strategy_name": self.strategy_name
+            "strategy_name": strategy_name
         })
         
         if row:
