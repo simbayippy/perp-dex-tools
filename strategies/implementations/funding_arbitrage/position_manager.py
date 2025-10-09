@@ -16,6 +16,7 @@ from decimal import Decimal
 from datetime import datetime
 from uuid import UUID
 import logging
+import asyncio
 
 from strategies.components.base_components import BasePositionManager, Position
 from .models import FundingArbPosition
@@ -63,6 +64,10 @@ class FundingArbPositionManager(BasePositionManager):
         self._funding_payments: Dict[UUID, List[Dict]] = {}  # {position_id: [payment_records]}
         self._cumulative_funding: Dict[UUID, Decimal] = {}   # {position_id: total_funding}
         
+        # 🔒 CRITICAL FIX: Position locks to prevent simultaneous operations
+        self._position_locks: Dict[UUID, asyncio.Lock] = {}  # {position_id: lock}
+        self._master_lock = asyncio.Lock()  # For managing the locks dict itself
+        
         self.logger = logging.getLogger(__name__)
         self._initialized = False
     
@@ -72,6 +77,23 @@ class FundingArbPositionManager(BasePositionManager):
             self.logger.warning("Database operation skipped - running in test mode")
             return False
         return True
+    
+    async def _get_position_lock(self, position_id: UUID) -> asyncio.Lock:
+        """
+        Get or create a lock for a position.
+        
+        🔒 CRITICAL FIX: Prevents race conditions on position operations
+        
+        Args:
+            position_id: Position ID
+        
+        Returns:
+            asyncio.Lock for the position
+        """
+        async with self._master_lock:
+            if position_id not in self._position_locks:
+                self._position_locks[position_id] = asyncio.Lock()
+            return self._position_locks[position_id]
     
     async def initialize(self):
         """
@@ -185,6 +207,101 @@ class FundingArbPositionManager(BasePositionManager):
         
         self._funding_payments[position_id] = payments
     
+    async def _check_position_exists_in_db(self, position_id: UUID) -> bool:
+        """
+        Check if position exists in database.
+        
+        🔒 CRITICAL FIX: Prevents double-adding positions
+        
+        Args:
+            position_id: Position ID to check
+        
+        Returns:
+            True if position exists in database
+        """
+        if not self._check_database_available():
+            return False
+        
+        query = "SELECT COUNT(*) as count FROM strategy_positions WHERE id = :position_id"
+        result = await database.fetch_one(query, values={"position_id": position_id})
+        return result['count'] > 0 if result else False
+    
+    async def _load_position_from_db(self, position_id: UUID) -> Optional[FundingArbPosition]:
+        """
+        Load a single position from database.
+        
+        Args:
+            position_id: Position ID to load
+        
+        Returns:
+            FundingArbPosition if found, None otherwise
+        """
+        if not self._check_database_available():
+            return None
+        
+        query = """
+            SELECT 
+                p.id,
+                s.symbol,
+                p.long_dex_id,
+                p.short_dex_id,
+                p.size_usd,
+                p.entry_long_rate,
+                p.entry_short_rate,
+                p.entry_divergence,
+                p.opened_at,
+                p.current_divergence,
+                p.last_check,
+                p.status,
+                p.rebalance_pending,
+                p.rebalance_reason,
+                p.exit_reason,
+                p.closed_at,
+                p.pnl_usd,
+                p.cumulative_funding_usd,
+                p.metadata
+            FROM strategy_positions p
+            JOIN symbols s ON p.symbol_id = s.id
+            WHERE p.id = :position_id
+        """
+        
+        row = await database.fetch_one(query, values={"position_id": position_id})
+        
+        if not row:
+            return None
+        
+        # Convert DB row to FundingArbPosition
+        position = FundingArbPosition(
+            id=row['id'],
+            symbol=row['symbol'],
+            long_dex=dex_mapper.get_name(row['long_dex_id']),
+            short_dex=dex_mapper.get_name(row['short_dex_id']),
+            size_usd=row['size_usd'],
+            entry_long_rate=row['entry_long_rate'],
+            entry_short_rate=row['entry_short_rate'],
+            entry_divergence=row['entry_divergence'],
+            opened_at=row['opened_at'],
+            current_divergence=row['current_divergence'],
+            last_check=row['last_check'],
+            status=row['status'],
+            rebalance_pending=row['rebalance_pending'],
+            rebalance_reason=row['rebalance_reason'],
+            exit_reason=row['exit_reason'],
+            closed_at=row['closed_at'],
+            pnl_usd=row['pnl_usd']
+        )
+        
+        # Add to memory cache
+        self._positions[position.id] = position
+        
+        # Initialize funding tracking
+        self._cumulative_funding[position.id] = row['cumulative_funding_usd'] or Decimal("0")
+        
+        # Load funding payments
+        await self._load_funding_payments(position.id)
+        
+        return position
+    
     async def create_position(
         self,
         position: FundingArbPosition
@@ -194,12 +311,42 @@ class FundingArbPositionManager(BasePositionManager):
         
         Stores in both database and memory cache.
         
+        🔒 CRITICAL FIX: Added duplicate detection to prevent double-adding
+        
         Args:
             position: FundingArbPosition to track
         
         Returns:
             Position ID
+        
+        Raises:
+            ValueError: If position already exists
         """
+        # Check if position already exists in memory
+        if position.id in self._positions:
+            self.logger.error(
+                f"❌ Position {position.id} already exists in memory! "
+                f"Refusing to create duplicate."
+            )
+            raise ValueError(f"Position {position.id} already exists in memory")
+        
+        # Check if position exists in database (defense in depth)
+        exists_in_db = await self._check_position_exists_in_db(position.id)
+        if exists_in_db:
+            self.logger.error(
+                f"❌ Position {position.id} already exists in database! "
+                f"Loading from DB instead of creating new."
+            )
+            # Load existing position instead of creating duplicate
+            loaded = await self._load_position_from_db(position.id)
+            if loaded:
+                self.logger.warning(
+                    f"⚠️ Loaded existing position {position.id} from database"
+                )
+                return loaded.id
+            else:
+                raise ValueError(f"Position {position.id} exists in DB but failed to load")
+        
         # Get IDs for foreign keys
         symbol_id = symbol_mapper.get_id(position.symbol)
         long_dex_id = dex_mapper.get_id(position.long_dex)
@@ -234,15 +381,15 @@ class FundingArbPositionManager(BasePositionManager):
             "payment_count": 0
         })
         
-        # Store in memory cache (base manager)
-        await self.add_position(position)
+        # Store in memory cache
+        self._positions[position.id] = position
         
         # Initialize funding tracking
         self._funding_payments[position.id] = []
         self._cumulative_funding[position.id] = Decimal("0")
         
         self.logger.info(
-            f"Created position {position.id}: {position.symbol} "
+            f"✅ Created position {position.id}: {position.symbol} "
             f"({position.long_dex} / {position.short_dex}) "
             f"${position.size_usd} @ {position.entry_divergence*100:.3f}% APY"
         )
@@ -448,60 +595,77 @@ class FundingArbPositionManager(BasePositionManager):
         
         Persists to database and updates in-memory cache.
         
+        🔒 CRITICAL FIX: Uses locking to prevent simultaneous closes
+        
         Args:
             position_id: Position to close
             exit_reason: Reason for exit
             final_pnl_usd: Final realized PnL (if known)
         """
-        position = await self.get_position(position_id)
-        if not isinstance(position, FundingArbPosition):
-            return
+        # Acquire position lock to prevent simultaneous closes
+        lock = await self._get_position_lock(position_id)
         
-        # Calculate PnL if not provided
-        if final_pnl_usd is None:
-            # Use cumulative funding as baseline
-            final_pnl_usd = self._cumulative_funding.get(position_id, Decimal("0"))
-        
-        # Update in database
-        closed_at = datetime.now()
-        
-        query = """
-            UPDATE strategy_positions
-            SET status = 'closed',
-                exit_reason = :exit_reason,
-                closed_at = :closed_at,
-                pnl_usd = :pnl_usd,
-                rebalance_pending = FALSE
-            WHERE id = :position_id
-        """
-        
-        await database.execute(query, values={
-            "exit_reason": exit_reason,
-            "closed_at": closed_at,
-            "pnl_usd": final_pnl_usd,
-            "position_id": position_id
-        })
-        
-        # Update in memory
-        position.status = "closed"
-        position.exit_reason = exit_reason
-        position.closed_at = closed_at
-        position.pnl_usd = final_pnl_usd
-        position.rebalance_pending = False
-        
-        await self.update_position(position)
-        
-        # Log closure
-        self.logger.info(
-            f"Closed position {position_id}: {position.symbol} "
-            f"Reason: {exit_reason}, PnL: ${final_pnl_usd:.2f}, "
-            f"Duration: {(closed_at - position.opened_at).total_seconds() / 3600:.1f}h"
-        )
-        
-        # Keep tracking data in database for analysis
-        # Memory can be cleaned up if needed
-        # del self._funding_payments[position_id]
-        # del self._cumulative_funding[position_id]
+        async with lock:
+            # Re-fetch position inside lock to ensure latest state
+            position = await self.get_funding_position(position_id)
+            if not position:
+                self.logger.warning(f"Position {position_id} not found, cannot close")
+                return
+            
+            # Check if already closed
+            if position.status == "closed":
+                self.logger.warning(
+                    f"Position {position_id} already closed (reason: {position.exit_reason}), "
+                    f"skipping duplicate close request"
+                )
+                return
+            
+            # Calculate PnL if not provided
+            if final_pnl_usd is None:
+                # Use cumulative funding as baseline
+                final_pnl_usd = self._cumulative_funding.get(position_id, Decimal("0"))
+            
+            # Update in database
+            closed_at = datetime.now()
+            
+            query = """
+                UPDATE strategy_positions
+                SET status = 'closed',
+                    exit_reason = :exit_reason,
+                    closed_at = :closed_at,
+                    pnl_usd = :pnl_usd,
+                    rebalance_pending = FALSE
+                WHERE id = :position_id AND status = 'open'
+            """
+            
+            result = await database.execute(query, values={
+                "exit_reason": exit_reason,
+                "closed_at": closed_at,
+                "pnl_usd": final_pnl_usd,
+                "position_id": position_id
+            })
+            
+            # Update in memory
+            position.status = "closed"
+            position.exit_reason = exit_reason
+            position.closed_at = closed_at
+            position.pnl_usd = final_pnl_usd
+            position.rebalance_pending = False
+            
+            await self.update_funding_position(position)
+            
+            # Log closure
+            self.logger.info(
+                f"✅ Closed position {position_id}: {position.symbol} "
+                f"Reason: {exit_reason}, PnL: ${final_pnl_usd:.2f}, "
+                f"Duration: {(closed_at - position.opened_at).total_seconds() / 3600:.1f}h"
+            )
+            
+            # Keep tracking data in database for analysis
+            # Memory can be cleaned up if needed
+            # del self._funding_payments[position_id]
+            # del self._cumulative_funding[position_id]
+            # del self._position_locks[position_id]  # Cleanup lock
     
     def get_cumulative_funding(self, position_id: UUID) -> Decimal:
         """
@@ -607,14 +771,60 @@ class FundingArbPositionManager(BasePositionManager):
             'positions_pending_rebalance': len(await self.get_pending_rebalance_positions())
         }
     
+    async def get_funding_position(self, position_id: UUID) -> Optional[FundingArbPosition]:
+        """
+        Get funding arbitrage position by ID (returns as FundingArbPosition).
+        
+        Args:
+            position_id: Position ID
+        
+        Returns:
+            FundingArbPosition if found, None otherwise
+        """
+        return self._positions.get(position_id)
+    
+    async def update_funding_position(self, position: FundingArbPosition) -> None:
+        """
+        Update funding arbitrage position in memory.
+        
+        Args:
+            position: Updated position
+        """
+        if position.id in self._positions:
+            self._positions[position.id] = position
+        else:
+            self.logger.warning(f"Position {position.id} not found for update")
+    
     # ========================================================================
     # BasePositionManager Interface Implementation
     # ========================================================================
     
     async def add_position(self, position: Position) -> None:
-        """Add a new position (converts to FundingArbPosition if needed)."""
+        """
+        Add a new position (converts to FundingArbPosition if needed).
+        
+        🔒 CRITICAL FIX: Added duplicate detection
+        
+        This method is called by create_position(), so we need to avoid
+        infinite recursion by directly adding to memory cache instead of
+        calling create_position() again.
+        """
+        # Check if position already exists in memory
+        if position.id in self._positions:
+            self.logger.warning(
+                f"⚠️ Position {position.id} already exists in memory, skipping add"
+            )
+            return
+        
         if isinstance(position, FundingArbPosition):
-            await self.create_position(position)
+            # Directly add to memory cache (don't call create_position to avoid recursion)
+            self._positions[position.id] = position
+            
+            # Initialize funding tracking if not already present
+            if position.id not in self._funding_payments:
+                self._funding_payments[position.id] = []
+            if position.id not in self._cumulative_funding:
+                self._cumulative_funding[position.id] = Decimal("0")
         else:
             # Convert generic Position to FundingArbPosition
             funding_position = FundingArbPosition(
@@ -629,7 +839,15 @@ class FundingArbPositionManager(BasePositionManager):
                 opened_at=position.opened_at or datetime.now(),
                 status=position.status
             )
-            await self.create_position(funding_position)
+            
+            # Add to memory cache
+            self._positions[funding_position.id] = funding_position
+            
+            # Initialize funding tracking
+            if funding_position.id not in self._funding_payments:
+                self._funding_payments[funding_position.id] = []
+            if funding_position.id not in self._cumulative_funding:
+                self._cumulative_funding[funding_position.id] = Decimal("0")
     
     async def get_position(self, position_id: UUID) -> Optional[Position]:
         """Get position by ID (returns as generic Position)."""

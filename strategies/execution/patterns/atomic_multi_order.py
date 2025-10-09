@@ -261,12 +261,89 @@ class AtomicMultiOrderExecutor:
         """
         Run pre-flight checks on all orders.
         
+        Checks:
+        1. Account balance sufficiency (CRITICAL - prevents partial fills due to insufficient margin)
+        2. Liquidity availability (prevents high slippage)
+        
         Returns:
             (all_checks_passed, error_message)
         """
         try:
             # Import here to avoid circular dependency
             from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
+            
+            # ========================================================================
+            # CHECK 1: Account Balance Validation (CRITICAL FIX)
+            # ========================================================================
+            self.logger.info("Running balance checks...")
+            
+            # Calculate total required margin per exchange
+            exchange_margin_required: Dict[str, Decimal] = {}
+            
+            for order_spec in orders:
+                exchange_name = order_spec.exchange_client.get_exchange_name()
+                
+                # Estimate required margin (conservative: assume 5x leverage = 20% margin)
+                # Most perp DEXs use 5-20x leverage, so 20% margin is conservative
+                estimated_margin = order_spec.size_usd * Decimal('0.20')
+                
+                if exchange_name not in exchange_margin_required:
+                    exchange_margin_required[exchange_name] = Decimal('0')
+                
+                exchange_margin_required[exchange_name] += estimated_margin
+            
+            # Check each exchange's available balance
+            for exchange_name, required_margin in exchange_margin_required.items():
+                # Find exchange client for this exchange
+                exchange_client = None
+                for order_spec in orders:
+                    if order_spec.exchange_client.get_exchange_name() == exchange_name:
+                        exchange_client = order_spec.exchange_client
+                        break
+                
+                if not exchange_client:
+                    continue
+                
+                # Check if exchange supports balance queries
+                try:
+                    available_balance = await exchange_client.get_account_balance()
+                    
+                    if available_balance is None:
+                        # Exchange doesn't support balance queries - log warning but continue
+                        self.logger.warning(
+                            f"⚠️ Cannot verify balance for {exchange_name} "
+                            f"(required: ~${required_margin:.2f})"
+                        )
+                        continue
+                    
+                    # Add 10% buffer for safety (fees, slippage, etc.)
+                    required_with_buffer = required_margin * Decimal('1.10')
+                    
+                    if available_balance < required_with_buffer:
+                        error_msg = (
+                            f"Insufficient balance on {exchange_name}: "
+                            f"available=${available_balance:.2f}, "
+                            f"required=${required_with_buffer:.2f} "
+                            f"(${required_margin:.2f} + 10% buffer)"
+                        )
+                        self.logger.error(f"❌ {error_msg}")
+                        return False, error_msg
+                    
+                    self.logger.info(
+                        f"✅ {exchange_name} balance OK: "
+                        f"${available_balance:.2f} >= ${required_with_buffer:.2f}"
+                    )
+                
+                except Exception as e:
+                    # Balance check failed - log but don't fail execution
+                    self.logger.warning(
+                        f"⚠️ Balance check failed for {exchange_name}: {e}"
+                    )
+            
+            # ========================================================================
+            # CHECK 2: Liquidity Analysis
+            # ========================================================================
+            self.logger.info("Running liquidity checks...")
             
             analyzer = LiquidityAnalyzer()
             
@@ -282,9 +359,9 @@ class AtomicMultiOrderExecutor:
                 if not analyzer.is_execution_acceptable(report):
                     error_msg = (
                         f"Order {i} ({order_spec.side} {order_spec.symbol}) "
-                        f"failed pre-flight: {report.recommendation}"
+                        f"failed liquidity check: {report.recommendation}"
                     )
-                    self.logger.warning(error_msg)
+                    self.logger.warning(f"❌ {error_msg}")
                     return False, error_msg
             
             self.logger.info("✅ All pre-flight checks passed")
@@ -292,7 +369,9 @@ class AtomicMultiOrderExecutor:
         
         except Exception as e:
             self.logger.error(f"Pre-flight check error: {e}")
-            # Don't fail execution on pre-flight check errors
+            # Don't fail execution on pre-flight check errors (defensive)
+            # Better to attempt execution than block potentially valid trades
+            self.logger.warning("⚠️ Continuing despite pre-flight check error")
             return True, None
     
     async def _place_single_order(self, spec: OrderSpec) -> Dict:
@@ -353,6 +432,11 @@ class AtomicMultiOrderExecutor:
         
         ⚠️ This will incur slippage but prevents directional exposure.
         
+        🔒 CRITICAL FIX: Race condition protection
+        1. Cancel all orders FIRST to prevent further fills
+        2. Query actual filled amounts AFTER cancellation
+        3. Close actual filled amounts (not cached values)
+        
         Args:
             filled_orders: List of successfully filled orders
         
@@ -363,56 +447,126 @@ class AtomicMultiOrderExecutor:
             f"🚨 EMERGENCY ROLLBACK: Closing {len(filled_orders)} filled orders"
         )
         
-        rollback_tasks = []
         total_rollback_cost = Decimal('0')
         
+        # Step 1: CANCEL ALL ORDERS IMMEDIATELY (stop the bleeding)
+        self.logger.info("Step 1/3: Canceling all orders to prevent further fills...")
+        cancel_tasks = []
         for order in filled_orders:
+            if order.get('order_id'):
+                try:
+                    cancel_task = order['exchange_client'].cancel_order(order['order_id'])
+                    cancel_tasks.append(cancel_task)
+                except Exception as e:
+                    self.logger.error(f"Failed to create cancel task for {order.get('order_id')}: {e}")
+        
+        if cancel_tasks:
+            cancel_results = await asyncio.gather(*cancel_tasks, return_exceptions=True)
+            for i, result in enumerate(cancel_results):
+                if isinstance(result, Exception):
+                    self.logger.warning(f"Cancel failed for order {i}: {result}")
+            
+            # Small delay to ensure cancellation propagates through exchange systems
+            await asyncio.sleep(0.5)
+        
+        # Step 2: Query ACTUAL filled amounts after cancellation
+        self.logger.info("Step 2/3: Querying actual filled amounts...")
+        actual_fills = []
+        for order in filled_orders:
+            if order.get('order_id'):
+                try:
+                    order_info = await order['exchange_client'].get_order_info(order['order_id'])
+                    if order_info and order_info.filled_size > 0:
+                        actual_fills.append({
+                            'exchange_client': order['exchange_client'],
+                            'symbol': order['symbol'],
+                            'side': order['side'],
+                            'filled_quantity': order_info.filled_size,  # ✅ ACTUAL filled amount
+                            'fill_price': order['fill_price']  # Use original price for cost calc
+                        })
+                        
+                        # Warn if fill amount changed
+                        original_qty = order['filled_quantity']
+                        actual_qty = order_info.filled_size
+                        if abs(actual_qty - original_qty) > Decimal('0.0001'):
+                            self.logger.warning(
+                                f"⚠️ Fill amount changed for {order['symbol']}: "
+                                f"{original_qty} → {actual_qty} "
+                                f"(Δ={actual_qty - original_qty})"
+                            )
+                except Exception as e:
+                    self.logger.error(
+                        f"Failed to get actual fill for {order.get('order_id')}: {e}"
+                    )
+                    # Fallback to original quantity (pessimistic approach)
+                    actual_fills.append({
+                        'exchange_client': order['exchange_client'],
+                        'symbol': order['symbol'],
+                        'side': order['side'],
+                        'filled_quantity': order['filled_quantity'],
+                        'fill_price': order['fill_price']
+                    })
+            else:
+                # No order ID (shouldn't happen, but handle gracefully)
+                actual_fills.append({
+                    'exchange_client': order['exchange_client'],
+                    'symbol': order['symbol'],
+                    'side': order['side'],
+                    'filled_quantity': order['filled_quantity'],
+                    'fill_price': order['fill_price']
+                })
+        
+        # Step 3: Close actual filled amounts
+        self.logger.info(f"Step 3/3: Closing {len(actual_fills)} filled positions...")
+        rollback_tasks = []
+        for fill in actual_fills:
             try:
-                # Market close the opposite side
-                close_side = "sell" if order['side'] == "buy" else "buy"
+                close_side = "sell" if fill['side'] == "buy" else "buy"
                 
                 self.logger.info(
-                    f"Rollback: {close_side} {order['symbol']} "
-                    f"{order['filled_quantity']} @ market"
+                    f"Rollback: {close_side} {fill['symbol']} "
+                    f"{fill['filled_quantity']} @ market"
                 )
                 
                 # Place market close order
-                close_task = order['exchange_client'].place_market_order(
-                    contract_id=order['symbol'],
-                    quantity=float(order['filled_quantity']),
+                close_task = fill['exchange_client'].place_market_order(
+                    contract_id=fill['symbol'],
+                    quantity=float(fill['filled_quantity']),  # ✅ Use ACTUAL fill
                     side=close_side
                 )
-                rollback_tasks.append(close_task)
-            
+                rollback_tasks.append((close_task, fill))
             except Exception as e:
                 self.logger.error(
-                    f"Failed to create rollback order for {order['symbol']}: {e}"
+                    f"Failed to create rollback order for {fill['symbol']}: {e}"
                 )
         
         # Execute all rollback orders
         if rollback_tasks:
-            results = await asyncio.gather(*rollback_tasks, return_exceptions=True)
+            tasks_only = [task for task, _ in rollback_tasks]
+            results = await asyncio.gather(*tasks_only, return_exceptions=True)
             
             # Calculate rollback cost (slippage from entry to exit)
             for i, result in enumerate(results):
+                fill = rollback_tasks[i][1]
                 if isinstance(result, Exception):
-                    self.logger.error(f"Rollback order {i} failed: {result}")
+                    self.logger.error(
+                        f"Rollback order failed for {fill['symbol']}: {result}"
+                    )
                 elif hasattr(result, 'price'):
-                    # Calculate cost difference
-                    order = filled_orders[i]
-                    entry_price = order['fill_price']
+                    entry_price = fill['fill_price']
                     exit_price = Decimal(str(result.price))
-                    quantity = order['filled_quantity']
+                    quantity = fill['filled_quantity']
                     
                     rollback_cost = abs(exit_price - entry_price) * quantity
                     total_rollback_cost += rollback_cost
                     
                     self.logger.warning(
-                        f"Rollback cost for {order['symbol']}: ${rollback_cost:.2f}"
+                        f"Rollback cost for {fill['symbol']}: ${rollback_cost:.2f} "
+                        f"(entry: ${entry_price}, exit: ${exit_price})"
                     )
         
         self.logger.warning(
-            f"Total rollback cost: ${total_rollback_cost:.2f}"
+            f"✅ Rollback complete. Total cost: ${total_rollback_cost:.2f}"
         )
         
         return total_rollback_cost
