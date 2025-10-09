@@ -272,7 +272,7 @@ class LighterClient(BaseExchangeClient):
         This is more reliable than WebSocket for pre-trade liquidity checks.
         
         Args:
-            contract_id: Contract/symbol identifier (market_id)
+            contract_id: Contract/symbol identifier (market_id as string)
             levels: Number of price levels to fetch (default: 10, max: 100)
             
         Returns:
@@ -281,15 +281,31 @@ class LighterClient(BaseExchangeClient):
         try:
             # Use REST API for order book (more reliable than WebSocket for one-time queries)
             url = f"{self.base_url}/api/v1/orderBookOrders"
+            
+            # contract_id should be market_id (integer)
+            # If it's a string representation, convert it
+            try:
+                market_id = int(contract_id)
+            except (ValueError, TypeError):
+                self.logger.log(f"Invalid contract_id format: {contract_id}, expected integer", "ERROR")
+                return {'bids': [], 'asks': []}
+            
             params = {
-                'market_id': contract_id,
+                'market_id': market_id,
                 'limit': min(levels, 100)  # API max is 100
             }
+            
+            self.logger.log(f"Fetching order book for market_id={market_id}, limit={params['limit']}", "DEBUG")
             
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=params) as response:
                     if response.status != 200:
-                        self.logger.log(f"Failed to get order book: HTTP {response.status}", "ERROR")
+                        response_text = await response.text()
+                        self.logger.log(
+                            f"Failed to get order book: HTTP {response.status}, "
+                            f"URL: {url}, params: {params}, response: {response_text[:200]}",
+                            "ERROR"
+                        )
                         return {'bids': [], 'asks': []}
                     
                     data = await response.json()
@@ -301,6 +317,11 @@ class LighterClient(BaseExchangeClient):
                     # Extract bids and asks from Lighter response
                     bids_raw = data.get('bids', [])
                     asks_raw = data.get('asks', [])
+                    
+                    self.logger.log(
+                        f"Received order book: {len(bids_raw)} bids, {len(asks_raw)} asks",
+                        "DEBUG"
+                    )
                     
                     # Convert to standardized format
                     # Lighter format: [{'price': '1243.5281', 'remaining_base_amount': '0.20'}, ...]
@@ -326,6 +347,8 @@ class LighterClient(BaseExchangeClient):
 
         except Exception as e:
             self.logger.log(f"Error fetching order book depth: {e}", "ERROR")
+            import traceback
+            self.logger.log(f"Traceback: {traceback.format_exc()}", "DEBUG")
             # Return empty order book on error
             return {'bids': [], 'asks': []}
 

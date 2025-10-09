@@ -131,10 +131,14 @@ class LiquidityAnalyzer:
             )
             
             # Validate order book is not empty
+            bids_count = len(order_book.get('bids', []))
+            asks_count = len(order_book.get('asks', []))
+            
             if not order_book.get('bids') or not order_book.get('asks'):
                 self.logger.warning(
-                    f"Order book for {symbol} is empty or not yet loaded. "
-                    "This often happens when WebSocket hasn't initialized yet."
+                    f"Order book for {symbol} is empty or unavailable. "
+                    f"Received {bids_count} bids, {asks_count} asks. "
+                    f"Exchange may have no liquidity for this symbol, or API call failed."
                 )
                 return LiquidityReport(
                     depth_sufficient=False,
@@ -149,6 +153,12 @@ class LiquidityAnalyzer:
                     best_bid=Decimal('0'),
                     best_ask=Decimal('0')
                 )
+            
+            # Log order book depth
+            self.logger.info(
+                f"Order book for {symbol}: {bids_count} bids, {asks_count} asks. "
+                f"Best bid: {order_book['bids'][0]['price']}, Best ask: {order_book['asks'][0]['price']}"
+            )
             
             # Extract best bid/ask
             best_bid = Decimal(str(order_book['bids'][0]['price']))
