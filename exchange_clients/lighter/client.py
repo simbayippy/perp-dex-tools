@@ -351,10 +351,15 @@ class LighterClient(BaseExchangeClient):
                         "ERROR"
                     )
                     return {'bids': [], 'asks': []}
-            
+
+            if levels < 100:
+                # API max is 100 for lighter, while default is set to 20
+                # so we use the highest of the 2
+                levels = 100 #lighter specific
+
             params = {
                 'market_id': market_id,
-                'limit': min(levels, 100)  # API max is 100
+                'limit': levels  # API max is 100
             }
             
             self.logger.log(

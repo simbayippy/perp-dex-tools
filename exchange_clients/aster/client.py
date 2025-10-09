@@ -479,6 +479,10 @@ class AsterClient(BaseExchangeClient):
         Returns:
             Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
         """
+        self.logger.log(
+            f"🔍 [ASTER] get_order_book_depth() called with symbol='{contract_id}', levels={levels}",
+            "INFO"
+        )
         try:
             self.logger.log(
                 f"📊 [ASTER] Fetching order book: symbol={contract_id}, limit={levels}",
