@@ -2,10 +2,11 @@
 """
 Modular Trading Bot - Supports multiple exchanges
 
-Three Launch Modes:
-  1. Interactive: python runbot.py --interactive
-  2. Config File: python runbot.py --config configs/my_strategy.yml
-  3. CLI Args:    python runbot.py --strategy grid --exchange lighter --ticker BTC ...
+Two Launch Modes:
+  1. Config File: python runbot.py --config configs/my_strategy.yml
+  2. CLI Args:    python runbot.py --strategy grid --exchange lighter --ticker BTC ...
+
+To create a config file, run: python config_builder.py
 """
 
 import argparse
@@ -27,20 +28,22 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Launch Modes:
-  Interactive Mode:
-    python runbot.py --interactive
-    
-  Config File Mode:
+  Config File Mode (Recommended):
     python runbot.py --config configs/my_strategy.yml
     
-  CLI Args Mode:
+  CLI Args Mode (Quick Tests):
     python runbot.py --strategy grid --exchange lighter --ticker BTC --quantity 100 --take-profit 0.008 --direction buy
 
-Examples:
-  # Interactive wizard (recommended for first-time users)
-  python runbot.py --interactive
+Creating a Config File:
+  # Run the interactive config builder
+  python config_builder.py
   
-  # Use saved config
+  # OR generate examples and edit
+  python config_yaml.py
+  nano configs/example_funding_arbitrage.yml
+
+Examples:
+  # Use saved config (recommended)
   python runbot.py --config configs/funding_arb_20251009.yml
   
   # Quick CLI launch (grid strategy)
@@ -52,13 +55,10 @@ Examples:
     )
 
     # ========================================================================
-    # Launch Mode Selection (mutually exclusive)
+    # Config File Mode
     # ========================================================================
-    mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument('--interactive', '-i', action='store_true',
-                           help='Launch interactive configuration wizard')
-    mode_group.add_argument('--config', '-c', type=str,
-                           help='Load configuration from YAML file')
+    parser.add_argument('--config', '-c', type=str,
+                        help='Load configuration from YAML file')
 
     # ========================================================================
     # Common Arguments
@@ -162,36 +162,9 @@ async def main():
     setup_logging("WARNING")
 
     # ========================================================================
-    # MODE 1: Interactive Configuration Wizard
+    # MODE 1: Config File Mode
     # ========================================================================
-    if args.interactive:
-        from config_builder import InteractiveConfigBuilder
-        
-        builder = InteractiveConfigBuilder()
-        result = builder.build_config()
-        
-        if result is None or not result.get("start_bot"):
-            print("\nGoodbye!")
-            return
-        
-        # Extract strategy and config from interactive result
-        strategy_name = result["strategy"]
-        strategy_config = result["config"]
-        
-        # Load env
-        env_path = Path(args.env_file)
-        if not env_path.exists():
-            print(f"Env file not found: {env_path.resolve()}")
-            sys.exit(1)
-        dotenv.load_dotenv(args.env_file)
-        
-        # Convert to TradingConfig for the bot
-        config = _config_dict_to_trading_config(strategy_name, strategy_config)
-        
-    # ========================================================================
-    # MODE 2: Config File Mode
-    # ========================================================================
-    elif args.config:
+    if args.config:
         from config_yaml import load_config_from_yaml, validate_config_file
         
         config_path = Path(args.config)
@@ -225,21 +198,25 @@ async def main():
         config = _config_dict_to_trading_config(strategy_name, strategy_config)
         
     # ========================================================================
-    # MODE 3: CLI Args Mode (Legacy/Backward Compatible)
+    # MODE 2: CLI Args Mode (Direct)
     # ========================================================================
     else:
         # Validate required CLI arguments
         if not args.strategy:
-            print("Error: --strategy is required (or use --interactive or --config)")
+            print("Error: --strategy is required (or use --config)")
+            print("\nTo create a config file:")
+            print("  python config_builder.py")
+            print("\nThen run:")
+            print("  python runbot.py --config configs/your_config.yml")
             sys.exit(1)
         if not args.ticker:
-            print("Error: --ticker is required (or use --interactive or --config)")
+            print("Error: --ticker is required (or use --config)")
             sys.exit(1)
         if not args.quantity:
-            print("Error: --quantity is required (or use --interactive or --config)")
+            print("Error: --quantity is required (or use --config)")
             sys.exit(1)
         if not args.exchange:
-            print("Error: --exchange is required (or use --interactive or --config)")
+            print("Error: --exchange is required (or use --config)")
             sys.exit(1)
         
         # Validate strategy-specific requirements
