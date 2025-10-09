@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
 Modular Trading Bot - Supports multiple exchanges
+
+Three Launch Modes:
+  1. Interactive: python runbot.py --interactive
+  2. Config File: python runbot.py --config configs/my_strategy.yml
+  3. CLI Args:    python runbot.py --strategy grid --exchange lighter --ticker BTC ...
 """
 
 import argparse
@@ -17,27 +22,71 @@ from strategies import StrategyFactory
 
 def parse_arguments():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='Modular Trading Bot - Supports multiple exchanges')
+    parser = argparse.ArgumentParser(
+        description='Modular Trading Bot - Supports multiple exchanges',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Launch Modes:
+  Interactive Mode:
+    python runbot.py --interactive
+    
+  Config File Mode:
+    python runbot.py --config configs/my_strategy.yml
+    
+  CLI Args Mode:
+    python runbot.py --strategy grid --exchange lighter --ticker BTC --quantity 100 --take-profit 0.008 --direction buy
 
+Examples:
+  # Interactive wizard (recommended for first-time users)
+  python runbot.py --interactive
+  
+  # Use saved config
+  python runbot.py --config configs/funding_arb_20251009.yml
+  
+  # Quick CLI launch (grid strategy)
+  python runbot.py --strategy grid --exchange lighter --ticker BTC --quantity 100 --take-profit 0.008 --direction buy
+  
+  # Quick CLI launch (funding arbitrage)
+  python runbot.py --strategy funding_arbitrage --exchange lighter --ticker BTC --quantity 1 --target-exposure 100 --exchanges lighter,grvt
+        """
+    )
+
+    # ========================================================================
+    # Launch Mode Selection (mutually exclusive)
+    # ========================================================================
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument('--interactive', '-i', action='store_true',
+                           help='Launch interactive configuration wizard')
+    mode_group.add_argument('--config', '-c', type=str,
+                           help='Load configuration from YAML file')
+
+    # ========================================================================
+    # Common Arguments
+    # ========================================================================
+    parser.add_argument('--env-file', type=str, default=".env",
+                        help=".env file path (default: .env)")
+
+    # ========================================================================
+    # CLI Mode Arguments (only used if not --interactive or --config)
+    # ========================================================================
+    
     # Exchange selection
-    parser.add_argument('--exchange', type=str, default='edgex',
+    parser.add_argument('--exchange', type=str,
                         choices=ExchangeFactory.get_supported_exchanges(),
-                        help='Exchange to use (default: edgex). '
+                        help='Exchange to use. '
                              f'Available: {", ".join(ExchangeFactory.get_supported_exchanges())}')
     
     # Strategy selection
-    parser.add_argument('--strategy', type=str, default='grid',
+    parser.add_argument('--strategy', type=str,
                         choices=StrategyFactory.get_supported_strategies(),
-                        help='Trading strategy to use (default: grid). '
+                        help='Trading strategy to use. '
                              f'Available: {", ".join(StrategyFactory.get_supported_strategies())}')
 
     # Universal trading parameters
-    parser.add_argument('--ticker', type=str, required=True,
+    parser.add_argument('--ticker', type=str,
                         help='Trading ticker (e.g., BTC, ETH, HYPE)')
-    parser.add_argument('--quantity', type=Decimal, required=True,
-                        help='Order quantity')
-    parser.add_argument('--env-file', type=str, default=".env",
-                        help=".env file path (default: .env)")
+    parser.add_argument('--quantity', type=Decimal,
+                        help='Order quantity (may be unused by some strategies)')
     
     # Strategy-specific parameters (passed as key=value pairs)
     parser.add_argument('--strategy-params', type=str, nargs='*', default=[],
@@ -70,7 +119,7 @@ def parse_arguments():
     parser.add_argument('--min-profit-rate', type=Decimal,
                         help='Funding: Minimum hourly profit rate to trade')
     parser.add_argument('--exchanges', type=str,
-                        help='Funding: Comma-separated list of exchanges (e.g., lighter,extended)')
+                        help='Funding: Comma-separated list of exchanges (e.g., lighter,grvt,backpack)')
 
     return parser.parse_args()
 
@@ -112,26 +161,175 @@ async def main():
     # Setup logging first
     setup_logging("WARNING")
 
-    # Validate strategy-specific requirements
-    if args.strategy == 'grid':
-        if not args.take_profit and 'take_profit' not in [p.split('=')[0] for p in args.strategy_params]:
-            print("Error: Grid strategy requires --take-profit parameter")
+    # ========================================================================
+    # MODE 1: Interactive Configuration Wizard
+    # ========================================================================
+    if args.interactive:
+        from config_builder import InteractiveConfigBuilder
+        
+        builder = InteractiveConfigBuilder()
+        result = builder.build_config()
+        
+        if result is None or not result.get("start_bot"):
+            print("\nGoodbye!")
+            return
+        
+        # Extract strategy and config from interactive result
+        strategy_name = result["strategy"]
+        strategy_config = result["config"]
+        
+        # Load env
+        env_path = Path(args.env_file)
+        if not env_path.exists():
+            print(f"Env file not found: {env_path.resolve()}")
             sys.exit(1)
-        if not args.direction and 'direction' not in [p.split('=')[0] for p in args.strategy_params]:
-            print("Error: Grid strategy requires --direction parameter")
+        dotenv.load_dotenv(args.env_file)
+        
+        # Convert to TradingConfig for the bot
+        config = _config_dict_to_trading_config(strategy_name, strategy_config)
+        
+    # ========================================================================
+    # MODE 2: Config File Mode
+    # ========================================================================
+    elif args.config:
+        from config_yaml import load_config_from_yaml, validate_config_file
+        
+        config_path = Path(args.config)
+        if not config_path.exists():
+            print(f"Error: Config file not found: {config_path}")
             sys.exit(1)
-    elif args.strategy == 'funding_arbitrage':
-        if not args.target_exposure and 'target_exposure' not in [p.split('=')[0] for p in args.strategy_params]:
-            print("Error: Funding arbitrage strategy requires --target-exposure parameter")
+        
+        # Validate config file
+        is_valid, error = validate_config_file(config_path)
+        if not is_valid:
+            print(f"Error: Invalid config file: {error}")
             sys.exit(1)
+        
+        # Load config
+        loaded = load_config_from_yaml(config_path)
+        strategy_name = loaded["strategy"]
+        strategy_config = loaded["config"]
+        
+        print(f"\n✓ Loaded configuration from: {config_path}")
+        print(f"  Strategy: {strategy_name}")
+        print(f"  Created: {loaded['metadata'].get('created_at', 'unknown')}\n")
+        
+        # Load env
+        env_path = Path(args.env_file)
+        if not env_path.exists():
+            print(f"Env file not found: {env_path.resolve()}")
+            sys.exit(1)
+        dotenv.load_dotenv(args.env_file)
+        
+        # Convert to TradingConfig
+        config = _config_dict_to_trading_config(strategy_name, strategy_config)
+        
+    # ========================================================================
+    # MODE 3: CLI Args Mode (Legacy/Backward Compatible)
+    # ========================================================================
+    else:
+        # Validate required CLI arguments
+        if not args.strategy:
+            print("Error: --strategy is required (or use --interactive or --config)")
+            sys.exit(1)
+        if not args.ticker:
+            print("Error: --ticker is required (or use --interactive or --config)")
+            sys.exit(1)
+        if not args.quantity:
+            print("Error: --quantity is required (or use --interactive or --config)")
+            sys.exit(1)
+        if not args.exchange:
+            print("Error: --exchange is required (or use --interactive or --config)")
+            sys.exit(1)
+        
+        # Validate strategy-specific requirements
+        if args.strategy == 'grid':
+            if not args.take_profit and 'take_profit' not in [p.split('=')[0] for p in args.strategy_params]:
+                print("Error: Grid strategy requires --take-profit parameter")
+                sys.exit(1)
+            if not args.direction and 'direction' not in [p.split('=')[0] for p in args.strategy_params]:
+                print("Error: Grid strategy requires --direction parameter")
+                sys.exit(1)
+        elif args.strategy == 'funding_arbitrage':
+            if not args.target_exposure and 'target_exposure' not in [p.split('=')[0] for p in args.strategy_params]:
+                print("Error: Funding arbitrage strategy requires --target-exposure parameter")
+                sys.exit(1)
 
-    env_path = Path(args.env_file)
-    if not env_path.exists():
-        print(f"Env file not find: {env_path.resolve()}")
-        sys.exit(1)
-    dotenv.load_dotenv(args.env_file)
+        env_path = Path(args.env_file)
+        if not env_path.exists():
+            print(f"Env file not found: {env_path.resolve()}")
+            sys.exit(1)
+        dotenv.load_dotenv(args.env_file)
 
-    # Build strategy parameters
+        # Build strategy parameters (legacy CLI parsing)
+        config = _parse_cli_args_to_config(args)
+
+    # ========================================================================
+    # Launch Bot (Common for All Modes)
+    # ========================================================================
+    print("\n" + "="*70)
+    print(f"  Starting Trading Bot")
+    print("="*70)
+    print(f"  Strategy: {config.strategy}")
+    print(f"  Exchange: {config.exchange}")
+    print(f"  Ticker:   {config.ticker}")
+    print("="*70 + "\n")
+    
+    bot = TradingBot(config)
+    try:
+        await bot.run()
+    except Exception as e:
+        print(f"Bot execution failed: {e}")
+        # The bot's run method already handles graceful shutdown
+        return
+
+
+def _config_dict_to_trading_config(strategy_name: str, config_dict: dict) -> TradingConfig:
+    """
+    Convert a strategy config dict (from YAML or interactive) to TradingConfig.
+    
+    Args:
+        strategy_name: Name of the strategy
+        config_dict: Configuration dictionary
+        
+    Returns:
+        TradingConfig object
+    """
+    # Extract common fields
+    if strategy_name == "grid":
+        exchange = config_dict.get("exchange", "lighter")
+        ticker = config_dict.get("ticker", "BTC")
+        quantity = config_dict.get("quantity", Decimal("100"))
+    elif strategy_name == "funding_arbitrage":
+        exchange = config_dict.get("primary_exchange", "lighter")
+        ticker = "BTC"  # Funding arb scans all tickers
+        quantity = Decimal("1")  # Placeholder, not used
+    else:
+        exchange = "lighter"
+        ticker = "BTC"
+        quantity = Decimal("100")
+    
+    return TradingConfig(
+        ticker=ticker.upper() if isinstance(ticker, str) else "BTC",
+        contract_id='',  # will be set in the bot's run method
+        tick_size=Decimal(0),
+        quantity=quantity,
+        exchange=exchange.lower(),
+        strategy=strategy_name.lower(),
+        strategy_params=config_dict
+    )
+
+
+def _parse_cli_args_to_config(args) -> TradingConfig:
+    """
+    Parse CLI arguments into TradingConfig (legacy mode).
+    
+    Args:
+        args: Parsed argparse arguments
+        
+    Returns:
+        TradingConfig object
+    """
     strategy_params = {}
     
     # Parse key=value strategy parameters
@@ -186,7 +384,7 @@ async def main():
         strategy_params.setdefault('funding_check_interval', 300)
     
     # Create clean configuration
-    config = TradingConfig(
+    return TradingConfig(
         ticker=args.ticker.upper(),
         contract_id='',  # will be set in the bot's run method
         tick_size=Decimal(0),
@@ -195,15 +393,6 @@ async def main():
         strategy=args.strategy.lower(),
         strategy_params=strategy_params
     )
-
-    # Create and run the bot
-    bot = TradingBot(config)
-    try:
-        await bot.run()
-    except Exception as e:
-        print(f"Bot execution failed: {e}")
-        # The bot's run method already handles graceful shutdown
-        return
 
 
 if __name__ == "__main__":

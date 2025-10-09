@@ -1,0 +1,4 @@
+# Additional requirements for interactive configuration
+questionary>=2.0.0
+pyyaml>=6.0
+
