@@ -11,7 +11,7 @@ from pysdk.grvt_ccxt import GrvtCcxt
 from pysdk.grvt_ccxt_ws import GrvtCcxtWS
 from pysdk.grvt_ccxt_env import GrvtEnv, GrvtWSEndpointType
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError
+from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
 from helpers.logger import TradingLogger
 
 
@@ -73,18 +73,10 @@ class GrvtClient(BaseExchangeClient):
 
     def _validate_config(self) -> None:
         """Validate GRVT configuration."""
-        required_env_vars = ['GRVT_TRADING_ACCOUNT_ID', 'GRVT_PRIVATE_KEY', 'GRVT_API_KEY']
-        missing_vars = [var for var in required_env_vars if not os.getenv(var)]
-        if missing_vars:
-            raise MissingCredentialsError(f"Missing required environment variables: {missing_vars}")
-        
-        # Check for placeholder values
-        if self.trading_account_id in ['your_trading_account_id_here', 'PLACEHOLDER', '', None]:
-            raise MissingCredentialsError("GRVT_TRADING_ACCOUNT_ID is not configured (placeholder or empty)")
-        if self.private_key in ['your_private_key_here', 'PLACEHOLDER', '', None]:
-            raise MissingCredentialsError("GRVT_PRIVATE_KEY is not configured (placeholder or empty)")
-        if self.api_key in ['your_api_key_here', 'PLACEHOLDER', '', None]:
-            raise MissingCredentialsError("GRVT_API_KEY is not configured (placeholder or empty)")
+        # Use base validation helper (reduces code duplication)
+        validate_credentials('GRVT_TRADING_ACCOUNT_ID', os.getenv('GRVT_TRADING_ACCOUNT_ID'))
+        validate_credentials('GRVT_PRIVATE_KEY', os.getenv('GRVT_PRIVATE_KEY'))
+        validate_credentials('GRVT_API_KEY', os.getenv('GRVT_API_KEY'))
 
     async def connect(self) -> None:
         """Connect to GRVT WebSocket."""

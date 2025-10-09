@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Dict, Any, List, Optional, Tuple
 from edgex_sdk import Client, OrderSide, WebSocketManager, CancelOrderParams, GetOrderBookDepthParams, GetActiveOrderParams
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError
+from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
 from helpers.logger import TradingLogger
 
 
@@ -57,16 +57,9 @@ class EdgeXClient(BaseExchangeClient):
 
     def _validate_config(self) -> None:
         """Validate EdgeX configuration."""
-        required_env_vars = ['EDGEX_ACCOUNT_ID', 'EDGEX_STARK_PRIVATE_KEY']
-        missing_vars = [var for var in required_env_vars if not os.getenv(var)]
-        if missing_vars:
-            raise MissingCredentialsError(f"Missing required environment variables: {missing_vars}")
-        
-        # Check for placeholder values
-        if self.account_id in ['your_account_id_here', 'PLACEHOLDER', '', None]:
-            raise MissingCredentialsError("EDGEX_ACCOUNT_ID is not configured (placeholder or empty)")
-        if self.stark_private_key in ['your_stark_private_key_here', 'PLACEHOLDER', '', None]:
-            raise MissingCredentialsError("EDGEX_STARK_PRIVATE_KEY is not configured (placeholder or empty)")
+        # Use base validation helper (reduces code duplication)
+        validate_credentials('EDGEX_ACCOUNT_ID', os.getenv('EDGEX_ACCOUNT_ID'))
+        validate_credentials('EDGEX_STARK_PRIVATE_KEY', os.getenv('EDGEX_STARK_PRIVATE_KEY'))
 
     # ---------------------------
     # Connection / Reconnect

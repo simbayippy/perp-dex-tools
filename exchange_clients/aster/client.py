@@ -15,7 +15,7 @@ import aiohttp
 import websockets
 import sys
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError
+from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
 from helpers.logger import TradingLogger
 
 
@@ -341,16 +341,9 @@ class AsterClient(BaseExchangeClient):
 
     def _validate_config(self) -> None:
         """Validate Aster configuration."""
-        required_env_vars = ['ASTER_API_KEY', 'ASTER_SECRET_KEY']
-        missing_vars = [var for var in required_env_vars if not os.getenv(var)]
-        if missing_vars:
-            raise MissingCredentialsError(f"Missing required environment variables: {missing_vars}")
-        
-        # Check for placeholder values
-        if self.api_key in ['your_api_key_here', 'PLACEHOLDER', '', None]:
-            raise MissingCredentialsError("ASTER_API_KEY is not configured (placeholder or empty)")
-        if self.secret_key in ['your_secret_key_here', 'PLACEHOLDER', '', None]:
-            raise MissingCredentialsError("ASTER_SECRET_KEY is not configured (placeholder or empty)")
+        # Use base validation helper (reduces code duplication)
+        validate_credentials('ASTER_API_KEY', os.getenv('ASTER_API_KEY'))
+        validate_credentials('ASTER_SECRET_KEY', os.getenv('ASTER_SECRET_KEY'))
 
     def _generate_signature(self, params: Dict[str, Any]) -> str:
         """Generate HMAC SHA256 signature for Aster API authentication."""

@@ -17,6 +17,46 @@ class MissingCredentialsError(Exception):
     pass
 
 
+def validate_credentials(credential_name: str, credential_value: Optional[str], 
+                        placeholder_values: Optional[list] = None) -> None:
+    """
+    Helper function to validate exchange credentials.
+    
+    Args:
+        credential_name: Name of the credential (e.g., 'API_KEY')
+        credential_value: Value of the credential from environment
+        placeholder_values: List of placeholder values to reject (default: common placeholders)
+        
+    Raises:
+        MissingCredentialsError: If credential is missing or is a placeholder
+        
+    Example:
+        >>> validate_credentials('EDGEX_ACCOUNT_ID', os.getenv('EDGEX_ACCOUNT_ID'))
+    """
+    # Default placeholder values
+    if placeholder_values is None:
+        placeholder_values = [
+            'your_account_id_here',
+            'your_api_key_here', 
+            'your_secret_key_here',
+            'your_private_key_here',
+            'your_public_key_here',
+            'your_trading_account_id_here',
+            'your_stark_private_key_here',
+            'PLACEHOLDER',
+            'placeholder',
+            ''
+        ]
+    
+    # Check if credential exists
+    if not credential_value:
+        raise MissingCredentialsError(f"Missing {credential_name} environment variable")
+    
+    # Check for placeholder values
+    if credential_value in placeholder_values:
+        raise MissingCredentialsError(f"{credential_name} is not configured (placeholder or empty)")
+
+
 def query_retry(
     default_return: Any = None,
     exception_type: Union[Type[Exception], Tuple[Type[Exception], ...]] = (Exception,),
