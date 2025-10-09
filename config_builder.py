@@ -321,8 +321,16 @@ class InteractiveConfigBuilder:
         default_list = param.default if isinstance(param.default, list) else \
                       [x.strip() for x in str(param.default).split(',')] if param.default else []
         
+        # DEBUG: Print what we're comparing
+        print(f"\n  DEBUG: param.choices = {param.choices}")
+        print(f"  DEBUG: param.choices type = {type(param.choices)}")
+        print(f"  DEBUG: default_list = {default_list}")
+        print(f"  DEBUG: default_list type = {type(default_list)}")
+        
         # Ensure defaults are actually in choices
         valid_defaults = [d for d in default_list if d in param.choices] if param.choices else default_list
+        
+        print(f"  DEBUG: valid_defaults = {valid_defaults}")
         
         result = questionary.checkbox(
             prompt,
