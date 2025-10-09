@@ -69,14 +69,35 @@ class InteractiveConfigBuilder:
             "funding_arbitrage": get_funding_arb_schema()
         }
     
-    def build_config(self) -> Optional[Dict[str, Any]]:
+    def build_config(self, use_cli_fallback: bool = False) -> Optional[Dict[str, Any]]:
         """
         Main entry point - build a configuration interactively.
+        
+        Args:
+            use_cli_fallback: If True, use simple input() instead of questionary (for headless/SSH)
         
         Returns:
             Dictionary with configuration, or None if user cancels
         """
         self._print_header()
+        
+        # Check if running in async context - if so, warn user
+        try:
+            import asyncio
+            try:
+                asyncio.get_running_loop()
+                print("\n⚠️  WARNING: Interactive mode detected async context.")
+                print("   For best experience, run standalone: python config_builder.py")
+                print("   Falling back to simple CLI input mode...\n")
+                use_cli_fallback = True
+            except RuntimeError:
+                # No running loop, we're good
+                pass
+        except:
+            pass
+        
+        if use_cli_fallback:
+            return self._build_config_cli_fallback()
         
         # Step 1: Choose strategy
         strategy_name = self._select_strategy()
@@ -112,6 +133,77 @@ class InteractiveConfigBuilder:
                 "config_file": config_file,
                 "start_bot": False
             }
+    
+    def _build_config_cli_fallback(self) -> Optional[Dict[str, Any]]:
+        """
+        Fallback to simple CLI input when questionary won't work.
+        
+        Returns:
+            Dictionary with configuration, or None if user cancels
+        """
+        print("\n📝 Simple Configuration Mode")
+        print("   (For interactive prompts, run: python config_builder.py)\n")
+        
+        # Step 1: Choose strategy
+        print("Available strategies:")
+        strategies = list(self.available_strategies.keys())
+        for i, name in enumerate(strategies, 1):
+            schema = self.available_strategies[name]
+            print(f"  {i}. {schema.display_name}")
+        
+        try:
+            choice = input("\nSelect strategy (1-{}): ".format(len(strategies))).strip()
+            strategy_idx = int(choice) - 1
+            if strategy_idx < 0 or strategy_idx >= len(strategies):
+                print("Invalid choice")
+                return None
+            strategy_name = strategies[strategy_idx]
+        except (ValueError, KeyboardInterrupt):
+            print("\nCancelled")
+            return None
+        
+        schema = self.available_strategies[strategy_name]
+        print(f"\n✓ Selected: {schema.display_name}\n")
+        
+        # For now, just use defaults for all parameters
+        print("⚠️  Using default configuration (edit YAML file to customize)")
+        print("   Run 'python config_yaml.py' to see example configs\n")
+        
+        # Get default config
+        if strategy_name == "funding_arbitrage":
+            from strategies.implementations.funding_arbitrage.schema import create_default_funding_config
+            config = create_default_funding_config()
+        elif strategy_name == "grid":
+            from strategies.implementations.grid.schema import create_default_grid_config
+            config = create_default_grid_config()
+        else:
+            print("Unknown strategy")
+            return None
+        
+        # Save config
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{strategy_name}_{timestamp}.yml"
+        
+        configs_dir = Path("configs")
+        configs_dir.mkdir(exist_ok=True)
+        config_path = configs_dir / filename
+        
+        from config_yaml import save_config_to_yaml
+        save_config_to_yaml(strategy_name, config, config_path)
+        
+        print(f"✓ Configuration saved to: {config_path}")
+        print(f"\nTo customize, edit: {config_path}")
+        print(f"Then run: python runbot.py --config {config_path}\n")
+        
+        # Ask if start bot
+        start = input("Start bot now with these defaults? [y/N]: ").strip().lower()
+        
+        return {
+            "strategy": strategy_name,
+            "config": config,
+            "config_file": str(config_path),
+            "start_bot": start in ['y', 'yes']
+        }
     
     def _print_header(self):
         """Print welcome header."""

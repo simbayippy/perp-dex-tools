@@ -1,5 +1,8 @@
 #!/bin/bash
 # Setup script for interactive configuration system
+#
+# Usage: ./setup_interactive.sh
+# (Make sure to run: chmod +x setup_interactive.sh first)
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Trading Bot - Interactive Configuration Setup"
@@ -55,4 +58,3 @@ echo "   docs/INTERACTIVE_CONFIG_GUIDE.md"
 echo ""
 echo "Happy trading! 🚀"
 echo ""
-
