@@ -118,21 +118,12 @@ class InteractiveConfigBuilder:
         # Step 4: Save config
         config_file = self._save_config(strategy_name, config)
         
-        # Step 5: Ask if user wants to start bot
-        if self._ask_start_bot():
-            return {
-                "strategy": strategy_name,
-                "config": config,
-                "config_file": config_file,
-                "start_bot": True
-            }
-        else:
-            return {
-                "strategy": strategy_name,
-                "config": config,
-                "config_file": config_file,
-                "start_bot": False
-            }
+        # Return config info
+        return {
+            "strategy": strategy_name,
+            "config": config,
+            "config_file": config_file
+        }
     
     def _build_config_cli_fallback(self) -> Optional[Dict[str, Any]]:
         """
@@ -195,14 +186,10 @@ class InteractiveConfigBuilder:
         print(f"\nTo customize, edit: {config_path}")
         print(f"Then run: python runbot.py --config {config_path}\n")
         
-        # Ask if start bot
-        start = input("Start bot now with these defaults? [y/N]: ").strip().lower()
-        
         return {
             "strategy": strategy_name,
             "config": config,
-            "config_file": str(config_path),
-            "start_bot": start in ['y', 'yes']
+            "config_file": str(config_path)
         }
     
     def _print_header(self):
@@ -482,16 +469,6 @@ class InteractiveConfigBuilder:
             print(f"Warning: Could not save config: {e}")
             return None
     
-    def _ask_start_bot(self) -> bool:
-        """Ask if user wants to start the bot now."""
-        try:
-            return questionary.confirm(
-                "🚀 Start trading bot now?",
-                default=True,
-                style=CUSTOM_STYLE
-            ).ask()
-        except KeyboardInterrupt:
-            return False
 
 
 # ============================================================================
@@ -507,20 +484,12 @@ def main():
         print("\nGoodbye!")
         sys.exit(0)
     
-    if result["start_bot"]:
-        print("\nStarting bot with your configuration...")
-        print(f"Strategy: {result['strategy']}")
-        if result["config_file"]:
-            print(f"Config file: {result['config_file']}")
-        
-        # TODO: Launch bot here
-        print("\n(Bot launch will be implemented in runbot.py integration)")
-    else:
-        print("\nConfiguration complete!")
-        if result["config_file"]:
-            print(f"\nTo use this configuration, run:")
-            print(f"  python runbot.py --config {result['config_file']}")
-        print("\nGoodbye!")
+    print("\n✅ Configuration complete!")
+    if result["config_file"]:
+        print(f"\n📁 Config saved to: {result['config_file']}")
+        print(f"\n🚀 To start the bot, run:")
+        print(f"  python runbot.py --config {result['config_file']}")
+    print("\nGoodbye!")
 
 
 if __name__ == "__main__":

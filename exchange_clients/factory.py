@@ -117,7 +117,14 @@ class ExchangeFactory:
         
         for exchange_name in exchange_names:
             # Create a copy of config for each exchange
-            exchange_config = config.copy()
+            # Handle both dict and TradingConfig object
+            if hasattr(config, '__dict__'):
+                # It's a dataclass or object, convert to dict
+                exchange_config = vars(config).copy()
+            else:
+                # It's already a dict
+                exchange_config = config.copy()
+            
             exchange_config['exchange'] = exchange_name
             
             try:
