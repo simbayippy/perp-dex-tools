@@ -30,13 +30,14 @@ This document outlines the complete structure of the `perp-dex-tools` repository
 │   ├── example_funding_arbitrage.yml  # Example funding arb config
 │   └── example_grid.yml               # Example grid config
 │
-├── /docs/                             # Project documentation
+├── /docs/                             # 📚 PUBLIC DOCUMENTATION
 │   ├── PROJECT_STRUCTURE.md           # This file
 │   ├── telegram-bot-setup.md
 │   ├── telegram-bot-setup-en.md
 │   ├── ADDING_EXCHANGES.md
-│   ├── CLI_COMMANDS.md                # CLI usage guide
-│   │
+│   └── CLI_COMMANDS.md                # CLI usage guide
+│
+├── /docs-internal/                    # 🔒 INTERNAL DEVELOPMENT DOCS (git-ignored)
 │   ├── /strategies_refactor/          # Strategy refactor planning & documentation
 │   │   ├── final_refactor_plan_with_hummingbot.md  # Master refactor plan
 │   │   ├── WHATS_LEFT.md              # Remaining tasks tracker
