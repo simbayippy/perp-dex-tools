@@ -11,10 +11,10 @@ from strategies.base_schema import (
     ParameterSchema,
     ParameterType,
     create_exchange_choice_parameter,
-    create_exchange_multi_choice_parameter,
     create_decimal_parameter,
     create_boolean_parameter
 )
+from exchange_clients.factory import ExchangeFactory
 
 
 # ============================================================================
@@ -39,12 +39,15 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             help_text="This exchange will handle the main connection and risk management"
         ),
         
-        create_exchange_multi_choice_parameter(
+        ParameterSchema(
             key="scan_exchanges",
-            prompt="Which exchanges should we scan for opportunities? (comma-separated)",
-            default="lighter,grvt,backpack",
+            prompt="Which exchanges should we scan for opportunities?",
+            param_type=ParameterType.MULTI_CHOICE,
+            choices=ExchangeFactory.get_supported_exchanges(),
+            default=["lighter", "grvt", "backpack"],  # List, not string!
             required=True,
-            help_text="We'll look for funding rate divergences across these exchanges"
+            help_text="We'll look for funding rate divergences across these exchanges",
+            show_default_in_prompt=True
         ),
         
         # ====================================================================
