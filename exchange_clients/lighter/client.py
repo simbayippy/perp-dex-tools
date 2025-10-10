@@ -318,22 +318,29 @@ class LighterClient(BaseExchangeClient):
 
     @query_retry(default_return=(0, 0))
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
-        """Get orderbook using official SDK."""
-        # Use WebSocket data if available
-        self.logger.log(f"Fetching BBO prices for {contract_id}")
-        if (hasattr(self, 'ws_manager') and
-                self.ws_manager.best_bid and self.ws_manager.best_ask):
-            best_bid = Decimal(str(self.ws_manager.best_bid))
-            best_ask = Decimal(str(self.ws_manager.best_ask))
-
-            if best_bid <= 0 or best_ask <= 0 or best_bid >= best_ask:
-                self.logger.log("Invalid bid/ask prices", "ERROR")
-                raise ValueError("Invalid bid/ask prices")
-        else:
-            self.logger.log("Unable to get bid/ask prices from WebSocket.", "ERROR")
-            raise ValueError("WebSocket not running. No bid/ask prices available")
-
-        return best_bid, best_ask
+        """
+        Get best bid/offer prices using REST API.
+        
+        Note: This method is kept for backward compatibility with legacy code
+        that calls it directly. New code should use PriceProvider instead.
+        
+        For real-time monitoring, WebSocket data is available via ws_manager.
+        For order execution, use PriceProvider which intelligently caches data.
+        """
+        try:
+            order_book = await self.get_order_book_depth(contract_id, levels=1)
+            
+            if not order_book['bids'] or not order_book['asks']:
+                raise ValueError(f"Empty order book for {contract_id}")
+            
+            best_bid = order_book['bids'][0]['price']
+            best_ask = order_book['asks'][0]['price']
+            
+            return best_bid, best_ask
+            
+        except Exception as e:
+            self.logger.log(f"❌ [LIGHTER] Failed to get BBO prices: {e}", "ERROR")
+            raise ValueError(f"Unable to fetch BBO prices for {contract_id}: {e}")
 
     async def get_order_book_depth(
         self, 

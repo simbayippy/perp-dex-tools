@@ -154,12 +154,20 @@ class FundingArbitrageStrategy(StatefulStrategy):
         )
         self.funding_rate_repo = FundingRateRepository(database)
         
+        # ⭐ Price Provider (shared cache for all execution components)
+        from strategies.execution.core.price_provider import PriceProvider
+        self.price_provider = PriceProvider(
+            cache_ttl_seconds=5.0,  # Cache prices for 5 seconds
+            prefer_websocket=False  # Prefer cache over WebSocket for stability
+        )
+        
         # ⭐ Execution layer (atomic delta-neutral execution)
-        self.atomic_executor = AtomicMultiOrderExecutor()
+        self.atomic_executor = AtomicMultiOrderExecutor(price_provider=self.price_provider)
         self.liquidity_analyzer = LiquidityAnalyzer(
             max_slippage_pct=Decimal("0.005"),  # 0.5% max slippage
             max_spread_bps=50,  # 50 basis points
-            min_liquidity_score=0.6
+            min_liquidity_score=0.6,
+            price_provider=self.price_provider  # Share the cache
         )
         
         # ⭐ Position and state management (database-backed)

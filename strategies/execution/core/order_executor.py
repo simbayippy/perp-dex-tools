@@ -96,14 +96,20 @@ class OrderExecutor:
             print(f"Filled at ${result.fill_price}, slippage: {result.slippage_pct}%")
     """
     
-    def __init__(self, default_timeout: float = 30.0):
+    def __init__(
+        self,
+        default_timeout: float = 30.0,
+        price_provider = None  # Optional PriceProvider for cached prices
+    ):
         """
         Initialize order executor.
         
         Args:
             default_timeout: Default timeout for limit orders (seconds)
+            price_provider: Optional PriceProvider for getting cached/fresh prices
         """
         self.default_timeout = default_timeout
+        self.price_provider = price_provider
         self.logger = logging.getLogger(__name__)
     
     async def execute_order(
@@ -389,12 +395,25 @@ class OrderExecutor:
         symbol: str
     ) -> tuple[Decimal, Decimal]:
         """
-        Fetch best bid/offer prices.
+        Fetch best bid/offer prices using best available method.
+        
+        Priority:
+        1. PriceProvider (uses cache if available)
+        2. Direct exchange client method
         
         Returns:
             (best_bid, best_ask) as Decimals
         """
         try:
+            # Use PriceProvider if available (cache-first strategy)
+            if self.price_provider:
+                bid, ask = await self.price_provider.get_bbo_prices(
+                    exchange_client=exchange_client,
+                    symbol=symbol
+                )
+                return bid, ask
+            
+            # Fallback: Direct exchange client methods
             # Try dedicated BBO method if available
             if hasattr(exchange_client, 'fetch_bbo_prices'):
                 bid, ask = await exchange_client.fetch_bbo_prices(symbol)
@@ -407,7 +426,7 @@ class OrderExecutor:
                 best_ask = Decimal(str(book['asks'][0]['price']))
                 return best_bid, best_ask
             
-            # Last resort: Use mid-price if available
+            # Last resort: Error
             raise NotImplementedError(
                 "Exchange client must implement fetch_bbo_prices() or get_order_book_depth()"
             )

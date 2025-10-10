@@ -97,8 +97,14 @@ class AtomicMultiOrderExecutor:
             print(f"Atomic execution failed: {result.error_message}")
     """
     
-    def __init__(self):
-        """Initialize atomic multi-order executor."""
+    def __init__(self, price_provider=None):
+        """
+        Initialize atomic multi-order executor.
+        
+        Args:
+            price_provider: Optional PriceProvider for shared price caching
+        """
+        self.price_provider = price_provider
         self.logger = logging.getLogger(__name__)
     
     async def execute_atomically(
@@ -345,7 +351,8 @@ class AtomicMultiOrderExecutor:
             # ========================================================================
             self.logger.info("Running liquidity checks...")
             
-            analyzer = LiquidityAnalyzer()
+            # Use shared price_provider if available (enables caching)
+            analyzer = LiquidityAnalyzer(price_provider=self.price_provider)
             
             for i, order_spec in enumerate(orders):
                 # Check liquidity
@@ -386,7 +393,8 @@ class AtomicMultiOrderExecutor:
             # Import here to avoid circular dependency
             from strategies.execution.core.order_executor import OrderExecutor, ExecutionMode
             
-            executor = OrderExecutor()
+            # Use shared price_provider if available
+            executor = OrderExecutor(price_provider=self.price_provider)
             
             # Map string mode to enum
             mode_map = {

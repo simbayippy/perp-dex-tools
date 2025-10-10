@@ -87,7 +87,8 @@ class LiquidityAnalyzer:
         self,
         max_slippage_pct: Decimal = Decimal("0.005"),  # 0.5% max slippage
         max_spread_bps: int = 50,  # 50 basis points = 0.5%
-        min_liquidity_score: float = 0.6
+        min_liquidity_score: float = 0.6,
+        price_provider = None  # Optional PriceProvider for caching
     ):
         """
         Initialize liquidity analyzer.
@@ -96,10 +97,12 @@ class LiquidityAnalyzer:
             max_slippage_pct: Maximum acceptable slippage (0.005 = 0.5%)
             max_spread_bps: Maximum acceptable spread in basis points
             min_liquidity_score: Minimum acceptable liquidity score (0-1)
+            price_provider: Optional PriceProvider for caching order book data
         """
         self.max_slippage_pct = max_slippage_pct
         self.max_spread_bps = max_spread_bps
         self.min_liquidity_score = min_liquidity_score
+        self.price_provider = price_provider
         self.logger = logging.getLogger(__name__)
     
     async def check_execution_feasibility(
@@ -231,6 +234,16 @@ class LiquidityAnalyzer:
                 spread_bps=spread_bps,
                 liquidity_score=liquidity_score
             )
+            
+            # Cache order book data for later use (if price_provider available)
+            if self.price_provider:
+                exchange_name = exchange_client.get_exchange_name()
+                self.price_provider.cache_order_book(
+                    exchange_name=exchange_name,
+                    symbol=symbol,
+                    order_book=order_book,
+                    source="liquidity_check"
+                )
             
             # Log final verdict
             verdict_emoji = "✅" if recommendation in ["use_limit", "use_market"] else "❌"
