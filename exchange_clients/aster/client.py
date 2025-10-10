@@ -469,6 +469,23 @@ class AsterClient(BaseExchangeClient):
         """
         # Use the common utility function
         return get_aster_symbol_format(symbol)
+    
+    def round_to_step(self, quantity: Decimal) -> Decimal:
+        """
+        Round quantity to the exchange's step size.
+        
+        Args:
+            quantity: Raw quantity
+            
+        Returns:
+            Rounded quantity that meets step size requirements
+        """
+        from decimal import ROUND_DOWN
+        
+        step_size = getattr(self.config, 'step_size', Decimal('1'))
+        
+        # Round down to nearest step size
+        return (quantity / step_size).quantize(Decimal('1'), rounding=ROUND_DOWN) * step_size
 
     def setup_order_update_handler(self, handler) -> None:
         """Setup order update handler for WebSocket."""
@@ -596,12 +613,17 @@ class AsterClient(BaseExchangeClient):
         
         print(f"🔍 [ASTER] Using contract_id for order: '{contract_id}'")
         
+        # Round quantity to step size (e.g., 941.8750094 → 941.875 or 941 depending on stepSize)
+        rounded_quantity = self.round_to_step(Decimal(str(quantity)))
+        
+        print(f"📐 [ASTER] Rounded quantity: {quantity} → {rounded_quantity} (step_size={getattr(self.config, 'step_size', 'unknown')})")
+        
         # Place limit order with post-only (GTX) for maker fees
         order_data = {
             'symbol': contract_id,  # Already normalized (e.g., "MONUSDT")
             'side': side.upper(),
             'type': 'LIMIT',
-            'quantity': str(quantity),
+            'quantity': str(rounded_quantity),
             'price': str(self.round_to_tick(price)),
             'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
         }
@@ -765,12 +787,20 @@ class AsterClient(BaseExchangeClient):
             if side.lower() not in ['buy', 'sell']:
                 return OrderResult(success=False, error_message=f'Invalid side: {side}')
 
+            # Round quantity to step size
+            rounded_quantity = self.round_to_step(Decimal(str(quantity)))
+            
+            self.logger.log(
+                f"📐 [ASTER] Rounded quantity: {quantity} → {rounded_quantity}",
+                "DEBUG"
+            )
+
             # Place the market order
             order_data = {
                 'symbol': contract_id,  # Already normalized (e.g., "MONUSDT")
                 'side': side.upper(),
                 'type': 'MARKET',
-                'quantity': str(quantity)
+                'quantity': str(rounded_quantity)
             }
             
             self.logger.log(
@@ -925,12 +955,24 @@ class AsterClient(BaseExchangeClient):
                                 self.config.tick_size = Decimal(filter_info['tickSize'].strip('0'))
                                 break
 
-                        # Get minimum quantity
+                        # Get LOT_SIZE filter (quantity precision)
                         min_quantity = Decimal(0)
+                        step_size = Decimal('1')  # Default to whole numbers
                         for filter_info in symbol_info.get('filters', []):
                             if filter_info.get('filterType') == 'LOT_SIZE':
                                 min_quantity = Decimal(filter_info.get('minQty', 0))
+                                step_size_str = filter_info.get('stepSize', '1')
+                                step_size = Decimal(step_size_str.strip('0') if step_size_str.strip('0') else '1')
                                 break
+                        
+                        # Store step_size in config for quantity rounding
+                        self.config.step_size = step_size
+                        
+                        self.logger.log(
+                            f"📐 [ASTER] {ticker}USDT filters: "
+                            f"tick_size={self.config.tick_size}, step_size={step_size}, min_qty={min_quantity}",
+                            "DEBUG"
+                        )
 
                         if self.config.quantity < min_quantity:
                             self.logger.log(
