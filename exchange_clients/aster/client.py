@@ -523,19 +523,12 @@ class AsterClient(BaseExchangeClient):
             
             print(f"✅ [ASTER] Order book received: {len(bids_raw)} bids, {len(asks_raw)} asks for {contract_id}")
             
-            if bids_raw and asks_raw and bids_raw[0] and asks_raw[0] and len(bids_raw[0]) >= 2 and len(asks_raw[0]) >= 2:
-                print(
-                    f"   → Best bid: {bids_raw[0][0]} (size: {bids_raw[0][1]}), "
-                    f"Best ask: {asks_raw[0][0]} (size: {asks_raw[0][1]})"
-                )
-            else:
-                print(
-                    f"⚠️  [ASTER] Invalid or empty order book for {contract_id}! "
-                    f"Symbol may not be listed on Aster or has zero liquidity."
-                )
+
             # Convert to standardized format
             bids = [{'price': Decimal(bid[0]), 'size': Decimal(bid[1])} for bid in bids_raw]
             asks = [{'price': Decimal(ask[0]), 'size': Decimal(ask[1])} for ask in asks_raw]
+
+            print(f"✅ [ASTER] Order book converted to standardized format: {len(bids)} bids, {len(asks)} asks")
             
             return {
                 'bids': bids,
