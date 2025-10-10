@@ -917,6 +917,66 @@ class AsterClient(BaseExchangeClient):
 
         return Decimal(0)
 
+    async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get leverage and position limit information for a symbol.
+        
+        Args:
+            symbol: Trading symbol (e.g., "ZORA", "BTC")
+            
+        Returns:
+            Dictionary with leverage limits:
+            {
+                'max_leverage': Decimal or None,
+                'max_notional': Decimal or None,
+                'brackets': List or None
+            }
+        """
+        try:
+            result = await self._make_request('GET', '/fapi/v1/exchangeInfo')
+            
+            normalized_symbol = f"{symbol}USDT"
+            for symbol_info in result.get('symbols', []):
+                if symbol_info.get('symbol') == normalized_symbol:
+                    leverage_info = {
+                        'max_leverage': None,
+                        'max_notional': None,
+                        'brackets': None
+                    }
+                    
+                    # Extract from filters
+                    for filter_info in symbol_info.get('filters', []):
+                        if filter_info.get('filterType') == 'NOTIONAL':
+                            max_notional = filter_info.get('maxNotional')
+                            if max_notional:
+                                leverage_info['max_notional'] = Decimal(str(max_notional))
+                    
+                    # Check for leverage brackets
+                    if 'leverageBrackets' in symbol_info:
+                        leverage_info['brackets'] = symbol_info['leverageBrackets']
+                        if leverage_info['brackets']:
+                            # Get max leverage from first bracket
+                            leverage_info['max_leverage'] = Decimal(
+                                str(leverage_info['brackets'][0].get('initialLeverage', 10))
+                            )
+                    
+                    return leverage_info
+            
+            # Symbol not found
+            return {
+                'max_leverage': Decimal('10'),  # Conservative default
+                'max_notional': None,
+                'brackets': None
+            }
+        
+        except Exception as e:
+            self.logger.log(f"Error getting leverage info for {symbol}: {e}", "ERROR")
+            return {
+                'max_leverage': Decimal('10'),
+                'max_notional': None,
+                'brackets': None
+            }
+
     async def get_contract_attributes(self) -> Tuple[str, Decimal]:
         """Get contract ID and tick size for a ticker."""
         ticker = self.config.ticker

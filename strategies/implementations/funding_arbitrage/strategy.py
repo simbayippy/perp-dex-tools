@@ -699,10 +699,44 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 "INFO"
             )
             
+            # ⭐ LEVERAGE CHECK: Reduce size if needed ⭐
+            # Import leverage validator
+            from strategies.execution.core.leverage_validator import LeverageValidator
+            
+            leverage_validator = LeverageValidator()
+            
+            # Check if both exchanges can support the requested size
+            max_size, limiting_exchange = await leverage_validator.get_max_position_size(
+                exchange_clients=[long_client, short_client],
+                symbol=symbol,
+                requested_size_usd=size_usd,
+                check_balance=True
+            )
+            
+            # Adjust size if needed
+            if max_size < size_usd:
+                original_size = size_usd
+                size_usd = max_size
+                
+                self.logger.log(
+                    f"⚙️  [AUTO-ADJUST] Reduced position size for {symbol}: "
+                    f"${original_size:.2f} → ${size_usd:.2f} "
+                    f"(limited by {limiting_exchange}'s leverage/balance)",
+                    "WARNING"
+                )
+                
+                # Check if reduced size is still profitable
+                if size_usd < Decimal('5'):  # Minimum $5 position
+                    self.logger.log(
+                        f"⛔ [SKIP] Position size too small after leverage adjustment: ${size_usd:.2f}",
+                        "WARNING"
+                    )
+                    return
+            
             self.logger.log(
                 f"🎯 [EXECUTION PLAN] {symbol} | "
-                f"Long: {long_dex.upper()} (${size_usd}) | "
-                f"Short: {short_dex.upper()} (${size_usd}) | "
+                f"Long: {long_dex.upper()} (${size_usd:.2f}) | "
+                f"Short: {short_dex.upper()} (${size_usd:.2f}) | "
                 f"Divergence: {opportunity.divergence*100:.3f}%",
                 "INFO"
             )

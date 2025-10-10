@@ -356,6 +356,50 @@ class BaseExchangeClient(ABC):
     def supports_risk_management(self) -> bool:
         """Check if exchange supports advanced risk management."""
         return False
+    
+    async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get leverage and position limit information for a symbol.
+        
+        ⚠️ IMPORTANT for delta-neutral strategies: Different exchanges have different
+        leverage limits for the same symbol. This method allows pre-flight validation
+        to ensure both sides of a delta-neutral trade can execute with the same size.
+        
+        Args:
+            symbol: Trading symbol (normalized format, e.g., "ZORA", "BTC")
+            
+        Returns:
+            Dictionary with leverage limits:
+            {
+                'max_leverage': Decimal or None,  # e.g., Decimal('10') for 10x
+                'max_notional': Decimal or None,  # Max position value in USD
+                'margin_requirement': Decimal or None,  # e.g., Decimal('0.1') = 10% = 10x leverage
+                'brackets': List or None  # Leverage brackets if available
+            }
+            
+        Default Implementation:
+            Returns conservative defaults (10x leverage, 10% margin requirement).
+            Override this method in exchange clients to query actual limits from APIs.
+            
+        Example Override:
+            ```python
+            async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
+                result = await self._make_request('GET', '/api/v1/leverage_info')
+                return {
+                    'max_leverage': Decimal(str(result['maxLeverage'])),
+                    'max_notional': Decimal(str(result['maxPositionSize'])),
+                    'margin_requirement': Decimal('1') / Decimal(str(result['maxLeverage'])),
+                    'brackets': result.get('brackets')
+                }
+            ```
+        """
+        # Default implementation: Conservative 10x leverage
+        return {
+            'max_leverage': Decimal('10'),
+            'max_notional': None,
+            'margin_requirement': Decimal('0.10'),  # 10% margin = 10x leverage
+            'brackets': None
+        }
 
 
 # ============================================================================

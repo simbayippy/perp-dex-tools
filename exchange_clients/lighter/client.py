@@ -889,6 +889,108 @@ class LighterClient(BaseExchangeClient):
         except Exception as e:
             self.logger.log(f"Error getting account P&L: {e}", "ERROR")
             return None
+    
+    async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get leverage information for Lighter by querying market configuration.
+        
+        Leverages Lighter SDK's order_book_details endpoint to get margin requirements.
+        
+        Args:
+            symbol: Trading symbol (e.g., "ZORA", "BTC")
+            
+        Returns:
+            Dictionary with leverage limits based on margin fractions
+        """
+        try:
+            # Initialize order API if needed
+            if not hasattr(self, 'order_api') or self.order_api is None:
+                self.order_api = lighter.OrderApi(self.api_client)
+            
+            # Normalize symbol and get market ID
+            normalized_symbol = self.normalize_symbol(symbol)
+            market_id = await self._get_market_id_for_symbol(normalized_symbol)
+            
+            if market_id is None:
+                self.logger.log(
+                    f"Could not find market for {symbol}, using default 20x leverage",
+                    "WARNING"
+                )
+                return {
+                    'max_leverage': Decimal('20'),
+                    'max_notional': None,
+                    'margin_requirement': Decimal('0.05'),
+                    'brackets': None
+                }
+            
+            # Query market details
+            market_details_response = await self.order_api.order_book_details(
+                market_id=market_id,
+                _request_timeout=10
+            )
+            
+            if not market_details_response or not market_details_response.order_book_details:
+                self.logger.log(
+                    f"No market details found for {symbol} (market_id={market_id})",
+                    "WARNING"
+                )
+                return {
+                    'max_leverage': Decimal('20'),
+                    'max_notional': None,
+                    'margin_requirement': Decimal('0.05'),
+                    'brackets': None
+                }
+            
+            # Get first (and should be only) market detail
+            market_detail = market_details_response.order_book_details[0]
+            
+            # Extract margin fractions
+            # Lighter uses fixed-point integers, need to convert to decimals
+            # The fraction is represented as an integer where 1e18 = 1.0 (100%)
+            FRACTION_DIVISOR = Decimal('1000000000000000000')  # 1e18
+            
+            # min_initial_margin_fraction is the minimum margin requirement
+            # Max leverage = 1 / min_initial_margin_fraction
+            min_margin_fraction_int = market_detail.min_initial_margin_fraction
+            min_margin_fraction = Decimal(str(min_margin_fraction_int)) / FRACTION_DIVISOR
+            
+            # Calculate max leverage
+            if min_margin_fraction > 0:
+                max_leverage = Decimal('1') / min_margin_fraction
+            else:
+                max_leverage = Decimal('20')  # Fallback
+            
+            # Also get maintenance margin for reference
+            maintenance_margin_int = market_detail.maintenance_margin_fraction
+            maintenance_margin = Decimal(str(maintenance_margin_int)) / FRACTION_DIVISOR
+            
+            self.logger.log(
+                f"📊 [LIGHTER] Leverage info for {symbol}: "
+                f"max_leverage={max_leverage:.1f}x, "
+                f"min_margin={min_margin_fraction*100:.2f}%, "
+                f"maintenance_margin={maintenance_margin*100:.2f}%",
+                "DEBUG"
+            )
+            
+            return {
+                'max_leverage': max_leverage,
+                'max_notional': None,  # Lighter doesn't have explicit notional limits per se
+                'margin_requirement': min_margin_fraction,
+                'brackets': None  # Lighter uses fixed margin, not brackets
+            }
+        
+        except Exception as e:
+            self.logger.log(
+                f"Error getting leverage info for {symbol}: {e}. Using default 20x",
+                "WARNING"
+            )
+            # Return conservative default on error
+            return {
+                'max_leverage': Decimal('20'),
+                'max_notional': None,
+                'margin_requirement': Decimal('0.05'),
+                'brackets': None
+            }
 
     async def get_total_asset_value(self) -> Optional[Decimal]:
         """Get total account asset value using Lighter SDK."""

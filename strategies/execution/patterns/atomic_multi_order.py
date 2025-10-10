@@ -289,6 +289,57 @@ class AtomicMultiOrderExecutor:
             from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
             
             # ========================================================================
+            # CHECK 0: Leverage Limit Validation (NEW - CRITICAL FOR DELTA NEUTRAL)
+            # ========================================================================
+            self.logger.info("🔍 Checking leverage limits across exchanges...")
+            
+            # Import leverage validator
+            from strategies.execution.core.leverage_validator import LeverageValidator
+            
+            leverage_validator = LeverageValidator()
+            
+            # Group orders by symbol (for delta-neutral we need same size on both sides)
+            symbols_to_check: Dict[str, List[OrderSpec]] = {}
+            for order_spec in orders:
+                symbol = order_spec.symbol
+                if symbol not in symbols_to_check:
+                    symbols_to_check[symbol] = []
+                symbols_to_check[symbol].append(order_spec)
+            
+            # For each symbol, verify all exchanges can support the requested size
+            adjusted_orders = []
+            for symbol, symbol_orders in symbols_to_check.items():
+                # Get all exchange clients for this symbol
+                exchange_clients = [order.exchange_client for order in symbol_orders]
+                
+                # Get requested size (should be same for all orders in delta-neutral strategy)
+                requested_size = symbol_orders[0].size_usd
+                
+                # Check max size supported by ALL exchanges
+                max_size, limiting_exchange = await leverage_validator.get_max_position_size(
+                    exchange_clients=exchange_clients,
+                    symbol=symbol,
+                    requested_size_usd=requested_size,
+                    check_balance=True  # Also consider available balance
+                )
+                
+                # If size needs adjustment, update all orders for this symbol
+                if max_size < requested_size:
+                    error_msg = (
+                        f"Position size too large for {symbol}: "
+                        f"Requested ${requested_size:.2f}, "
+                        f"maximum supported: ${max_size:.2f} "
+                        f"(limited by {limiting_exchange})"
+                    )
+                    self.logger.warning(f"⚠️  {error_msg}")
+                    
+                    # For atomic execution, we can't have mismatched sizes
+                    # Return error so strategy can decide (reduce size or skip)
+                    return False, error_msg
+            
+            self.logger.info("✅ Leverage limits validated for all exchanges")
+            
+            # ========================================================================
             # CHECK 1: Account Balance Validation (CRITICAL FIX)
             # ========================================================================
             self.logger.info("Running balance checks...")
