@@ -583,10 +583,12 @@ class AsterClient(BaseExchangeClient):
         # NO need to normalize again (would cause "MONUSDTUSDT")
         
         print(f"🔍 [ASTER] Using contract_id for order: '{contract_id}'")
+        # Remove USDT suffix if present for order placement
+        base_symbol = contract_id.replace('USDT', '') if contract_id.endswith('USDT') else contract_id
         
         # Place limit order with post-only (GTX) for maker fees
         order_data = {
-            'symbol': contract_id,  # Already normalized (e.g., "MONUSDT")
+            'symbol': base_symbol,  # Strip USDT suffix (e.g., "MON" from "MONUSDT")
             'side': side.upper(),
             'type': 'LIMIT',
             'quantity': str(quantity),
