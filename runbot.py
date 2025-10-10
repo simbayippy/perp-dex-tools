@@ -159,7 +159,7 @@ async def main():
     args = parse_arguments()
 
     # Setup logging first
-    setup_logging("WARNING")
+    setup_logging("INFO")
 
     # ========================================================================
     # MODE 1: Config File Mode
