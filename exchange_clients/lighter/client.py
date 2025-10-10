@@ -607,33 +607,93 @@ class LighterClient(BaseExchangeClient):
             return OrderResult(success=False, error_message='Failed to send cancellation transaction')
 
     async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
-        """Get order information from Lighter using official SDK."""
+        """
+        Get order information from Lighter using official SDK.
+        
+        Note: Lighter uses order_index (int) as order_id, and we need market_id to query orders.
+        """
         try:
-            # Use shared API client to get account info
-            account_api = lighter.AccountApi(self.api_client)
-
-            # Get account orders
-            account_data = await account_api.account(by="index", value=str(self.account_index))
-
-            # Look for the specific order in account positions
-            for position in account_data.positions:
-                if position.symbol == self.config.ticker:
-                    position_amt = abs(float(position.position))
-                    if position_amt > 0.001:  # Only include significant positions
+            if not self.order_api:
+                self.logger.log("Order API not initialized", "ERROR")
+                return None
+            
+            # Get market ID from config (should be set during initialization)
+            market_id = getattr(self.config, 'contract_id', None)
+            if market_id is None:
+                self.logger.log(f"Market ID not found in config for symbol {self.config.ticker}", "ERROR")
+                return None
+            
+            # Generate auth token
+            auth_token, error = self.lighter_client.create_auth_token_with_expiry()
+            if error:
+                self.logger.log(f"Error creating auth token: {error}", "ERROR")
+                return None
+            
+            # Query active orders for this market
+            try:
+                orders_response = await self.order_api.account_active_orders(
+                    account_index=self.account_index,
+                    market_id=int(market_id),
+                    auth=auth_token,
+                    _request_timeout=10
+                )
+            except Exception as e:
+                # Order might not be active anymore (filled or cancelled)
+                self.logger.log(f"Order {order_id} not found in active orders (might be filled): {e}", "DEBUG")
+                
+                # Check if order was filled by looking at positions
+                account_data = await self.account_api.account(by="index", value=str(self.account_index))
+                if account_data and account_data.accounts and account_data.accounts[0].positions:
+                    for position in account_data.accounts[0].positions:
+                        if position.symbol == self.config.ticker:
+                            position_amt = abs(float(position.position))
+                            if position_amt > 0.001:  # Only include significant positions
+                                return OrderInfo(
+                                    order_id=order_id,
+                                    side="buy" if float(position.position) > 0 else "sell",
+                                    size=Decimal(str(position_amt)),
+                                    price=Decimal(str(position.avg_price)),
+                                    status="FILLED",
+                                    filled_size=Decimal(str(position_amt)),
+                                    remaining_size=Decimal('0')
+                                )
+                return None
+            
+            # Look for the specific order by order_index
+            if orders_response and orders_response.orders:
+                order_id_int = int(order_id)
+                for order in orders_response.orders:
+                    if order.order_index == order_id_int:
+                        # Found the order!
+                        size = Decimal(str(order.size_base))
+                        filled = Decimal(str(order.matched_base))
+                        remaining = size - filled
+                        
+                        # Determine status
+                        if filled >= size:
+                            status = "FILLED"
+                        elif filled > 0:
+                            status = "PARTIALLY_FILLED"
+                        else:
+                            status = "OPEN"
+                        
                         return OrderInfo(
                             order_id=order_id,
-                            side="buy" if float(position.position) > 0 else "sell",
-                            size=Decimal(str(position_amt)),
-                            price=Decimal(str(position.avg_price)),
-                            status="FILLED",  # Positions are filled orders
-                            filled_size=Decimal(str(position_amt)),
-                            remaining_size=Decimal('0')
+                            side="buy" if order.is_bid else "sell",
+                            size=size,
+                            price=Decimal(str(order.price)),
+                            status=status,
+                            filled_size=filled,
+                            remaining_size=remaining
                         )
-
+            
+            # Order not found in active orders - might be filled
             return None
 
         except Exception as e:
             self.logger.log(f"Error getting order info: {e}", "ERROR")
+            import traceback
+            self.logger.log(f"Traceback: {traceback.format_exc()}", "DEBUG")
             return None
 
     @query_retry(reraise=True)
