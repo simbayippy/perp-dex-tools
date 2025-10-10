@@ -86,7 +86,6 @@ class LighterClient(BaseExchangeClient):
             Integer market_id, or None if not found
         """
         try:
-            self.logger.log(f"🔍 [LIGHTER] Querying all markets to find '{symbol}'...", "INFO")
             order_api = lighter.OrderApi(self.api_client)
             order_books = await order_api.order_books()
             
@@ -97,17 +96,9 @@ class LighterClient(BaseExchangeClient):
                 available_symbols.append(market.symbol)
                 # Try exact match
                 if market.symbol == symbol:
-                    self.logger.log(
-                        f"✅ [LIGHTER] Found exact match: '{symbol}' → market_id={market.market_id}",
-                        "INFO"
-                    )
                     return market.market_id
                 # Try case-insensitive match
                 elif market.symbol.upper() == symbol.upper():
-                    self.logger.log(
-                        f"✅ [LIGHTER] Found case-insensitive match: '{symbol}' → '{market.symbol}' → market_id={market.market_id}",
-                        "INFO"
-                    )
                     return market.market_id
             
             # Symbol not found - provide helpful error message
@@ -372,10 +363,6 @@ class LighterClient(BaseExchangeClient):
             except (ValueError, TypeError):
                 # contract_id is a symbol string - normalize it first
                 normalized_symbol = self.normalize_symbol(contract_id)
-                self.logger.log(
-                    f"🔍 [LIGHTER] Looking up market_id for symbol: '{contract_id}' → '{normalized_symbol}'",
-                    "INFO"
-                )
                 market_id = await self._get_market_id_for_symbol(normalized_symbol)
                 
                 if market_id is None:
@@ -430,19 +417,6 @@ class LighterClient(BaseExchangeClient):
                         "INFO"
                     )
                     
-                    if bids_raw and asks_raw:
-                        self.logger.log(
-                            f"   → Best bid: {bids_raw[0]['price']} (size: {bids_raw[0]['remaining_base_amount']}), "
-                            f"Best ask: {asks_raw[0]['price']} (size: {asks_raw[0]['remaining_base_amount']})",
-                            "INFO"
-                        )
-                    elif not bids_raw and not asks_raw:
-                        self.logger.log(
-                            f"⚠️  [LIGHTER] EMPTY order book for market_id={market_id}! "
-                            f"Market may not exist or has zero liquidity.",
-                            "WARNING"
-                        )
-                    
                     # Convert to standardized format
                     # Lighter format: [{'price': '1243.5281', 'remaining_base_amount': '0.20'}, ...]
                     bids = [
@@ -459,6 +433,11 @@ class LighterClient(BaseExchangeClient):
                         } 
                         for ask in asks_raw
                     ]
+                    
+                    self.logger.log(
+                        f"✅ [LIGHTER] get_order_book_depth finished executing for {contract_id}",
+                        "INFO"
+                    )
                     
                     return {
                         'bids': bids,

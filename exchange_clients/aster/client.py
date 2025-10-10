@@ -548,15 +548,17 @@ class AsterClient(BaseExchangeClient):
             bids_raw = result.get('bids', [])
             asks_raw = result.get('asks', [])
             
-            self.logger.log(f"✅ [ASTER] Order book received: {len(bids_raw)} bids, {len(asks_raw)} asks for {contract_id}", "DEBUG")
+            self.logger.log(f"✅ [ASTER] Order book received: {len(bids_raw)} bids, {len(asks_raw)} asks for {contract_id}", "INFO")
             
 
             # Convert to standardized format
             bids = [{'price': Decimal(bid[0]), 'size': Decimal(bid[1])} for bid in bids_raw]
             asks = [{'price': Decimal(ask[0]), 'size': Decimal(ask[1])} for ask in asks_raw]
 
-            self.logger.log(f"✅ [ASTER] Order book converted to standardized format: {len(bids)} bids, {len(asks)} asks", "DEBUG")
-            
+            self.logger.log(
+                f"✅ [ASTER] get_order_book_depth finished executing for {contract_id}",
+                "INFO"
+            ) 
             return {
                 'bids': bids,
                 'asks': asks
