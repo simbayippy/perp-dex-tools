@@ -599,10 +599,9 @@ class AsterClient(BaseExchangeClient):
         try:
             result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
         except Exception as e:
-            self.logger.log(
+            print(
                 f"❌ [ASTER] Failed to place limit order for {contract_id} "
-                f"({side.upper()}, qty={quantity}, price={price}): {e}",
-                "ERROR"
+                f"({side.upper()}, qty={quantity}, price={price}): {e}"
             )
             raise
         order_status = result.get('status', '')
