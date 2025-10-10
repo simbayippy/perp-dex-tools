@@ -8,19 +8,27 @@
 
 ## 🐛 Problem Summary
 
-### Error Message
+### Error Messages
 ```
+# Error 1: Symbol normalization in order_executor.py
 ERROR: Limit order execution failed: API request failed: {'code': -4095, 'msg': 'not supported symbol'}
+
+# Error 2: Double normalization in aster/client.py
+ERROR: [ASTER] Limit order execution failed for MON: API request failed: {'code': -1121, 'msg': 'Invalid symbol.'}
 ```
 
 ### What Happened
 1. ✅ **Initialization worked**: Aster client initialized for symbol "MON" → `contract_id=MONUSDT`
 2. ✅ **Liquidity check worked**: Used normalized symbol `MONUSDT` 
-3. ❌ **Order placement failed**: Passed raw symbol `"MON"` instead of `"MONUSDT"`
+3. ❌ **Order placement failed (Error 1)**: OrderExecutor passed raw symbol `"MON"` instead of `"MONUSDT"`
+4. ❌ **Order placement failed (Error 2)**: Aster client double-normalized `"MONUSDT"` → `"MONUSDTUSDT"`
 
 ### Root Cause
 
-**The Problem**: `OrderExecutor` was passing the **raw symbol** (`"MON"`) directly to `place_limit_order()` and `place_market_order()`, but these methods expect the **exchange-normalized symbol** (`"MONUSDT"` for Aster).
+**Two separate bugs were discovered:**
+
+#### Bug #1: OrderExecutor not using normalized symbol
+`OrderExecutor` was passing the **raw symbol** (`"MON"`) directly to `place_limit_order()` and `place_market_order()`, but these methods expect the **exchange-normalized symbol** (`"MONUSDT"` for Aster).
 
 **Why This Happened**:
 - Each exchange has different symbol formats:
@@ -29,6 +37,18 @@ ERROR: Limit order execution failed: API request failed: {'code': -4095, 'msg': 
   - Other DEXs: Various formats
 - During initialization, `get_contract_attributes()` normalizes the symbol and stores it in `config.contract_id`
 - But `OrderExecutor` wasn't using this normalized `contract_id` — it was using the raw `symbol` parameter
+
+#### Bug #2: Double normalization in Aster client
+After fixing Bug #1, `OrderExecutor` now correctly passes `contract_id="MONUSDT"` to Aster's `place_limit_order()`. However, Aster client was **normalizing again**:
+- Received: `contract_id="MONUSDT"` (already normalized)
+- Called: `normalize_symbol("MONUSDT")` 
+- Result: `"MONUSDTUSDT"` ❌❌❌
+- API Error: `-1121 'Invalid symbol.'`
+
+**Why This Happened**:
+- `place_limit_order()` and `place_market_order()` were calling `self.normalize_symbol(contract_id)` 
+- But `contract_id` is already normalized from `get_contract_attributes()`
+- `normalize_symbol()` adds "USDT" suffix, causing double normalization
 
 ---
 
@@ -70,7 +90,42 @@ order_result = await exchange_client.place_limit_order(
 
 Same fix applied to `place_market_order()`.
 
-#### 2. **`aster/client.py`** - Better error messages
+#### 2. **`aster/client.py`** - Remove double normalization
+
+**Before** (❌ Bug #2):
+```python
+async def place_limit_order(self, contract_id: str, ...):
+    # Normalize symbol to Aster's format
+    normalized_symbol = self.normalize_symbol(contract_id)  # 🔥 Double normalization!
+    # "MONUSDT" → "MONUSDTUSDT"
+    
+    order_data = {
+        'symbol': normalized_symbol,  # ❌ "MONUSDTUSDT"
+        ...
+    }
+```
+
+**After** (✅ Fixed):
+```python
+async def place_limit_order(self, contract_id: str, ...):
+    # Contract ID should already be in Aster format (e.g., "MONUSDT")
+    # from get_contract_attributes(), so use it directly
+    # NO need to normalize again (would cause "MONUSDTUSDT")
+    
+    self.logger.log(
+        f"🔍 [ASTER] Using contract_id for order: '{contract_id}'",
+        "DEBUG"
+    )
+    
+    order_data = {
+        'symbol': contract_id,  # ✅ Already normalized "MONUSDT"
+        ...
+    }
+```
+
+Same fix applied to `place_market_order()`.
+
+#### 3. **`aster/client.py`** - Better error messages
 
 **Added**:
 - Clearer distinction between "symbol not found" vs "symbol not tradeable"

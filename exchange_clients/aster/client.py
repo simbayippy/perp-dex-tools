@@ -578,24 +578,35 @@ class AsterClient(BaseExchangeClient):
         Returns:
             OrderResult with order details
         """
-        # Normalize symbol to Aster's format
-        normalized_symbol = self.normalize_symbol(contract_id)
+        # Contract ID should already be in Aster format (e.g., "MONUSDT")
+        # from get_contract_attributes(), so use it directly
+        # NO need to normalize again (would cause "MONUSDTUSDT")
+        
+        self.logger.log(
+            f"🔍 [ASTER] Using contract_id for order: '{contract_id}'",
+            "DEBUG"
+        )
         
         # Place limit order with post-only (GTX) for maker fees
         order_data = {
-            'symbol': normalized_symbol,
+            'symbol': contract_id,  # Already normalized (e.g., "MONUSDT")
             'side': side.upper(),
             'type': 'LIMIT',
             'quantity': str(quantity),
             'price': str(self.round_to_tick(price)),
             'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
         }
+        
+        self.logger.log(
+            f"📤 [ASTER] Placing order with data: {order_data}",
+            "DEBUG"
+        )
 
         try:
             result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
         except Exception as e:
             self.logger.log(
-                f"❌ [ASTER] Failed to place limit order for {normalized_symbol} "
+                f"❌ [ASTER] Failed to place limit order for {contract_id} "
                 f"({side.upper()}, qty={quantity}, price={price}): {e}",
                 "ERROR"
             )
@@ -737,8 +748,13 @@ class AsterClient(BaseExchangeClient):
         Place a market order on Aster (true market order for immediate execution).
         """
         try:
-            # Normalize symbol to Aster's format
-            normalized_symbol = self.normalize_symbol(contract_id)
+            # Contract ID should already be in Aster format (e.g., "MONUSDT")
+            # from get_contract_attributes(), so use it directly
+            
+            self.logger.log(
+                f"🔍 [ASTER] Using contract_id for market order: '{contract_id}'",
+                "DEBUG"
+            )
             
             # Validate side
             if side.lower() not in ['buy', 'sell']:
@@ -746,11 +762,16 @@ class AsterClient(BaseExchangeClient):
 
             # Place the market order
             order_data = {
-                'symbol': normalized_symbol,
+                'symbol': contract_id,  # Already normalized (e.g., "MONUSDT")
                 'side': side.upper(),
                 'type': 'MARKET',
                 'quantity': str(quantity)
             }
+            
+            self.logger.log(
+                f"📤 [ASTER] Placing market order with data: {order_data}",
+                "DEBUG"
+            )
 
             result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
             order_status = result.get('status', '')
