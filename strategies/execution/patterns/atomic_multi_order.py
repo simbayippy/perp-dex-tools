@@ -600,9 +600,18 @@ class AtomicMultiOrderExecutor:
                     f"{fill['filled_quantity']} @ market"
                 )
                 
+                # 🔧 FIX: Get proper contract_id from exchange client
+                # Some exchanges (Aster) need "ZORAUSDT", not just "ZORA"
+                contract_attrs = await fill['exchange_client'].get_contract_attributes(fill['symbol'])
+                contract_id = contract_attrs.get('contract_id', fill['symbol'])
+                
+                self.logger.debug(
+                    f"Rollback: Using contract_id='{contract_id}' for symbol '{fill['symbol']}'"
+                )
+                
                 # Place market close order
                 close_task = fill['exchange_client'].place_market_order(
-                    contract_id=fill['symbol'],
+                    contract_id=contract_id,
                     quantity=float(fill['filled_quantity']),  # ✅ Use ACTUAL fill
                     side=close_side
                 )

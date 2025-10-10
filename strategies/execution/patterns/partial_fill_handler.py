@@ -124,8 +124,17 @@ class PartialFillHandler:
                 f"{close_side} {filled_order['filled_quantity']} @ market"
             )
             
+            # 🔧 FIX: Get proper contract_id from exchange client
+            # Some exchanges (Aster) need "ZORAUSDT", not just "ZORA"
+            contract_attrs = await exchange_client.get_contract_attributes(filled_order['symbol'])
+            contract_id = contract_attrs.get('contract_id', filled_order['symbol'])
+            
+            self.logger.debug(
+                f"Emergency close: Using contract_id='{contract_id}' for symbol '{filled_order['symbol']}'"
+            )
+            
             close_result = await exchange_client.place_market_order(
-                contract_id=filled_order['symbol'],
+                contract_id=contract_id,
                 quantity=float(filled_order['filled_quantity']),
                 side=close_side
             )

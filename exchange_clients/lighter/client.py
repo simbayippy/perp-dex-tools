@@ -459,15 +459,37 @@ class LighterClient(BaseExchangeClient):
             # For now, raise an error if client is not initialized
             raise ValueError("Lighter client not initialized. Call connect() first.")
 
+        self.logger.log(
+            f"📤 [LIGHTER] Submitting order: "
+            f"market={order_params.get('market_index')}, "
+            f"client_id={order_params.get('client_order_index')}, "
+            f"side={'ASK' if order_params.get('is_ask') else 'BID'}, "
+            f"price={order_params.get('price')}, "
+            f"amount={order_params.get('base_amount')}",
+            "INFO"
+        )
+
         # Create order using official SDK
         create_order, tx_hash, error = await self.lighter_client.create_order(**order_params)
+        
         if error is not None:
+            self.logger.log(
+                f"❌ [LIGHTER] Order submission failed: {error}",
+                "ERROR"
+            )
             return OrderResult(
                 success=False, order_id=str(order_params['client_order_index']),
                 error_message=f"Order creation error: {error}")
-
-        else:
-            return OrderResult(success=True, order_id=str(order_params['client_order_index']))
+        
+        # Log successful submission with tx hash
+        self.logger.log(
+            f"✅ [LIGHTER] Order submitted successfully! "
+            f"client_id={order_params['client_order_index']}, "
+            f"tx_hash={tx_hash}",
+            "INFO"
+        )
+        
+        return OrderResult(success=True, order_id=str(order_params['client_order_index']))
 
     async def place_limit_order(self, contract_id: str, quantity: Decimal, price: Decimal,
                                 side: str) -> OrderResult:
@@ -1067,7 +1089,7 @@ class LighterClient(BaseExchangeClient):
                 'price': 0,  # Market order
                 'is_ask': is_ask,
                 'order_type': self.lighter_client.ORDER_TYPE_MARKET,
-                'time_in_force': self.lighter_client.TIME_IN_FORCE_IOC,  # Immediate or Cancel
+                'time_in_force': self.lighter_client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,  # Immediate or Cancel
                 'reduce_only': True  # For closing positions
             }
 
