@@ -917,9 +917,122 @@ class AsterClient(BaseExchangeClient):
 
         return Decimal(0)
 
+    async def get_account_leverage(self, symbol: str) -> Optional[int]:
+        """
+        Get current account leverage setting for a symbol from Aster.
+        
+        Aster uses Binance Futures-compatible API.
+        Endpoint: GET /fapi/v2/positionRisk
+        
+        Args:
+            symbol: Trading symbol (e.g., "ZORA")
+            
+        Returns:
+            Current leverage multiplier (e.g., 10 for 10x), or None if unavailable
+        """
+        try:
+            normalized_symbol = f"{symbol}USDT"
+            result = await self._make_request('GET', '/fapi/v2/positionRisk', {'symbol': normalized_symbol})
+            
+            if result and len(result) > 0:
+                # positionRisk returns array, take first position
+                position_info = result[0]
+                leverage = int(position_info.get('leverage', 0))
+                
+                self.logger.log(
+                    f"📊 [ASTER] Account leverage for {symbol}: {leverage}x",
+                    "DEBUG"
+                )
+                
+                return leverage if leverage > 0 else None
+            
+            return None
+        
+        except Exception as e:
+            self.logger.log(f"Could not get account leverage for {symbol}: {e}", "WARNING")
+            return None
+    
+    async def set_account_leverage(self, symbol: str, leverage: int) -> bool:
+        """
+        Set account leverage for a symbol on Aster.
+        
+        ⚠️ WARNING: Only call this if you want to change leverage settings!
+        This is a TRADE endpoint that modifies account settings.
+        
+        Endpoint: POST /fapi/v1/leverage
+        
+        Args:
+            symbol: Trading symbol (e.g., "ZORA")
+            leverage: Target leverage (1 to 125)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if leverage < 1 or leverage > 125:
+                self.logger.log(
+                    f"[ASTER] Invalid leverage value: {leverage}. Must be between 1 and 125",
+                    "ERROR"
+                )
+                return False
+            
+            normalized_symbol = f"{symbol}USDT"
+            
+            self.logger.log(
+                f"[ASTER] Setting leverage for {symbol} to {leverage}x...",
+                "INFO"
+            )
+            
+            result = await self._make_request(
+                'POST',
+                '/fapi/v1/leverage',
+                data={
+                    'symbol': normalized_symbol,
+                    'leverage': leverage
+                }
+            )
+            
+            # Response format:
+            # {
+            #   "leverage": 21,
+            #   "maxNotionalValue": "1000000",
+            #   "symbol": "BTCUSDT"
+            # }
+            
+            if 'leverage' in result:
+                actual_leverage = result.get('leverage')
+                max_notional = result.get('maxNotionalValue')
+                
+                self.logger.log(
+                    f"✅ [ASTER] Leverage set for {symbol}: {actual_leverage}x "
+                    f"(max notional: ${max_notional})",
+                    "INFO"
+                )
+                return True
+            else:
+                self.logger.log(
+                    f"[ASTER] Unexpected response when setting leverage: {result}",
+                    "WARNING"
+                )
+                return False
+        
+        except Exception as e:
+            self.logger.log(
+                f"[ASTER] Error setting leverage for {symbol} to {leverage}x: {e}",
+                "ERROR"
+            )
+            return False
+    
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
         """
         Get leverage and position limit information for a symbol.
+        
+        ⚠️ CRITICAL: Queries BOTH symbol limits AND account leverage settings.
+        Aster requires account leverage to be manually set per symbol.
+        
+        Uses:
+        - GET /fapi/v1/leverageBracket (for symbol-level max leverage)
+        - GET /fapi/v2/positionRisk (for account leverage setting)
         
         Args:
             symbol: Trading symbol (e.g., "ZORA", "BTC")
@@ -927,53 +1040,154 @@ class AsterClient(BaseExchangeClient):
         Returns:
             Dictionary with leverage limits:
             {
-                'max_leverage': Decimal or None,
-                'max_notional': Decimal or None,
+                'max_leverage': Decimal or None,  # From symbol config
+                'max_notional': Decimal or None,  # From leverage brackets
+                'account_leverage': int or None,  # Current account setting
+                'margin_requirement': Decimal or None,
                 'brackets': List or None
             }
         """
         try:
-            result = await self._make_request('GET', '/fapi/v1/exchangeInfo')
-            
             normalized_symbol = f"{symbol}USDT"
-            for symbol_info in result.get('symbols', []):
-                if symbol_info.get('symbol') == normalized_symbol:
-                    leverage_info = {
-                        'max_leverage': None,
-                        'max_notional': None,
-                        'brackets': None
-                    }
-                    
-                    # Extract from filters
-                    for filter_info in symbol_info.get('filters', []):
-                        if filter_info.get('filterType') == 'NOTIONAL':
-                            max_notional = filter_info.get('maxNotional')
-                            if max_notional:
-                                leverage_info['max_notional'] = Decimal(str(max_notional))
-                    
-                    # Check for leverage brackets
-                    if 'leverageBrackets' in symbol_info:
-                        leverage_info['brackets'] = symbol_info['leverageBrackets']
-                        if leverage_info['brackets']:
-                            # Get max leverage from first bracket
-                            leverage_info['max_leverage'] = Decimal(
-                                str(leverage_info['brackets'][0].get('initialLeverage', 10))
-                            )
-                    
-                    return leverage_info
-            
-            # Symbol not found
-            return {
-                'max_leverage': Decimal('10'),  # Conservative default
+            leverage_info = {
+                'max_leverage': None,
                 'max_notional': None,
+                'account_leverage': None,
+                'margin_requirement': None,
                 'brackets': None
             }
+            
+            # Step 1: Get symbol leverage brackets (more efficient than exchangeInfo)
+            # Endpoint: GET /fapi/v1/leverageBracket
+            try:
+                brackets_result = await self._make_request(
+                    'GET', 
+                    '/fapi/v1/leverageBracket',
+                    {'symbol': normalized_symbol}
+                )
+                
+                # Response format (when symbol is specified):
+                # {
+                #   "symbol": "ETHUSDT",
+                #   "brackets": [
+                #     {
+                #       "bracket": 1,
+                #       "initialLeverage": 75,
+                #       "notionalCap": 10000,
+                #       "notionalFloor": 0,
+                #       "maintMarginRatio": 0.0065,
+                #       "cum": 0
+                #     }
+                #   ]
+                # }
+                
+                if brackets_result and 'brackets' in brackets_result:
+                    leverage_info['brackets'] = brackets_result['brackets']
+                    
+                    if leverage_info['brackets'] and len(leverage_info['brackets']) > 0:
+                        first_bracket = leverage_info['brackets'][0]
+                        
+                        # Max leverage from first bracket
+                        leverage_info['max_leverage'] = Decimal(
+                            str(first_bracket.get('initialLeverage', 10))
+                        )
+                        
+                        # Max notional from first bracket
+                        notional_cap = first_bracket.get('notionalCap')
+                        if notional_cap:
+                            leverage_info['max_notional'] = Decimal(str(notional_cap))
+                        
+                        self.logger.log(
+                            f"[ASTER] Leverage brackets for {symbol}: "
+                            f"max={leverage_info['max_leverage']}x, "
+                            f"notional_cap=${leverage_info['max_notional']}",
+                            "DEBUG"
+                        )
+                        
+            except Exception as e:
+                # Fallback: If leverageBracket endpoint fails, try exchangeInfo
+                self.logger.log(
+                    f"[ASTER] leverageBracket endpoint failed for {symbol}, "
+                    f"falling back to exchangeInfo: {e}",
+                    "DEBUG"
+                )
+                
+                result = await self._make_request('GET', '/fapi/v1/exchangeInfo')
+                
+                for symbol_info in result.get('symbols', []):
+                    if symbol_info.get('symbol') == normalized_symbol:
+                        # Extract max notional from filters
+                        for filter_info in symbol_info.get('filters', []):
+                            if filter_info.get('filterType') == 'NOTIONAL':
+                                max_notional = filter_info.get('maxNotional')
+                                if max_notional:
+                                    leverage_info['max_notional'] = Decimal(str(max_notional))
+                        
+                        # Check for leverage brackets in symbol info
+                        if 'leverageBrackets' in symbol_info:
+                            leverage_info['brackets'] = symbol_info['leverageBrackets']
+                            if leverage_info['brackets']:
+                                leverage_info['max_leverage'] = Decimal(
+                                    str(leverage_info['brackets'][0].get('initialLeverage', 10))
+                                )
+                        break
+            
+            # Step 2: Get ACTUAL account leverage setting (CRITICAL!)
+            # This is what the exchange actually uses for margin calculations
+            # Endpoint: GET /fapi/v2/positionRisk
+            account_leverage = await self.get_account_leverage(symbol)
+            
+            if account_leverage and account_leverage > 0:
+                leverage_info['account_leverage'] = account_leverage
+                
+                # Use account leverage as the effective limit
+                # This is what actually determines your max position size
+                effective_leverage = Decimal(str(account_leverage))
+                leverage_info['margin_requirement'] = Decimal('1') / effective_leverage
+                
+                # Warn if account leverage exceeds symbol limits
+                if leverage_info['max_leverage'] and effective_leverage > leverage_info['max_leverage']:
+                    self.logger.log(
+                        f"⚠️  [ASTER] Account leverage ({account_leverage}x) exceeds "
+                        f"symbol max ({leverage_info['max_leverage']}x) for {symbol}!",
+                        "WARNING"
+                    )
+            else:
+                # No account leverage set - this will likely cause trading errors!
+                self.logger.log(
+                    f"⚠️  [ASTER] No account leverage configured for {symbol}! "
+                    f"You need to set leverage on Aster before trading. "
+                    f"Use: POST /fapi/v1/leverage with symbol={normalized_symbol}",
+                    "WARNING"
+                )
+                # Use symbol max as fallback for margin requirement calculation
+                if leverage_info['max_leverage']:
+                    leverage_info['margin_requirement'] = Decimal('1') / leverage_info['max_leverage']
+            
+            # Log comprehensive info
+            self.logger.log(
+                f"📊 [ASTER] Leverage info for {symbol}:\n"
+                f"  - Symbol max leverage: {leverage_info.get('max_leverage')}x\n"
+                f"  - Account leverage: {leverage_info.get('account_leverage')}x\n"
+                f"  - Max notional: ${leverage_info.get('max_notional')}\n"
+                f"  - Margin requirement: {leverage_info.get('margin_requirement')} "
+                f"({(leverage_info.get('margin_requirement', 0) * 100):.1f}%)",
+                "INFO"
+            )
+            
+            return leverage_info
         
         except Exception as e:
             self.logger.log(f"Error getting leverage info for {symbol}: {e}", "ERROR")
+            import traceback
+            self.logger.log(f"Traceback: {traceback.format_exc()}", "DEBUG")
+            
+            # Conservative fallback
             return {
                 'max_leverage': Decimal('10'),
                 'max_notional': None,
+                'account_leverage': None,
+                'margin_requirement': Decimal('0.10'),
                 'brackets': None
             }
 
