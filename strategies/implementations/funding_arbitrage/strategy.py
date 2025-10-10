@@ -560,6 +560,57 @@ class FundingArbitrageStrategy(StatefulStrategy):
         # Add more filters as needed
         return True
     
+    async def _ensure_contract_attributes(self, exchange_client: Any, symbol: str) -> bool:
+        """
+        Ensure exchange client has contract attributes initialized for symbol.
+        
+        For multi-symbol strategies, contract attributes (tick_size, multipliers, etc.)
+        need to be initialized per-symbol before trading.
+        
+        Args:
+            exchange_client: Exchange client instance
+            symbol: Trading symbol
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            exchange_name = exchange_client.get_exchange_name()
+            
+            # Check if we need to initialize (config has ticker="ALL" for multi-symbol)
+            if not hasattr(exchange_client.config, 'contract_id') or exchange_client.config.ticker == "ALL":
+                self.logger.log(
+                    f"🔧 [INIT] Initializing contract attributes for {exchange_name}:{symbol}",
+                    "INFO"
+                )
+                
+                # Temporarily set ticker to specific symbol for initialization
+                original_ticker = exchange_client.config.ticker
+                exchange_client.config.ticker = symbol
+                
+                # Get contract attributes (initializes multipliers, tick_size, contract_id)
+                contract_id, tick_size = await exchange_client.get_contract_attributes()
+                
+                self.logger.log(
+                    f"✅ [INIT] {exchange_name}:{symbol} → contract_id={contract_id}, tick_size={tick_size}",
+                    "INFO"
+                )
+                
+                # Restore original ticker if needed
+                if original_ticker != symbol:
+                    exchange_client.config.ticker = original_ticker
+                
+                return True
+            
+            return True  # Already initialized
+            
+        except Exception as e:
+            self.logger.log(
+                f"❌ [INIT] Failed to initialize {exchange_name}:{symbol}: {e}",
+                "ERROR"
+            )
+            return False
+    
     async def _open_position(self, opportunity):
         """
         Open delta-neutral position from opportunity using atomic execution.
@@ -587,6 +638,17 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 return
             if short_client is None:
                 self.logger.log(f"ERROR: No exchange client found for short_dex: {short_dex}")
+                return
+            
+            # ⭐ CRITICAL: Initialize contract attributes for this symbol
+            long_init_ok = await self._ensure_contract_attributes(long_client, symbol)
+            short_init_ok = await self._ensure_contract_attributes(short_client, symbol)
+            
+            if not long_init_ok:
+                self.logger.log(f"❌ Cannot trade {symbol} on {long_dex}: initialization failed", "ERROR")
+                return
+            if not short_init_ok:
+                self.logger.log(f"❌ Cannot trade {symbol} on {short_dex}: initialization failed", "ERROR")
                 return
             
             self.logger.log(
