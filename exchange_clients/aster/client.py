@@ -332,7 +332,7 @@ class AsterClient(BaseExchangeClient):
         self.base_url = 'https://fapi.asterdex.com'
 
         # Initialize logger early
-        self.logger = TradingLogger(exchange="aster", ticker=self.config.ticker, log_to_console=False)
+        self.logger = TradingLogger(exchange="aster", ticker=self.config.ticker, log_to_console=True)
         self._order_update_handler = None
 
     def _validate_config(self) -> None:

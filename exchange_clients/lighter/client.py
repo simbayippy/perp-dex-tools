@@ -48,7 +48,7 @@ class LighterClient(BaseExchangeClient):
         self.base_url = "https://mainnet.zklighter.elliot.ai"
 
         # Initialize logger
-        self.logger = TradingLogger(exchange="lighter", ticker=self.config.ticker, log_to_console=False)
+        self.logger = TradingLogger(exchange="lighter", ticker=self.config.ticker, log_to_console=True)
         self._order_update_handler = None
 
         # Initialize Lighter client (will be done in connect)
