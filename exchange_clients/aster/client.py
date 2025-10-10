@@ -390,11 +390,23 @@ class AsterClient(BaseExchangeClient):
                 # For POST requests, signature must include both query string and request body
                 # According to Aster API docs: totalParams = queryString + requestBody
                 all_params = {**params, **data}
+                
+                print(f"🔍 [ASTER] POST Request Debug:")
+                print(f"  URL: {url}")
+                print(f"  Params (timestamp/recvWindow): {params}")
+                print(f"  Data (order params): {data}")
+                print(f"  All params (merged): {all_params}")
+                
                 signature = self._generate_signature(all_params)
                 all_params['signature'] = signature
+                
+                print(f"  Generated signature: {signature[:20]}... (truncated)")
+                print(f"  Final request data: {all_params}")
 
                 async with session.post(url, data=all_params, headers=headers) as response:
+                    print(f"  Response status: {response.status}")
                     result = await response.json()
+                    print(f"  Response body: {result}")
                     if response.status != 200:
                         raise Exception(f"API request failed: {result}")
                     return result
@@ -583,12 +595,10 @@ class AsterClient(BaseExchangeClient):
         # NO need to normalize again (would cause "MONUSDTUSDT")
         
         print(f"🔍 [ASTER] Using contract_id for order: '{contract_id}'")
-        # Remove USDT suffix if present for order placement
-        base_symbol = contract_id.replace('USDT', '') if contract_id.endswith('USDT') else contract_id
         
         # Place limit order with post-only (GTX) for maker fees
         order_data = {
-            'symbol': base_symbol,  # Strip USDT suffix (e.g., "MON" from "MONUSDT")
+            'symbol': contract_id,  # Already normalized (e.g., "MONUSDT")
             'side': side.upper(),
             'type': 'LIMIT',
             'quantity': str(quantity),
@@ -886,11 +896,24 @@ class AsterClient(BaseExchangeClient):
             found_symbol = None
             symbol_status = None
             
+            # Debug: List all available symbols
+            available_symbols = [s.get('symbol') for s in result['symbols'] if s.get('status') == 'TRADING']
+            self.logger.log(
+                f"🔍 [ASTER] Found {len(available_symbols)} tradeable symbols. "
+                f"Looking for {ticker}USDT...",
+                "DEBUG"
+            )
+            
             for symbol_info in result['symbols']:
                 if (symbol_info.get('baseAsset') == ticker and
                         symbol_info.get('quoteAsset') == 'USDT'):
                     found_symbol = symbol_info
                     symbol_status = symbol_info.get('status', 'UNKNOWN')
+                    
+                    self.logger.log(
+                        f"🔍 [ASTER] Found {ticker}USDT with status: {symbol_status}",
+                        "DEBUG"
+                    )
                     
                     # Only accept TRADING status
                     if symbol_status == 'TRADING':
