@@ -144,6 +144,11 @@ class AtomicMultiOrderExecutor:
             
             # Step 1: Pre-flight checks (optional)
             if pre_flight_check:
+                # Separator to indicate pre-flight checks are starting
+                self.logger.info("=" * 60)
+                self.logger.info("🔍 RUNNING PRE-FLIGHT CHECKS")
+                self.logger.info("=" * 60)
+                
                 preflight_ok, preflight_error = await self._run_preflight_checks(orders)
                 if not preflight_ok:
                     return AtomicExecutionResult(
