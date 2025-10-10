@@ -529,8 +529,8 @@ class AsterClient(BaseExchangeClient):
         # Normalize symbol to Aster's format (e.g., "ZORA" → "ZORAUSDT")
         normalized_symbol = self.normalize_symbol(contract_id)
         
-        print(f"🔍 [ASTER] Symbol normalization: '{contract_id}' → '{normalized_symbol}'")
-        print(f"🔍 [ASTER] Attempting to fetch order book for symbol='{normalized_symbol}', limit={levels}")
+        self.logger.log(f"🔍 [ASTER] Symbol normalization: '{contract_id}' → '{normalized_symbol}'", "DEBUG")
+        self.logger.log(f"🔍 [ASTER] Attempting to fetch order book for symbol='{normalized_symbol}', limit={levels}", "DEBUG")
         try:
             self.logger.log(
                 f"📊 [ASTER] Fetching order book: symbol={normalized_symbol}, limit={levels}",
@@ -539,7 +539,7 @@ class AsterClient(BaseExchangeClient):
             
             # Call Aster API: GET /fapi/v1/depth
             # Note: Aster expects symbols with quote currency (e.g., "BTCUSDT", not "BTC")
-            print(f"📊 [ASTER] Calling API: GET /fapi/v1/depth?symbol={normalized_symbol}&limit={levels}")
+            self.logger.log(f"📊 [ASTER] Calling API: GET /fapi/v1/depth?symbol={normalized_symbol}&limit={levels}", "DEBUG")
             result = await self._make_request('GET', '/fapi/v1/depth', {
                 'symbol': normalized_symbol,
                 'limit': levels
@@ -550,14 +550,14 @@ class AsterClient(BaseExchangeClient):
             bids_raw = result.get('bids', [])
             asks_raw = result.get('asks', [])
             
-            print(f"✅ [ASTER] Order book received: {len(bids_raw)} bids, {len(asks_raw)} asks for {contract_id}")
+            self.logger.log(f"✅ [ASTER] Order book received: {len(bids_raw)} bids, {len(asks_raw)} asks for {contract_id}", "DEBUG")
             
 
             # Convert to standardized format
             bids = [{'price': Decimal(bid[0]), 'size': Decimal(bid[1])} for bid in bids_raw]
             asks = [{'price': Decimal(ask[0]), 'size': Decimal(ask[1])} for ask in asks_raw]
 
-            print(f"✅ [ASTER] Order book converted to standardized format: {len(bids)} bids, {len(asks)} asks")
+            self.logger.log(f"✅ [ASTER] Order book converted to standardized format: {len(bids)} bids, {len(asks)} asks", "DEBUG")
             
             return {
                 'bids': bids,
@@ -565,8 +565,8 @@ class AsterClient(BaseExchangeClient):
             }
             
         except Exception as e:
-            print(f"❌ [ASTER] ERROR fetching order book for '{contract_id}': {e}")
-            print(f"   Hint: Aster expects symbols with quote currency (e.g., 'BTCUSDT' not 'BTC')")
+            self.logger.log(f"❌ [ASTER] ERROR fetching order book for '{contract_id}': {e}", "ERROR")
+            self.logger.log(f"   Hint: Aster expects symbols with quote currency (e.g., 'BTCUSDT' not 'BTC')", "ERROR")
             self.logger.log(f"❌ [ASTER] Error fetching order book for {contract_id}: {e}", "ERROR")
             import traceback
             self.logger.log(f"Traceback: {traceback.format_exc()}", "DEBUG")
