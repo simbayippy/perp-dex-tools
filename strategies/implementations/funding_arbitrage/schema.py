@@ -57,7 +57,7 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             key="target_exposure",
             prompt="What is your target position size per side (USD)?",
             default=Decimal("100"),
-            min_value=Decimal("10"),
+            min_value=Decimal("0.10"),
             max_value=Decimal("100000"),
             required=True,
             help_text="This is the USD value of each long/short position. "
@@ -80,7 +80,7 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             key="max_total_exposure_usd",
             prompt="Maximum total exposure across all positions (USD)?",
             default=Decimal("1000"),
-            min_value=Decimal("100"),
+            min_value=Decimal("1.00"),
             max_value=Decimal("1000000"),
             required=False,
             help_text="Total notional value limit. Example: 5 positions × $200 each = $1000"
