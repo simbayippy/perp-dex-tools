@@ -919,6 +919,7 @@ class LighterClient(BaseExchangeClient):
                 return {
                     'max_leverage': Decimal('20'),
                     'max_notional': None,
+                    'account_leverage': None,
                     'margin_requirement': Decimal('0.05'),
                     'brackets': None
                 }
@@ -937,6 +938,7 @@ class LighterClient(BaseExchangeClient):
                 return {
                     'max_leverage': Decimal('20'),
                     'max_notional': None,
+                    'account_leverage': None,
                     'margin_requirement': Decimal('0.05'),
                     'brackets': None
                 }
@@ -945,14 +947,14 @@ class LighterClient(BaseExchangeClient):
             market_detail = market_details_response.order_book_details[0]
             
             # Extract margin fractions
-            # Lighter uses fixed-point integers, need to convert to decimals
-            # The fraction is represented as an integer where 1e18 = 1.0 (100%)
-            FRACTION_DIVISOR = Decimal('1000000000000000000')  # 1e18
+            # ⚠️ CRITICAL FIX: Lighter uses BASIS POINTS, not 1e18!
+            # Based on SDK code: imf = int(10_000 / leverage) → 10,000 = 100%
+            BASIS_POINTS_DIVISOR = Decimal('10000')  # 10,000 = 100%
             
             # min_initial_margin_fraction is the minimum margin requirement
             # Max leverage = 1 / min_initial_margin_fraction
             min_margin_fraction_int = market_detail.min_initial_margin_fraction
-            min_margin_fraction = Decimal(str(min_margin_fraction_int)) / FRACTION_DIVISOR
+            min_margin_fraction = Decimal(str(min_margin_fraction_int)) / BASIS_POINTS_DIVISOR
             
             # Calculate max leverage
             if min_margin_fraction > 0:
@@ -962,19 +964,51 @@ class LighterClient(BaseExchangeClient):
             
             # Also get maintenance margin for reference
             maintenance_margin_int = market_detail.maintenance_margin_fraction
-            maintenance_margin = Decimal(str(maintenance_margin_int)) / FRACTION_DIVISOR
+            maintenance_margin = Decimal(str(maintenance_margin_int)) / BASIS_POINTS_DIVISOR
+            
+            # Try to get account-level leverage (current usage)
+            account_leverage = None
+            try:
+                if self.account_api:
+                    account_data = await self.account_api.account(
+                        by="index", 
+                        value=str(self.account_index)
+                    )
+                    
+                    if account_data and account_data.accounts:
+                        account = account_data.accounts[0]
+                        
+                        # Look for position in this specific market
+                        for position in account.positions:
+                            if position.market_id == market_id:
+                                # Found position - get its leverage
+                                if hasattr(position, 'initial_margin_fraction'):
+                                    imf_int = position.initial_margin_fraction
+                                    imf = Decimal(str(imf_int)) / BASIS_POINTS_DIVISOR
+                                    if imf > 0:
+                                        account_leverage = Decimal('1') / imf
+                                break
+                        
+                        # Fallback: check account-level leverage
+                        if account_leverage is None and hasattr(account, 'leverage'):
+                            account_leverage = Decimal(str(account.leverage))
+                            
+            except Exception as e:
+                self.logger.log(f"Could not get account leverage: {e}", "DEBUG")
             
             self.logger.log(
-                f"📊 [LIGHTER] Leverage info for {symbol}: "
-                f"max_leverage={max_leverage:.1f}x, "
-                f"min_margin={min_margin_fraction*100:.2f}%, "
-                f"maintenance_margin={maintenance_margin*100:.2f}%",
-                "DEBUG"
+                f"📊 [LIGHTER] Leverage info for {symbol}:\n"
+                f"  - Symbol max leverage: {max_leverage:.1f}x\n"
+                f"  - Account leverage: {account_leverage}x\n"
+                f"  - Max notional: None\n"
+                f"  - Margin requirement: {min_margin_fraction} ({min_margin_fraction*100:.1f}%)",
+                "INFO"
             )
             
             return {
                 'max_leverage': max_leverage,
                 'max_notional': None,  # Lighter doesn't have explicit notional limits per se
+                'account_leverage': account_leverage,
                 'margin_requirement': min_margin_fraction,
                 'brackets': None  # Lighter uses fixed margin, not brackets
             }
@@ -988,6 +1022,7 @@ class LighterClient(BaseExchangeClient):
             return {
                 'max_leverage': Decimal('20'),
                 'max_notional': None,
+                'account_leverage': None,
                 'margin_requirement': Decimal('0.05'),
                 'brackets': None
             }
