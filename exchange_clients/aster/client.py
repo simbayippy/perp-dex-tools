@@ -500,10 +500,6 @@ class AsterClient(BaseExchangeClient):
         # Normalize symbol to Aster's format (e.g., "ZORA" → "ZORAUSDT")
         normalized_symbol = self.normalize_symbol(contract_id)
         
-        self.logger.log(
-            f"🔍 [ASTER] get_order_book_depth() called with symbol='{contract_id}' → normalized to '{normalized_symbol}', levels={levels}",
-            "INFO"
-        )
         print(f"🔍 [ASTER] Symbol normalization: '{contract_id}' → '{normalized_symbol}'")
         print(f"🔍 [ASTER] Attempting to fetch order book for symbol='{normalized_symbol}', limit={levels}")
         try:
@@ -519,31 +515,24 @@ class AsterClient(BaseExchangeClient):
                 'symbol': normalized_symbol,
                 'limit': levels
             })
-            print(f"✅ [ASTER] API call successful, parsing response...")
             
             # Parse response
             # Aster returns: {"bids": [["price", "qty"], ...], "asks": [["price", "qty"], ...]}
             bids_raw = result.get('bids', [])
             asks_raw = result.get('asks', [])
             
-            self.logger.log(
-                f"📊 [ASTER] Order book received: {len(bids_raw)} bids, {len(asks_raw)} asks for {contract_id}",
-                "INFO"
-            )
+            print(f"✅ [ASTER] Order book received: {len(bids_raw)} bids, {len(asks_raw)} asks for {contract_id}")
             
             if bids_raw and asks_raw:
-                self.logger.log(
+                print(
                     f"   → Best bid: {bids_raw[0][0]} (size: {bids_raw[0][1]}), "
-                    f"Best ask: {asks_raw[0][0]} (size: {asks_raw[0][1]})",
-                    "INFO"
+                    f"Best ask: {asks_raw[0][0]} (size: {asks_raw[0][1]})"
                 )
             elif not bids_raw and not asks_raw:
-                self.logger.log(
+                print(
                     f"⚠️  [ASTER] EMPTY order book for {contract_id}! "
-                    f"Symbol may not be listed on Aster or has zero liquidity.",
-                    "WARNING"
+                    f"Symbol may not be listed on Aster or has zero liquidity."
                 )
-            
             # Convert to standardized format
             bids = [{'price': Decimal(bid[0]), 'size': Decimal(bid[1])} for bid in bids_raw]
             asks = [{'price': Decimal(ask[0]), 'size': Decimal(ask[1])} for ask in asks_raw]
