@@ -582,10 +582,7 @@ class AsterClient(BaseExchangeClient):
         # from get_contract_attributes(), so use it directly
         # NO need to normalize again (would cause "MONUSDTUSDT")
         
-        self.logger.log(
-            f"🔍 [ASTER] Using contract_id for order: '{contract_id}'",
-            "DEBUG"
-        )
+        print(f"🔍 [ASTER] Using contract_id for order: '{contract_id}'")
         
         # Place limit order with post-only (GTX) for maker fees
         order_data = {
@@ -597,10 +594,7 @@ class AsterClient(BaseExchangeClient):
             'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
         }
         
-        self.logger.log(
-            f"📤 [ASTER] Placing order with data: {order_data}",
-            "DEBUG"
-        )
+        print(f"📤 [ASTER] Placing order with data: {order_data}")
 
         try:
             result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
