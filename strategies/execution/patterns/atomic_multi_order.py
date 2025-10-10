@@ -155,9 +155,14 @@ class AtomicMultiOrderExecutor:
                         execution_time_ms=int((time.time() - start_time) * 1000),
                         error_message=f"Pre-flight check failed: {preflight_error}"
                     )
+                
+                # Separator to indicate pre-flight checks are complete
+                self.logger.info("=" * 60)
+                self.logger.info("✅ PRE-FLIGHT CHECKS COMPLETE - PROCEEDING TO ORDER PLACEMENT")
+                self.logger.info("=" * 60)
             
             # Step 2: Place all orders simultaneously
-            self.logger.info("Placing all orders simultaneously...")
+            self.logger.info("🚀 Placing all orders simultaneously...")
             order_tasks = [
                 self._place_single_order(spec) for spec in orders
             ]

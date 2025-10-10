@@ -700,9 +700,10 @@ class FundingArbitrageStrategy(StatefulStrategy):
             )
             
             self.logger.log(
-                f"🎯 Opening {symbol}: "
-                f"Long {long_dex}, Short {short_dex}, "
-                f"Size=${size_usd}, Divergence={opportunity.divergence*100:.3f}%",
+                f"🎯 [EXECUTION PLAN] {symbol} | "
+                f"Long: {long_dex.upper()} (${size_usd}) | "
+                f"Short: {short_dex.upper()} (${size_usd}) | "
+                f"Divergence: {opportunity.divergence*100:.3f}%",
                 "INFO"
             )
             
