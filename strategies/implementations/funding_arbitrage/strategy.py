@@ -210,8 +210,8 @@ class FundingArbitrageStrategy(StatefulStrategy):
         from .config import RiskManagementConfig
         from funding_rate_service.config import settings
         
-        # Get target exposure from config
-        target_exposure = Decimal(str(getattr(trading_config, 'target_exposure', 100.0)))
+        # Get target exposure from strategy_params
+        target_exposure = Decimal(str(strategy_params.get('target_exposure', 100.0)))
         
         return FundingArbConfig(
             exchange=trading_config.exchange,  # Primary exchange
@@ -221,7 +221,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
             default_position_size_usd=target_exposure,  # Use target_exposure as default position size
             max_position_size_usd=target_exposure * Decimal('10'),  # Max is 10x the default
             max_total_exposure_usd=Decimal(str(strategy_params.get('max_total_exposure_usd', float(target_exposure) * 5))),
-            min_profit=Decimal(str(getattr(trading_config, 'min_profit_rate', 0.0001))),
+            min_profit=Decimal(str(strategy_params.get('min_profit_rate', 0.0001))),
             max_oi_usd=Decimal(str(strategy_params.get('max_oi_usd', 10000000.0))),  # 10M default
             max_new_positions_per_cycle=strategy_params.get('max_new_positions_per_cycle', 2),
             # Required database URL from funding_rate_service settings
