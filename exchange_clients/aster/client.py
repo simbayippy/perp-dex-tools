@@ -591,7 +591,15 @@ class AsterClient(BaseExchangeClient):
             'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
         }
 
-        result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
+        try:
+            result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
+        except Exception as e:
+            self.logger.log(
+                f"❌ [ASTER] Failed to place limit order for {normalized_symbol} "
+                f"({side.upper()}, qty={quantity}, price={price}): {e}",
+                "ERROR"
+            )
+            raise
         order_status = result.get('status', '')
         order_id = result.get('orderId', '')
 
@@ -858,44 +866,67 @@ class AsterClient(BaseExchangeClient):
         try:
             result = await self._make_request('GET', '/fapi/v1/exchangeInfo')
 
+            # Check all symbols to find matching base asset
+            found_symbol = None
+            symbol_status = None
+            
             for symbol_info in result['symbols']:
-                if (symbol_info.get('status') == 'TRADING' and
-                        symbol_info.get('baseAsset') == ticker and
+                if (symbol_info.get('baseAsset') == ticker and
                         symbol_info.get('quoteAsset') == 'USDT'):
+                    found_symbol = symbol_info
+                    symbol_status = symbol_info.get('status', 'UNKNOWN')
+                    
+                    # Only accept TRADING status
+                    if symbol_status == 'TRADING':
+                        self.config.contract_id = symbol_info.get('symbol', '')
 
-                    self.config.contract_id = symbol_info.get('symbol', '')
+                        # Get tick size from filters
+                        for filter_info in symbol_info.get('filters', []):
+                            if filter_info.get('filterType') == 'PRICE_FILTER':
+                                self.config.tick_size = Decimal(filter_info['tickSize'].strip('0'))
+                                break
 
-                    # Get tick size from filters
-                    for filter_info in symbol_info.get('filters', []):
-                        if filter_info.get('filterType') == 'PRICE_FILTER':
-                            self.config.tick_size = Decimal(filter_info['tickSize'].strip('0'))
-                            break
+                        # Get minimum quantity
+                        min_quantity = Decimal(0)
+                        for filter_info in symbol_info.get('filters', []):
+                            if filter_info.get('filterType') == 'LOT_SIZE':
+                                min_quantity = Decimal(filter_info.get('minQty', 0))
+                                break
 
-                    # Get minimum quantity
-                    min_quantity = Decimal(0)
-                    for filter_info in symbol_info.get('filters', []):
-                        if filter_info.get('filterType') == 'LOT_SIZE':
-                            min_quantity = Decimal(filter_info.get('minQty', 0))
-                            break
+                        if self.config.quantity < min_quantity:
+                            self.logger.log(
+                                f"Order quantity is less than min quantity: "
+                                f"{self.config.quantity} < {min_quantity}", "ERROR"
+                            )
+                            raise ValueError(
+                                f"Order quantity is less than min quantity: "
+                                f"{self.config.quantity} < {min_quantity}"
+                            )
 
-                    if self.config.quantity < min_quantity:
-                        self.logger.log(
-                            f"Order quantity is less than min quantity: "
-                            f"{self.config.quantity} < {min_quantity}", "ERROR"
-                        )
-                        raise ValueError(
-                            f"Order quantity is less than min quantity: "
-                            f"{self.config.quantity} < {min_quantity}"
-                        )
+                        if self.config.tick_size == 0:
+                            self.logger.log("Failed to get tick size for ticker", "ERROR")
+                            raise ValueError("Failed to get tick size for ticker")
 
-                    if self.config.tick_size == 0:
-                        self.logger.log("Failed to get tick size for ticker", "ERROR")
-                        raise ValueError("Failed to get tick size for ticker")
-
-                    return self.config.contract_id, self.config.tick_size
-
-            self.logger.log("Failed to get contract ID for ticker", "ERROR")
-            raise ValueError("Failed to get contract ID for ticker")
+                        return self.config.contract_id, self.config.tick_size
+                    else:
+                        # Symbol found but not trading
+                        break
+            
+            # Improved error message
+            if found_symbol:
+                self.logger.log(
+                    f"Symbol {ticker}USDT exists on Aster but is not tradeable (status: {symbol_status})",
+                    "ERROR"
+                )
+                raise ValueError(
+                    f"Symbol {ticker}USDT is not tradeable on Aster (status: {symbol_status})"
+                )
+            else:
+                self.logger.log(
+                    f"Symbol {ticker}USDT not found on Aster",
+                    "ERROR"
+                )
+                raise ValueError(f"Symbol {ticker}USDT not found on Aster")
 
         except Exception as e:
             self.logger.log(f"Error getting contract attributes: {e}", "ERROR")

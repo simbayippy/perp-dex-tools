@@ -572,7 +572,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
             symbol: Trading symbol
             
         Returns:
-            True if successful, False otherwise
+            True if successful and symbol is tradeable, False otherwise
         """
         try:
             exchange_name = exchange_client.get_exchange_name()
@@ -580,26 +580,52 @@ class FundingArbitrageStrategy(StatefulStrategy):
             # Check if we need to initialize (config has ticker="ALL" for multi-symbol)
             if not hasattr(exchange_client.config, 'contract_id') or exchange_client.config.ticker == "ALL":
                 self.logger.log(
-                    f"🔧 [INIT] Initializing contract attributes for {exchange_name}:{symbol}",
+                    f"🔧 [{exchange_name.upper()}] Initializing contract attributes for {symbol}",
                     "INFO"
                 )
-                print(f"🔧 [INIT] Initializing contract attributes for {exchange_name}:{symbol}")
                 
                 # Temporarily set ticker to specific symbol for initialization
                 original_ticker = exchange_client.config.ticker
                 exchange_client.config.ticker = symbol
                 
                 # Get contract attributes (initializes multipliers, tick_size, contract_id)
-                contract_id, tick_size = await exchange_client.get_contract_attributes()
+                try:
+                    contract_id, tick_size = await exchange_client.get_contract_attributes()
+                    
+                    # Additional validation: contract_id should be meaningful
+                    if not contract_id or contract_id == "":
+                        self.logger.log(
+                            f"❌ [{exchange_name.upper()}] Symbol {symbol} initialization returned empty contract_id",
+                            "WARNING"
+                        )
+                        return False
+                    
+                    self.logger.log(
+                        f"✅ [{exchange_name.upper()}] {symbol} initialized → "
+                        f"contract_id={contract_id}, tick_size={tick_size}",
+                        "INFO"
+                    )
+                    
+                except ValueError as e:
+                    # Specific handling for "symbol not found" errors
+                    error_msg = str(e).lower()
+                    if "not found" in error_msg or "not supported" in error_msg:
+                        self.logger.log(
+                            f"⚠️  [{exchange_name.upper()}] Symbol {symbol} is NOT TRADEABLE on {exchange_name} "
+                            f"(not listed or not supported)",
+                            "WARNING"
+                        )
+                    else:
+                        self.logger.log(
+                            f"❌ [{exchange_name.upper()}] Failed to initialize {symbol}: {e}",
+                            "ERROR"
+                        )
+                    return False
                 
-                self.logger.log(
-                    f"✅ [INIT] {exchange_name}:{symbol} → contract_id={contract_id}, tick_size={tick_size}",
-                    "INFO"
-                )
-                
-                # Restore original ticker if needed
-                if original_ticker != symbol:
-                    exchange_client.config.ticker = original_ticker
+                finally:
+                    # Always restore original ticker
+                    if original_ticker != symbol:
+                        exchange_client.config.ticker = original_ticker
                 
                 return True
             
@@ -607,9 +633,11 @@ class FundingArbitrageStrategy(StatefulStrategy):
             
         except Exception as e:
             self.logger.log(
-                f"❌ [INIT] Failed to initialize {exchange_name}:{symbol}: {e}",
+                f"❌ [{exchange_name.upper()}] Unexpected error initializing {symbol}: {e}",
                 "ERROR"
             )
+            import traceback
+            self.logger.log(f"Traceback: {traceback.format_exc()}", "DEBUG")
             return False
     
     async def _open_position(self, opportunity):
@@ -642,15 +670,31 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 return
             
             # ⭐ CRITICAL: Initialize contract attributes for this symbol
+            self.logger.log(
+                f"📋 [VALIDATION] Checking if {symbol} is tradeable on both {long_dex} and {short_dex}...",
+                "INFO"
+            )
+            
             long_init_ok = await self._ensure_contract_attributes(long_client, symbol)
             short_init_ok = await self._ensure_contract_attributes(short_client, symbol)
             
             if not long_init_ok:
-                self.logger.log(f"❌ Cannot trade {symbol} on {long_dex}: initialization failed", "ERROR")
+                self.logger.log(
+                    f"⛔ [SKIP] Cannot trade {symbol}: Not supported on {long_dex.upper()} (long side)",
+                    "WARNING"
+                )
                 return
             if not short_init_ok:
-                self.logger.log(f"❌ Cannot trade {symbol} on {short_dex}: initialization failed", "ERROR")
+                self.logger.log(
+                    f"⛔ [SKIP] Cannot trade {symbol}: Not supported on {short_dex.upper()} (short side)",
+                    "WARNING"
+                )
                 return
+            
+            self.logger.log(
+                f"✅ [VALIDATION] {symbol} is tradeable on both exchanges",
+                "INFO"
+            )
             
             self.logger.log(
                 f"🎯 Opening {symbol}: "

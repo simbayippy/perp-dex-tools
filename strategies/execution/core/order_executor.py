@@ -230,14 +230,18 @@ class OrderExecutor:
             # Convert USD size to quantity
             quantity = size_usd / limit_price
             
+            # Get the exchange-specific contract ID (normalized symbol)
+            # Each exchange has already normalized the symbol during initialization
+            contract_id = getattr(exchange_client.config, 'contract_id', symbol)
+            
             self.logger.info(
-                f"Placing limit {side} {symbol}: {quantity} @ ${limit_price} "
-                f"(mid: ${mid_price}, offset: {price_offset_pct}%)"
+                f"Placing limit {side} {symbol} (contract_id={contract_id}): "
+                f"{quantity} @ ${limit_price} (mid: ${mid_price}, offset: {price_offset_pct}%)"
             )
             
-            # Place limit order
+            # Place limit order using the normalized contract_id
             order_result = await exchange_client.place_limit_order(
-                contract_id=symbol,
+                contract_id=contract_id,
                 quantity=float(quantity),
                 price=float(limit_price),
                 side=side
@@ -307,11 +311,22 @@ class OrderExecutor:
             )
         
         except Exception as e:
-            self.logger.error(f"Limit order execution failed: {e}", exc_info=True)
+            # Extract exchange name for better error messages
+            exchange_name = "unknown"
+            if hasattr(exchange_client, 'get_exchange_name'):
+                try:
+                    exchange_name = exchange_client.get_exchange_name()
+                except:
+                    pass
+            
+            self.logger.error(
+                f"[{exchange_name.upper()}] Limit order execution failed for {symbol}: {e}",
+                exc_info=True
+            )
             return ExecutionResult(
                 success=False,
                 filled=False,
-                error_message=f"Limit execution error: {str(e)}",
+                error_message=f"[{exchange_name}] Limit execution error: {str(e)}",
                 execution_mode_used="limit_error"
             )
     
@@ -336,13 +351,17 @@ class OrderExecutor:
             # Calculate quantity
             quantity = size_usd / expected_price
             
+            # Get the exchange-specific contract ID (normalized symbol)
+            contract_id = getattr(exchange_client.config, 'contract_id', symbol)
+            
             self.logger.info(
-                f"Placing market {side} {symbol}: {quantity} @ ~${expected_price}"
+                f"Placing market {side} {symbol} (contract_id={contract_id}): "
+                f"{quantity} @ ~${expected_price}"
             )
             
-            # Place market order
+            # Place market order using the normalized contract_id
             result = await exchange_client.place_market_order(
-                contract_id=symbol,
+                contract_id=contract_id,
                 quantity=float(quantity),
                 side=side
             )
@@ -381,11 +400,22 @@ class OrderExecutor:
             )
         
         except Exception as e:
-            self.logger.error(f"Market order execution failed: {e}", exc_info=True)
+            # Extract exchange name for better error messages
+            exchange_name = "unknown"
+            if hasattr(exchange_client, 'get_exchange_name'):
+                try:
+                    exchange_name = exchange_client.get_exchange_name()
+                except:
+                    pass
+            
+            self.logger.error(
+                f"[{exchange_name.upper()}] Market order execution failed for {symbol}: {e}",
+                exc_info=True
+            )
             return ExecutionResult(
                 success=False,
                 filled=False,
-                error_message=f"Market execution error: {str(e)}",
+                error_message=f"[{exchange_name}] Market execution error: {str(e)}",
                 execution_mode_used="market_error"
             )
     
