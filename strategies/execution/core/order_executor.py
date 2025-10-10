@@ -140,8 +140,19 @@ class OrderExecutor:
         start_time = time.time()
         timeout = timeout_seconds or self.default_timeout
         
+        # Get exchange name for better logging
+        exchange_name = "unknown"
+        if hasattr(exchange_client, 'get_exchange_name'):
+            try:
+                exchange_name = exchange_client.get_exchange_name()
+            except:
+                pass
+        
+        # Choose emoji based on side
+        emoji = "🟢" if side == "buy" else "🔴"
+        
         self.logger.info(
-            f"Executing {side} {symbol} for ${size_usd} in mode {mode.value}"
+            f"{emoji} [{exchange_name.upper()}] Executing {side} {symbol} for ${size_usd} in mode {mode.value}"
         )
         
         try:
