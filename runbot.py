@@ -134,9 +134,17 @@ def setup_logging(log_level: str):
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
 
-    # Configure root logger WITHOUT adding a console handler
-    # This prevents duplicate logs when TradingLogger adds its own console handler
+    # Configure root logger WITH a console handler for standard Python loggers
+    # (TradingLogger has its own console handler when log_to_console=True)
     root_logger.setLevel(level)
+    
+    # Add console handler for standard Python loggers (like atomic_multi_order.py)
+    if not any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers):
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(level)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
 
     # Suppress websockets debug logs unless DEBUG level is explicitly requested
     if log_level.upper() != 'DEBUG':
@@ -148,10 +156,7 @@ def setup_logging(log_level: str):
 
     # Suppress Lighter SDK debug logs
     logging.getLogger('lighter').setLevel(logging.WARNING)
-    # Also suppress any root logger DEBUG messages that might be coming from Lighter
-    if log_level.upper() != 'DEBUG':
-        # Set root logger to WARNING to suppress DEBUG messages from Lighter SDK
-        root_logger.setLevel(logging.WARNING)
+    # Note: We keep the root logger at the requested level (INFO) so atomic_multi_order.py logs show up
 
 
 async def main():
