@@ -142,7 +142,11 @@ def setup_logging(log_level: str):
     if not any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers):
         console_handler = logging.StreamHandler()
         console_handler.setLevel(level)
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+        # Use cleaner format matching TradingLogger style
+        formatter = logging.Formatter(
+            '%(asctime)s.%(msecs)03d - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
         console_handler.setFormatter(formatter)
         root_logger.addHandler(console_handler)
 
@@ -153,6 +157,11 @@ def setup_logging(log_level: str):
     # Suppress other noisy loggers
     logging.getLogger('urllib3').setLevel(logging.WARNING)
     logging.getLogger('requests').setLevel(logging.WARNING)
+    logging.getLogger('aiohttp').setLevel(logging.WARNING)
+    
+    # Suppress funding service verbose logs (keep only warnings/errors)
+    logging.getLogger('funding_rate_service').setLevel(logging.WARNING)
+    logging.getLogger('databases').setLevel(logging.WARNING)
 
     # Suppress Lighter SDK debug logs
     logging.getLogger('lighter').setLevel(logging.WARNING)

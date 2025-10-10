@@ -356,7 +356,9 @@ class AtomicMultiOrderExecutor:
             
             for i, order_spec in enumerate(orders):
                 # Check liquidity
-                print(f"[Liquidity Analyzer] 🔍 Checking liquidity for order {i} ({order_spec.side} {order_spec.symbol})")
+                self.logger.debug(
+                    f"Checking liquidity for order {i}: {order_spec.side} {order_spec.symbol} ${order_spec.size_usd}"
+                )
                 report = await analyzer.check_execution_feasibility(
                     exchange_client=order_spec.exchange_client,
                     symbol=order_spec.symbol,

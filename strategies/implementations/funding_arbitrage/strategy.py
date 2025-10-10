@@ -488,8 +488,11 @@ class FundingArbitrageStrategy(StatefulStrategy):
             )
             
             # 🔍 DEBUG: Log the filters being used
-            self.logger.log(f"DEBUG: Filters - min_profit: {self.config.min_profit}, max_oi_usd: {self.config.max_oi_usd}, "
-                          f"configured_dexes: {self.config.exchanges}, available_dexes: {available_exchanges}")
+            self.logger.log(
+                f"Filters - min_profit: {self.config.min_profit}, max_oi_usd: {self.config.max_oi_usd}, "
+                f"configured_dexes: {self.config.exchanges}, available_dexes: {available_exchanges}",
+                "DEBUG"
+            )
             
             opportunities = await self.opportunity_finder.find_opportunities(filters)
             
@@ -656,8 +659,8 @@ class FundingArbitrageStrategy(StatefulStrategy):
             size_usd = self.config.default_position_size_usd
             
             # Get exchange clients
-            self.logger.log(f"DEBUG: Available exchange clients: {list(self.exchange_clients.keys())}")
-            self.logger.log(f"DEBUG: Looking for long_dex: {long_dex}, short_dex: {short_dex}")
+            self.logger.log(f"Available exchange clients: {list(self.exchange_clients.keys())}", "DEBUG")
+            self.logger.log(f"Looking for long_dex: {long_dex}, short_dex: {short_dex}", "DEBUG")
             
             long_client = self.exchange_clients.get(long_dex)
             short_client = self.exchange_clients.get(short_dex)

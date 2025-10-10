@@ -391,22 +391,20 @@ class AsterClient(BaseExchangeClient):
                 # According to Aster API docs: totalParams = queryString + requestBody
                 all_params = {**params, **data}
                 
-                print(f"🔍 [ASTER] POST Request Debug:")
-                print(f"  URL: {url}")
-                print(f"  Params (timestamp/recvWindow): {params}")
-                print(f"  Data (order params): {data}")
-                print(f"  All params (merged): {all_params}")
+                self.logger.log(
+                    f"POST {endpoint} - Params: {params}, Data: {data}",
+                    "DEBUG"
+                )
                 
                 signature = self._generate_signature(all_params)
                 all_params['signature'] = signature
-                
-                print(f"  Generated signature: {signature[:20]}... (truncated)")
-                print(f"  Final request data: {all_params}")
 
                 async with session.post(url, data=all_params, headers=headers) as response:
-                    print(f"  Response status: {response.status}")
                     result = await response.json()
-                    print(f"  Response body: {result}")
+                    self.logger.log(
+                        f"Response {response.status}: {result.get('orderId', result.get('status', 'N/A'))}",
+                        "DEBUG"
+                    )
                     if response.status != 200:
                         raise Exception(f"API request failed: {result}")
                     return result
@@ -611,12 +609,16 @@ class AsterClient(BaseExchangeClient):
         # from get_contract_attributes(), so use it directly
         # NO need to normalize again (would cause "MONUSDTUSDT")
         
-        print(f"🔍 [ASTER] Using contract_id for order: '{contract_id}'")
+        self.logger.log(f"Using contract_id for order: '{contract_id}'", "DEBUG")
         
         # Round quantity to step size (e.g., 941.8750094 → 941.875 or 941 depending on stepSize)
         rounded_quantity = self.round_to_step(Decimal(str(quantity)))
         
-        print(f"📐 [ASTER] Rounded quantity: {quantity} → {rounded_quantity} (step_size={getattr(self.config, 'step_size', 'unknown')})")
+        self.logger.log(
+            f"Rounded quantity: {quantity} → {rounded_quantity} "
+            f"(step_size={getattr(self.config, 'step_size', 'unknown')})",
+            "DEBUG"
+        )
         
         # Place limit order with post-only (GTX) for maker fees
         order_data = {
@@ -628,14 +630,15 @@ class AsterClient(BaseExchangeClient):
             'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
         }
         
-        print(f"📤 [ASTER] Placing order with data: {order_data}")
+        self.logger.log(f"Placing {side.upper()} limit order: {rounded_quantity} @ {price}", "DEBUG")
 
         try:
             result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
         except Exception as e:
-            print(
-                f"❌ [ASTER] Failed to place limit order for {contract_id} "
-                f"({side.upper()}, qty={quantity}, price={price}): {e}"
+            self.logger.log(
+                f"Failed to place limit order for {contract_id} "
+                f"({side.upper()}, qty={quantity}, price={price}): {e}",
+                "ERROR"
             )
             raise
         order_status = result.get('status', '')
