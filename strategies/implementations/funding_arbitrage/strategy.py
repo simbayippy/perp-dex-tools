@@ -583,6 +583,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
                     f"🔧 [INIT] Initializing contract attributes for {exchange_name}:{symbol}",
                     "INFO"
                 )
+                print(f"🔧 [INIT] Initializing contract attributes for {exchange_name}:{symbol}")
                 
                 # Temporarily set ticker to specific symbol for initialization
                 original_ticker = exchange_client.config.ticker
