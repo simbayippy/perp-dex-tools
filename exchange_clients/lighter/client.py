@@ -323,16 +323,57 @@ class LighterClient(BaseExchangeClient):
             self.logger.error(f"❌ [LIGHTER] Failed to get BBO prices: {e}")
             raise ValueError(f"Unable to fetch BBO prices for {contract_id}: {e}")
 
+    def get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
+        """
+        Get order book from WebSocket if available (zero latency).
+        
+        Returns:
+            Order book dict if WebSocket is connected and has data, None otherwise
+        """
+        try:
+            if not self.ws_manager or not self.ws_manager.running:
+                return None
+            
+            if not self.ws_manager.snapshot_loaded:
+                return None
+            
+            # Check if order book has data
+            if not self.ws_manager.order_book["bids"] or not self.ws_manager.order_book["asks"]:
+                return None
+            
+            # Convert WebSocket order book to standard format
+            bids = [
+                {'price': Decimal(str(price)), 'size': Decimal(str(size))}
+                for price, size in sorted(self.ws_manager.order_book["bids"].items(), reverse=True)
+            ]
+            asks = [
+                {'price': Decimal(str(price)), 'size': Decimal(str(size))}
+                for price, size in sorted(self.ws_manager.order_book["asks"].items())
+            ]
+            
+            self.logger.info(
+                f"📡 [WEBSOCKET] Using real-time order book from WebSocket "
+                f"({len(bids)} bids, {len(asks)} asks)"
+            )
+            
+            return {
+                'bids': bids,
+                'asks': asks
+            }
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to get order book from WebSocket: {e}")
+            return None
+
     async def get_order_book_depth(
         self, 
         contract_id: str, 
         levels: int = 10
     ) -> Dict[str, List[Dict[str, Decimal]]]:
         """
-        Get order book depth from Lighter REST API.
+        Get order book depth for a symbol.
         
-        Uses /api/v1/orderBookOrders endpoint for reliable order book data.
-        This is more reliable than WebSocket for pre-trade liquidity checks.
+        Tries WebSocket first (real-time, zero latency), falls back to REST API.
         
         Args:
             contract_id: Contract/symbol identifier (can be symbol or market_id)
@@ -342,6 +383,19 @@ class LighterClient(BaseExchangeClient):
             Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
         """
         try:
+            # 🔴 Priority 1: Try WebSocket (real-time, zero latency)
+            ws_book = self.get_order_book_from_websocket()
+            if ws_book:
+                # Limit to requested levels
+                return {
+                    'bids': ws_book['bids'][:levels],
+                    'asks': ws_book['asks'][:levels]
+                }
+            
+            # 🔄 Priority 2: Fall back to REST API
+            self.logger.info(
+                f"📞 [REST] Fetching order book via REST API (WebSocket not available)"
+            )
             # Use REST API for order book (more reliable than WebSocket for one-time queries)
             url = f"{self.base_url}/api/v1/orderBookOrders"
             

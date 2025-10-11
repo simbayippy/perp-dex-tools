@@ -182,16 +182,24 @@ class LighterWebSocketManager:
             self._log(f"Error requesting fresh snapshot: {e}", "ERROR")
             raise
 
-    def get_best_levels(self) -> Tuple[Tuple[Optional[float], Optional[float]], Tuple[Optional[float], Optional[float]]]:
-        """Get the best bid and ask levels with sufficient size for our order (~$5000)."""
+    def get_best_levels(self, min_size_usd: float = 0) -> Tuple[Tuple[Optional[float], Optional[float]], Tuple[Optional[float], Optional[float]]]:
+        """
+        Get the best bid and ask levels from order book.
+        
+        Args:
+            min_size_usd: Minimum size in USD (default: 0 = no filter, return true best bid/ask)
+        
+        Returns:
+            ((best_bid_price, best_bid_size), (best_ask_price, best_ask_size))
+        """
         try:
             # Get all bid levels with sufficient size
             bid_levels = [(price, size) for price, size in self.order_book["bids"].items()
-                          if size * price >= 40000]
+                          if size * price >= min_size_usd]
 
             # Get all ask levels with sufficient size
             ask_levels = [(price, size) for price, size in self.order_book["asks"].items()
-                          if size * price >= 40000]
+                          if size * price >= min_size_usd]
 
             # Get best bid (highest price) and best ask (lowest price)
             best_bid = max(bid_levels) if bid_levels else (None, None)
@@ -362,8 +370,8 @@ class LighterWebSocketManager:
                                         # Release lock before network I/O
                                         break
 
-                                    # Get the best bid and ask levels
-                                    (best_bid_price, best_bid_size), (best_ask_price, best_ask_size) = self.get_best_levels()
+                                    # Get the best bid and ask levels (no size filter)
+                                    (best_bid_price, best_bid_size), (best_ask_price, best_ask_size) = self.get_best_levels(min_size_usd=0)
 
                                     # Update global variables
                                     if best_bid_price is not None:

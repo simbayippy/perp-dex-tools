@@ -266,6 +266,41 @@ class BaseExchangeClient(ABC):
         """
         pass
 
+    def get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
+        """
+        Get order book from WebSocket if available (zero latency).
+        
+        ⚡ Performance Optimization: If the exchange WebSocket maintains a full order book,
+        this method can return it instantly from memory instead of making a REST API call.
+        
+        Returns:
+            Order book dict if WebSocket is connected and has data, None otherwise
+            
+        Example Return Value:
+            {
+                'bids': [
+                    {'price': Decimal('50000'), 'size': Decimal('1.5')},
+                    {'price': Decimal('49999'), 'size': Decimal('2.0')},
+                    ...
+                ],
+                'asks': [...]
+            }
+            
+        Implementation Notes:
+            - Return None if WebSocket doesn't maintain full order book (only BBO)
+            - Return None if WebSocket is not connected or data not ready
+            - Only return data if WebSocket has received and validated order book snapshot
+            
+        Exchange-Specific Behavior:
+            - Lighter: Returns full order book (WebSocket maintains complete depth)
+            - Aster: Returns None (WebSocket only maintains BBO, not full depth)
+            - Default: Returns None (override if exchange supports it)
+            
+        Default Implementation:
+            Returns None. Override in exchange client if WebSocket maintains order book.
+        """
+        return None
+
     @abstractmethod
     async def get_order_book_depth(
         self, 
@@ -274,6 +309,10 @@ class BaseExchangeClient(ABC):
     ) -> Dict[str, List[Dict[str, Decimal]]]:
         """
         Get order book depth for liquidity analysis.
+        
+        🔄 Smart Implementation Pattern:
+        1. Try get_order_book_from_websocket() first (zero latency)
+        2. Fall back to REST API if WebSocket data not available
         
         Args:
             contract_id: Contract/symbol identifier
@@ -295,6 +334,21 @@ class BaseExchangeClient(ABC):
                     ...
                 ]
             }
+            
+        Recommended Implementation:
+            ```python
+            async def get_order_book_depth(self, contract_id, levels=10):
+                # Try WebSocket first (zero latency)
+                ws_book = self.get_order_book_from_websocket()
+                if ws_book:
+                    return {
+                        'bids': ws_book['bids'][:levels],
+                        'asks': ws_book['asks'][:levels]
+                    }
+                
+                # Fall back to REST API
+                # ... REST API implementation ...
+            ```
         """
         pass
 

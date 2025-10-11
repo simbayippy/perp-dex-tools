@@ -206,6 +206,40 @@ class AsterClient(BaseExchangeClient):
 
         return best_bid, best_ask
 
+    def get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
+        """
+        Get order book from WebSocket if available.
+        
+        Aster WebSocket maintains order book via partial depth stream (@depth20@100ms).
+        This provides top 20 bids and asks with 100ms updates.
+        
+        Returns:
+            Order book dict if WebSocket depth stream is active and has data, None otherwise
+        """
+        try:
+            if not self.ws_manager or not self.ws_manager.running:
+                return None
+            
+            if not self.ws_manager.order_book_ready:
+                return None
+            
+            # Check if order book has data
+            if not self.ws_manager.order_book.get('bids') or not self.ws_manager.order_book.get('asks'):
+                return None
+            
+            # Order book is already in standard format from websocket_manager
+            self.logger.info(
+                f"📡 [WEBSOCKET] Using real-time order book from WebSocket "
+                f"({len(self.ws_manager.order_book['bids'])} bids, "
+                f"{len(self.ws_manager.order_book['asks'])} asks)"
+            )
+            
+            return self.ws_manager.order_book
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to get order book from WebSocket: {e}")
+            return None
+
     async def get_order_book_depth(
         self, 
         contract_id: str, 
@@ -214,6 +248,8 @@ class AsterClient(BaseExchangeClient):
         """
         Get order book depth from Aster.
         
+        Tries WebSocket depth stream first (100ms snapshots), falls back to REST API.
+        
         Args:
             contract_id: Contract/symbol identifier
             levels: Number of price levels to fetch (default: 10)
@@ -221,6 +257,15 @@ class AsterClient(BaseExchangeClient):
         Returns:
             Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
         """
+        # 🔴 Priority 1: Try WebSocket depth stream (100ms snapshots, zero latency)
+        ws_book = self.get_order_book_from_websocket()
+        if ws_book:
+            return {
+                'bids': ws_book['bids'][:levels],
+                'asks': ws_book['asks'][:levels]
+            }
+        
+        # 🔄 Priority 2: Fall back to REST API
         # Normalize symbol to Aster's format (e.g., "ZORA" → "ZORAUSDT")
         normalized_symbol = self.normalize_symbol(contract_id)
         

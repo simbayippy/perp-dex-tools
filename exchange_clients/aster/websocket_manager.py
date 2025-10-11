@@ -33,12 +33,19 @@ class AsterWebSocketManager:
         self._last_ping_time = None
         self.config = config
         
-        # 📊 Order book state (for real-time BBO)
+        # 📊 Order book state (for real-time BBO via book ticker)
         self.best_bid = None
         self.best_ask = None
         self._book_ticker_ws = None  # Separate WebSocket for book ticker
         self._book_ticker_task = None
         self._current_book_ticker_symbol = None  # Track which symbol we're subscribed to
+        
+        # 📚 Full order book state (for liquidity checks via depth stream)
+        self.order_book = {"bids": [], "asks": []}  # Snapshot format: [{'price': Decimal, 'size': Decimal}, ...]
+        self._depth_ws = None  # Separate WebSocket for order book depth
+        self._depth_task = None
+        self._current_depth_symbol = None
+        self.order_book_ready = False
 
     def _generate_signature(self, params: Dict[str, Any]) -> str:
         """Generate HMAC SHA256 signature for Aster API authentication."""
@@ -437,6 +444,151 @@ class AsterWebSocketManager:
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error processing book ticker: {e}")
+    
+    async def start_order_book_stream(self, symbol: str):
+        """
+        Start order book depth stream for a specific symbol.
+        
+        Uses partial depth stream (@depth20@100ms) for real-time order book snapshots.
+        This provides top 20 bids and asks with 100ms updates, sufficient for liquidity checks.
+        
+        Args:
+            symbol: Normalized symbol (e.g., "MONUSDT", "SKYUSDT")
+        """
+        # If already subscribed to this symbol, no need to restart
+        if self._current_depth_symbol == symbol and self._depth_task and not self._depth_task.done():
+            if self.logger:
+                self.logger.debug(f"Already subscribed to depth stream for {symbol}")
+            return
+        
+        # Cancel existing depth task if different symbol
+        if self._depth_task and not self._depth_task.done():
+            if self.logger:
+                self.logger.info(f"Switching depth stream from {self._current_depth_symbol} to {symbol}")
+            self._depth_task.cancel()
+            try:
+                await self._depth_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Start new depth task
+        self._current_depth_symbol = symbol
+        self._depth_task = asyncio.create_task(self._connect_depth_stream(symbol))
+        
+        if self.logger:
+            self.logger.info(f"📚 Started order book depth stream for {symbol}")
+    
+    async def _connect_depth_stream(self, symbol: str):
+        """
+        Connect to order book depth stream.
+        
+        Stream: <symbol>@depth20@100ms
+        Provides top 20 bids and asks every 100ms.
+        
+        Args:
+            symbol: Symbol to subscribe to (e.g., "MONUSDT")
+        """
+        try:
+            # Use partial depth stream: top 20 levels at 100ms
+            stream_name = f"{symbol.lower()}@depth20@100ms"
+            depth_url = f"{self.ws_url}/ws/{stream_name}"
+            
+            if self.logger:
+                self.logger.info(f"📚 [ASTER] Connecting to depth stream: {stream_name}")
+            
+            reconnect_delay = 1
+            max_reconnect_delay = 60
+            
+            while self.running:
+                try:
+                    async with websockets.connect(depth_url) as ws:
+                        self._depth_ws = ws
+                        
+                        if self.logger:
+                            self.logger.info(f"📚 [ASTER] Connected to depth stream for {symbol}")
+                        
+                        # Reset reconnect delay on successful connection
+                        reconnect_delay = 1
+                        
+                        # Listen for depth updates
+                        async for message in ws:
+                            if not self.running:
+                                break
+                            
+                            try:
+                                data = json.loads(message)
+                                await self._handle_depth_update(data)
+                            except json.JSONDecodeError as e:
+                                if self.logger:
+                                    self.logger.error(f"Failed to parse depth message: {e}")
+                            except Exception as e:
+                                if self.logger:
+                                    self.logger.error(f"Error handling depth update: {e}")
+                
+                except websockets.exceptions.ConnectionClosed:
+                    if self.logger and self.running:
+                        self.logger.warning("Depth WebSocket closed, reconnecting...")
+                except Exception as e:
+                    if self.logger and self.running:
+                        self.logger.error(f"Depth WebSocket error: {e}")
+                
+                # Reconnect with exponential backoff
+                if self.running:
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
+        
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Failed to start depth WebSocket: {e}")
+    
+    async def _handle_depth_update(self, data: Dict[str, Any]):
+        """
+        Handle order book depth updates.
+        
+        Format (partial depth):
+        {
+          "e": "depthUpdate",
+          "E": 1571889248277,  // Event time
+          "s": "BTCUSDT",
+          "b": [["7403.89", "0.002"], ["7403.90", "3.906"], ...],  // Top 20 bids
+          "a": [["7405.96", "3.340"], ["7406.63", "4.525"], ...]   // Top 20 asks
+        }
+        """
+        try:
+            if data.get('e') != 'depthUpdate':
+                return
+            
+            # Extract bids and asks
+            bids_raw = data.get('b', [])
+            asks_raw = data.get('a', [])
+            
+            # Convert to standard format
+            from decimal import Decimal
+            
+            bids = [
+                {'price': Decimal(price), 'size': Decimal(qty)}
+                for price, qty in bids_raw
+            ]
+            asks = [
+                {'price': Decimal(price), 'size': Decimal(qty)}
+                for price, qty in asks_raw
+            ]
+            
+            # Update order book state (snapshot, not incremental)
+            self.order_book = {
+                'bids': bids,
+                'asks': asks
+            }
+            self.order_book_ready = True
+            
+            if self.logger:
+                self.logger.debug(
+                    f"📚 [ASTER] Depth update: {len(bids)} bids, {len(asks)} asks"
+                )
+        
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error processing depth update: {e}")
 
     async def disconnect(self):
         """Disconnect from WebSocket."""
@@ -457,6 +609,14 @@ class AsterWebSocketManager:
                 await self._book_ticker_task
             except asyncio.CancelledError:
                 pass
+        
+        # Cancel depth stream task
+        if self._depth_task and not self._depth_task.done():
+            self._depth_task.cancel()
+            try:
+                await self._depth_task
+            except asyncio.CancelledError:
+                pass
 
         # Close WebSockets
         if self.websocket:
@@ -464,6 +624,9 @@ class AsterWebSocketManager:
         
         if self._book_ticker_ws:
             await self._book_ticker_ws.close()
+        
+        if self._depth_ws:
+            await self._depth_ws.close()
             
         if self.logger:
             self.logger.info("WebSocket disconnected")

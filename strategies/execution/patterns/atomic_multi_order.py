@@ -373,7 +373,7 @@ class AtomicMultiOrderExecutor:
                     exchange_client = order.exchange_client
                     exchange_name = exchange_client.get_exchange_name()
                     
-                    # Start book ticker WebSocket if supported
+                    # Start WebSocket streams if supported
                     if hasattr(exchange_client, 'ws_manager') and exchange_client.ws_manager:
                         ws_manager = exchange_client.ws_manager
                         
@@ -381,16 +381,24 @@ class AtomicMultiOrderExecutor:
                         if exchange_name == "aster":
                             # Aster needs full symbol like "SKYUSDT"
                             normalized_symbol = getattr(exchange_client.config, 'contract_id', f"{symbol}USDT")
+                            
+                            # Start book ticker for BBO (limit orders)
                             if hasattr(ws_manager, 'start_book_ticker'):
                                 await ws_manager.start_book_ticker(normalized_symbol)
                                 self.logger.info(f"✅ Started Aster book ticker for {normalized_symbol}")
+                            
+                            # Start order book depth stream for liquidity checks
+                            if hasattr(ws_manager, 'start_order_book_stream'):
+                                await ws_manager.start_order_book_stream(normalized_symbol)
+                                self.logger.info(f"✅ Started Aster order book depth stream for {normalized_symbol}")
+                        
                         elif exchange_name == "lighter":
                             # Lighter uses market_id, already subscribed to order book
                             # The order book WebSocket is already running from connect()
                             self.logger.info(f"✅ Lighter order book WebSocket already active for {symbol}")
             
-            # Give WebSockets a moment to receive first BBO update
-            await asyncio.sleep(0.5)
+            # Give WebSockets a moment to receive first updates (BBO + order book depth)
+            await asyncio.sleep(1.0)
             
             # ========================================================================
             # CHECK 1: Account Balance Validation (CRITICAL FIX)
