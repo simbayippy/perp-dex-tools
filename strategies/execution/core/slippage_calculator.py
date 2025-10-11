@@ -17,9 +17,9 @@ Key features:
 
 from typing import Dict, List
 from decimal import Decimal
-import logging
+from helpers.unified_logger import get_core_logger
 
-logger = logging.getLogger(__name__)
+logger = get_core_logger("slippage_calculator")
 
 
 class SlippageCalculator:
@@ -50,7 +50,7 @@ class SlippageCalculator:
     
     def __init__(self):
         """Initialize slippage calculator."""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_core_logger("slippage_calculator")
     
     def calculate_expected_slippage(
         self,

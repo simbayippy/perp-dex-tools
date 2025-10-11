@@ -1,6 +1,15 @@
 """
 Base exchange client and funding adapter interfaces.
 All exchange implementations should inherit from these classes.
+
+Architecture:
+    - BaseExchangeClient: Trading execution interface (used by trading bots)
+    - BaseFundingAdapter: Funding rate collection interface (used by funding rate service)
+    
+Each exchange implementation typically has:
+    - client.py: Trading execution (inherits BaseExchangeClient)
+    - funding_adapter.py: Funding rate collection (inherits BaseFundingAdapter)
+    - common.py: Shared utilities (symbol normalization, etc.)
 """
 
 from abc import ABC, abstractmethod
@@ -12,15 +21,28 @@ import aiohttp
 import asyncio
 
 
+# ============================================================================
+# EXCEPTIONS & ERRORS
+# ============================================================================
+
 class MissingCredentialsError(Exception):
     """Raised when exchange credentials are missing or invalid (placeholders)."""
     pass
 
 
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+
 def validate_credentials(credential_name: str, credential_value: Optional[str], 
                         placeholder_values: Optional[list] = None) -> None:
     """
-    Helper function to validate exchange credentials.
+    Validate exchange credentials to ensure they're not missing or placeholders.
+    
+    This is a standalone utility function (not a method) because:
+    - It's used during __init__ before the object is fully constructed
+    - It's stateless and doesn't need access to instance data
+    - It can be used by multiple exchange clients consistently
     
     Args:
         credential_name: Name of the credential (e.g., 'API_KEY')
@@ -66,7 +88,7 @@ def query_retry(
     reraise: bool = False
 ):
     """
-    Retry decorator for query operations
+    Retry decorator for query operations with exponential backoff.
     
     Args:
         default_return: Value to return if all retries fail
@@ -90,9 +112,13 @@ def query_retry(
     )
 
 
+# ============================================================================
+# DATA CLASSES
+# ============================================================================
+
 @dataclass
 class OrderResult:
-    """Standardized order result structure."""
+    """Standardized order result structure returned by order placement methods."""
     success: bool
     order_id: Optional[str] = None
     side: Optional[str] = None
@@ -105,7 +131,7 @@ class OrderResult:
 
 @dataclass
 class OrderInfo:
-    """Standardized order information structure."""
+    """Standardized order information structure returned by order queries."""
     order_id: str
     side: str
     size: Decimal
@@ -122,161 +148,122 @@ class OrderInfo:
 
 class BaseExchangeClient(ABC):
     """
-    Base interface for trading execution
+    Base interface for trading execution on perpetual DEXs.
     
-    This interface is used by the trading bot to execute orders, manage positions,
+    This interface is used by trading bots to execute orders, manage positions,
     and interact with exchange trading APIs.
+    
+    Key Responsibilities:
+        - Order placement and management (limit, market, cancel)
+        - Position tracking and management
+        - Market data fetching (prices, order book depth)
+        - WebSocket integration for real-time updates
+        - Risk management and leverage queries
+    
+    Implementation Pattern:
+        Each exchange should implement this interface in a client.py file:
+        
+        ```python
+        class AsterClient(BaseExchangeClient):
+            def __init__(self, config: Dict[str, Any]):
+                super().__init__(config)
+                # Exchange-specific initialization
+                
+            async def connect(self) -> None:
+                # Connect to exchange WebSocket/API
+                pass
+        ```
     """
 
     def __init__(self, config: Dict[str, Any]):
-        """Initialize the exchange client with configuration."""
+        """
+        Initialize the exchange client with configuration.
+        
+        Args:
+            config: Configuration dictionary containing trading parameters
+        """
         self.config = config
         self._validate_config()
 
-    def round_to_tick(self, price) -> Decimal:
-        """Round price to tick size"""
-        price = Decimal(price)
-        tick = self.config.tick_size
-        return price.quantize(tick, rounding=ROUND_HALF_UP)
-
     @abstractmethod
     def _validate_config(self) -> None:
-        """Validate the exchange-specific configuration."""
+        """
+        Validate the exchange-specific configuration.
+        
+        This method should:
+        - Check for required credentials using validate_credentials()
+        - Validate configuration parameters
+        - Raise MissingCredentialsError if credentials are invalid
+        
+        Example:
+            ```python
+            def _validate_config(self) -> None:
+                validate_credentials('ASTER_API_KEY', os.getenv('ASTER_API_KEY'))
+                validate_credentials('ASTER_SECRET_KEY', os.getenv('ASTER_SECRET_KEY'))
+            ```
+        """
         pass
+
+    # ========================================================================
+    # CONNECTION MANAGEMENT
+    # ========================================================================
 
     @abstractmethod
     async def connect(self) -> None:
-        """Connect to the exchange (WebSocket, etc.)."""
+        """
+        Connect to the exchange (WebSocket, HTTP session, etc.).
+        
+        This method should:
+        - Establish WebSocket connections for real-time updates
+        - Initialize HTTP sessions for API calls
+        - Subscribe to necessary data streams
+        """
         pass
 
     @abstractmethod
     async def disconnect(self) -> None:
-        """Disconnect from the exchange."""
+        """
+        Disconnect from the exchange and cleanup resources.
+        
+        This method should:
+        - Close WebSocket connections
+        - Close HTTP sessions
+        - Cancel background tasks
+        """
         pass
+
+    @abstractmethod
+    def get_exchange_name(self) -> str:
+        """
+        Get the exchange name identifier.
+        
+        Returns:
+            Exchange name (e.g., "aster", "lighter", "backpack")
+        """
+        pass
+
+    # ========================================================================
+    # MARKET DATA & PRICING
+    # ========================================================================
 
     @abstractmethod
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
         """
-        Fetch best bid and offer prices for a contract.
+        Fetch best bid and offer (BBO) prices for a contract.
         
         Args:
             contract_id: Contract/symbol identifier
             
         Returns:
-            Tuple of (best_bid, best_ask)
+            Tuple of (best_bid, best_ask) as Decimals
             
         Raises:
             Exception: If fetching fails
-        """
-        pass
-
-    @abstractmethod
-    async def place_limit_order(
-        self, 
-        contract_id: str, 
-        quantity: Decimal, 
-        price: Decimal, 
-        side: str
-    ) -> OrderResult:
-        """
-        Place a limit order.
-        
-        Args:
-            contract_id: Contract/symbol identifier
-            quantity: Order size
-            price: Limit price
-            side: 'buy' or 'sell'
             
-        Returns:
-            OrderResult with order details
+        Example:
+            >>> bid, ask = await client.fetch_bbo_prices("BTC")
+            >>> print(f"Spread: {ask - bid}")
         """
-        pass
-
-    @abstractmethod
-    async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
-        """Place an open order."""
-        pass
-
-    @abstractmethod
-    async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
-        """Place a close order."""
-        pass
-
-    @abstractmethod
-    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
-        """
-        Place a market order (taker order for immediate execution).
-        
-        Args:
-            contract_id: Contract/symbol identifier
-            quantity: Order size
-            side: 'buy' or 'sell'
-            
-        Returns:
-            OrderResult with order details
-            
-        Note:
-            If exchange doesn't support true market orders, implement using
-            aggressive limit order priced to execute immediately.
-        """
-        pass
-
-    @abstractmethod
-    async def cancel_order(self, order_id: str) -> OrderResult:
-        """Cancel an order."""
-        pass
-
-    @abstractmethod
-    async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
-        """Get order information."""
-        pass
-
-    @abstractmethod
-    async def get_active_orders(self, contract_id: str) -> List[OrderInfo]:
-        """Get active orders for a contract."""
-        pass
-
-    @abstractmethod
-    async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
-        """
-        Fetch best bid and offer prices for a contract.
-        
-        Args:
-            contract_id: Contract/symbol identifier
-            
-        Returns:
-            Tuple of (best_bid, best_ask)
-            
-        Raises:
-            Exception: If fetching fails
-        """
-        pass
-
-    @abstractmethod
-    async def place_limit_order(
-        self, 
-        contract_id: str, 
-        quantity: Decimal, 
-        price: Decimal, 
-        side: str
-    ) -> OrderResult:
-        """
-        Place a limit order.
-        
-        Args:
-            contract_id: Contract/symbol identifier
-            quantity: Order size
-            price: Limit price
-            side: 'buy' or 'sell'
-            
-        Returns:
-            OrderResult with order details
-        """
-        pass
-
-    @abstractmethod
-    async def get_account_positions(self) -> Decimal:
-        """Get account positions."""
         pass
 
     @abstractmethod
@@ -293,13 +280,361 @@ class BaseExchangeClient(ABC):
             levels: Number of price levels to fetch (default: 10)
             
         Returns:
-            Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
-            Example: {
-                'bids': [{'price': Decimal('50000'), 'size': Decimal('1.5')}, ...],
-                'asks': [{'price': Decimal('50001'), 'size': Decimal('2.0')}, ...]
+            Dictionary with 'bids' and 'asks' lists containing dicts with 'price' and 'size'
+            
+        Example:
+            {
+                'bids': [
+                    {'price': Decimal('50000'), 'size': Decimal('1.5')},
+                    {'price': Decimal('49999'), 'size': Decimal('2.0')},
+                    ...
+                ],
+                'asks': [
+                    {'price': Decimal('50001'), 'size': Decimal('2.0')},
+                    {'price': Decimal('50002'), 'size': Decimal('1.5')},
+                    ...
+                ]
             }
         """
         pass
+
+    # ========================================================================
+    # ORDER MANAGEMENT
+    # ========================================================================
+
+    @abstractmethod
+    async def place_limit_order(
+        self, 
+        contract_id: str, 
+        quantity: Decimal, 
+        price: Decimal, 
+        side: str
+    ) -> OrderResult:
+        """
+        Place a limit order at a specific price.
+        
+        Limit orders are maker orders that sit on the order book until filled.
+        Most exchanges offer maker fee rebates for limit orders.
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            quantity: Order size
+            price: Limit price
+            side: 'buy' or 'sell'
+            
+        Returns:
+            OrderResult with order details
+            
+        Example:
+            >>> result = await client.place_limit_order("BTC", Decimal("1.0"), Decimal("50000"), "buy")
+            >>> if result.success:
+            ...     print(f"Order placed: {result.order_id}")
+        """
+        pass
+
+    @abstractmethod
+    async def place_market_order(
+        self, 
+        contract_id: str, 
+        quantity: Decimal, 
+        side: str
+    ) -> OrderResult:
+        """
+        Place a market order for immediate execution.
+        
+        Market orders are taker orders that execute against the order book immediately.
+        They typically incur taker fees.
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            quantity: Order size
+            side: 'buy' or 'sell'
+            
+        Returns:
+            OrderResult with order details
+            
+        Note:
+            If exchange doesn't support true market orders, implement using
+            aggressive limit order priced to execute immediately.
+            
+        Example:
+            >>> result = await client.place_market_order("BTC", Decimal("1.0"), "buy")
+            >>> print(f"Executed at: {result.price}")
+        """
+        pass
+
+    async def place_close_order(
+        self, 
+        contract_id: str,   
+        quantity: Decimal, 
+        price: Decimal, 
+        side: str,
+        max_retries: int = 50,
+        enable_price_adjustment: bool = True
+    ) -> OrderResult:
+        """
+        Place an order to close a position with automatic retry and price adjustment.
+        
+        This method should be implemented with intelligent close logic:
+        - Retries on order rejection (e.g., post-only orders that would take)
+        - Dynamically adjusts price based on market conditions
+        - Ensures maker-only orders to avoid fees (if exchange supports it)
+        - Continues retrying until position is closed
+        
+        Default implementation uses simple limit order. Override for exchange-specific
+        retry logic (see Aster implementation for reference).
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            quantity: Position size to close
+            price: Target price
+            side: 'buy' or 'sell' (opposite of the position side)
+            max_retries: Maximum retry attempts (default: 50)
+            enable_price_adjustment: Whether to adjust price based on BBO (default: True)
+            
+        Returns:
+            OrderResult with order details
+            
+        Example Override (close order with retry):
+            ```python
+            async def place_close_order(self, contract_id, quantity, price, side, **kwargs):
+                attempt = 0
+                while attempt < kwargs.get('max_retries', 50):
+                    attempt += 1
+                    
+                    # Get current market to adjust price
+                    if kwargs.get('enable_price_adjustment', True):
+                        bid, ask = await self.fetch_bbo_prices(contract_id)
+                        if side == 'sell' and price <= bid:
+                            price = bid + tick_size
+                        elif side == 'buy' and price >= ask:
+                            price = ask - tick_size
+                    
+                    result = await self.place_limit_order(contract_id, quantity, price, side)
+                    
+                    if result.status in ['OPEN', 'FILLED']:
+                        return result
+                    # Retry if EXPIRED/REJECTED
+                
+                return OrderResult(success=False, error_message='Max retries exceeded')
+            ```
+        """
+        # Default implementation: Single attempt with limit order
+        return await self.place_limit_order(contract_id, quantity, price, side)
+
+    @abstractmethod
+    async def cancel_order(self, order_id: str) -> OrderResult:
+        """
+        Cancel an existing order.
+        
+        ⚠️ CRITICAL METHOD - Required for all exchanges.
+        
+        This method is essential for:
+        - Timeout handling in limit-with-fallback execution
+        - Emergency rollback in atomic multi-order patterns
+        - Risk management (canceling stale orders in fast markets)
+        - Strategy order lifecycle management
+        
+        Args:
+            order_id: Order identifier to cancel
+            
+        Returns:
+            OrderResult indicating success/failure and any partial fills
+            - success: True if cancel succeeded
+            - filled_size: Amount that was filled before cancel (if any)
+            - error_message: Error details if cancel failed
+            
+        Example:
+            >>> result = await client.cancel_order("order_12345")
+            >>> if result.success:
+            ...     print(f"Canceled, {result.filled_size} was already filled")
+        """
+        pass
+
+    @abstractmethod
+    async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
+        """
+        Get detailed information about a specific order.
+        
+        Args:
+            order_id: Order identifier
+            
+        Returns:
+            OrderInfo with order details, or None if order not found
+        """
+        pass
+
+    @abstractmethod
+    async def get_active_orders(self, contract_id: str) -> List[OrderInfo]:
+        """
+        Get all active (open) orders for a contract.
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            
+        Returns:
+            List of OrderInfo for active orders
+        """
+        pass
+
+    @abstractmethod
+    def setup_order_update_handler(self, handler) -> None:
+        """
+        Setup callback handler for WebSocket order updates.
+        
+        Args:
+            handler: Callback function to receive order updates
+                     Signature: handler(order_data: Dict[str, Any]) -> None
+        """
+        pass
+
+    # ========================================================================
+    # POSITION & ACCOUNT MANAGEMENT
+    # ========================================================================
+
+    @abstractmethod
+    async def get_account_positions(self) -> Decimal:
+        """
+        Get account position size for the configured contract.
+        
+        Returns:
+            Position size as Decimal (typically absolute value)
+        """
+        pass
+
+    async def get_account_balance(self) -> Optional[Decimal]:
+        """
+        Get current account balance.
+        
+        Returns:
+            Account balance in USD/base currency, or None if not supported
+            
+        Note:
+            Override this method if exchange supports balance queries.
+            Default implementation returns None.
+        """
+        return None
+    
+    async def get_detailed_positions(self) -> List[Dict[str, Any]]:
+        """
+        Get detailed position information for all active positions.
+        
+        Returns:
+            List of position dictionaries with details like:
+            - symbol: str
+            - size: Decimal
+            - entry_price: Decimal
+            - mark_price: Decimal
+            - unrealized_pnl: Decimal
+            - liquidation_price: Decimal (if available)
+            
+        Note:
+            Override this method if exchange supports detailed position queries.
+            Default implementation returns empty list.
+        """
+        return []
+    
+    async def get_account_pnl(self) -> Optional[Decimal]:
+        """
+        Get account unrealized P&L.
+        
+        Returns:
+            P&L in USD/base currency, or None if not supported
+            
+        Note:
+            Override this method if exchange supports P&L queries.
+            Default implementation returns None.
+        """
+        return None
+    
+    async def get_total_asset_value(self) -> Optional[Decimal]:
+        """
+        Get total account asset value (balance + unrealized P&L).
+        
+        Returns:
+            Total asset value in USD/base currency, or None if not supported
+            
+        Note:
+            Override this method if exchange supports asset value queries.
+            Default implementation returns None.
+        """
+        return None
+
+    # ========================================================================
+    # RISK MANAGEMENT & LEVERAGE
+    # ========================================================================
+
+    def supports_risk_management(self) -> bool:
+        """
+        Check if exchange supports advanced risk management queries.
+        
+        Returns:
+            True if exchange implements balance, P&L, and asset value queries
+        """
+        return False
+    
+    @abstractmethod
+    async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get leverage and position limit information for a symbol.
+        
+        ⚠️ CRITICAL for delta-neutral strategies: Different exchanges have different
+        leverage limits for the same symbol. This method allows pre-flight validation
+        to ensure both sides of a delta-neutral trade can execute with the same size.
+        
+        Args:
+            symbol: Trading symbol (normalized format, e.g., "ZORA", "BTC")
+            
+        Returns:
+            Dictionary with leverage limits:
+            {
+                'max_leverage': Decimal or None,        # e.g., Decimal('10') for 10x
+                'max_notional': Decimal or None,        # Max position value in USD
+                'margin_requirement': Decimal or None,  # e.g., Decimal('0.1') = 10% = 10x leverage
+                'brackets': List or None                # Leverage brackets if available
+            }
+            
+        Implementation Notes:
+            - For production exchanges (Aster, Lighter): Query actual limits from API
+            - For exchanges in development: Return conservative defaults (10x leverage)
+            - Always return the same dict structure (even if values are None)
+            
+        Example Implementation (Query from API):
+            ```python
+            async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
+                normalized_symbol = f"{symbol}USDT"
+                result = await self._make_request('GET', '/api/v1/leverageBracket', 
+                                                   {'symbol': normalized_symbol})
+                brackets = result.get('brackets', [])
+                first_bracket = brackets[0] if brackets else {}
+                
+                return {
+                    'max_leverage': Decimal(str(first_bracket.get('initialLeverage', 10))),
+                    'max_notional': Decimal(str(first_bracket.get('notionalCap'))) if first_bracket.get('notionalCap') else None,
+                    'margin_requirement': Decimal('1') / Decimal(str(first_bracket.get('initialLeverage', 10))),
+                    'brackets': brackets
+                }
+            ```
+        """
+        pass
+
+    # ========================================================================
+    # CONFIGURATION & UTILITIES
+    # ========================================================================
+
+    def round_to_tick(self, price) -> Decimal:
+        """
+        Round price to exchange tick size.
+        
+        Args:
+            price: Price to round
+            
+        Returns:
+            Price rounded to tick size
+        """
+        price = Decimal(price)
+        tick = self.config.tick_size
+        return price.quantize(tick, rounding=ROUND_HALF_UP)
     
     def normalize_symbol(self, symbol: str) -> str:
         """
@@ -326,37 +661,6 @@ class BaseExchangeClient(ABC):
         """
         return symbol
 
-    @abstractmethod
-    def setup_order_update_handler(self, handler) -> None:
-        """Setup order update handler for WebSocket."""
-        pass
-
-    @abstractmethod
-    def get_exchange_name(self) -> str:
-        """Get the exchange name."""
-        pass
-
-    # Optional risk management methods (exchanges can override if supported)
-    async def get_account_balance(self) -> Optional[Decimal]:
-        """Get current account balance. Override if exchange supports it."""
-        return None
-    
-    async def get_detailed_positions(self) -> List[Dict[str, Any]]:
-        """Get detailed position info. Override if exchange supports it."""
-        return []
-    
-    async def get_account_pnl(self) -> Optional[Decimal]:
-        """Get account P&L. Override if exchange supports it."""
-        return None
-    
-    async def get_total_asset_value(self) -> Optional[Decimal]:
-        """Get total account asset value. Override if exchange supports it."""
-        return None
-    
-    def supports_risk_management(self) -> bool:
-        """Check if exchange supports advanced risk management."""
-        return False
-
 
 # ============================================================================
 # FUNDING RATE COLLECTION INTERFACE
@@ -364,25 +668,41 @@ class BaseExchangeClient(ABC):
 
 class BaseFundingAdapter(ABC):
     """
-    Base interface for funding rate collection
+    Base interface for funding rate collection from perpetual DEXs.
     
     This interface is used by the funding rate service to collect funding rates
     and market data from exchanges. It's read-only and doesn't require authentication
-    in most cases.
+    in most cases (uses public endpoints).
     
-    Each DEX adapter is responsible for:
-    1. Fetching funding rates from the DEX API
-    2. Parsing the API response into a standard format
-    3. Handling DEX-specific API quirks
-    4. Error handling and retries
+    Key Responsibilities:
+        - Fetch funding rates for all available symbols
+        - Fetch market data (volume, open interest)
+        - Normalize symbol formats across exchanges
+        - Handle exchange-specific API quirks
+        - Retry logic and error handling
+    
+    Implementation Pattern:
+        Each exchange should implement this interface in a funding_adapter.py file:
+        
+        ```python
+        class AsterFundingAdapter(BaseFundingAdapter):
+            def __init__(self, api_base_url: str = "https://fapi.asterdex.com", timeout: int = 10):
+                super().__init__(dex_name="aster", api_base_url=api_base_url, timeout=timeout)
+                
+            async def fetch_funding_rates(self) -> Dict[str, Decimal]:
+                # Fetch from exchange API
+                result = await self._make_request("/api/v1/fundingRate")
+                # Parse and normalize
+                return {"BTC": Decimal(result["BTC"]["rate"]), ...}
+        ```
     """
     
     def __init__(self, dex_name: str, api_base_url: str, timeout: int = 10):
         """
-        Initialize base adapter
+        Initialize base funding adapter.
         
         Args:
-            dex_name: Name of the DEX (e.g., "lighter", "edgex")
+            dex_name: Name of the DEX (e.g., "lighter", "edgex", "aster")
             api_base_url: Base URL for the DEX API
             timeout: Request timeout in seconds
         """
@@ -391,14 +711,24 @@ class BaseFundingAdapter(ABC):
         self.timeout = timeout
         self._session: Optional[aiohttp.ClientSession] = None
     
+    # ========================================================================
+    # CORE DATA FETCHING
+    # ========================================================================
+    
     @abstractmethod
     async def fetch_funding_rates(self) -> Dict[str, Decimal]:
         """
-        Fetch all funding rates from this DEX
+        Fetch all funding rates from this DEX.
         
         Returns:
             Dictionary mapping normalized symbols to funding rates
-            Example: {"BTC": Decimal("0.0001"), "ETH": Decimal("0.00008")}
+            
+        Example:
+            {
+                "BTC": Decimal("0.0001"),    # 0.01% per 8 hours
+                "ETH": Decimal("0.00008"),   # 0.008% per 8 hours
+                "SOL": Decimal("-0.00005")   # -0.005% per 8 hours (negative rate)
+            }
             
         Raises:
             Exception: If fetching fails after retries
@@ -408,22 +738,27 @@ class BaseFundingAdapter(ABC):
     @abstractmethod
     async def fetch_market_data(self) -> Dict[str, Dict[str, Decimal]]:
         """
-        Fetch market data (volume, open interest) for all symbols
+        Fetch market data (volume, open interest) for all symbols.
         
         Returns:
             Dictionary mapping normalized symbols to market data
-            Example: {
+            
+        Example:
+            {
                 "BTC": {
-                    "volume_24h": Decimal("1500000.0"),
-                    "open_interest": Decimal("5000000.0")
+                    "volume_24h": Decimal("1500000.0"),      # $1.5M daily volume
+                    "open_interest": Decimal("5000000.0")    # $5M open interest
                 },
-                "ETH": {...}
+                "ETH": {
+                    "volume_24h": Decimal("800000.0"),
+                    "open_interest": Decimal("2000000.0")
+                }
             }
             
         Note:
             - volume_24h should be in USD
             - open_interest should be in USD
-            - Both fields are optional (can be None)
+            - Both fields are optional (can be None or omitted)
             - Spread is NOT included here (too volatile, fetch client-side)
             
         Raises:
@@ -431,34 +766,60 @@ class BaseFundingAdapter(ABC):
         """
         pass
     
+    # ========================================================================
+    # SYMBOL NORMALIZATION
+    # ========================================================================
+    
     @abstractmethod
     def normalize_symbol(self, dex_symbol: str) -> str:
         """
-        Normalize DEX-specific symbol format to standard format
+        Normalize DEX-specific symbol format to standard format.
+        
+        Standard format: Base asset only, uppercase (e.g., "BTC", "ETH", "ZORA")
         
         Args:
-            dex_symbol: DEX-specific format (e.g., "BTC-PERP", "PERP_BTC_USDC")
+            dex_symbol: DEX-specific format
             
         Returns:
-            Normalized symbol (e.g., "BTC")
+            Normalized symbol
+            
+        Examples:
+            - "BTC-PERP" -> "BTC"
+            - "PERP_BTC_USDC" -> "BTC"
+            - "BTCUSDT" -> "BTC"
+            - "1000PEPEUSDT" -> "PEPE" (handle multipliers)
         """
         pass
     
     @abstractmethod
     def get_dex_symbol_format(self, normalized_symbol: str) -> str:
         """
-        Convert normalized symbol back to DEX-specific format
+        Convert normalized symbol back to DEX-specific format.
         
         Args:
             normalized_symbol: Normalized symbol (e.g., "BTC")
             
         Returns:
-            DEX-specific format (e.g., "BTC-PERP")
+            DEX-specific format
+            
+        Examples:
+            - "BTC" -> "BTC-PERP"
+            - "BTC" -> "PERP_BTC_USDC"
+            - "BTC" -> "BTCUSDT"
         """
         pass
     
+    # ========================================================================
+    # HTTP SESSION MANAGEMENT
+    # ========================================================================
+    
     async def get_session(self) -> aiohttp.ClientSession:
-        """Get or create aiohttp session"""
+        """
+        Get or create aiohttp session for HTTP requests.
+        
+        Returns:
+            Active aiohttp ClientSession
+        """
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=self.timeout)
@@ -466,9 +827,15 @@ class BaseFundingAdapter(ABC):
         return self._session
     
     async def close(self) -> None:
-        """Close the HTTP session"""
+        """
+        Close the HTTP session and cleanup resources.
+        """
         if self._session and not self._session.closed:
             await self._session.close()
+    
+    # ========================================================================
+    # HTTP REQUEST UTILITIES
+    # ========================================================================
     
     @retry(
         stop=stop_after_attempt(3),
@@ -483,11 +850,11 @@ class BaseFundingAdapter(ABC):
         json_data: Optional[Dict] = None
     ) -> Dict:
         """
-        Make HTTP request with retry logic
+        Make HTTP request with automatic retry logic.
         
         Args:
             endpoint: API endpoint (will be appended to base_url)
-            method: HTTP method
+            method: HTTP method (GET, POST, etc.)
             params: Query parameters
             json_data: JSON body data
             
@@ -495,8 +862,8 @@ class BaseFundingAdapter(ABC):
             Response JSON as dictionary
             
         Raises:
-            aiohttp.ClientError: On connection/HTTP errors
-            asyncio.TimeoutError: On timeout
+            aiohttp.ClientError: On connection/HTTP errors (after retries)
+            asyncio.TimeoutError: On timeout (after retries)
         """
         session = await self.get_session()
         url = f"{self.api_base_url}{endpoint}"
@@ -522,12 +889,20 @@ class BaseFundingAdapter(ABC):
         except aiohttp.ClientError as e:
             raise
     
+    # ========================================================================
+    # METRICS & MONITORING
+    # ========================================================================
+    
     async def fetch_with_metrics(self) -> tuple[Dict[str, Decimal], int]:
         """
-        Fetch funding rates with collection latency metrics
+        Fetch funding rates with collection latency metrics.
         
         Returns:
             Tuple of (rates_dict, latency_ms)
+            
+        Example:
+            >>> rates, latency = await adapter.fetch_with_metrics()
+            >>> print(f"Fetched {len(rates)} rates in {latency}ms")
         """
         start_time = asyncio.get_event_loop().time()
         
@@ -542,4 +917,3 @@ class BaseFundingAdapter(ABC):
     
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} dex={self.dex_name}>"
-

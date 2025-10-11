@@ -22,9 +22,9 @@ from enum import Enum
 from dataclasses import dataclass
 import time
 import asyncio
-import logging
+from helpers.unified_logger import get_core_logger
 
-logger = logging.getLogger(__name__)
+logger = get_core_logger("order_executor")
 
 
 class ExecutionMode(Enum):
@@ -96,15 +96,21 @@ class OrderExecutor:
             print(f"Filled at ${result.fill_price}, slippage: {result.slippage_pct}%")
     """
     
-    def __init__(self, default_timeout: float = 30.0):
+    def __init__(
+        self,
+        default_timeout: float = 30.0,
+        price_provider = None  # Optional PriceProvider for cached prices
+    ):
         """
         Initialize order executor.
         
         Args:
             default_timeout: Default timeout for limit orders (seconds)
+            price_provider: Optional PriceProvider for getting cached/fresh prices
         """
         self.default_timeout = default_timeout
-        self.logger = logging.getLogger(__name__)
+        self.price_provider = price_provider
+        self.logger = get_core_logger("order_executor")
     
     async def execute_order(
         self,
@@ -134,8 +140,19 @@ class OrderExecutor:
         start_time = time.time()
         timeout = timeout_seconds or self.default_timeout
         
+        # Get exchange name for better logging
+        exchange_name = "unknown"
+        if hasattr(exchange_client, 'get_exchange_name'):
+            try:
+                exchange_name = exchange_client.get_exchange_name()
+            except:
+                pass
+        
+        # Choose emoji based on side
+        emoji = "🟢" if side == "buy" else "🔴"
+        
         self.logger.info(
-            f"Executing {side} {symbol} for ${size_usd} in mode {mode.value}"
+            f"{emoji} [{exchange_name.upper()}] Executing {side} {symbol} for ${size_usd} in mode {mode.value}"
         )
         
         try:
@@ -224,14 +241,18 @@ class OrderExecutor:
             # Convert USD size to quantity
             quantity = size_usd / limit_price
             
+            # Get the exchange-specific contract ID (normalized symbol)
+            # Each exchange has already normalized the symbol during initialization
+            contract_id = getattr(exchange_client.config, 'contract_id', symbol)
+            
             self.logger.info(
-                f"Placing limit {side} {symbol}: {quantity} @ ${limit_price} "
-                f"(mid: ${mid_price}, offset: {price_offset_pct}%)"
+                f"Placing limit {side} {symbol} (contract_id={contract_id}): "
+                f"{quantity} @ ${limit_price} (mid: ${mid_price}, offset: {price_offset_pct}%)"
             )
             
-            # Place limit order
+            # Place limit order using the normalized contract_id
             order_result = await exchange_client.place_limit_order(
-                contract_id=symbol,
+                contract_id=contract_id,
                 quantity=float(quantity),
                 price=float(limit_price),
                 side=side
@@ -301,11 +322,22 @@ class OrderExecutor:
             )
         
         except Exception as e:
-            self.logger.error(f"Limit order execution failed: {e}", exc_info=True)
+            # Extract exchange name for better error messages
+            exchange_name = "unknown"
+            if hasattr(exchange_client, 'get_exchange_name'):
+                try:
+                    exchange_name = exchange_client.get_exchange_name()
+                except:
+                    pass
+            
+            self.logger.error(
+                f"[{exchange_name.upper()}] Limit order execution failed for {symbol}: {e}",
+                exc_info=True
+            )
             return ExecutionResult(
                 success=False,
                 filled=False,
-                error_message=f"Limit execution error: {str(e)}",
+                error_message=f"[{exchange_name}] Limit execution error: {str(e)}",
                 execution_mode_used="limit_error"
             )
     
@@ -330,13 +362,17 @@ class OrderExecutor:
             # Calculate quantity
             quantity = size_usd / expected_price
             
+            # Get the exchange-specific contract ID (normalized symbol)
+            contract_id = getattr(exchange_client.config, 'contract_id', symbol)
+            
             self.logger.info(
-                f"Placing market {side} {symbol}: {quantity} @ ~${expected_price}"
+                f"Placing market {side} {symbol} (contract_id={contract_id}): "
+                f"{quantity} @ ~${expected_price}"
             )
             
-            # Place market order
+            # Place market order using the normalized contract_id
             result = await exchange_client.place_market_order(
-                contract_id=symbol,
+                contract_id=contract_id,
                 quantity=float(quantity),
                 side=side
             )
@@ -375,11 +411,22 @@ class OrderExecutor:
             )
         
         except Exception as e:
-            self.logger.error(f"Market order execution failed: {e}", exc_info=True)
+            # Extract exchange name for better error messages
+            exchange_name = "unknown"
+            if hasattr(exchange_client, 'get_exchange_name'):
+                try:
+                    exchange_name = exchange_client.get_exchange_name()
+                except:
+                    pass
+            
+            self.logger.error(
+                f"[{exchange_name.upper()}] Market order execution failed for {symbol}: {e}",
+                exc_info=True
+            )
             return ExecutionResult(
                 success=False,
                 filled=False,
-                error_message=f"Market execution error: {str(e)}",
+                error_message=f"[{exchange_name}] Market execution error: {str(e)}",
                 execution_mode_used="market_error"
             )
     
@@ -389,12 +436,25 @@ class OrderExecutor:
         symbol: str
     ) -> tuple[Decimal, Decimal]:
         """
-        Fetch best bid/offer prices.
+        Fetch best bid/offer prices using best available method.
+        
+        Priority:
+        1. PriceProvider (uses cache if available)
+        2. Direct exchange client method
         
         Returns:
             (best_bid, best_ask) as Decimals
         """
         try:
+            # Use PriceProvider if available (cache-first strategy)
+            if self.price_provider:
+                bid, ask = await self.price_provider.get_bbo_prices(
+                    exchange_client=exchange_client,
+                    symbol=symbol
+                )
+                return bid, ask
+            
+            # Fallback: Direct exchange client methods
             # Try dedicated BBO method if available
             if hasattr(exchange_client, 'fetch_bbo_prices'):
                 bid, ask = await exchange_client.fetch_bbo_prices(symbol)
@@ -407,7 +467,7 @@ class OrderExecutor:
                 best_ask = Decimal(str(book['asks'][0]['price']))
                 return best_bid, best_ask
             
-            # Last resort: Use mid-price if available
+            # Last resort: Error
             raise NotImplementedError(
                 "Exchange client must implement fetch_bbo_prices() or get_order_book_depth()"
             )

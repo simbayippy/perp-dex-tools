@@ -154,12 +154,20 @@ class FundingArbitrageStrategy(StatefulStrategy):
         )
         self.funding_rate_repo = FundingRateRepository(database)
         
+        # ⭐ Price Provider (shared cache for all execution components)
+        from strategies.execution.core.price_provider import PriceProvider
+        self.price_provider = PriceProvider(
+            cache_ttl_seconds=5.0,  # Cache prices for 5 seconds
+            prefer_websocket=False  # Prefer cache over WebSocket for stability
+        )
+        
         # ⭐ Execution layer (atomic delta-neutral execution)
-        self.atomic_executor = AtomicMultiOrderExecutor()
+        self.atomic_executor = AtomicMultiOrderExecutor(price_provider=self.price_provider)
         self.liquidity_analyzer = LiquidityAnalyzer(
             max_slippage_pct=Decimal("0.005"),  # 0.5% max slippage
             max_spread_bps=50,  # 50 basis points
-            min_liquidity_score=0.6
+            min_liquidity_score=0.6,
+            price_provider=self.price_provider  # Share the cache
         )
         
         # ⭐ Position and state management (database-backed)
@@ -202,8 +210,8 @@ class FundingArbitrageStrategy(StatefulStrategy):
         from .config import RiskManagementConfig
         from funding_rate_service.config import settings
         
-        # Get target exposure from config
-        target_exposure = Decimal(str(getattr(trading_config, 'target_exposure', 100.0)))
+        # Get target exposure from strategy_params
+        target_exposure = Decimal(str(strategy_params.get('target_exposure', 100.0)))
         
         return FundingArbConfig(
             exchange=trading_config.exchange,  # Primary exchange
@@ -213,7 +221,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
             default_position_size_usd=target_exposure,  # Use target_exposure as default position size
             max_position_size_usd=target_exposure * Decimal('10'),  # Max is 10x the default
             max_total_exposure_usd=Decimal(str(strategy_params.get('max_total_exposure_usd', float(target_exposure) * 5))),
-            min_profit=Decimal(str(getattr(trading_config, 'min_profit_rate', 0.0001))),
+            min_profit=Decimal(str(strategy_params.get('min_profit_rate', 0.0001))),
             max_oi_usd=Decimal(str(strategy_params.get('max_oi_usd', 10000000.0))),  # 10M default
             max_new_positions_per_cycle=strategy_params.get('max_new_positions_per_cycle', 2),
             # Required database URL from funding_rate_service settings
@@ -480,8 +488,11 @@ class FundingArbitrageStrategy(StatefulStrategy):
             )
             
             # 🔍 DEBUG: Log the filters being used
-            self.logger.log(f"DEBUG: Filters - min_profit: {self.config.min_profit}, max_oi_usd: {self.config.max_oi_usd}, "
-                          f"configured_dexes: {self.config.exchanges}, available_dexes: {available_exchanges}")
+            self.logger.log(
+                f"Filters - min_profit: {self.config.min_profit}, max_oi_usd: {self.config.max_oi_usd}, "
+                f"configured_dexes: {self.config.exchanges}, available_dexes: {available_exchanges}",
+                "DEBUG"
+            )
             
             opportunities = await self.opportunity_finder.find_opportunities(filters)
             
@@ -552,6 +563,86 @@ class FundingArbitrageStrategy(StatefulStrategy):
         # Add more filters as needed
         return True
     
+    async def _ensure_contract_attributes(self, exchange_client: Any, symbol: str) -> bool:
+        """
+        Ensure exchange client has contract attributes initialized for symbol.
+        
+        For multi-symbol strategies, contract attributes (tick_size, multipliers, etc.)
+        need to be initialized per-symbol before trading.
+        
+        Args:
+            exchange_client: Exchange client instance
+            symbol: Trading symbol
+            
+        Returns:
+            True if successful and symbol is tradeable, False otherwise
+        """
+        try:
+            exchange_name = exchange_client.get_exchange_name()
+            
+            # Check if we need to initialize (config has ticker="ALL" for multi-symbol)
+            if not hasattr(exchange_client.config, 'contract_id') or exchange_client.config.ticker == "ALL":
+                self.logger.log(
+                    f"🔧 [{exchange_name.upper()}] Initializing contract attributes for {symbol}",
+                    "INFO"
+                )
+                
+                # Temporarily set ticker to specific symbol for initialization
+                original_ticker = exchange_client.config.ticker
+                exchange_client.config.ticker = symbol
+                
+                # Get contract attributes (initializes multipliers, tick_size, contract_id)
+                try:
+                    contract_id, tick_size = await exchange_client.get_contract_attributes()
+                    
+                    # Additional validation: contract_id should be meaningful
+                    if not contract_id or contract_id == "":
+                        self.logger.log(
+                            f"❌ [{exchange_name.upper()}] Symbol {symbol} initialization returned empty contract_id",
+                            "WARNING"
+                        )
+                        return False
+                    
+                    self.logger.log(
+                        f"✅ [{exchange_name.upper()}] {symbol} initialized → "
+                        f"contract_id={contract_id}, tick_size={tick_size}",
+                        "INFO"
+                    )
+                    
+                except ValueError as e:
+                    # Specific handling for "symbol not found" errors
+                    error_msg = str(e).lower()
+                    if "not found" in error_msg or "not supported" in error_msg:
+                        self.logger.log(
+                            f"⚠️  [{exchange_name.upper()}] Symbol {symbol} is NOT TRADEABLE on {exchange_name} "
+                            f"(not listed or not supported)",
+                            "WARNING"
+                        )
+                    else:
+                        self.logger.log(
+                            f"❌ [{exchange_name.upper()}] Failed to initialize {symbol}: {e}",
+                            "ERROR"
+                        )
+                    return False
+                
+                finally:
+                    # Always restore original ticker
+                    if original_ticker != symbol:
+                        exchange_client.config.ticker = original_ticker
+                
+                return True
+            
+            return True  # Already initialized
+            
+        except Exception as e:
+            self.logger.log(
+                f"❌ [{exchange_name.upper()}] Unexpected error initializing {symbol}: {e}",
+                "ERROR"
+            )
+            import traceback
+            self.logger.log(f"Traceback: {traceback.format_exc()}", "DEBUG")
+            return False
+    
     async def _open_position(self, opportunity):
         """
         Open delta-neutral position from opportunity using atomic execution.
@@ -568,8 +659,8 @@ class FundingArbitrageStrategy(StatefulStrategy):
             size_usd = self.config.default_position_size_usd
             
             # Get exchange clients
-            self.logger.log(f"DEBUG: Available exchange clients: {list(self.exchange_clients.keys())}")
-            self.logger.log(f"DEBUG: Looking for long_dex: {long_dex}, short_dex: {short_dex}")
+            self.logger.log(f"Available exchange clients: {list(self.exchange_clients.keys())}", "DEBUG")
+            self.logger.log(f"Looking for long_dex: {long_dex}, short_dex: {short_dex}", "DEBUG")
             
             long_client = self.exchange_clients.get(long_dex)
             short_client = self.exchange_clients.get(short_dex)
@@ -581,10 +672,72 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 self.logger.log(f"ERROR: No exchange client found for short_dex: {short_dex}")
                 return
             
+            # ⭐ CRITICAL: Initialize contract attributes for this symbol
             self.logger.log(
-                f"🎯 Opening {symbol}: "
-                f"Long {long_dex}, Short {short_dex}, "
-                f"Size=${size_usd}, Divergence={opportunity.divergence*100:.3f}%",
+                f"📋 [VALIDATION] Checking if {symbol} is tradeable on both {long_dex} and {short_dex}...",
+                "INFO"
+            )
+            
+            long_init_ok = await self._ensure_contract_attributes(long_client, symbol)
+            short_init_ok = await self._ensure_contract_attributes(short_client, symbol)
+            
+            if not long_init_ok:
+                self.logger.log(
+                    f"⛔ [SKIP] Cannot trade {symbol}: Not supported on {long_dex.upper()} (long side)",
+                    "WARNING"
+                )
+                return
+            if not short_init_ok:
+                self.logger.log(
+                    f"⛔ [SKIP] Cannot trade {symbol}: Not supported on {short_dex.upper()} (short side)",
+                    "WARNING"
+                )
+                return
+            
+            self.logger.log(
+                f"✅ [VALIDATION] {symbol} is tradeable on both exchanges",
+                "INFO"
+            )
+            
+            # ⭐ LEVERAGE CHECK: Reduce size if needed ⭐
+            # Import leverage validator
+            from strategies.execution.core.leverage_validator import LeverageValidator
+            
+            leverage_validator = LeverageValidator()
+            
+            # Check if both exchanges can support the requested size
+            max_size, limiting_exchange = await leverage_validator.get_max_position_size(
+                exchange_clients=[long_client, short_client],
+                symbol=symbol,
+                requested_size_usd=size_usd,
+                check_balance=True
+            )
+            
+            # Adjust size if needed
+            if max_size < size_usd:
+                original_size = size_usd
+                size_usd = max_size
+                
+                self.logger.log(
+                    f"⚙️  [AUTO-ADJUST] Reduced position size for {symbol}: "
+                    f"${original_size:.2f} → ${size_usd:.2f} "
+                    f"(limited by {limiting_exchange}'s leverage/balance)",
+                    "WARNING"
+                )
+                
+                # Check if reduced size is still profitable
+                if size_usd < Decimal('5'):  # Minimum $5 position
+                    self.logger.log(
+                        f"⛔ [SKIP] Position size too small after leverage adjustment: ${size_usd:.2f}",
+                        "WARNING"
+                    )
+                    return
+            
+            self.logger.log(
+                f"🎯 [EXECUTION PLAN] {symbol} | "
+                f"Long: {long_dex.upper()} (${size_usd:.2f}) | "
+                f"Short: {short_dex.upper()} (${size_usd:.2f}) | "
+                f"Divergence: {opportunity.divergence*100:.3f}%",
                 "INFO"
             )
             

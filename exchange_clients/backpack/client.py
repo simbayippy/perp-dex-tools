@@ -4,149 +4,16 @@ Backpack exchange client implementation.
 
 import os
 import asyncio
-import json
 import time
-import base64
-import sys
 from decimal import Decimal
 from typing import Dict, Any, List, Optional, Tuple
-from cryptography.hazmat.primitives.asymmetric import ed25519
-import websockets
 from bpx.public import Public
 from bpx.account import Account
 from bpx.constants.enums import OrderTypeEnum, TimeInForceEnum
 
 from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
-from helpers.logger import TradingLogger
-
-
-class BackpackWebSocketManager:
-    """WebSocket manager for Backpack order updates."""
-
-    def __init__(self, public_key: str, secret_key: str, symbol: str, order_update_callback):
-        self.public_key = public_key
-        self.secret_key = secret_key
-        self.symbol = symbol
-        self.order_update_callback = order_update_callback
-        self.websocket = None
-        self.running = False
-        self.ws_url = "wss://ws.backpack.exchange"
-        self.logger = None
-
-        # Initialize ED25519 private key from base64 decoded secret
-        self.private_key = ed25519.Ed25519PrivateKey.from_private_bytes(
-            base64.b64decode(secret_key)
-        )
-
-    def _generate_signature(self, instruction: str, timestamp: int, window: int = 5000) -> str:
-        """Generate ED25519 signature for WebSocket authentication."""
-        # Create the message string in the same format as BPX package
-        message = f"instruction={instruction}&timestamp={timestamp}&window={window}"
-
-        # Sign the message using ED25519 private key
-        signature_bytes = self.private_key.sign(message.encode())
-
-        # Return base64 encoded signature
-        return base64.b64encode(signature_bytes).decode()
-
-    async def connect(self):
-        """Connect to Backpack WebSocket."""
-        while True:
-            try:
-                self.logger.log(f"Connecting to Backpack WebSocket", "INFO")
-                self.websocket = await websockets.connect(self.ws_url)
-                self.running = True
-
-                # Subscribe to order updates for the specific symbol
-                timestamp = int(time.time() * 1000)
-                signature = self._generate_signature("subscribe", timestamp)
-
-                subscribe_message = {
-                    "method": "SUBSCRIBE",
-                    "params": [f"account.orderUpdate.{self.symbol}"],
-                    "signature": [
-                        self.public_key,
-                        signature,
-                        str(timestamp),
-                        "5000"
-                    ]
-                }
-
-                await self.websocket.send(json.dumps(subscribe_message))
-                if self.logger:
-                    self.logger.log(f"Subscribed to order updates for {self.symbol}", "INFO")
-
-                # Start listening for messages
-                await self._listen()
-
-            except Exception as e:
-                if self.logger:
-                    self.logger.log(f"WebSocket connection error: {e}", "ERROR")
-
-    async def _listen(self):
-        """Listen for WebSocket messages."""
-        try:
-            async for message in self.websocket:
-                if not self.running:
-                    break
-
-                try:
-                    data = json.loads(message)
-                    await self._handle_message(data)
-                except json.JSONDecodeError as e:
-                    if self.logger:
-                        self.logger.log(f"Failed to parse WebSocket message: {e}", "ERROR")
-                except Exception as e:
-                    if self.logger:
-                        self.logger.log(f"Error handling WebSocket message: {e}", "ERROR")
-
-        except websockets.exceptions.ConnectionClosed:
-            if self.logger:
-                self.logger.log("WebSocket connection closed", "WARNING")
-        except Exception as e:
-            if self.logger:
-                self.logger.log(f"WebSocket listen error: {e}", "ERROR")
-
-    async def _handle_message(self, data: Dict[str, Any]):
-        """Handle incoming WebSocket messages."""
-        try:
-            stream = data.get('stream', '')
-            payload = data.get('data', {})
-
-            if 'orderUpdate' in stream:
-                await self._handle_order_update(payload)
-            else:
-                self.logger.log(f"Unknown WebSocket message: {data}", "ERROR")
-
-        except Exception as e:
-            if self.logger:
-                self.logger.log(f"Error handling WebSocket message: {e}", "ERROR")
-
-    async def _handle_order_update(self, order_data: Dict[str, Any]):
-        """Handle order update messages."""
-        try:
-            # Call the order update callback if it exists
-            if hasattr(self, 'order_update_callback') and self.order_update_callback:
-                await self.order_update_callback(order_data)
-        except Exception as e:
-            if self.logger:
-                self.logger.log(f"Error handling order update: {e}", "ERROR")
-
-    async def disconnect(self):
-        """Disconnect from WebSocket."""
-        self.running = False
-        if self.websocket:
-            await self.websocket.close()
-            if self.logger:
-                self.logger.log("WebSocket disconnected", "INFO")
-
-    def set_logger(self, logger):
-        """Set the logger instance."""
-        self.logger = logger
-
-    def set_order_filled_event(self, event):
-        """Set the order filled event for synchronization."""
-        self.order_filled_event = event
+from exchange_clients.backpack.websocket_manager import BackpackWebSocketManager
+from helpers.unified_logger import get_exchange_logger
 
 
 class BackpackClient(BaseExchangeClient):
@@ -195,7 +62,7 @@ class BackpackClient(BaseExchangeClient):
         self.ws_manager.config = self.config
 
         # Initialize logger using the same format as helpers
-        self.logger = TradingLogger(exchange="backpack", ticker=self.config.ticker, log_to_console=False)
+        self.logger = get_exchange_logger("backpack", self.config.ticker)
         self.ws_manager.set_logger(self.logger)
 
         try:
@@ -204,7 +71,7 @@ class BackpackClient(BaseExchangeClient):
             # Wait a moment for connection to establish
             await asyncio.sleep(2)
         except Exception as e:
-            self.logger.log(f"Error connecting to Backpack WebSocket: {e}", "ERROR")
+            self.logger.error(f"Error connecting to Backpack WebSocket: {e}")
             raise
 
     async def disconnect(self) -> None:
@@ -213,7 +80,7 @@ class BackpackClient(BaseExchangeClient):
             if hasattr(self, 'ws_manager') and self.ws_manager:
                 await self.ws_manager.disconnect()
         except Exception as e:
-            self.logger.log(f"Error during Backpack disconnect: {e}", "ERROR")
+            self.logger.error(f"Error during Backpack disconnect: {e}")
 
     def get_exchange_name(self) -> str:
         """Get the exchange name."""
@@ -244,7 +111,7 @@ class BackpackClient(BaseExchangeClient):
             elif side.upper() == 'ASK':
                 order_side = 'sell'
             else:
-                self.logger.log(f"Unexpected order side: {side}", "ERROR")
+                self.logger.error(f"Unexpected order side: {side}")
                 sys.exit(1)
 
             # Let strategy determine order type
@@ -284,13 +151,13 @@ class BackpackClient(BaseExchangeClient):
                     })
 
         except Exception as e:
-            self.logger.log(f"Error handling WebSocket order update: {e}", "ERROR")
+            self.logger.error(f"Error handling WebSocket order update: {e}")
 
     async def get_order_price(self, direction: str) -> Decimal:
         """Get the price of an order with Backpack using official SDK."""
         best_bid, best_ask = await self.fetch_bbo_prices(self.config.contract_id)
         if best_bid <= 0 or best_ask <= 0:
-            self.logger.log("Invalid bid/ask prices", "ERROR")
+            self.logger.error("Invalid bid/ask prices")
             raise ValueError("Invalid bid/ask prices")
 
         if direction == 'buy':
@@ -361,7 +228,7 @@ class BackpackClient(BaseExchangeClient):
             }
 
         except Exception as e:
-            self.logger.log(f"Error fetching order book depth: {e}", "ERROR")
+            self.logger.error(f"Error fetching order book depth: {e}")
             # Return empty order book on error
             return {'bids': [], 'asks': []}
 
@@ -439,28 +306,12 @@ class BackpackClient(BaseExchangeClient):
                 )
                 
         except Exception as e:
-            self.logger.log(f"Error placing limit order: {e}", "ERROR")
+            self.logger.error(f"Error placing limit order: {e}")
             return OrderResult(
                 success=False,
                 error_message=f"Failed to place limit order: {str(e)}"
             )
 
-    async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
-        """
-        Aggressively open a position on Backpack (uses limit order priced to fill quickly).
-        Similar to Lighter's implementation - gets aggressive price and uses place_limit_order.
-        """
-        # Get aggressive price that's likely to fill (acting like market order but with price protection)
-        order_price = await self.get_order_price(direction)
-        order_price = self.round_to_tick(order_price)
-        
-        # Use place_limit_order with the aggressive price
-        order_result = await self.place_limit_order(contract_id, quantity, order_price, direction)
-        
-        if not order_result.success:
-            raise Exception(f"[OPEN] Error placing order: {order_result.error_message}")
-        
-        return order_result
 
     async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
         """
@@ -506,7 +357,7 @@ class BackpackClient(BaseExchangeClient):
                 )
                 
         except Exception as e:
-            self.logger.log(f"Error placing market order: {e}", "ERROR")
+            self.logger.error(f"Error placing market order: {e}")
             return OrderResult(success=False, error_message=str(e))
 
     async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
@@ -552,13 +403,13 @@ class BackpackClient(BaseExchangeClient):
 
             if 'code' in order_result:
                 message = order_result.get('message', 'Unknown error')
-                self.logger.log(f"[CLOSE] Error placing order: {message}", "ERROR")
+                self.logger.error(f"[CLOSE] Error placing order: {message}")
                 continue
 
             # Extract order ID from response
             order_id = order_result.get('id')
             if not order_id:
-                self.logger.log(f"[CLOSE] No order ID in response: {order_result}", "ERROR")
+                self.logger.error(f"[CLOSE] No order ID in response: {order_result}")
                 return OrderResult(success=False, error_message='No order ID in response')
 
             # Order successfully placed
@@ -585,8 +436,8 @@ class BackpackClient(BaseExchangeClient):
             if not cancel_result:
                 return OrderResult(success=False, error_message='Failed to cancel order')
             if 'code' in cancel_result:
-                self.logger.log(
-                    f"[CLOSE] Failed to cancel order {order_id}: {cancel_result.get('message', 'Unknown error')}", "ERROR")
+                self.logger.error(
+                    f"[CLOSE] Failed to cancel order {order_id}: {cancel_result.get('message', 'Unknown error')}")
                 filled_size = self.config.quantity
             else:
                 filled_size = Decimal(cancel_result.get('executedQuantity', 0))
@@ -659,12 +510,29 @@ class BackpackClient(BaseExchangeClient):
                 position_amt = abs(Decimal(position.get('netQuantity', 0)))
                 break
         return position_amt
+    
+    async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get leverage information for Backpack.
+        
+        TODO: Implement actual API query when Backpack trading is in production.
+        Currently returns conservative defaults.
+        """
+        self.logger.debug(
+            f"[BACKPACK] get_leverage_info not yet implemented, using defaults for {symbol}"
+        )
+        return {
+            'max_leverage': Decimal('10'),
+            'max_notional': None,
+            'margin_requirement': Decimal('0.10'),  # 10% margin = 10x leverage
+            'brackets': None
+        }
 
     async def get_contract_attributes(self) -> Tuple[str, Decimal]:
         """Get contract ID for a ticker."""
         ticker = self.config.ticker
         if len(ticker) == 0:
-            self.logger.log("Ticker is empty", "ERROR")
+            self.logger.error("Ticker is empty")
             raise ValueError("Ticker is empty")
 
         markets = self.public_client.get_markets()
@@ -677,15 +545,15 @@ class BackpackClient(BaseExchangeClient):
                 break
 
         if self.config.contract_id == '':
-            self.logger.log("Failed to get contract ID for ticker", "ERROR")
+            self.logger.error("Failed to get contract ID for ticker")
             raise ValueError("Failed to get contract ID for ticker")
 
         if self.config.quantity < min_quantity:
-            self.logger.log(f"Order quantity is less than min quantity: {self.config.quantity} < {min_quantity}", "ERROR")
+            self.logger.error(f"Order quantity is less than min quantity: {self.config.quantity} < {min_quantity}")
             raise ValueError(f"Order quantity is less than min quantity: {self.config.quantity} < {min_quantity}")
 
         if self.config.tick_size == 0:
-            self.logger.log("Failed to get tick size for ticker", "ERROR")
+            self.logger.error("Failed to get tick size for ticker")
             raise ValueError("Failed to get tick size for ticker")
 
         return self.config.contract_id, self.config.tick_size

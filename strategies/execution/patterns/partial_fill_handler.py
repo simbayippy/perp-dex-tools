@@ -21,9 +21,9 @@ Use cases:
 from typing import Any, Dict, Optional
 from decimal import Decimal
 from datetime import datetime
-import logging
+from helpers.unified_logger import get_core_logger
 
-logger = logging.getLogger(__name__)
+logger = get_core_logger("partial_fill_handler")
 
 
 class PartialFillHandler:
@@ -58,7 +58,7 @@ class PartialFillHandler:
     
     def __init__(self):
         """Initialize partial fill handler."""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_core_logger("partial_fill_handler")
         self.incident_log = []  # Track all partial fill incidents
     
     async def handle_one_sided_fill(
@@ -124,8 +124,17 @@ class PartialFillHandler:
                 f"{close_side} {filled_order['filled_quantity']} @ market"
             )
             
+            # 🔧 FIX: Get proper contract_id from exchange client
+            # Some exchanges (Aster) need "ZORAUSDT", not just "ZORA"
+            contract_attrs = await exchange_client.get_contract_attributes(filled_order['symbol'])
+            contract_id = contract_attrs.get('contract_id', filled_order['symbol'])
+            
+            self.logger.debug(
+                f"Emergency close: Using contract_id='{contract_id}' for symbol '{filled_order['symbol']}'"
+            )
+            
             close_result = await exchange_client.place_market_order(
-                contract_id=filled_order['symbol'],
+                contract_id=contract_id,
                 quantity=float(filled_order['filled_quantity']),
                 side=close_side
             )

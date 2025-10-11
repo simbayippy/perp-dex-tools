@@ -17,7 +17,7 @@ from typing import Dict, Any, Optional
 from decimal import Decimal
 from datetime import datetime
 import json
-import logging
+from helpers.unified_logger import get_core_logger
 
 from strategies.components.base_components import BaseStateManager
 
@@ -53,7 +53,7 @@ class FundingArbStateManager(BaseStateManager):
         """
         super().__init__()
         self.strategy_name = strategy_name
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_core_logger("funding_arb_state_manager")
         self._initialized = False
     
     def _check_database_available(self) -> bool:

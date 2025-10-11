@@ -134,9 +134,21 @@ def setup_logging(log_level: str):
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
 
-    # Configure root logger WITHOUT adding a console handler
-    # This prevents duplicate logs when TradingLogger adds its own console handler
+    # Configure root logger WITH a console handler for standard Python loggers
+    # (UnifiedLogger handles its own console output)
     root_logger.setLevel(level)
+    
+    # Add console handler for standard Python loggers (like atomic_multi_order.py)
+    if not any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers):
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(level)
+        # Use cleaner format matching UnifiedLogger style
+        formatter = logging.Formatter(
+            '%(asctime)s.%(msecs)03d - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
 
     # Suppress websockets debug logs unless DEBUG level is explicitly requested
     if log_level.upper() != 'DEBUG':
@@ -145,13 +157,15 @@ def setup_logging(log_level: str):
     # Suppress other noisy loggers
     logging.getLogger('urllib3').setLevel(logging.WARNING)
     logging.getLogger('requests').setLevel(logging.WARNING)
+    logging.getLogger('aiohttp').setLevel(logging.WARNING)
+    
+    # Suppress funding service verbose logs (keep only warnings/errors)
+    logging.getLogger('funding_rate_service').setLevel(logging.WARNING)
+    logging.getLogger('databases').setLevel(logging.WARNING)
 
     # Suppress Lighter SDK debug logs
     logging.getLogger('lighter').setLevel(logging.WARNING)
-    # Also suppress any root logger DEBUG messages that might be coming from Lighter
-    if log_level.upper() != 'DEBUG':
-        # Set root logger to WARNING to suppress DEBUG messages from Lighter SDK
-        root_logger.setLevel(logging.WARNING)
+    # Note: We keep the root logger at the requested level (INFO) so atomic_multi_order.py logs show up
 
 
 async def main():
@@ -159,7 +173,7 @@ async def main():
     args = parse_arguments()
 
     # Setup logging first
-    setup_logging("WARNING")
+    setup_logging("INFO")
 
     # ========================================================================
     # MODE 1: Config File Mode

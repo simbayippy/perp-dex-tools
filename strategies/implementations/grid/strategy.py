@@ -173,10 +173,23 @@ class GridStrategy(StatelessStrategy):
             quantity = self.exchange_client.config.quantity
             contract_id = self.exchange_client.config.contract_id
             
-            order_result = await self.exchange_client.place_open_order(
+            # Get aggressive price (act like market order but with price protection)
+            best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(contract_id)
+            
+            if self.config.direction == 'buy':
+                # For buy, place below ask to fill quickly
+                order_price = best_ask - self.exchange_client.config.tick_size
+            else:  # sell
+                # For sell, place above bid to fill quickly
+                order_price = best_bid + self.exchange_client.config.tick_size
+            
+            order_price = self.exchange_client.round_to_tick(order_price)
+            
+            order_result = await self.exchange_client.place_limit_order(
                 contract_id=contract_id,
                 quantity=quantity,
-                direction=self.config.direction
+                price=order_price,
+                side=self.config.direction
             )
             
             if order_result.success:

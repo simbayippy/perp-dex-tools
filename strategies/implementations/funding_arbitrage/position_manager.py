@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Any
 from decimal import Decimal
 from datetime import datetime
 from uuid import UUID
-import logging
+from helpers.unified_logger import get_core_logger
 import asyncio
 
 from strategies.components.base_components import BasePositionManager, Position
@@ -68,7 +68,7 @@ class FundingArbPositionManager(BasePositionManager):
         self._position_locks: Dict[UUID, asyncio.Lock] = {}  # {position_id: lock}
         self._master_lock = asyncio.Lock()  # For managing the locks dict itself
         
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_core_logger("funding_arb_position_manager")
         self._initialized = False
     
     def _check_database_available(self) -> bool:

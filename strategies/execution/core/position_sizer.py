@@ -18,9 +18,9 @@ Key features:
 
 from typing import Any, Optional
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
-import logging
+from helpers.unified_logger import get_core_logger
 
-logger = logging.getLogger(__name__)
+logger = get_core_logger("position_sizer")
 
 
 class PositionSizer:
@@ -57,7 +57,7 @@ class PositionSizer:
     
     def __init__(self):
         """Initialize position sizer."""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_core_logger("position_sizer")
     
     async def usd_to_quantity(
         self,

@@ -14,7 +14,7 @@ from decimal import Decimal
 from typing import Dict, Any, List, Optional, Tuple, Callable
 from enum import Enum
 import time
-from helpers.logger import TradingLogger
+from helpers.unified_logger import get_strategy_logger
 
 
 # ============================================================================
@@ -126,10 +126,10 @@ class BaseStrategy(ABC):
         self.exchange_client = exchange_client
         
         # Initialize logger
-        self.logger = TradingLogger(
+        self.logger = get_strategy_logger(
+            self.get_strategy_name().lower().replace(' ', '_'),
             exchange=getattr(config, 'exchange', 'unknown'),
-            ticker=getattr(config, 'ticker', 'unknown'),
-            log_to_console=False
+            ticker=getattr(config, 'ticker', 'unknown')
         )
         
         # Strategy state
@@ -146,7 +146,7 @@ class BaseStrategy(ABC):
         if not self.is_initialized:
             await self._initialize_strategy()
             self.is_initialized = True
-            self.logger.log(f"Strategy '{self.get_strategy_name()}' initialized", "INFO")
+            self.logger.info(f"Strategy '{self.get_strategy_name()}' initialized")
     
     @abstractmethod
     async def _initialize_strategy(self):
@@ -166,9 +166,8 @@ class BaseStrategy(ABC):
         2. Set status to RUNNING
         """
         if self.status != RunnableStatus.NOT_STARTED:
-            self.logger.log(
-                f"Cannot start strategy in status {self.status}",
-                "WARNING"
+            self.logger.warning(
+                f"Cannot start strategy in status {self.status}"
             )
             return
         
@@ -178,7 +177,7 @@ class BaseStrategy(ABC):
         # Start running
         self.status = RunnableStatus.RUNNING
         
-        self.logger.log(f"Strategy '{self.get_strategy_name()}' started", "INFO")
+        self.logger.info(f"Strategy '{self.get_strategy_name()}' started")
     
     def stop(self):
         """

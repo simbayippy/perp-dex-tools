@@ -1,6 +1,14 @@
 """
-Custom Lighter WebSocket implementation without using the official SDK.
-Based on the sample code provided by the user.
+Lighter WebSocket Manager
+
+Handles WebSocket connections for Lighter exchange order updates and order book.
+Custom implementation without using the official SDK for more control over connection management.
+
+Features:
+- Order book management with sequence validation
+- Automatic reconnection with exponential backoff
+- Order update callbacks for account orders
+- Health checks and integrity validation
 """
 
 import asyncio
@@ -10,8 +18,8 @@ from typing import Dict, Any, List, Optional, Tuple, Callable
 import websockets
 
 
-class LighterCustomWebSocketManager:
-    """Custom WebSocket manager for Lighter order updates and order book without SDK."""
+class LighterWebSocketManager:
+    """WebSocket manager for Lighter order updates and order book."""
 
     def __init__(self, config: Dict[str, Any], order_update_callback: Optional[Callable] = None):
         self.config = config
@@ -430,3 +438,4 @@ class LighterCustomWebSocketManager:
             except Exception as e:
                 self._log(f"Error closing websocket: {e}", "ERROR")
         self._log("WebSocket disconnected", "INFO")
+

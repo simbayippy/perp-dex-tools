@@ -21,9 +21,9 @@ from decimal import Decimal
 from datetime import datetime
 from dataclasses import dataclass, asdict
 from uuid import UUID, uuid4
-import logging
+from helpers.unified_logger import get_core_logger
 
-logger = logging.getLogger(__name__)
+logger = get_core_logger("execution_tracker")
 
 
 @dataclass
@@ -99,7 +99,7 @@ class ExecutionTracker:
     def __init__(self):
         """Initialize execution tracker."""
         self.executions: Dict[UUID, ExecutionRecord] = {}
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_core_logger("execution_tracker")
     
     async def record_execution(self, record: ExecutionRecord):
         """

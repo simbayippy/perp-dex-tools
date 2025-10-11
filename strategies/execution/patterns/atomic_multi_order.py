@@ -24,9 +24,9 @@ from dataclasses import dataclass
 from enum import Enum
 import time
 import asyncio
-import logging
+from helpers.unified_logger import get_core_logger
 
-logger = logging.getLogger(__name__)
+logger = get_core_logger("atomic_multi_order")
 
 
 @dataclass
@@ -97,9 +97,15 @@ class AtomicMultiOrderExecutor:
             print(f"Atomic execution failed: {result.error_message}")
     """
     
-    def __init__(self):
-        """Initialize atomic multi-order executor."""
-        self.logger = logging.getLogger(__name__)
+    def __init__(self, price_provider=None):
+        """
+        Initialize atomic multi-order executor.
+        
+        Args:
+            price_provider: Optional PriceProvider for shared price caching
+        """
+        self.price_provider = price_provider
+        self.logger = get_core_logger("atomic_multi_order")
     
     async def execute_atomically(
         self,
@@ -138,6 +144,11 @@ class AtomicMultiOrderExecutor:
             
             # Step 1: Pre-flight checks (optional)
             if pre_flight_check:
+                # Separator to indicate pre-flight checks are starting
+                self.logger.info("=" * 60)
+                self.logger.info("🔍 RUNNING PRE-FLIGHT CHECKS")
+                self.logger.info("=" * 60)
+                
                 preflight_ok, preflight_error = await self._run_preflight_checks(orders)
                 if not preflight_ok:
                     return AtomicExecutionResult(
@@ -149,9 +160,14 @@ class AtomicMultiOrderExecutor:
                         execution_time_ms=int((time.time() - start_time) * 1000),
                         error_message=f"Pre-flight check failed: {preflight_error}"
                     )
+                
+                # Separator to indicate pre-flight checks are complete
+                self.logger.info("=" * 60)
+                self.logger.info("✅ PRE-FLIGHT CHECKS COMPLETE - PROCEEDING TO ORDER PLACEMENT")
+                self.logger.info("=" * 60)
             
             # Step 2: Place all orders simultaneously
-            self.logger.info("Placing all orders simultaneously...")
+            self.logger.info("🚀 Placing all orders simultaneously...")
             order_tasks = [
                 self._place_single_order(spec) for spec in orders
             ]
@@ -273,6 +289,57 @@ class AtomicMultiOrderExecutor:
             from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
             
             # ========================================================================
+            # CHECK 0: Leverage Limit Validation (NEW - CRITICAL FOR DELTA NEUTRAL)
+            # ========================================================================
+            self.logger.info("🔍 Checking leverage limits across exchanges...")
+            
+            # Import leverage validator
+            from strategies.execution.core.leverage_validator import LeverageValidator
+            
+            leverage_validator = LeverageValidator()
+            
+            # Group orders by symbol (for delta-neutral we need same size on both sides)
+            symbols_to_check: Dict[str, List[OrderSpec]] = {}
+            for order_spec in orders:
+                symbol = order_spec.symbol
+                if symbol not in symbols_to_check:
+                    symbols_to_check[symbol] = []
+                symbols_to_check[symbol].append(order_spec)
+            
+            # For each symbol, verify all exchanges can support the requested size
+            adjusted_orders = []
+            for symbol, symbol_orders in symbols_to_check.items():
+                # Get all exchange clients for this symbol
+                exchange_clients = [order.exchange_client for order in symbol_orders]
+                
+                # Get requested size (should be same for all orders in delta-neutral strategy)
+                requested_size = symbol_orders[0].size_usd
+                
+                # Check max size supported by ALL exchanges
+                max_size, limiting_exchange = await leverage_validator.get_max_position_size(
+                    exchange_clients=exchange_clients,
+                    symbol=symbol,
+                    requested_size_usd=requested_size,
+                    check_balance=True  # Also consider available balance
+                )
+                
+                # If size needs adjustment, update all orders for this symbol
+                if max_size < requested_size:
+                    error_msg = (
+                        f"Position size too large for {symbol}: "
+                        f"Requested ${requested_size:.2f}, "
+                        f"maximum supported: ${max_size:.2f} "
+                        f"(limited by {limiting_exchange})"
+                    )
+                    self.logger.warning(f"⚠️  {error_msg}")
+                    
+                    # For atomic execution, we can't have mismatched sizes
+                    # Return error so strategy can decide (reduce size or skip)
+                    return False, error_msg
+            
+            self.logger.info("✅ Leverage limits validated for all exchanges")
+            
+            # ========================================================================
             # CHECK 1: Account Balance Validation (CRITICAL FIX)
             # ========================================================================
             self.logger.info("Running balance checks...")
@@ -345,11 +412,14 @@ class AtomicMultiOrderExecutor:
             # ========================================================================
             self.logger.info("Running liquidity checks...")
             
-            analyzer = LiquidityAnalyzer()
+            # Use shared price_provider if available (enables caching)
+            analyzer = LiquidityAnalyzer(price_provider=self.price_provider)
             
             for i, order_spec in enumerate(orders):
                 # Check liquidity
-                print(f"[Liquidity Analyzer] 🔍 Checking liquidity for order {i} ({order_spec.side} {order_spec.symbol})")
+                self.logger.debug(
+                    f"Checking liquidity for order {i}: {order_spec.side} {order_spec.symbol} ${order_spec.size_usd}"
+                )
                 report = await analyzer.check_execution_feasibility(
                     exchange_client=order_spec.exchange_client,
                     symbol=order_spec.symbol,
@@ -386,7 +456,8 @@ class AtomicMultiOrderExecutor:
             # Import here to avoid circular dependency
             from strategies.execution.core.order_executor import OrderExecutor, ExecutionMode
             
-            executor = OrderExecutor()
+            # Use shared price_provider if available
+            executor = OrderExecutor(price_provider=self.price_provider)
             
             # Map string mode to enum
             mode_map = {
@@ -529,9 +600,18 @@ class AtomicMultiOrderExecutor:
                     f"{fill['filled_quantity']} @ market"
                 )
                 
+                # 🔧 FIX: Get proper contract_id from exchange client
+                # Some exchanges (Aster) need "ZORAUSDT", not just "ZORA"
+                contract_attrs = await fill['exchange_client'].get_contract_attributes(fill['symbol'])
+                contract_id = contract_attrs.get('contract_id', fill['symbol'])
+                
+                self.logger.debug(
+                    f"Rollback: Using contract_id='{contract_id}' for symbol '{fill['symbol']}'"
+                )
+                
                 # Place market close order
                 close_task = fill['exchange_client'].place_market_order(
-                    contract_id=fill['symbol'],
+                    contract_id=contract_id,
                     quantity=float(fill['filled_quantity']),  # ✅ Use ACTUAL fill
                     side=close_side
                 )
