@@ -588,14 +588,6 @@ class BaseExchangeClient(ABC):
     # RISK MANAGEMENT & LEVERAGE
     # ========================================================================
 
-    def supports_risk_management(self) -> bool:
-        """
-        Check if exchange supports advanced risk management queries.
-        
-        Returns:
-            True if exchange implements balance, P&L, and asset value queries
-        """
-        return False
     
     @abstractmethod
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:

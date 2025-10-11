@@ -792,11 +792,7 @@ class LighterClient(BaseExchangeClient):
 
         return self.config.contract_id, self.config.tick_size
 
-    # Risk Management Methods (Lighter-specific implementations)
-    def supports_risk_management(self) -> bool:
-        """Lighter supports advanced risk management."""
-        return True
-
+    # Account monitoring methods (Lighter-specific implementations)
     async def get_account_balance(self) -> Optional[Decimal]:
         """Get current account balance using Lighter SDK."""
         try:
