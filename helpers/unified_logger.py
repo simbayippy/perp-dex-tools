@@ -218,8 +218,6 @@ class UnifiedLogger:
     def log_transaction(self, order_id: str, side: str, quantity: Any, price: Any, status: str):
         """
         Log trading transaction with structured data.
-        
-        Maintains compatibility with existing TradingLogger.log_transaction() calls.
         """
         transaction_data = {
             "order_id": order_id,

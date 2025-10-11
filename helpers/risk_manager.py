@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
-from helpers.logger import TradingLogger
+from helpers.unified_logger import get_core_logger
 
 
 class RiskAction(Enum):
@@ -73,20 +73,19 @@ class RiskManager:
         self.enabled = exchange_client.supports_risk_management()
         
         # Initialize logger
-        self.logger = TradingLogger(
-            exchange=config.exchange, 
-            ticker=config.ticker, 
-            log_to_console=False
+        self.logger = get_core_logger(
+            "risk_manager", 
+            context={"exchange": config.exchange, "ticker": config.ticker}
         )
         
         if self.enabled:
-            self.logger.log("Risk management enabled with thresholds:", "INFO")
-            self.logger.log(f"  - Margin failures: {self.thresholds.margin_failure_threshold}", "INFO")
-            self.logger.log(f"  - Time stall: {self.thresholds.time_stall_threshold}s", "INFO")
-            self.logger.log(f"  - Account loss: {self.thresholds.account_loss_threshold * 100}%", "INFO")
-            self.logger.log(f"  - Position closure: {self.thresholds.position_closure_percent * 100}%", "INFO")
+            self.logger.info("Risk management enabled with thresholds:")
+            self.logger.info(f"  - Margin failures: {self.thresholds.margin_failure_threshold}")
+            self.logger.info(f"  - Time stall: {self.thresholds.time_stall_threshold}s")
+            self.logger.info(f"  - Account loss: {self.thresholds.account_loss_threshold * 100}%")
+            self.logger.info(f"  - Position closure: {self.thresholds.position_closure_percent * 100}%")
         else:
-            self.logger.log("Risk management disabled (exchange not supported)", "INFO")
+            self.logger.info("Risk management disabled (exchange not supported)")
     
     async def initialize(self):
         """Initialize risk manager with baseline data."""
@@ -98,13 +97,13 @@ class RiskManager:
             initial_value = await self.exchange_client.get_total_asset_value()
             if initial_value:
                 self.state.initial_account_value = initial_value
-                self.logger.log(f"Initial account value: ${initial_value}", "INFO")
+                self.logger.info(f"Initial account value: ${initial_value}")
             
             # Set initial successful order time
             self.state.last_successful_order_time = time.time()
             
         except Exception as e:
-            self.logger.log(f"Error initializing risk manager: {e}", "ERROR")
+            self.logger.error(f"Error initializing risk manager: {e}")
     
     async def check_risk_conditions(self) -> RiskAction:
         """Check all risk conditions and return required action."""
@@ -121,7 +120,7 @@ class RiskManager:
             return await self._check_standard_conditions()
             
         except Exception as e:
-            self.logger.log(f"Error checking risk conditions: {e}", "ERROR")
+            self.logger.error(f"Error checking risk conditions: {e}")
             return RiskAction.NONE
     
     async def _check_emergency_conditions(self) -> RiskAction:
@@ -138,9 +137,8 @@ class RiskManager:
         loss_percent = (self.state.initial_account_value - current_value) / self.state.initial_account_value
         
         if loss_percent >= self.thresholds.emergency_loss_threshold:
-            self.logger.log(
-                f"EMERGENCY: Account loss {loss_percent * 100:.2f}% >= {self.thresholds.emergency_loss_threshold * 100}%",
-                "ERROR"
+            self.logger.error(
+                f"EMERGENCY: Account loss {loss_percent * 100:.2f}% >= {self.thresholds.emergency_loss_threshold * 100}%"
             )
             return RiskAction.EMERGENCY_CLOSE_ALL
         
@@ -155,10 +153,9 @@ class RiskManager:
             self.state.margin_failure_start_time and
             current_time - self.state.margin_failure_start_time >= self.thresholds.time_stall_threshold):
             
-            self.logger.log(
+            self.logger.warning(
                 f"Risk threshold met: {self.state.consecutive_margin_failures} margin failures "
-                f"+ {current_time - self.state.margin_failure_start_time:.0f}s stall",
-                "WARNING"
+                f"+ {current_time - self.state.margin_failure_start_time:.0f}s stall"
             )
             
             # Check account loss threshold
@@ -179,9 +176,8 @@ class RiskManager:
         loss_percent = (self.state.initial_account_value - current_value) / self.state.initial_account_value
         
         if loss_percent >= self.thresholds.account_loss_threshold:
-            self.logger.log(
-                f"Account loss threshold exceeded: {loss_percent * 100:.2f}% >= {self.thresholds.account_loss_threshold * 100}%",
-                "WARNING"
+            self.logger.warning(
+                f"Account loss threshold exceeded: {loss_percent * 100:.2f}% >= {self.thresholds.account_loss_threshold * 100}%"
             )
             return True
         
@@ -198,10 +194,9 @@ class RiskManager:
         if self.state.margin_failure_start_time is None:
             self.state.margin_failure_start_time = time.time()
         
-        self.logger.log(
+        self.logger.warning(
             f"Margin failure #{self.state.consecutive_margin_failures} "
-            f"(threshold: {self.thresholds.margin_failure_threshold})",
-            "WARNING"
+            f"(threshold: {self.thresholds.margin_failure_threshold})"
         )
     
     def record_successful_order(self):
@@ -210,7 +205,7 @@ class RiskManager:
             return
             
         self.state.record_successful_order()
-        self.logger.log("Successful order recorded, risk counters reset", "INFO")
+        self.logger.info("Successful order recorded, risk counters reset")
     
     async def get_worst_positions(self) -> List[Dict[str, Any]]:
         """Get worst performing positions for closure."""
@@ -235,16 +230,15 @@ class RiskManager:
             num_to_close = max(1, int(len(losing_positions) * self.thresholds.position_closure_percent))
             worst_positions = losing_positions[:num_to_close]
             
-            self.logger.log(
+            self.logger.info(
                 f"Identified {len(worst_positions)} worst positions for closure "
-                f"(out of {len(losing_positions)} losing positions)",
-                "INFO"
+                f"(out of {len(losing_positions)} losing positions)"
             )
             
             return worst_positions
             
         except Exception as e:
-            self.logger.log(f"Error getting worst positions: {e}", "ERROR")
+            self.logger.error(f"Error getting worst positions: {e}")
             return []
     
     async def get_all_positions(self) -> List[Dict[str, Any]]:
@@ -257,11 +251,11 @@ class RiskManager:
             # Filter to positions with actual size
             active_positions = [pos for pos in positions if abs(pos['position']) > 0]
             
-            self.logger.log(f"Found {len(active_positions)} active positions for emergency closure", "WARNING")
+            self.logger.warning(f"Found {len(active_positions)} active positions for emergency closure")
             return active_positions
             
         except Exception as e:
-            self.logger.log(f"Error getting all positions: {e}", "ERROR")
+            self.logger.error(f"Error getting all positions: {e}")
             return []
     
     async def get_risk_summary(self) -> Dict[str, Any]:
@@ -292,5 +286,5 @@ class RiskManager:
             return summary
             
         except Exception as e:
-            self.logger.log(f"Error getting risk summary: {e}", "ERROR")
+            self.logger.error(f"Error getting risk summary: {e}")
             return {"enabled": True, "error": str(e)}
