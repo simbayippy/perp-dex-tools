@@ -364,6 +364,35 @@ class AtomicMultiOrderExecutor:
                     )
             
             # ========================================================================
+            # SETUP: Start WebSocket book tickers for real-time BBO (Issue #3 fix)
+            # ========================================================================
+            self.logger.info("🔴 Starting WebSocket book tickers for real-time pricing...")
+            
+            for symbol, symbol_orders in symbols_to_check.items():
+                for order in symbol_orders:
+                    exchange_client = order.exchange_client
+                    exchange_name = exchange_client.get_exchange_name()
+                    
+                    # Start book ticker WebSocket if supported
+                    if hasattr(exchange_client, 'ws_manager') and exchange_client.ws_manager:
+                        ws_manager = exchange_client.ws_manager
+                        
+                        # Get normalized symbol for this exchange
+                        if exchange_name == "aster":
+                            # Aster needs full symbol like "SKYUSDT"
+                            normalized_symbol = getattr(exchange_client.config, 'contract_id', f"{symbol}USDT")
+                            if hasattr(ws_manager, 'start_book_ticker'):
+                                await ws_manager.start_book_ticker(normalized_symbol)
+                                self.logger.info(f"✅ Started Aster book ticker for {normalized_symbol}")
+                        elif exchange_name == "lighter":
+                            # Lighter uses market_id, already subscribed to order book
+                            # The order book WebSocket is already running from connect()
+                            self.logger.info(f"✅ Lighter order book WebSocket already active for {symbol}")
+            
+            # Give WebSockets a moment to receive first BBO update
+            await asyncio.sleep(0.5)
+            
+            # ========================================================================
             # CHECK 1: Account Balance Validation (CRITICAL FIX)
             # ========================================================================
             self.logger.info("Running balance checks...")

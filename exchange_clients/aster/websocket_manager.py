@@ -38,6 +38,7 @@ class AsterWebSocketManager:
         self.best_ask = None
         self._book_ticker_ws = None  # Separate WebSocket for book ticker
         self._book_ticker_task = None
+        self._current_book_ticker_symbol = None  # Track which symbol we're subscribed to
 
     def _generate_signature(self, params: Dict[str, Any]) -> str:
         """Generate HMAC SHA256 signature for Aster API authentication."""
@@ -196,8 +197,8 @@ class AsterWebSocketManager:
             # Start keepalive task
             self._keepalive_task = asyncio.create_task(self._start_keepalive_task())
             
-            # 📊 Start book ticker WebSocket (real-time BBO)
-            self._book_ticker_task = asyncio.create_task(self._connect_book_ticker())
+            # 📊 Note: Book ticker WebSocket is started on-demand via start_book_ticker(symbol)
+            # Don't start it here since we don't know which symbol to trade yet
 
             # Start listening for messages
             await self._listen()
@@ -302,20 +303,50 @@ class AsterWebSocketManager:
             if self.logger:
                 self.logger.error(f"Error handling order update: {e}")
 
-    async def _connect_book_ticker(self):
+    async def start_book_ticker(self, symbol: str):
+        """
+        Start book ticker WebSocket for a specific symbol.
+        
+        This should be called AFTER identifying the opportunity symbol,
+        not during initial connection.
+        
+        Args:
+            symbol: Normalized symbol (e.g., "MONUSDT", "SKYUSDT")
+        """
+        # If already subscribed to this symbol, no need to restart
+        if self._current_book_ticker_symbol == symbol and self._book_ticker_task and not self._book_ticker_task.done():
+            if self.logger:
+                self.logger.debug(f"Already subscribed to book ticker for {symbol}")
+            return
+        
+        # Cancel existing book ticker task if different symbol
+        if self._book_ticker_task and not self._book_ticker_task.done():
+            if self.logger:
+                self.logger.info(f"Switching book ticker from {self._current_book_ticker_symbol} to {symbol}")
+            self._book_ticker_task.cancel()
+            try:
+                await self._book_ticker_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Start new book ticker task
+        self._current_book_ticker_symbol = symbol
+        self._book_ticker_task = asyncio.create_task(self._connect_book_ticker(symbol))
+        
+        if self.logger:
+            self.logger.info(f"📊 Started book ticker WebSocket for {symbol}")
+    
+    async def _connect_book_ticker(self, symbol: str):
         """
         Connect to book ticker stream for real-time BBO updates.
         
         Stream: <symbol>@bookTicker
         Pushes any update to the best bid or ask's price or quantity in real-time.
+        
+        Args:
+            symbol: Symbol to subscribe to (e.g., "MONUSDT")
         """
         try:
-            # Get symbol from config (e.g., "MONUSDT")
-            symbol = getattr(self.config, 'contract_id', None)
-            if not symbol:
-                if self.logger:
-                    self.logger.warning("No contract_id in config, skipping book ticker WebSocket")
-                return
             
             # Construct book ticker stream URL
             stream_name = f"{symbol.lower()}@bookTicker"
