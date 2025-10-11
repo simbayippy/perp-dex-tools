@@ -17,7 +17,7 @@ import websockets
 
 
 class AsterWebSocketManager:
-    """WebSocket manager for Aster order updates."""
+    """WebSocket manager for Aster order updates and order book."""
 
     def __init__(self, config: Dict[str, Any], api_key: str, secret_key: str, order_update_callback: Callable):
         self.api_key = api_key
@@ -32,6 +32,12 @@ class AsterWebSocketManager:
         self._keepalive_task = None
         self._last_ping_time = None
         self.config = config
+        
+        # 📊 Order book state (for real-time BBO)
+        self.best_bid = None
+        self.best_ask = None
+        self._book_ticker_ws = None  # Separate WebSocket for book ticker
+        self._book_ticker_task = None
 
     def _generate_signature(self, params: Dict[str, Any]) -> str:
         """Generate HMAC SHA256 signature for Aster API authentication."""
@@ -172,14 +178,14 @@ class AsterWebSocketManager:
                 await asyncio.sleep(60)
 
     async def connect(self):
-        """Connect to Aster WebSocket."""
+        """Connect to Aster WebSocket for order updates and book ticker."""
         try:
-            # Get listen key
+            # Get listen key for user data stream
             self.listen_key = await self._get_listen_key()
             if not self.listen_key:
                 raise Exception("Failed to get listen key")
 
-            # Connect to WebSocket
+            # Connect to user data stream (order updates)
             ws_url = f"{self.ws_url}/ws/{self.listen_key}"
             self.websocket = await websockets.connect(ws_url)
             self.running = True
@@ -189,6 +195,9 @@ class AsterWebSocketManager:
 
             # Start keepalive task
             self._keepalive_task = asyncio.create_task(self._start_keepalive_task())
+            
+            # 📊 Start book ticker WebSocket (real-time BBO)
+            self._book_ticker_task = asyncio.create_task(self._connect_book_ticker())
 
             # Start listening for messages
             await self._listen()
@@ -293,6 +302,111 @@ class AsterWebSocketManager:
             if self.logger:
                 self.logger.error(f"Error handling order update: {e}")
 
+    async def _connect_book_ticker(self):
+        """
+        Connect to book ticker stream for real-time BBO updates.
+        
+        Stream: <symbol>@bookTicker
+        Pushes any update to the best bid or ask's price or quantity in real-time.
+        """
+        try:
+            # Get symbol from config (e.g., "MONUSDT")
+            symbol = getattr(self.config, 'contract_id', None)
+            if not symbol:
+                if self.logger:
+                    self.logger.warning("No contract_id in config, skipping book ticker WebSocket")
+                return
+            
+            # Construct book ticker stream URL
+            stream_name = f"{symbol.lower()}@bookTicker"
+            book_ticker_url = f"{self.ws_url}/ws/{stream_name}"
+            
+            if self.logger:
+                self.logger.info(f"📊 Connecting to Aster book ticker: {stream_name}")
+            
+            # Connect with reconnection logic
+            reconnect_delay = 1
+            max_reconnect_delay = 30
+            
+            while self.running:
+                try:
+                    async with websockets.connect(book_ticker_url) as ws:
+                        self._book_ticker_ws = ws
+                        
+                        if self.logger:
+                            self.logger.info(f"✅ Connected to Aster book ticker for {symbol}")
+                        
+                        # Reset reconnect delay on successful connection
+                        reconnect_delay = 1
+                        
+                        # Listen for book ticker updates
+                        async for message in ws:
+                            if not self.running:
+                                break
+                            
+                            try:
+                                data = json.loads(message)
+                                await self._handle_book_ticker(data)
+                            except json.JSONDecodeError as e:
+                                if self.logger:
+                                    self.logger.error(f"Failed to parse book ticker message: {e}")
+                            except Exception as e:
+                                if self.logger:
+                                    self.logger.error(f"Error handling book ticker: {e}")
+                
+                except websockets.exceptions.ConnectionClosed:
+                    if self.logger and self.running:
+                        self.logger.warning("Book ticker WebSocket closed, reconnecting...")
+                except Exception as e:
+                    if self.logger and self.running:
+                        self.logger.error(f"Book ticker WebSocket error: {e}")
+                
+                # Reconnect with exponential backoff
+                if self.running:
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
+        
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Failed to start book ticker WebSocket: {e}")
+    
+    async def _handle_book_ticker(self, data: Dict[str, Any]):
+        """
+        Handle book ticker updates.
+        
+        Format:
+        {
+          "e": "bookTicker",     // Event type
+          "u": 400900217,        // Order book updateId
+          "s": "BNBUSDT",        // Symbol
+          "b": "25.35190000",    // Best bid price
+          "B": "31.21000000",    // Best bid qty
+          "a": "25.36520000",    // Best ask price
+          "A": "40.66000000"     // Best ask qty
+        }
+        """
+        try:
+            if data.get('e') != 'bookTicker':
+                return
+            
+            # Extract best bid and ask
+            best_bid_str = data.get('b')
+            best_ask_str = data.get('a')
+            
+            if best_bid_str and best_ask_str:
+                self.best_bid = float(best_bid_str)
+                self.best_ask = float(best_ask_str)
+                
+                if self.logger:
+                    self.logger.debug(
+                        f"📊 [ASTER] Book ticker update: "
+                        f"bid={self.best_bid}, ask={self.best_ask}"
+                    )
+        
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error processing book ticker: {e}")
+
     async def disconnect(self):
         """Disconnect from WebSocket."""
         self.running = False
@@ -304,11 +418,24 @@ class AsterWebSocketManager:
                 await self._keepalive_task
             except asyncio.CancelledError:
                 pass
+        
+        # Cancel book ticker task
+        if self._book_ticker_task and not self._book_ticker_task.done():
+            self._book_ticker_task.cancel()
+            try:
+                await self._book_ticker_task
+            except asyncio.CancelledError:
+                pass
 
+        # Close WebSockets
         if self.websocket:
             await self.websocket.close()
-            if self.logger:
-                self.logger.info("WebSocket disconnected")
+        
+        if self._book_ticker_ws:
+            await self._book_ticker_ws.close()
+            
+        if self.logger:
+            self.logger.info("WebSocket disconnected")
 
     def set_logger(self, logger):
         """Set the logger instance."""

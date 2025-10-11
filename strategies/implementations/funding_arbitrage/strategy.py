@@ -180,6 +180,12 @@ class FundingArbitrageStrategy(StatefulStrategy):
         # Tracking
         self.cumulative_funding = {}  # {position_id: Decimal}
         self.failed_symbols = set()  # Track symbols that failed validation (avoid retrying same cycle)
+        
+        # 🔒 Session-level position limit (Issue #4 fix)
+        # Set to True to limit strategy to 1 position per bot session
+        # Set to False to allow multiple positions based on max_positions config
+        self.one_position_per_session = True  # Keep it simple for now
+        self.position_opened_this_session = False
     
     
     def get_strategy_name(self) -> str:
@@ -855,6 +861,9 @@ class FundingArbitrageStrategy(StatefulStrategy):
             
             await self.position_manager.add_position(position)
             
+            # 🔒 Mark that we've opened a position this session (Issue #4 fix)
+            self.position_opened_this_session = True
+            
             self.logger.log(
                 f"✅ Position opened {symbol}: "
                 f"Long @ ${long_fill['fill_price']}, "
@@ -863,6 +872,12 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 f"Fees: ${entry_fees:.2f}",
                 "INFO"
             )
+            
+            if self.one_position_per_session:
+                self.logger.log(
+                    "📊 Session limit: Will not open more positions this session (one_position_per_session=True)",
+                    "INFO"
+                )
             
             return True  # Success
             
@@ -882,13 +897,29 @@ class FundingArbitrageStrategy(StatefulStrategy):
         """
         Check if can open more positions.
         
+        Checks both:
+        1. Global position limit (max_positions config)
+        2. Session-level limit (one_position_per_session flag)
+        
         Returns:
-            True if under max position limit
+            True if under max position limit AND session limit allows
         """
-        # Use synchronous call since we're in sync context
-        # In real implementation, would use async properly
+        # Check global position limit
         open_count = len(self.position_manager._positions)
-        return open_count < self.config.max_positions
+        if open_count >= self.config.max_positions:
+            return False
+        
+        # 🔒 Check session-level limit (Issue #4 fix)
+        # If one_position_per_session is enabled and we've already opened one, stop
+        if self.one_position_per_session and self.position_opened_this_session:
+            self.logger.log(
+                "📊 Session limit reached: Already opened 1 position this session. "
+                "Set one_position_per_session=False to allow multiple positions.",
+                "INFO"
+            )
+            return False
+        
+        return True
     
     def _calculate_total_exposure(self) -> Decimal:
         """

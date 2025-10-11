@@ -255,6 +255,59 @@ class FundingArbFeeCalculator:
         
         return costs
     
+    def calculate_total_cost(
+        self,
+        dex_long: str,
+        dex_short: str,
+        position_size_usd: Decimal,
+        is_maker: bool = True
+    ) -> Decimal:
+        """
+        Calculate total trading fees in USD for a position.
+        
+        This is a convenience method for calculating just the fee cost
+        without needing funding rate information.
+        
+        Args:
+            dex_long: DEX where we go LONG
+            dex_short: DEX where we go SHORT
+            position_size_usd: Position size in USD
+            is_maker: Whether using maker orders (default: True)
+            
+        Returns:
+            Total fee cost in USD (entry + exit)
+            
+        Example:
+            # $10,000 position on Aster (long) + Lighter (short)
+            total_fees = calculator.calculate_total_cost(
+                'aster', 'lighter', Decimal('10000'), is_maker=True
+            )
+            # Returns: $2.00 (assuming 0.01% maker fees each side, 4 trades)
+        """
+        # Get fee structures
+        fees_long = self.get_fee_structure(dex_long)
+        fees_short = self.get_fee_structure(dex_short)
+        
+        # Select fee type (maker or taker)
+        fee_long = fees_long.maker_fee if is_maker else fees_long.taker_fee
+        fee_short = fees_short.maker_fee if is_maker else fees_short.taker_fee
+        
+        # Calculate fees for 4 trades:
+        # 1. Open LONG on dex_long
+        # 2. Open SHORT on dex_short
+        # 3. Close LONG on dex_long
+        # 4. Close SHORT on dex_short
+        entry_cost = (fee_long + fee_short) * position_size_usd
+        exit_cost = (fee_long + fee_short) * position_size_usd
+        total_cost = entry_cost + exit_cost
+        
+        logger.debug(
+            f"Calculated total cost for ${position_size_usd} position: "
+            f"{dex_long} (long) + {dex_short} (short) = ${total_cost:.2f}"
+        )
+        
+        return total_cost
+    
     def calculate_absolute_profit(
         self,
         costs: TradingCosts,

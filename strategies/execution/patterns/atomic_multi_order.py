@@ -339,6 +339,30 @@ class AtomicMultiOrderExecutor:
             
             self.logger.info("✅ Leverage limits validated for all exchanges")
             
+            # 🔧 CRITICAL: Now SET the leverage to min(exchange1, exchange2)
+            # This ensures both sides use the same leverage (Issue #1 fix)
+            for symbol, symbol_orders in symbols_to_check.items():
+                exchange_clients = [order.exchange_client for order in symbol_orders]
+                requested_size = symbol_orders[0].size_usd
+                
+                self.logger.info(f"🔧 [LEVERAGE] Normalizing leverage for {symbol}...")
+                min_leverage, limiting = await leverage_validator.normalize_and_set_leverage(
+                    exchange_clients=exchange_clients,
+                    symbol=symbol,
+                    requested_size_usd=requested_size
+                )
+                
+                if min_leverage is not None:
+                    self.logger.info(
+                        f"✅ [LEVERAGE] {symbol} normalized to {min_leverage}x "
+                        f"(limited by {limiting})"
+                    )
+                else:
+                    self.logger.warning(
+                        f"⚠️  [LEVERAGE] Could not normalize leverage for {symbol}. "
+                        f"Orders may execute with different leverage!"
+                    )
+            
             # ========================================================================
             # CHECK 1: Account Balance Validation (CRITICAL FIX)
             # ========================================================================
