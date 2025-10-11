@@ -191,7 +191,7 @@ class PriceProvider:
                 f"🔄 [PRICE] Fetching fresh BBO for {exchange_name}:{symbol} via REST API"
             )
             
-            order_book = await exchange_client.get_order_book_depth(symbol, levels=1)
+            order_book = await exchange_client.get_order_book_depth(symbol)
             
             if not order_book['bids'] or not order_book['asks']:
                 raise ValueError(f"Empty order book for {symbol}")
