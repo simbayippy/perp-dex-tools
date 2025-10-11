@@ -827,13 +827,6 @@ class AsterClient(BaseExchangeClient):
                         
                         if max_notional_value:
                             leverage_info['max_notional'] = Decimal(str(max_notional_value))
-                        
-                        self.logger.info(
-                            f"📊 [ASTER] Parsed leverage brackets for {symbol}: "
-                            f"max_leverage={leverage_info['max_leverage']}x, "
-                            f"max_notional=${leverage_info['max_notional']}, "
-                            f"total_brackets={len(brackets)}"
-                        )
                     else:
                         self.logger.warning(
                             f"[ASTER] Symbol {symbol} has empty brackets array"
