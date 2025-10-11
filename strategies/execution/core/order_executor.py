@@ -467,7 +467,7 @@ class OrderExecutor:
             
             # Fallback: Get from order book
             if hasattr(exchange_client, 'get_order_book_depth'):
-                book = await exchange_client.get_order_book_depth(symbol, levels=1)
+                book = await exchange_client.get_order_book_depth(symbol)
                 best_bid = Decimal(str(book['bids'][0]['price']))
                 best_ask = Decimal(str(book['asks'][0]['price']))
                 return best_bid, best_ask
