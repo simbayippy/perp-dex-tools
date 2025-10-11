@@ -17,7 +17,7 @@ import sys
 
 from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
 from exchange_clients.aster.common import get_aster_symbol_format
-from helpers.logger import TradingLogger
+from helpers.unified_logger import get_exchange_logger
 
 
 class AsterWebSocketManager:
@@ -101,15 +101,15 @@ class AsterWebSocketManager:
                 ) as response:
                     if response.status == 200:
                         if self.logger:
-                            self.logger.log("Listen key keepalive successful", "DEBUG")
+                            self.logger.debug("Listen key keepalive successful")
                         return True
                     else:
                         if self.logger:
-                            self.logger.log(f"Failed to keepalive listen key: {response.status}", "WARNING")
+                            self.logger.warning(f"Failed to keepalive listen key: {response.status}")
                         return False
         except Exception as e:
             if self.logger:
-                self.logger.log(f"Error keeping alive listen key: {e}", "ERROR")
+                self.logger.error(f"Error keeping alive listen key: {e}")
             return False
 
     async def _check_connection_health(self) -> bool:
@@ -189,7 +189,7 @@ class AsterWebSocketManager:
             self.running = True
 
             if self.logger:
-                self.logger.log("Connected to Aster WebSocket with listen key", "INFO")
+                self.logger.info("Connected to Aster WebSocket with listen key")
 
             # Start keepalive task
             self._keepalive_task = asyncio.create_task(self._start_keepalive_task())
@@ -332,7 +332,7 @@ class AsterClient(BaseExchangeClient):
         self.base_url = 'https://fapi.asterdex.com'
 
         # Initialize logger early
-        self.logger = TradingLogger(exchange="aster", ticker=self.config.ticker, log_to_console=True)
+        self.logger = get_exchange_logger("aster", self.config.ticker)
         self._order_update_handler = None
 
     def _validate_config(self) -> None:
@@ -527,17 +527,16 @@ class AsterClient(BaseExchangeClient):
         # Normalize symbol to Aster's format (e.g., "ZORA" → "ZORAUSDT")
         normalized_symbol = self.normalize_symbol(contract_id)
         
-        self.logger.log(f"🔍 [ASTER] Symbol normalization: '{contract_id}' → '{normalized_symbol}'", "DEBUG")
-        self.logger.log(f"🔍 [ASTER] Attempting to fetch order book for symbol='{normalized_symbol}', limit={levels}", "DEBUG")
+        self.logger.debug(f"🔍 [ASTER] Symbol normalization: '{contract_id}' → '{normalized_symbol}'")
+        self.logger.debug(f"🔍 [ASTER] Attempting to fetch order book for symbol='{normalized_symbol}', limit={levels}")
         try:
-            self.logger.log(
-                f"📊 [ASTER] Fetching order book: symbol={normalized_symbol}, limit={levels}",
-                "INFO"
+            self.logger.info(
+                f"📊 [ASTER] Fetching order book: symbol={normalized_symbol}, limit={levels}"
             )
             
             # Call Aster API: GET /fapi/v1/depth
             # Note: Aster expects symbols with quote currency (e.g., "BTCUSDT", not "BTC")
-            self.logger.log(f"📊 [ASTER] Calling API: GET /fapi/v1/depth?symbol={normalized_symbol}&limit={levels}", "DEBUG")
+            self.logger.debug(f"📊 [ASTER] Calling API: GET /fapi/v1/depth?symbol={normalized_symbol}&limit={levels}")
             result = await self._make_request('GET', '/fapi/v1/depth', {
                 'symbol': normalized_symbol,
                 'limit': levels
@@ -548,7 +547,7 @@ class AsterClient(BaseExchangeClient):
             bids_raw = result.get('bids', [])
             asks_raw = result.get('asks', [])
             
-            self.logger.log(f"✅ [ASTER] Order book received: {len(bids_raw)} bids, {len(asks_raw)} asks for {contract_id}", "INFO")
+            self.logger.info(f"✅ [ASTER] Order book received: {len(bids_raw)} bids, {len(asks_raw)} asks for {contract_id}")
             
 
             # Convert to standardized format
