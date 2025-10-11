@@ -88,7 +88,9 @@ class UnifiedLogger:
                 format=console_format,
                 level=self.log_level,
                 colorize=True,
-                filter=lambda record: record["extra"].get("component_id") == self.component_id
+                filter=lambda record: record["extra"].get("component_id") == self.component_id,
+                backtrace=True,
+                diagnose=True
             )
         
         # File handler for all logs (no colors, includes extra context)
@@ -108,7 +110,9 @@ class UnifiedLogger:
             rotation="100 MB",
             retention="7 days",
             compression="zip",
-            filter=lambda record: record["extra"].get("component_id") == self.component_id
+            filter=lambda record: record["extra"].get("component_id") == self.component_id,
+            backtrace=True,
+            diagnose=True
         )
         
         # Error-specific file handler
@@ -120,7 +124,9 @@ class UnifiedLogger:
             rotation="10 MB",
             retention="30 days",
             compression="zip",
-            filter=lambda record: record["extra"].get("component_id") == self.component_id
+            filter=lambda record: record["extra"].get("component_id") == self.component_id,
+            backtrace=True,
+            diagnose=True
         )
         
         # Bind component context to all log records
@@ -128,23 +134,23 @@ class UnifiedLogger:
     
     def debug(self, message: str, **kwargs):
         """Log debug message."""
-        self._logger.debug(message, **kwargs)
+        self._logger.opt(depth=1).debug(message, **kwargs)
     
     def info(self, message: str, **kwargs):
         """Log info message."""
-        self._logger.info(message, **kwargs)
+        self._logger.opt(depth=1).info(message, **kwargs)
     
     def warning(self, message: str, **kwargs):
         """Log warning message."""
-        self._logger.warning(message, **kwargs)
+        self._logger.opt(depth=1).warning(message, **kwargs)
     
     def error(self, message: str, **kwargs):
         """Log error message."""
-        self._logger.error(message, **kwargs)
+        self._logger.opt(depth=1).error(message, **kwargs)
     
     def critical(self, message: str, **kwargs):
         """Log critical message."""
-        self._logger.critical(message, **kwargs)
+        self._logger.opt(depth=1).critical(message, **kwargs)
     
     def log(self, message: str, level: str = "INFO", **kwargs):
         """
@@ -156,18 +162,19 @@ class UnifiedLogger:
             **kwargs: Additional context
         """
         level = level.upper()
+        # Use depth=1 to skip this wrapper method and show the real caller
         if level == "DEBUG":
-            self.debug(message, **kwargs)
+            self._logger.opt(depth=1).debug(message, **kwargs)
         elif level == "INFO":
-            self.info(message, **kwargs)
+            self._logger.opt(depth=1).info(message, **kwargs)
         elif level == "WARNING":
-            self.warning(message, **kwargs)
+            self._logger.opt(depth=1).warning(message, **kwargs)
         elif level == "ERROR":
-            self.error(message, **kwargs)
+            self._logger.opt(depth=1).error(message, **kwargs)
         elif level == "CRITICAL":
-            self.critical(message, **kwargs)
+            self._logger.opt(depth=1).critical(message, **kwargs)
         else:
-            self.info(message, **kwargs)
+            self._logger.opt(depth=1).info(message, **kwargs)
     
     def log_transaction(self, order_id: str, side: str, quantity: Any, price: Any, status: str):
         """
@@ -184,7 +191,7 @@ class UnifiedLogger:
             "transaction": True  # Flag for filtering transaction logs
         }
         
-        self.info(
+        self._logger.opt(depth=1).info(
             f"TRANSACTION: {side.upper()} {quantity} @ {price} | Order: {order_id} | Status: {status}",
             **transaction_data
         )
