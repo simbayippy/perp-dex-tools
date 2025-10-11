@@ -445,22 +445,6 @@ class BackpackClient(BaseExchangeClient):
                 error_message=f"Failed to place limit order: {str(e)}"
             )
 
-    async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
-        """
-        Aggressively open a position on Backpack (uses limit order priced to fill quickly).
-        Similar to Lighter's implementation - gets aggressive price and uses place_limit_order.
-        """
-        # Get aggressive price that's likely to fill (acting like market order but with price protection)
-        order_price = await self.get_order_price(direction)
-        order_price = self.round_to_tick(order_price)
-        
-        # Use place_limit_order with the aggressive price
-        order_result = await self.place_limit_order(contract_id, quantity, order_price, direction)
-        
-        if not order_result.success:
-            raise Exception(f"[OPEN] Error placing order: {order_result.error_message}")
-        
-        return order_result
 
     async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
         """
@@ -659,6 +643,24 @@ class BackpackClient(BaseExchangeClient):
                 position_amt = abs(Decimal(position.get('netQuantity', 0)))
                 break
         return position_amt
+    
+    async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get leverage information for Backpack.
+        
+        TODO: Implement actual API query when Backpack trading is in production.
+        Currently returns conservative defaults.
+        """
+        self.logger.log(
+            f"[BACKPACK] get_leverage_info not yet implemented, using defaults for {symbol}",
+            "DEBUG"
+        )
+        return {
+            'max_leverage': Decimal('10'),
+            'max_notional': None,
+            'margin_requirement': Decimal('0.10'),  # 10% margin = 10x leverage
+            'brackets': None
+        }
 
     async def get_contract_attributes(self) -> Tuple[str, Decimal]:
         """Get contract ID for a ticker."""

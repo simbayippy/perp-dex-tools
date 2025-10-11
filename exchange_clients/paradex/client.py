@@ -355,68 +355,6 @@ class ParadexClient(BaseExchangeClient):
         else:
             return order_info
 
-    async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
-        """Place an open order with Paradex using official SDK."""
-        attempt = 0
-        from paradex_py.common.order import OrderSide
-        while True:
-            attempt += 1
-            if attempt % 5 == 0:
-                self.logger.log(f"[OPEN] Attempt {attempt} to place order", "INFO")
-                active_orders = await self.get_active_orders(contract_id)
-                active_open_orders = 0
-                for order in active_orders:
-                    if order.side == self.config.direction:
-                        active_open_orders += 1
-                if active_open_orders > 1:
-                    self.logger.log(f"[OPEN] ERROR: Active open orders abnormal: {active_open_orders}", "ERROR")
-                    raise Exception(f"[OPEN] ERROR: Active open orders abnormal: {active_open_orders}")
-
-            if direction == 'buy':
-                order_side = OrderSide.Buy
-            elif direction == 'sell':
-                order_side = OrderSide.Sell
-            else:
-                raise Exception(f"[OPEN] Invalid direction: {direction}")
-
-            order_price = await self.get_order_price(direction)
-            order_result = await self.place_post_only_order(contract_id, quantity, order_price, order_side)
-            order_status = order_result.status
-            order_id = order_result.order_id
-
-            if order_status == 'CLOSED':
-                remaining_size = order_result.remaining_size
-                cancel_reason = order_result.cancel_reason
-                if remaining_size == 0:
-                    break
-                elif cancel_reason == 'POST_ONLY_WOULD_CROSS':
-                    continue
-                else:
-                    raise Exception(f"[OPEN] [{order_id}] Error placing order: {cancel_reason}")
-            else:
-                break
-
-        if order_status in ['OPEN']:
-            # Order successfully placed
-            return OrderResult(
-                success=True,
-                order_id=order_id,
-                side=direction,
-                size=quantity,
-                price=order_price,
-                status=order_status
-            )
-        elif order_status == 'CLOSED' and remaining_size == 0:
-            return OrderResult(
-                success=True,
-                order_id=order_id,
-                side=direction,
-                size=quantity,
-                price=order_price,
-                status=order_status
-            )
-        else:
-            raise Exception(f"[OPEN] [{order_id}] Unexpected order status: {order_status}")
 
     async def _get_active_close_orders(self, contract_id: str) -> int:
         """Get active orders count for a contract."""
@@ -583,6 +521,24 @@ class ParadexClient(BaseExchangeClient):
                 return abs(Decimal(position.get('size', 0)).quantize(self.order_size_increment, rounding=ROUND_HALF_UP))
 
         return Decimal(0)
+    
+    async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get leverage information for Paradex.
+        
+        TODO: Implement actual API query when Paradex trading is in production.
+        Currently returns conservative defaults.
+        """
+        self.logger.log(
+            f"[PARADEX] get_leverage_info not yet implemented, using defaults for {symbol}",
+            "DEBUG"
+        )
+        return {
+            'max_leverage': Decimal('10'),
+            'max_notional': None,
+            'margin_requirement': Decimal('0.10'),  # 10% margin = 10x leverage
+            'brackets': None
+        }
 
     @retry(
         stop=stop_after_attempt(5),

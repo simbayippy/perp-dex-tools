@@ -526,47 +526,6 @@ class LighterClient(BaseExchangeClient):
         order_result = await self._submit_order_with_retry(order_params)
         return order_result
 
-    async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
-        """Place an open order with Lighter using official SDK."""
-
-        self.current_order = None
-        self.current_order_client_id = None
-        order_price = await self.get_order_price(direction)
-
-        order_price = self.round_to_tick(order_price)
-        order_result = await self.place_limit_order(contract_id, quantity, order_price, direction)
-        if not order_result.success:
-            raise Exception(f"[OPEN] Error placing order: {order_result.error_message}")
-
-        start_time = time.time()
-        order_status = 'OPEN'
-
-        # While waiting for order to be filled
-        while time.time() - start_time < 10 and order_status != 'FILLED':
-            await asyncio.sleep(0.1)
-            if self.current_order is not None:
-                order_status = self.current_order.status
-
-        # Handle case where current_order might be None
-        if self.current_order is not None:
-            return OrderResult(
-                success=True,
-                order_id=self.current_order.order_id,
-                side=direction,
-                size=quantity,
-                price=order_price,
-                status=self.current_order.status
-            )
-        else:
-            # Fallback when current_order is None
-            return OrderResult(
-                success=True,
-                order_id=order_result.order_id if order_result else None,
-                side=direction,
-                size=quantity,
-                price=order_price,
-                status='OPEN'
-            )
 
     async def _get_active_close_orders(self, contract_id: str) -> int:
         """Get active orders count for a contract using official SDK."""

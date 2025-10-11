@@ -366,9 +366,6 @@ class TradingBot:
     async def _execute_order(self, order_params) -> bool:
         """Execute an order based on order parameters."""
         try:
-            # Determine if this is an open order (for grid strategy state tracking)
-            is_open_order = order_params.metadata.get("stage") == "open" if order_params.metadata else False
-            
             if order_params.order_type == "market":
                 result = await self.exchange_client.place_market_order(
                     contract_id=order_params.contract_id or self.config.contract_id,
@@ -381,26 +378,19 @@ class TradingBot:
                     best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(self.config.contract_id)
                     order_params.price = best_ask if order_params.side == 'buy' else best_bid
                 
-                # Use place_open_order for open orders, place_close_order for close orders
-                if is_open_order:
-                    result = await self.exchange_client.place_open_order(
-                        contract_id=order_params.contract_id or self.config.contract_id,
-                        quantity=order_params.quantity,
-                        direction=order_params.side
-                    )
-                else:
-                    result = await self.exchange_client.place_close_order(
-                        contract_id=order_params.contract_id or self.config.contract_id,
-                        quantity=order_params.quantity,
-                        price=order_params.price,
-                        side=order_params.side
-                    )
+                # Use place_limit_order for all limit orders
+                result = await self.exchange_client.place_limit_order(
+                    contract_id=order_params.contract_id or self.config.contract_id,
+                    quantity=order_params.quantity,
+                    price=order_params.price,
+                    side=order_params.side
+                )
             
             if result.success:
                 self.logger.log(f"Order executed: {order_params.side} {order_params.quantity} @ {order_params.price or result.price or 'market'}", "INFO")
                 
-                # Notify strategy if this was an open order that got filled
-                if is_open_order and result.price and hasattr(self.strategy, 'notify_order_filled'):
+                # Notify strategy if order got filled (for state tracking)
+                if result.price and hasattr(self.strategy, 'notify_order_filled'):
                     filled_quantity = result.filled_size or order_params.quantity
                     self.strategy.notify_order_filled(result.price, filled_quantity)
                 

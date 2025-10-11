@@ -683,22 +683,6 @@ class AsterClient(BaseExchangeClient):
                 error_message=f'Unknown order status: {order_status}'
             )
 
-    async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
-        """
-        Aggressively open a position on Aster (uses limit order priced to fill quickly).
-        Similar to Lighter's implementation - gets aggressive price and uses place_limit_order.
-        """
-        # Get aggressive price that's likely to fill (acting like market order but with price protection)
-        order_price = await self.get_order_price(direction)
-        order_price = self.round_to_tick(order_price)
-        
-        # Use place_limit_order with the aggressive price
-        order_result = await self.place_limit_order(contract_id, quantity, order_price, direction)
-        
-        if not order_result.success:
-            raise Exception(f"[OPEN] Error placing order: {order_result.error_message}")
-        
-        return order_result
 
     async def _get_active_close_orders(self, contract_id: str) -> int:
         """Get active orders count for a contract."""
