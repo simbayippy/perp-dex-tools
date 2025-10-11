@@ -22,9 +22,9 @@ from enum import Enum
 from dataclasses import dataclass
 import time
 import asyncio
-import logging
+from helpers.unified_logger import get_core_logger
 
-logger = logging.getLogger(__name__)
+logger = get_core_logger("order_executor")
 
 
 class ExecutionMode(Enum):
@@ -110,7 +110,7 @@ class OrderExecutor:
         """
         self.default_timeout = default_timeout
         self.price_provider = price_provider
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_core_logger("order_executor")
     
     async def execute_order(
         self,

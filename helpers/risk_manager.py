@@ -79,11 +79,13 @@ class RiskManager:
         )
         
         if self.enabled:
-            self.logger.info("Risk management enabled with thresholds:")
-            self.logger.info(f"  - Margin failures: {self.thresholds.margin_failure_threshold}")
-            self.logger.info(f"  - Time stall: {self.thresholds.time_stall_threshold}s")
-            self.logger.info(f"  - Account loss: {self.thresholds.account_loss_threshold * 100}%")
-            self.logger.info(f"  - Position closure: {self.thresholds.position_closure_percent * 100}%")
+            self.logger.info(
+                f"Risk management enabled with thresholds: "
+                f"Margin failures: {self.thresholds.margin_failure_threshold}, "
+                f"Time stall: {self.thresholds.time_stall_threshold}s, "
+                f"Account loss: {self.thresholds.account_loss_threshold * 100}%, "
+                f"Position closure: {self.thresholds.position_closure_percent * 100}%"
+            )
         else:
             self.logger.info("Risk management disabled (exchange not supported)")
     

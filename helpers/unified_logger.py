@@ -83,9 +83,24 @@ class UnifiedLogger:
                 else:
                     short_name = record["name"]
                 
-                # Pad the source location to a fixed width for alignment
+                # Create source location string
                 source_location = f"{short_name}:{record['function']}:{record['line']}"
-                record["extra"]["short_name"] = f"{source_location:<45}"  # Increase to 60 char width for better alignment
+                
+                # Smart truncation if longer than 45 characters
+                max_width = 45
+                if len(source_location) > max_width:
+                    # Always preserve the line number at the end
+                    line_part = f":{record['line']}"
+                    available_space = max_width - len(line_part) - 3  # 3 for "..."
+                    
+                    if available_space > 10:  # Only truncate if we have reasonable space
+                        # Take first part and add ellipsis
+                        truncated = source_location[:available_space] + "..." + line_part
+                        source_location = truncated
+                    # If not enough space, just use the original (better than unreadable)
+                
+                # Pad to fixed width for alignment
+                record["extra"]["short_name"] = f"{source_location:<45}"
                 return True
                 
             console_format = (
@@ -116,9 +131,24 @@ class UnifiedLogger:
             else:
                 short_name = record["name"]
             
-            # Pad the source location to a fixed width for alignment in files too
+            # Create source location string
             source_location = f"{short_name}:{record['function']}:{record['line']}"
-            record["extra"]["short_name"] = f"{source_location:<60}"  # Increase to 60 char width for better alignment
+            
+            # Smart truncation if longer than 45 characters
+            max_width = 45
+            if len(source_location) > max_width:
+                # Always preserve the line number at the end
+                line_part = f":{record['line']}"
+                available_space = max_width - len(line_part) - 3  # 3 for "..."
+                
+                if available_space > 10:  # Only truncate if we have reasonable space
+                    # Take first part and add ellipsis
+                    truncated = source_location[:available_space] + "..." + line_part
+                    source_location = truncated
+                # If not enough space, just use the original (better than unreadable)
+            
+            # Pad to fixed width for alignment in files too
+            record["extra"]["short_name"] = f"{source_location:<45}"
             return True
             
         file_format = (
@@ -151,9 +181,24 @@ class UnifiedLogger:
             else:
                 short_name = record["name"]
             
-            # Pad the source location to a fixed width for alignment in error logs too
+            # Create source location string
             source_location = f"{short_name}:{record['function']}:{record['line']}"
-            record["extra"]["short_name"] = f"{source_location:<60}"  # Increase to 60 char width for better alignment
+            
+            # Smart truncation if longer than 45 characters
+            max_width = 45
+            if len(source_location) > max_width:
+                # Always preserve the line number at the end
+                line_part = f":{record['line']}"
+                available_space = max_width - len(line_part) - 3  # 3 for "..."
+                
+                if available_space > 10:  # Only truncate if we have reasonable space
+                    # Take first part and add ellipsis
+                    truncated = source_location[:available_space] + "..." + line_part
+                    source_location = truncated
+                # If not enough space, just use the original (better than unreadable)
+            
+            # Pad to fixed width for alignment in error logs too
+            record["extra"]["short_name"] = f"{source_location:<45}"
             return True
             
         _logger.add(
