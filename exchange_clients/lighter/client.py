@@ -17,7 +17,7 @@ import lighter
 from lighter import SignerClient, ApiClient, Configuration
 
 # Import custom WebSocket implementation
-from .lighter_custom_websocket import LighterCustomWebSocketManager
+from .websocket_manager import LighterWebSocketManager
 
 
 class LighterClient(BaseExchangeClient):
@@ -178,7 +178,7 @@ class LighterClient(BaseExchangeClient):
             self.config.lighter_client = self.lighter_client
 
             # Initialize WebSocket manager (using custom implementation)
-            self.ws_manager = LighterCustomWebSocketManager(
+            self.ws_manager = LighterWebSocketManager(
                 config=self.config,
                 order_update_callback=self._handle_websocket_order_update
             )

@@ -4,7 +4,6 @@ Aster exchange client implementation.
 
 import os
 import asyncio
-import json
 import time
 import hmac
 import hashlib
@@ -12,311 +11,11 @@ from decimal import Decimal
 from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import urlencode
 import aiohttp
-import websockets
-import sys
 
 from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
 from exchange_clients.aster.common import get_aster_symbol_format
+from exchange_clients.aster.websocket_manager import AsterWebSocketManager
 from helpers.unified_logger import get_exchange_logger
-
-
-class AsterWebSocketManager:
-    """WebSocket manager for Aster order updates."""
-
-    def __init__(self, config: Dict[str, Any], api_key: str, secret_key: str, order_update_callback):
-        self.api_key = api_key
-        self.secret_key = secret_key
-        self.order_update_callback = order_update_callback
-        self.websocket = None
-        self.running = False
-        self.base_url = "https://fapi.asterdex.com"
-        self.ws_url = "wss://fstream.asterdex.com"
-        self.listen_key = None
-        self.logger = None
-        self._keepalive_task = None
-        self._last_ping_time = None
-        self.config = config
-
-    def _generate_signature(self, params: Dict[str, Any]) -> str:
-        """Generate HMAC SHA256 signature for Aster API authentication."""
-        # Use urlencode to properly format the query string
-        query_string = urlencode(params)
-
-        # Generate HMAC SHA256 signature
-        signature = hmac.new(
-            self.secret_key.encode('utf-8'),
-            query_string.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
-
-        return signature
-
-    async def _get_listen_key(self) -> str:
-        """Get listen key for user data stream."""
-        params = {
-            'timestamp': int(time.time() * 1000)
-        }
-        signature = self._generate_signature(params)
-        params['signature'] = signature
-
-        headers = {
-            'X-MBX-APIKEY': self.api_key,
-            'Content-Type': 'application/x-www-form-urlencoded'
-        }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                'https://fapi.asterdex.com/fapi/v1/listenKey',
-                headers=headers,
-                data=params
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    return result.get('listenKey')
-                else:
-                    raise Exception(f"Failed to get listen key: {response.status}")
-
-    async def _keepalive_listen_key(self) -> bool:
-        """Keep alive the listen key to prevent timeout."""
-        try:
-            if not self.listen_key:
-                return False
-
-            params = {
-                'timestamp': int(time.time() * 1000)
-            }
-            signature = self._generate_signature(params)
-            params['signature'] = signature
-
-            headers = {
-                'X-MBX-APIKEY': self.api_key,
-                'Content-Type': 'application/x-www-form-urlencoded'
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.put(
-                    f"{self.base_url}/fapi/v1/listenKey",
-                    headers=headers,
-                    data=params
-                ) as response:
-                    if response.status == 200:
-                        if self.logger:
-                            self.logger.debug("Listen key keepalive successful")
-                        return True
-                    else:
-                        if self.logger:
-                            self.logger.warning(f"Failed to keepalive listen key: {response.status}")
-                        return False
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error keeping alive listen key: {e}")
-            return False
-
-    async def _check_connection_health(self) -> bool:
-        """Check if the WebSocket connection is healthy based on ping timing."""
-        if not self._last_ping_time:
-            return True  # No pings received yet, assume healthy
-
-        # Check if we haven't received a ping in the last 10 minutes
-        # (server sends pings every 5 minutes, so 10 minutes indicates a problem)
-        time_since_last_ping = time.time() - self._last_ping_time
-        if time_since_last_ping > 10 * 60:  # 10 minutes
-            if self.logger:
-                self.logger.log(
-                    f"No ping received for {time_since_last_ping/60:.1f} minutes, "
-                    "connection may be unhealthy", "WARNING"
-                )
-            return False
-
-        return True
-
-    async def _start_keepalive_task(self):
-        """Start the keepalive task to extend listen key validity and monitor connection health."""
-        while self.running:
-            try:
-                # Check connection health every 5 minutes
-                await asyncio.sleep(5 * 60)
-
-                if not self.running:
-                    break
-
-                # Check if connection is healthy
-                if not await self._check_connection_health():
-                    if self.logger:
-                        self.logger.log("Connection health check failed, reconnecting...", "WARNING")
-                    # Try to reconnect
-                    try:
-                        await self.connect()
-                    except Exception as e:
-                        if self.logger:
-                            self.logger.log(f"Reconnection failed: {e}", "ERROR")
-                        # Wait before retrying
-                        await asyncio.sleep(30)
-                    continue
-
-                # Check if we need to keepalive the listen key (every 50 minutes)
-                if self.listen_key and time.time() % (50 * 60) < 5 * 60:  # Within 5 minutes of 50-minute mark
-                    success = await self._keepalive_listen_key()
-                    if not success:
-                        if self.logger:
-                            self.logger.log("Listen key keepalive failed, reconnecting...", "WARNING")
-                        # Try to reconnect
-                        try:
-                            await self.connect()
-                        except Exception as e:
-                            if self.logger:
-                                self.logger.log(f"Reconnection failed: {e}", "ERROR")
-                            # Wait before retrying
-                            await asyncio.sleep(30)
-
-            except Exception as e:
-                if self.logger:
-                    self.logger.log(f"Error in keepalive task: {e}", "ERROR")
-                # Wait a bit before retrying
-                await asyncio.sleep(60)
-
-    async def connect(self):
-        """Connect to Aster WebSocket."""
-        try:
-            # Get listen key
-            self.listen_key = await self._get_listen_key()
-            if not self.listen_key:
-                raise Exception("Failed to get listen key")
-
-            # Connect to WebSocket
-            ws_url = f"{self.ws_url}/ws/{self.listen_key}"
-            self.websocket = await websockets.connect(ws_url)
-            self.running = True
-
-            if self.logger:
-                self.logger.info("Connected to Aster WebSocket with listen key")
-
-            # Start keepalive task
-            self._keepalive_task = asyncio.create_task(self._start_keepalive_task())
-
-            # Start listening for messages
-            await self._listen()
-
-        except Exception as e:
-            if self.logger:
-                self.logger.log(f"WebSocket connection error: {e}", "ERROR")
-            raise
-
-    async def _listen(self):
-        """Listen for WebSocket messages."""
-        try:
-            async for message in self.websocket:
-                if not self.running:
-                    break
-
-                # Check if this is a ping frame (websockets library handles pong automatically)
-                if isinstance(message, bytes) and message == b'\x89\x00':  # Ping frame
-                    self._last_ping_time = time.time()
-                    if self.logger:
-                        self.logger.log("Received ping frame, sending pong", "DEBUG")
-                    continue
-
-                try:
-                    data = json.loads(message)
-                    await self._handle_message(data)
-                except json.JSONDecodeError as e:
-                    if self.logger:
-                        self.logger.log(f"Failed to parse WebSocket message: {e}", "ERROR")
-                except Exception as e:
-                    if self.logger:
-                        self.logger.log(f"Error handling WebSocket message: {e}", "ERROR")
-
-        except websockets.exceptions.ConnectionClosed:
-            if self.logger:
-                self.logger.log("WebSocket connection closed", "WARNING")
-        except Exception as e:
-            if self.logger:
-                self.logger.log(f"WebSocket listen error: {e}", "ERROR")
-
-    async def _handle_message(self, data: Dict[str, Any]):
-        """Handle incoming WebSocket messages."""
-        try:
-            event_type = data.get('e', '')
-
-            if event_type == 'ORDER_TRADE_UPDATE':
-                await self._handle_order_update(data)
-            elif event_type == 'listenKeyExpired':
-                if self.logger:
-                    self.logger.log("Listen key expired, reconnecting...", "WARNING")
-                # Reconnect with new listen key
-                await self.connect()
-            else:
-                if self.logger:
-                    self.logger.log(f"Unknown WebSocket message: {data}", "DEBUG")
-
-        except Exception as e:
-            if self.logger:
-                self.logger.log(f"Error handling WebSocket message: {e}", "ERROR")
-
-    async def _handle_order_update(self, order_data: Dict[str, Any]):
-        """Handle order update messages."""
-        try:
-            order_info = order_data.get('o', {})
-
-            order_id = order_info.get('i', '')
-            symbol = order_info.get('s', '')
-            side = order_info.get('S', '')
-            quantity = order_info.get('q', '0')
-            price = order_info.get('p', '0')
-            executed_qty = order_info.get('z', '0')
-            status = order_info.get('X', '')
-
-            # Map status
-            status_map = {
-                'NEW': 'OPEN',
-                'PARTIALLY_FILLED': 'PARTIALLY_FILLED',
-                'FILLED': 'FILLED',
-                'CANCELED': 'CANCELED',
-                'REJECTED': 'REJECTED',
-                'EXPIRED': 'EXPIRED'
-            }
-            mapped_status = status_map.get(status, status)
-
-            # Call the order update callback if it exists
-            if hasattr(self, 'order_update_callback') and self.order_update_callback:
-                # Let strategy determine order type
-                order_type = "ORDER"
-
-                await self.order_update_callback({
-                    'order_id': order_id,
-                    'side': side.lower(),
-                    'order_type': order_type,
-                    'status': mapped_status,
-                    'size': quantity,
-                    'price': price,
-                    'contract_id': symbol,
-                    'filled_size': executed_qty
-                })
-
-        except Exception as e:
-            if self.logger:
-                self.logger.log(f"Error handling order update: {e}", "ERROR")
-
-    async def disconnect(self):
-        """Disconnect from WebSocket."""
-        self.running = False
-
-        # Cancel keepalive task
-        if self._keepalive_task and not self._keepalive_task.done():
-            self._keepalive_task.cancel()
-            try:
-                await self._keepalive_task
-            except asyncio.CancelledError:
-                pass
-
-        if self.websocket:
-            await self.websocket.close()
-            if self.logger:
-                self.logger.log("WebSocket disconnected", "INFO")
-
-    def set_logger(self, logger):
-        """Set the logger instance."""
-        self.logger = logger
 
 
 class AsterClient(BaseExchangeClient):
@@ -391,9 +90,8 @@ class AsterClient(BaseExchangeClient):
                 # According to Aster API docs: totalParams = queryString + requestBody
                 all_params = {**params, **data}
                 
-                self.logger.log(
-                    f"POST {endpoint} - Params: {params}, Data: {data}",
-                    "DEBUG"
+                self.logger.debug(
+                    f"POST {endpoint} - Params: {params}, Data: {data}"
                 )
                 
                 signature = self._generate_signature(all_params)
@@ -401,9 +99,8 @@ class AsterClient(BaseExchangeClient):
 
                 async with session.post(url, data=all_params, headers=headers) as response:
                     result = await response.json()
-                    self.logger.log(
-                        f"Response {response.status}: {result.get('orderId', result.get('status', 'N/A'))}",
-                        "DEBUG"
+                    self.logger.debug(
+                        f"Response {response.status}: {result.get('orderId', result.get('status', 'N/A'))}"
                     )
                     if response.status != 200:
                         raise Exception(f"API request failed: {result}")
@@ -438,7 +135,7 @@ class AsterClient(BaseExchangeClient):
             # Wait a moment for connection to establish
             await asyncio.sleep(2)
         except Exception as e:
-            self.logger.log(f"Error connecting to Aster WebSocket: {e}", "ERROR")
+            self.logger.error(f"Error connecting to Aster WebSocket: {e}")
             raise
 
     async def disconnect(self) -> None:
@@ -447,7 +144,7 @@ class AsterClient(BaseExchangeClient):
             if hasattr(self, 'ws_manager') and self.ws_manager:
                 await self.ws_manager.disconnect()
         except Exception as e:
-            self.logger.log(f"Error during Aster disconnect: {e}", "ERROR")
+            self.logger.error(f"Error during Aster disconnect: {e}")
 
     def get_exchange_name(self) -> str:
         """Get the exchange name."""
@@ -495,7 +192,7 @@ class AsterClient(BaseExchangeClient):
             if self._order_update_handler:
                 self._order_update_handler(order_data)
         except Exception as e:
-            self.logger.log(f"Error handling WebSocket order update: {e}", "ERROR")
+            self.logger.error(f"Error handling WebSocket order update: {e}")
 
     @query_retry(default_return=(0, 0))
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
@@ -554,9 +251,8 @@ class AsterClient(BaseExchangeClient):
             bids = [{'price': Decimal(bid[0]), 'size': Decimal(bid[1])} for bid in bids_raw]
             asks = [{'price': Decimal(ask[0]), 'size': Decimal(ask[1])} for ask in asks_raw]
 
-            self.logger.log(
-                f"✅ [ASTER] get_order_book_depth finished executing for {contract_id}",
-                "INFO"
+            self.logger.info(
+                f"✅ [ASTER] get_order_book_depth finished executing for {contract_id}"
             ) 
             return {
                 'bids': bids,
@@ -564,11 +260,11 @@ class AsterClient(BaseExchangeClient):
             }
             
         except Exception as e:
-            self.logger.log(f"❌ [ASTER] ERROR fetching order book for '{contract_id}': {e}", "ERROR")
-            self.logger.log(f"   Hint: Aster expects symbols with quote currency (e.g., 'BTCUSDT' not 'BTC')", "ERROR")
-            self.logger.log(f"❌ [ASTER] Error fetching order book for {contract_id}: {e}", "ERROR")
+            self.logger.error(f"❌ [ASTER] ERROR fetching order book for '{contract_id}': {e}")
+            self.logger.error(f"   Hint: Aster expects symbols with quote currency (e.g., 'BTCUSDT' not 'BTC')")
+            self.logger.error(f"❌ [ASTER] Error fetching order book for {contract_id}: {e}")
             import traceback
-            self.logger.log(f"Traceback: {traceback.format_exc()}", "DEBUG")
+            self.logger.debug(f"Traceback: {traceback.format_exc()}")
             # Return empty order book on error
             return {'bids': [], 'asks': []}
 
@@ -576,7 +272,7 @@ class AsterClient(BaseExchangeClient):
         """Get the price of an order with Aster using official SDK."""
         best_bid, best_ask = await self.fetch_bbo_prices(self.config.contract_id)
         if best_bid <= 0 or best_ask <= 0:
-            self.logger.log("Invalid bid/ask prices", "ERROR")
+            self.logger.error("Invalid bid/ask prices")
             raise ValueError("Invalid bid/ask prices")
 
         if direction == 'buy':
@@ -610,15 +306,14 @@ class AsterClient(BaseExchangeClient):
         # from get_contract_attributes(), so use it directly
         # NO need to normalize again (would cause "MONUSDTUSDT")
         
-        self.logger.log(f"Using contract_id for order: '{contract_id}'", "DEBUG")
+        self.logger.debug(f"Using contract_id for order: '{contract_id}'")
         
         # Round quantity to step size (e.g., 941.8750094 → 941.875 or 941 depending on stepSize)
         rounded_quantity = self.round_to_step(Decimal(str(quantity)))
         
-        self.logger.log(
+        self.logger.debug(
             f"Rounded quantity: {quantity} → {rounded_quantity} "
-            f"(step_size={getattr(self.config, 'step_size', 'unknown')})",
-            "DEBUG"
+            f"(step_size={getattr(self.config, 'step_size', 'unknown')})"
         )
         
         # Place limit order with post-only (GTX) for maker fees
@@ -631,15 +326,14 @@ class AsterClient(BaseExchangeClient):
             'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
         }
         
-        self.logger.log(f"Placing {side.upper()} limit order: {rounded_quantity} @ {price}", "DEBUG")
+        self.logger.debug(f"Placing {side.upper()} limit order: {rounded_quantity} @ {price}")
 
         try:
             result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
         except Exception as e:
-            self.logger.log(
+            self.logger.error(
                 f"Failed to place limit order for {contract_id} "
-                f"({side.upper()}, qty={quantity}, price={price}): {e}",
-                "ERROR"
+                f"({side.upper()}, qty={quantity}, price={price}): {e}"
             )
             raise
         order_status = result.get('status', '')
@@ -695,12 +389,12 @@ class AsterClient(BaseExchangeClient):
         while True:
             attempt += 1
             if attempt % 5 == 0:
-                self.logger.log(f"[CLOSE] Attempt {attempt} to place order", "INFO")
+                self.logger.info(f"[CLOSE] Attempt {attempt} to place order")
                 current_close_orders = await self._get_active_close_orders(contract_id)
 
                 if current_close_orders - active_close_orders > 1:
-                    self.logger.log(f"[CLOSE] ERROR: Active close orders abnormal: "
-                                    f"{active_close_orders}, {current_close_orders}", "ERROR")
+                    self.logger.error(f"[CLOSE] ERROR: Active close orders abnormal: "
+                                    f"{active_close_orders}, {current_close_orders}")
                     raise Exception(f"[CLOSE] ERROR: Active close orders abnormal: "
                                     f"{active_close_orders}, {current_close_orders}")
                 else:
@@ -766,9 +460,8 @@ class AsterClient(BaseExchangeClient):
             # Contract ID should already be in Aster format (e.g., "MONUSDT")
             # from get_contract_attributes(), so use it directly
             
-            self.logger.log(
-                f"🔍 [ASTER] Using contract_id for market order: '{contract_id}'",
-                "DEBUG"
+            self.logger.debug(
+                f"🔍 [ASTER] Using contract_id for market order: '{contract_id}'"
             )
             
             # Validate side
@@ -778,9 +471,8 @@ class AsterClient(BaseExchangeClient):
             # Round quantity to step size
             rounded_quantity = self.round_to_step(Decimal(str(quantity)))
             
-            self.logger.log(
-                f"📐 [ASTER] Rounded quantity: {quantity} → {rounded_quantity}",
-                "DEBUG"
+            self.logger.debug(
+                f"📐 [ASTER] Rounded quantity: {quantity} → {rounded_quantity}"
             )
 
             # Place the market order
@@ -791,9 +483,8 @@ class AsterClient(BaseExchangeClient):
                 'quantity': str(rounded_quantity)
             }
             
-            self.logger.log(
-                f"📤 [ASTER] Placing market order with data: {order_data}",
-                "DEBUG"
+            self.logger.debug(
+                f"📤 [ASTER] Placing market order with data: {order_data}"
             )
 
             result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
@@ -824,7 +515,7 @@ class AsterClient(BaseExchangeClient):
                 )
                 
         except Exception as e:
-            self.logger.log(f"Error placing market order: {e}", "ERROR")
+            self.logger.error(f"Error placing market order: {e}")
             return OrderResult(success=False, error_message=str(e))
 
     async def cancel_order(self, order_id: str) -> OrderResult:
@@ -922,9 +613,8 @@ class AsterClient(BaseExchangeClient):
                 position_info = result[0]
                 leverage = int(position_info.get('leverage', 0))
                 
-                self.logger.log(
-                    f"📊 [ASTER] Account leverage for {symbol}: {leverage}x",
-                    "DEBUG"
+                self.logger.debug(
+                    f"📊 [ASTER] Account leverage for {symbol}: {leverage}x"
                 )
                 
                 return leverage if leverage > 0 else None
@@ -932,7 +622,7 @@ class AsterClient(BaseExchangeClient):
             return None
         
         except Exception as e:
-            self.logger.log(f"Could not get account leverage for {symbol}: {e}", "WARNING")
+            self.logger.warning(f"Could not get account leverage for {symbol}: {e}")
             return None
     
     async def set_account_leverage(self, symbol: str, leverage: int) -> bool:
@@ -953,17 +643,15 @@ class AsterClient(BaseExchangeClient):
         """
         try:
             if leverage < 1 or leverage > 125:
-                self.logger.log(
-                    f"[ASTER] Invalid leverage value: {leverage}. Must be between 1 and 125",
-                    "ERROR"
+                self.logger.error(
+                    f"[ASTER] Invalid leverage value: {leverage}. Must be between 1 and 125"
                 )
                 return False
             
             normalized_symbol = f"{symbol}USDT"
             
-            self.logger.log(
-                f"[ASTER] Setting leverage for {symbol} to {leverage}x...",
-                "INFO"
+            self.logger.info(
+                f"[ASTER] Setting leverage for {symbol} to {leverage}x..."
             )
             
             result = await self._make_request(
@@ -986,23 +674,20 @@ class AsterClient(BaseExchangeClient):
                 actual_leverage = result.get('leverage')
                 max_notional = result.get('maxNotionalValue')
                 
-                self.logger.log(
+                self.logger.info(
                     f"✅ [ASTER] Leverage set for {symbol}: {actual_leverage}x "
-                    f"(max notional: ${max_notional})",
-                    "INFO"
+                    f"(max notional: ${max_notional})"
                 )
                 return True
             else:
-                self.logger.log(
-                    f"[ASTER] Unexpected response when setting leverage: {result}",
-                    "WARNING"
+                self.logger.warning(
+                    f"[ASTER] Unexpected response when setting leverage: {result}"
                 )
                 return False
         
         except Exception as e:
-            self.logger.log(
-                f"[ASTER] Error setting leverage for {symbol} to {leverage}x: {e}",
-                "ERROR"
+            self.logger.error(
+                f"[ASTER] Error setting leverage for {symbol} to {leverage}x: {e}"
             )
             return False
     
@@ -1080,19 +765,17 @@ class AsterClient(BaseExchangeClient):
                         if notional_cap:
                             leverage_info['max_notional'] = Decimal(str(notional_cap))
                         
-                        self.logger.log(
+                        self.logger.debug(
                             f"[ASTER] Leverage brackets for {symbol}: "
                             f"max={leverage_info['max_leverage']}x, "
-                            f"notional_cap=${leverage_info['max_notional']}",
-                            "DEBUG"
+                            f"notional_cap=${leverage_info['max_notional']}"
                         )
                         
             except Exception as e:
                 # Fallback: If leverageBracket endpoint fails, try exchangeInfo
-                self.logger.log(
+                self.logger.debug(
                     f"[ASTER] leverageBracket endpoint failed for {symbol}, "
-                    f"falling back to exchangeInfo: {e}",
-                    "DEBUG"
+                    f"falling back to exchangeInfo: {e}"
                 )
                 
                 result = await self._make_request('GET', '/fapi/v1/exchangeInfo')
@@ -1130,40 +813,37 @@ class AsterClient(BaseExchangeClient):
                 
                 # Warn if account leverage exceeds symbol limits
                 if leverage_info['max_leverage'] and effective_leverage > leverage_info['max_leverage']:
-                    self.logger.log(
+                    self.logger.warning(
                         f"⚠️  [ASTER] Account leverage ({account_leverage}x) exceeds "
-                        f"symbol max ({leverage_info['max_leverage']}x) for {symbol}!",
-                        "WARNING"
+                        f"symbol max ({leverage_info['max_leverage']}x) for {symbol}!"
                     )
             else:
                 # No account leverage set - this will likely cause trading errors!
-                self.logger.log(
+                self.logger.warning(
                     f"⚠️  [ASTER] No account leverage configured for {symbol}! "
                     f"You need to set leverage on Aster before trading. "
-                    f"Use: POST /fapi/v1/leverage with symbol={normalized_symbol}",
-                    "WARNING"
+                    f"Use: POST /fapi/v1/leverage with symbol={normalized_symbol}"
                 )
                 # Use symbol max as fallback for margin requirement calculation
                 if leverage_info['max_leverage']:
                     leverage_info['margin_requirement'] = Decimal('1') / leverage_info['max_leverage']
             
             # Log comprehensive info
-            self.logger.log(
+            self.logger.info(
                 f"📊 [ASTER] Leverage info for {symbol}:\n"
                 f"  - Symbol max leverage: {leverage_info.get('max_leverage')}x\n"
                 f"  - Account leverage: {leverage_info.get('account_leverage')}x\n"
                 f"  - Max notional: ${leverage_info.get('max_notional')}\n"
                 f"  - Margin requirement: {leverage_info.get('margin_requirement')} "
-                f"({(leverage_info.get('margin_requirement', 0) * 100):.1f}%)",
-                "INFO"
+                f"({(leverage_info.get('margin_requirement', 0) * 100):.1f}%)"
             )
             
             return leverage_info
         
         except Exception as e:
-            self.logger.log(f"Error getting leverage info for {symbol}: {e}", "ERROR")
+            self.logger.error(f"Error getting leverage info for {symbol}: {e}")
             import traceback
-            self.logger.log(f"Traceback: {traceback.format_exc()}", "DEBUG")
+            self.logger.debug(f"Traceback: {traceback.format_exc()}")
             
             # Conservative fallback
             return {
@@ -1178,7 +858,7 @@ class AsterClient(BaseExchangeClient):
         """Get contract ID and tick size for a ticker."""
         ticker = self.config.ticker
         if len(ticker) == 0:
-            self.logger.log("Ticker is empty", "ERROR")
+            self.logger.error("Ticker is empty")
             raise ValueError("Ticker is empty")
 
         try:
@@ -1190,10 +870,9 @@ class AsterClient(BaseExchangeClient):
             
             # Debug: List all available symbols
             available_symbols = [s.get('symbol') for s in result['symbols'] if s.get('status') == 'TRADING']
-            self.logger.log(
+            self.logger.debug(
                 f"🔍 [ASTER] Found {len(available_symbols)} tradeable symbols. "
-                f"Looking for {ticker}USDT...",
-                "DEBUG"
+                f"Looking for {ticker}USDT..."
             )
             
             for symbol_info in result['symbols']:
@@ -1202,9 +881,8 @@ class AsterClient(BaseExchangeClient):
                     found_symbol = symbol_info
                     symbol_status = symbol_info.get('status', 'UNKNOWN')
                     
-                    self.logger.log(
-                        f"🔍 [ASTER] Found {ticker}USDT with status: {symbol_status}",
-                        "DEBUG"
+                    self.logger.debug(
+                        f"🔍 [ASTER] Found {ticker}USDT with status: {symbol_status}"
                     )
                     
                     # Only accept TRADING status
@@ -1230,16 +908,15 @@ class AsterClient(BaseExchangeClient):
                         # Store step_size in config for quantity rounding
                         self.config.step_size = step_size
                         
-                        self.logger.log(
+                        self.logger.debug(
                             f"📐 [ASTER] {ticker}USDT filters: "
-                            f"tick_size={self.config.tick_size}, step_size={step_size}, min_qty={min_quantity}",
-                            "DEBUG"
+                            f"tick_size={self.config.tick_size}, step_size={step_size}, min_qty={min_quantity}"
                         )
 
                         if self.config.quantity < min_quantity:
-                            self.logger.log(
+                            self.logger.error(
                                 f"Order quantity is less than min quantity: "
-                                f"{self.config.quantity} < {min_quantity}", "ERROR"
+                                f"{self.config.quantity} < {min_quantity}"
                             )
                             raise ValueError(
                                 f"Order quantity is less than min quantity: "
@@ -1247,7 +924,7 @@ class AsterClient(BaseExchangeClient):
                             )
 
                         if self.config.tick_size == 0:
-                            self.logger.log("Failed to get tick size for ticker", "ERROR")
+                            self.logger.error("Failed to get tick size for ticker")
                             raise ValueError("Failed to get tick size for ticker")
 
                         return self.config.contract_id, self.config.tick_size
@@ -1257,20 +934,18 @@ class AsterClient(BaseExchangeClient):
             
             # Improved error message
             if found_symbol:
-                self.logger.log(
-                    f"Symbol {ticker}USDT exists on Aster but is not tradeable (status: {symbol_status})",
-                    "ERROR"
+                self.logger.error(
+                    f"Symbol {ticker}USDT exists on Aster but is not tradeable (status: {symbol_status})"
                 )
                 raise ValueError(
                     f"Symbol {ticker}USDT is not tradeable on Aster (status: {symbol_status})"
                 )
             else:
-                self.logger.log(
-                    f"Symbol {ticker}USDT not found on Aster",
-                    "ERROR"
+                self.logger.error(
+                    f"Symbol {ticker}USDT not found on Aster"
                 )
                 raise ValueError(f"Symbol {ticker}USDT not found on Aster")
 
         except Exception as e:
-            self.logger.log(f"Error getting contract attributes: {e}", "ERROR")
+            self.logger.error(f"Error getting contract attributes: {e}")
             raise
