@@ -265,7 +265,7 @@ class TradingBot:
                 await self.exchange_client.connect()
 
             # wait for connection to establish
-            await asyncio.sleep(5)
+            # await asyncio.sleep(5)
             
             # Initialize strategy after connection
             await self.strategy.initialize()
