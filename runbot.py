@@ -135,14 +135,14 @@ def setup_logging(log_level: str):
         root_logger.removeHandler(handler)
 
     # Configure root logger WITH a console handler for standard Python loggers
-    # (TradingLogger has its own console handler when log_to_console=True)
+    # (UnifiedLogger handles its own console output)
     root_logger.setLevel(level)
     
     # Add console handler for standard Python loggers (like atomic_multi_order.py)
     if not any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers):
         console_handler = logging.StreamHandler()
         console_handler.setLevel(level)
-        # Use cleaner format matching TradingLogger style
+        # Use cleaner format matching UnifiedLogger style
         formatter = logging.Formatter(
             '%(asctime)s.%(msecs)03d - %(levelname)s - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
