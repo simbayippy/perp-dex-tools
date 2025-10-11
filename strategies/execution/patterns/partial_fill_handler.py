@@ -230,9 +230,9 @@ class PartialFillHandler:
             Formatted incident report string
         """
         report_lines = [
-            "=" * 60,
+            "=" * 55,
             "⚠️  PARTIAL FILL INCIDENT REPORT",
-            "=" * 60,
+            "=" * 55,
             "",
             f"Timestamp: {datetime.now().isoformat()}",
             "",
@@ -269,7 +269,7 @@ class PartialFillHandler:
             "  2. Check exchange connectivity",
             "  3. Verify liquidity conditions",
             "  4. Consider adjusting timeout settings",
-            "=" * 60
+            "=" * 55
         ])
         
         return "\n".join(report_lines)

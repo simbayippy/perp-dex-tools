@@ -700,9 +700,9 @@ class FundingArbitrageStrategy(StatefulStrategy):
             )
 
             # Separator to indicate leverage checks are starting
-            self.logger.info("=" * 60)
+            self.logger.info("=" * 55)
             self.logger.info("🔍 CHECKING LEVERAGE LIMITS ON BOTH EXCHANGES")
-            self.logger.info("=" * 60)
+            self.logger.info("=" * 55)
             
             # ⭐ LEVERAGE CHECK: Reduce size if needed ⭐
             # Import leverage validator
@@ -748,9 +748,9 @@ class FundingArbitrageStrategy(StatefulStrategy):
             )
 
             # Separator to indicate leverage checks are complete
-            self.logger.info("=" * 60)
+            self.logger.info("=" * 55)
             self.logger.info("✅ LEVERAGE CHECKS COMPLETE - PROCEEDING TO ATOMIC MULTI-ORDER PLACEMENT")
-            self.logger.info("=" * 60)
+            self.logger.info("=" * 55)
             
             # ⭐ ATOMIC EXECUTION: Both sides fill or neither ⭐
             result: AtomicExecutionResult = await self.atomic_executor.execute_atomically(
