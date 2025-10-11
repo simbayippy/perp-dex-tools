@@ -717,7 +717,7 @@ class AsterClient(BaseExchangeClient):
             }
         """
         try:
-            normalized_symbol = f"{symbol}USDT"
+            normalized_symbol = f"{symbol}"
             leverage_info = {
                 'max_leverage': None,
                 'max_notional': None,
