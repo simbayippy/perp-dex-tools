@@ -19,9 +19,9 @@ Key features:
 from typing import Any, Dict, List, Optional
 from decimal import Decimal
 from dataclasses import dataclass
-import logging
+from helpers.unified_logger import get_core_logger
 
-logger = logging.getLogger(__name__)
+logger = get_core_logger("liquidity_analyzer")
 
 
 @dataclass
@@ -103,7 +103,7 @@ class LiquidityAnalyzer:
         self.max_spread_bps = max_spread_bps
         self.min_liquidity_score = min_liquidity_score
         self.price_provider = price_provider
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_core_logger("liquidity_analyzer")
     
     async def check_execution_feasibility(
         self,
