@@ -711,13 +711,20 @@ class FundingArbitrageStrategy(StatefulStrategy):
             leverage_validator = LeverageValidator()
             
             # Check if both exchanges can support the requested size
-            max_size, limiting_exchange = await leverage_validator.get_max_position_size(
-                exchange_clients=[long_client, short_client],
-                symbol=symbol,
-                requested_size_usd=size_usd,
-                check_balance=True
-            )
-            
+            try:
+                max_size, limiting_exchange = await leverage_validator.get_max_position_size(
+                    exchange_clients=[long_client, short_client],
+                    symbol=symbol,
+                    requested_size_usd=size_usd,
+                    check_balance=True
+                )
+            except ValueError as e:
+                # Leverage validation failed - cannot trade this symbol
+                self.logger.log(
+                    f"⛔ [SKIP] Cannot validate leverage for {symbol}: {e}",
+                    "ERROR"
+                )
+                return
             
             # Adjust size if needed
             if max_size < size_usd:

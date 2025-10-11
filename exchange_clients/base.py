@@ -591,29 +591,56 @@ class BaseExchangeClient(ABC):
                 'max_leverage': Decimal or None,        # e.g., Decimal('10') for 10x
                 'max_notional': Decimal or None,        # Max position value in USD
                 'margin_requirement': Decimal or None,  # e.g., Decimal('0.1') = 10% = 10x leverage
-                'brackets': List or None                # Leverage brackets if available
+                'brackets': List or None,               # Leverage brackets if available
+                'error': str or None                    # Error message if data unavailable (NEW)
             }
             
         Implementation Notes:
             - For production exchanges (Aster, Lighter): Query actual limits from API
             - For exchanges in development: Return conservative defaults (10x leverage)
             - Always return the same dict structure (even if values are None)
+            - 🔒 NEW: If symbol is not listed or leverage info cannot be determined,
+              set 'error' field with descriptive message and set other fields to None
+            
+        Error Handling:
+            - If symbol not found on exchange: Set error="Symbol XXX not listed on {exchange}"
+            - If API fails: Set error="Failed to query leverage info: {reason}"
+            - If data incomplete: Set error="Unable to determine leverage limits for {symbol}"
             
         Example Implementation (Query from API):
             ```python
             async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
-                normalized_symbol = f"{symbol}USDT"
-                result = await self._make_request('GET', '/api/v1/leverageBracket', 
-                                                   {'symbol': normalized_symbol})
-                brackets = result.get('brackets', [])
-                first_bracket = brackets[0] if brackets else {}
-                
-                return {
-                    'max_leverage': Decimal(str(first_bracket.get('initialLeverage', 10))),
-                    'max_notional': Decimal(str(first_bracket.get('notionalCap'))) if first_bracket.get('notionalCap') else None,
-                    'margin_requirement': Decimal('1') / Decimal(str(first_bracket.get('initialLeverage', 10))),
-                    'brackets': brackets
-                }
+                try:
+                    normalized_symbol = f"{symbol}USDT"
+                    result = await self._make_request('GET', '/api/v1/leverageBracket', 
+                                                       {'symbol': normalized_symbol})
+                    brackets = result.get('brackets', [])
+                    
+                    if not brackets:
+                        return {
+                            'max_leverage': None,
+                            'max_notional': None,
+                            'margin_requirement': None,
+                            'brackets': None,
+                            'error': f'No leverage data available for {symbol}'
+                        }
+                    
+                    first_bracket = brackets[0]
+                    return {
+                        'max_leverage': Decimal(str(first_bracket.get('initialLeverage', 10))),
+                        'max_notional': Decimal(str(first_bracket.get('notionalCap'))) if first_bracket.get('notionalCap') else None,
+                        'margin_requirement': Decimal('1') / Decimal(str(first_bracket.get('initialLeverage', 10))),
+                        'brackets': brackets,
+                        'error': None
+                    }
+                except Exception as e:
+                    return {
+                        'max_leverage': None,
+                        'max_notional': None,
+                        'margin_requirement': None,
+                        'brackets': None,
+                        'error': f'Failed to query leverage info: {str(e)}'
+                    }
             ```
         """
         pass

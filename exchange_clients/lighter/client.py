@@ -873,15 +873,16 @@ class LighterClient(BaseExchangeClient):
             market_id = await self._get_market_id_for_symbol(normalized_symbol)
             
             if market_id is None:
-                self.logger.warning(
-                    f"Could not find market for {symbol}, using default 20x leverage"
+                self.logger.error(
+                    f"[LIGHTER] Could not find market for {symbol} - symbol may not be listed"
                 )
                 return {
-                    'max_leverage': Decimal('20'),
+                    'max_leverage': None,
                     'max_notional': None,
                     'account_leverage': None,
-                    'margin_requirement': Decimal('0.05'),
-                    'brackets': None
+                    'margin_requirement': None,
+                    'brackets': None,
+                    'error': f"Symbol {symbol} not found on Lighter"
                 }
             
             # Query market details
@@ -891,15 +892,16 @@ class LighterClient(BaseExchangeClient):
             )
             
             if not market_details_response or not market_details_response.order_book_details:
-                self.logger.warning(
-                    f"No market details found for {symbol} (market_id={market_id})"
+                self.logger.error(
+                    f"[LIGHTER] No market details found for {symbol} (market_id={market_id})"
                 )
                 return {
-                    'max_leverage': Decimal('20'),
+                    'max_leverage': None,
                     'max_notional': None,
                     'account_leverage': None,
-                    'margin_requirement': Decimal('0.05'),
-                    'brackets': None
+                    'margin_requirement': None,
+                    'brackets': None,
+                    'error': f"No market details available for {symbol} on Lighter"
                 }
             
             # Get first (and should be only) market detail
@@ -968,20 +970,22 @@ class LighterClient(BaseExchangeClient):
                 'max_notional': None,  # Lighter doesn't have explicit notional limits per se
                 'account_leverage': account_leverage,
                 'margin_requirement': min_margin_fraction,
-                'brackets': None  # Lighter uses fixed margin, not brackets
+                'brackets': None,  # Lighter uses fixed margin, not brackets
+                'error': None  # No error - successful query
             }
         
         except Exception as e:
-            self.logger.warning(
-                f"Error getting leverage info for {symbol}: {e}. Using default 20x"
+            self.logger.error(
+                f"❌ [LIGHTER] Error getting leverage info for {symbol}: {e}"
             )
-            # Return conservative default on error
+            # Return error state instead of fallback
             return {
-                'max_leverage': Decimal('20'),
+                'max_leverage': None,
                 'max_notional': None,
                 'account_leverage': None,
-                'margin_requirement': Decimal('0.05'),
-                'brackets': None
+                'margin_requirement': None,
+                'brackets': None,
+                'error': f"Failed to query leverage info: {str(e)}"
             }
 
     async def get_total_asset_value(self) -> Optional[Decimal]:

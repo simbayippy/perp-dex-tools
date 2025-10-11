@@ -712,7 +712,8 @@ class AsterClient(BaseExchangeClient):
                 'max_notional': Decimal or None,  # From leverage brackets
                 'account_leverage': int or None,  # Current account setting
                 'margin_requirement': Decimal or None,
-                'brackets': List or None
+                'brackets': List or None,
+                'error': str or None  # Error message if data unavailable
             }
         """
         try:
@@ -722,8 +723,11 @@ class AsterClient(BaseExchangeClient):
                 'max_notional': None,
                 'account_leverage': None,
                 'margin_requirement': None,
-                'brackets': None
+                'brackets': None,
+                'error': None
             }
+            
+            symbol_found = False  # Track if symbol exists on exchange
             
             # Step 1: Get symbol leverage brackets (more efficient than exchangeInfo)
             # Endpoint: GET /fapi/v1/leverageBracket
@@ -732,6 +736,10 @@ class AsterClient(BaseExchangeClient):
                     'GET', 
                     '/fapi/v1/leverageBracket',
                     {'symbol': normalized_symbol}
+                )
+                
+                self.logger.debug(
+                    f"[ASTER] leverageBracket API response for {symbol}: {brackets_result}"
                 )
                 
                 # Response format (when symbol is specified):
@@ -749,54 +757,115 @@ class AsterClient(BaseExchangeClient):
                 #   ]
                 # }
                 
-                if brackets_result and 'brackets' in brackets_result:
-                    leverage_info['brackets'] = brackets_result['brackets']
-                    
-                    if leverage_info['brackets'] and len(leverage_info['brackets']) > 0:
-                        first_bracket = leverage_info['brackets'][0]
+                # Check if response is valid and contains brackets
+                if brackets_result and isinstance(brackets_result, dict):
+                    # Symbol was found (API returns the symbol)
+                    if brackets_result.get('symbol') == normalized_symbol:
+                        symbol_found = True
                         
-                        # Max leverage from first bracket
-                        leverage_info['max_leverage'] = Decimal(
-                            str(first_bracket.get('initialLeverage', 10))
+                    if 'brackets' in brackets_result:
+                        leverage_info['brackets'] = brackets_result['brackets']
+                        
+                        if leverage_info['brackets'] and len(leverage_info['brackets']) > 0:
+                            first_bracket = leverage_info['brackets'][0]
+                            
+                            # Max leverage from first bracket
+                            leverage_info['max_leverage'] = Decimal(
+                                str(first_bracket.get('initialLeverage', 10))
+                            )
+                            
+                            # Max notional from first bracket
+                            notional_cap = first_bracket.get('notionalCap')
+                            if notional_cap:
+                                leverage_info['max_notional'] = Decimal(str(notional_cap))
+                            
+                            self.logger.debug(
+                                f"[ASTER] Leverage brackets for {symbol}: "
+                                f"max={leverage_info['max_leverage']}x, "
+                                f"notional_cap=${leverage_info['max_notional']}"
+                            )
+                        else:
+                            # Symbol found but no brackets returned
+                            self.logger.warning(
+                                f"[ASTER] Symbol {symbol} found but has no leverage brackets"
+                            )
+                            leverage_info['error'] = f"No leverage brackets available for {symbol}"
+                    else:
+                        # No brackets field in response
+                        self.logger.warning(
+                            f"[ASTER] leverageBracket response for {symbol} missing 'brackets' field"
                         )
-                        
-                        # Max notional from first bracket
-                        notional_cap = first_bracket.get('notionalCap')
-                        if notional_cap:
-                            leverage_info['max_notional'] = Decimal(str(notional_cap))
-                        
-                        self.logger.debug(
-                            f"[ASTER] Leverage brackets for {symbol}: "
-                            f"max={leverage_info['max_leverage']}x, "
-                            f"notional_cap=${leverage_info['max_notional']}"
-                        )
+                        leverage_info['error'] = f"Invalid leverage bracket response for {symbol}"
                         
             except Exception as e:
-                # Fallback: If leverageBracket endpoint fails, try exchangeInfo
-                self.logger.debug(
-                    f"[ASTER] leverageBracket endpoint failed for {symbol}, "
-                    f"falling back to exchangeInfo: {e}"
+                # API call failed - try fallback to exchangeInfo
+                error_msg = str(e).lower()
+                
+                # Check if it's a "symbol not found" error
+                if "not found" in error_msg or "invalid symbol" in error_msg:
+                    self.logger.warning(
+                        f"[ASTER] Symbol {symbol} not found on exchange (leverageBracket API)"
+                    )
+                    leverage_info['error'] = f"Symbol {symbol} not listed on Aster"
+                else:
+                    self.logger.debug(
+                        f"[ASTER] leverageBracket endpoint failed for {symbol}, "
+                        f"falling back to exchangeInfo: {e}"
+                    )
+                
+                # Fallback: Try exchangeInfo to confirm symbol existence
+                try:
+                    result = await self._make_request('GET', '/fapi/v1/exchangeInfo')
+                    
+                    symbol_info_found = None
+                    for symbol_info in result.get('symbols', []):
+                        if symbol_info.get('symbol') == normalized_symbol:
+                            symbol_info_found = symbol_info
+                            symbol_found = True
+                            
+                            # Extract max notional from filters
+                            for filter_info in symbol_info.get('filters', []):
+                                if filter_info.get('filterType') == 'NOTIONAL':
+                                    max_notional = filter_info.get('maxNotional')
+                                    if max_notional:
+                                        leverage_info['max_notional'] = Decimal(str(max_notional))
+                            
+                            # Check for leverage brackets in symbol info
+                            if 'leverageBrackets' in symbol_info:
+                                leverage_info['brackets'] = symbol_info['leverageBrackets']
+                                if leverage_info['brackets']:
+                                    leverage_info['max_leverage'] = Decimal(
+                                        str(leverage_info['brackets'][0].get('initialLeverage', 10))
+                                    )
+                            break
+                    
+                    if not symbol_info_found:
+                        # Symbol definitely not found on exchange
+                        self.logger.error(
+                            f"❌ [ASTER] Symbol {symbol} ({normalized_symbol}) is NOT LISTED on Aster"
+                        )
+                        leverage_info['error'] = f"Symbol {symbol} not listed on Aster"
+                        
+                except Exception as fallback_e:
+                    self.logger.error(
+                        f"[ASTER] Both leverageBracket and exchangeInfo failed for {symbol}: {fallback_e}"
+                    )
+                    leverage_info['error'] = f"Failed to query leverage info: {fallback_e}"
+            
+            # CRITICAL CHECK: If we couldn't get ANY leverage data, return error
+            if not symbol_found or leverage_info['max_leverage'] is None:
+                if not leverage_info['error']:
+                    leverage_info['error'] = (
+                        f"Unable to determine leverage limits for {symbol} on Aster. "
+                        f"Symbol may not be listed or API may be unavailable."
+                    )
+                
+                self.logger.error(
+                    f"❌ [ASTER] Cannot trade {symbol}: {leverage_info['error']}"
                 )
                 
-                result = await self._make_request('GET', '/fapi/v1/exchangeInfo')
-                
-                for symbol_info in result.get('symbols', []):
-                    if symbol_info.get('symbol') == normalized_symbol:
-                        # Extract max notional from filters
-                        for filter_info in symbol_info.get('filters', []):
-                            if filter_info.get('filterType') == 'NOTIONAL':
-                                max_notional = filter_info.get('maxNotional')
-                                if max_notional:
-                                    leverage_info['max_notional'] = Decimal(str(max_notional))
-                        
-                        # Check for leverage brackets in symbol info
-                        if 'leverageBrackets' in symbol_info:
-                            leverage_info['brackets'] = symbol_info['leverageBrackets']
-                            if leverage_info['brackets']:
-                                leverage_info['max_leverage'] = Decimal(
-                                    str(leverage_info['brackets'][0].get('initialLeverage', 10))
-                                )
-                        break
+                # Return error state instead of fallback values
+                return leverage_info
             
             # Step 2: Get ACTUAL account leverage setting (CRITICAL!)
             # This is what the exchange actually uses for margin calculations
@@ -841,17 +910,18 @@ class AsterClient(BaseExchangeClient):
             return leverage_info
         
         except Exception as e:
-            self.logger.error(f"Error getting leverage info for {symbol}: {e}")
+            self.logger.error(f"❌ [ASTER] Unexpected error getting leverage info for {symbol}: {e}")
             import traceback
             self.logger.debug(f"Traceback: {traceback.format_exc()}")
             
-            # Conservative fallback
+            # Return error state instead of fallback
             return {
-                'max_leverage': Decimal('10'),
+                'max_leverage': None,
                 'max_notional': None,
                 'account_leverage': None,
-                'margin_requirement': Decimal('0.10'),
-                'brackets': None
+                'margin_requirement': None,
+                'brackets': None,
+                'error': f"Unexpected error querying leverage info: {str(e)}"
             }
 
     async def get_contract_attributes(self) -> Tuple[str, Decimal]:

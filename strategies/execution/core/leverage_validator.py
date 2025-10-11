@@ -139,6 +139,9 @@ class LeverageValidator:
         
         Calls the exchange client's get_leverage_info() method.
         All exchange clients implement this via BaseExchangeClient.
+        
+        Raises:
+            ValueError: If leverage info cannot be determined (symbol not listed, API error, etc.)
         """
         exchange_name = exchange_client.get_exchange_name()
         
@@ -147,23 +150,52 @@ class LeverageValidator:
             # This is implemented in BaseExchangeClient (with default) and can be overridden
             leverage_data = await exchange_client.get_leverage_info(symbol)
             
+            # 🔒 CRITICAL: Check for error state in response
+            if leverage_data.get('error'):
+                error_msg = leverage_data['error']
+                self.logger.error(
+                    f"❌ [{exchange_name.upper()}] Leverage info error for {symbol}: {error_msg}"
+                )
+                raise ValueError(
+                    f"Cannot determine leverage limits for {symbol} on {exchange_name}: {error_msg}"
+                )
+            
+            # 🔒 CRITICAL: Validate that we got actual leverage data
+            max_leverage = leverage_data.get('max_leverage')
+            if max_leverage is None:
+                error_msg = (
+                    f"No leverage data available for {symbol} on {exchange_name}. "
+                    f"Symbol may not be listed or supported for trading."
+                )
+                self.logger.error(f"❌ [{exchange_name.upper()}] {error_msg}")
+                raise ValueError(error_msg)
+            
             # Convert to LeverageInfo object
-            return LeverageInfo(
+            leverage_info = LeverageInfo(
                 exchange_name=exchange_name,
                 symbol=symbol,
-                max_leverage=leverage_data.get('max_leverage'),
+                max_leverage=max_leverage,
                 max_notional=leverage_data.get('max_notional'),
                 margin_requirement=leverage_data.get('margin_requirement')
             )
+            
+            self.logger.debug(
+                f"✅ [{exchange_name.upper()}] Leverage info for {symbol}: {leverage_info}"
+            )
+            
+            return leverage_info
+        
+        except ValueError:
+            # Re-raise ValueError (these are intentional errors we want to propagate)
+            raise
         
         except Exception as e:
-            self.logger.error(f"Error querying leverage for {exchange_name}:{symbol}: {e}")
-            # Return conservative default
-            return LeverageInfo(
-                exchange_name=exchange_name,
-                symbol=symbol,
-                max_leverage=Decimal('10'),
-                margin_requirement=Decimal('0.10')
+            self.logger.error(
+                f"❌ [{exchange_name.upper()}] Unexpected error querying leverage for {symbol}: {e}"
+            )
+            # Don't use fallback - raise error so caller knows we failed
+            raise ValueError(
+                f"Failed to query leverage info for {symbol} on {exchange_name}: {str(e)}"
             )
     
     async def get_max_position_size(
@@ -189,6 +221,9 @@ class LeverageValidator:
             Tuple of (max_size_usd, limiting_exchange_name)
             - max_size_usd: Maximum size all exchanges can support
             - limiting_exchange_name: Which exchange is limiting (or None)
+            
+        Raises:
+            ValueError: If leverage info cannot be determined for any exchange
         """
         max_size = requested_size_usd
         limiting_exchange = None
@@ -196,28 +231,44 @@ class LeverageValidator:
         for client in exchange_clients:
             exchange_name = client.get_exchange_name()
             
-            # Get leverage info
-            leverage_info = await self.get_leverage_info(client, symbol)
+            try:
+                # Get leverage info - this will raise ValueError if data unavailable
+                leverage_info = await self.get_leverage_info(client, symbol)
+                
+                # Get available balance if requested
+                available_balance = None
+                if check_balance:
+                    try:
+                        available_balance = await client.get_account_balance()
+                    except Exception as e:
+                        self.logger.warning(
+                            f"⚠️  Could not get balance for {exchange_name}: {e}"
+                        )
+                
+                # Calculate max size for this exchange
+                exchange_max = leverage_info.get_max_size_usd(available_balance)
+                
+                if exchange_max is not None and exchange_max < max_size:
+                    self.logger.warning(
+                        f"⚠️  [LEVERAGE] {exchange_name} limits position to ${exchange_max:.2f} "
+                        f"(requested: ${requested_size_usd:.2f}) | {leverage_info}"
+                    )
+                    max_size = exchange_max
+                    limiting_exchange = exchange_name
+                else:
+                    self.logger.debug(
+                        f"✅ [{exchange_name.upper()}] Can support ${requested_size_usd:.2f} "
+                        f"(max: ${exchange_max if exchange_max else 'unlimited'})"
+                    )
             
-            # Get available balance if requested
-            available_balance = None
-            if check_balance:
-                try:
-                    available_balance = await client.get_account_balance()
-                except:
-                    self.logger.warning(f"Could not get balance for {exchange_name}")
-            
-            # Calculate max size for this exchange
-            exchange_max = leverage_info.get_max_size_usd(available_balance)
-            
-            if exchange_max is not None and exchange_max < max_size:
-                self.logger.warning(
-                    f"⚠️  [LEVERAGE] {exchange_name} limits position to ${exchange_max:.2f} "
-                    f"(requested: ${requested_size_usd:.2f}) | {leverage_info}"
+            except ValueError as e:
+                # Leverage info unavailable - FAIL the validation
+                self.logger.error(
+                    f"❌ [LEVERAGE] Cannot validate position size for {symbol} on {exchange_name}: {e}"
                 )
-                max_size = exchange_max
-                limiting_exchange = exchange_name
+                raise  # Propagate the error
         
+        # All exchanges validated successfully
         if limiting_exchange:
             self.logger.info(
                 f"📊 [LEVERAGE] Position size adjusted: ${requested_size_usd:.2f} → ${max_size:.2f} "

@@ -655,7 +655,8 @@ class EdgeXClient(BaseExchangeClient):
             'max_leverage': Decimal('10'),
             'max_notional': None,
             'margin_requirement': Decimal('0.10'),  # 10% margin = 10x leverage
-            'brackets': None
+            'brackets': None,
+            'error': None  # Using default values (not queried from API)
         }
 
     async def get_contract_attributes(self) -> Tuple[str, Decimal]:
