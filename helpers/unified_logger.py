@@ -79,15 +79,19 @@ class UnifiedLogger:
                 # Truncate the file path to last 2 segments
                 name_parts = record["name"].split(".")
                 if len(name_parts) >= 2:
-                    record["extra"]["short_name"] = f"{name_parts[-2]}.{name_parts[-1]}"
+                    short_name = f"{name_parts[-2]}.{name_parts[-1]}"
                 else:
-                    record["extra"]["short_name"] = record["name"]
+                    short_name = record["name"]
+                
+                # Pad the source location to a fixed width for alignment
+                source_location = f"{short_name}:{record['function']}:{record['line']}"
+                record["extra"]["short_name"] = f"{source_location:<50}"  # Left-align with 50 char width
                 return True
                 
             console_format = (
                 "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
                 "<level>{level: <8}</level> | "
-                "<cyan>{extra[short_name]}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+                "<cyan>{extra[short_name]}</cyan> - "
                 "<level>{message}</level>"
             )
             
@@ -108,15 +112,19 @@ class UnifiedLogger:
             # Truncate the file path to last 2 segments for file logs too
             name_parts = record["name"].split(".")
             if len(name_parts) >= 2:
-                record["extra"]["short_name"] = f"{name_parts[-2]}.{name_parts[-1]}"
+                short_name = f"{name_parts[-2]}.{name_parts[-1]}"
             else:
-                record["extra"]["short_name"] = record["name"]
+                short_name = record["name"]
+            
+            # Pad the source location to a fixed width for alignment in files too
+            source_location = f"{short_name}:{record['function']}:{record['line']}"
+            record["extra"]["short_name"] = f"{source_location:<50}"  # Left-align with 50 char width
             return True
             
         file_format = (
             "{time:YYYY-MM-DD HH:mm:ss} | "
             "{level: <8} | "
-            "{extra[short_name]}:{function}:{line} - "
+            "{extra[short_name]} - "
             "{message}"
         )
         
@@ -139,9 +147,13 @@ class UnifiedLogger:
             # Truncate the file path to last 2 segments for error logs too
             name_parts = record["name"].split(".")
             if len(name_parts) >= 2:
-                record["extra"]["short_name"] = f"{name_parts[-2]}.{name_parts[-1]}"
+                short_name = f"{name_parts[-2]}.{name_parts[-1]}"
             else:
-                record["extra"]["short_name"] = record["name"]
+                short_name = record["name"]
+            
+            # Pad the source location to a fixed width for alignment in error logs too
+            source_location = f"{short_name}:{record['function']}:{record['line']}"
+            record["extra"]["short_name"] = f"{source_location:<50}"  # Left-align with 50 char width
             return True
             
         _logger.add(
