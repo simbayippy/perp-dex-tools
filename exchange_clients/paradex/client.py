@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 
 from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo
-from helpers.logger import TradingLogger
+from helpers.unified_logger import get_exchange_logger
 
 
 def patch_paradex_http_client():
@@ -99,7 +99,7 @@ class ParadexClient(BaseExchangeClient):
         self.env = env_map.get(self.environment.lower(), TESTNET)
 
         # Initialize logger
-        self.logger = TradingLogger(exchange="paradex", ticker=self.config.ticker, log_to_console=False)
+        self.logger = get_exchange_logger("paradex", self.config.ticker)
 
         # Initialize Paradex client with L2 credentials only
         self._initialize_paradex_client()
@@ -127,7 +127,7 @@ class ParadexClient(BaseExchangeClient):
 
             # Log the L2 address being used
             if self.l2_address:
-                self.logger.log(f"Using L2 address: {self.l2_address}", "INFO")
+                self.logger.info(f"Using L2 address: {self.l2_address}")
 
         except Exception as e:
             raise ValueError(f"Failed to initialize Paradex client: {e}")
@@ -159,7 +159,7 @@ class ParadexClient(BaseExchangeClient):
                 await self.paradex.ws_client._close_connection()
                 self._ws_connected = False
         except Exception as e:
-            self.logger.log(f"Error during Paradex disconnect: {e}", "ERROR")
+            self.logger.error(f"Error during Paradex disconnect: {e}")
 
     def get_exchange_name(self) -> str:
         """Get the exchange name."""
@@ -235,7 +235,7 @@ class ParadexClient(BaseExchangeClient):
                     self.logger.log("WebSocket connection failed, retrying in 1 second...", "WARN")
                     await asyncio.sleep(1)
             self._ws_connected = True
-            self.logger.log("WebSocket connected for order monitoring", "INFO")
+            self.logger.info("WebSocket connected for order monitoring")
 
         # Subscribe to orders channel for the specific market
         from paradex_py.api.ws_client import ParadexWebsocketChannel
@@ -247,9 +247,9 @@ class ParadexClient(BaseExchangeClient):
                 callback=self._ws_order_update_handler,
                 params={"market": contract_id}
             )
-            self.logger.log(f"Subscribed to order updates for {contract_id}", "INFO")
+            self.logger.info(f"Subscribed to order updates for {contract_id}")
         except Exception as e:
-            self.logger.log(f"Failed to subscribe to order updates: {e}", "ERROR")
+            self.logger.error(f"Failed to subscribe to order updates: {e}")
 
     @retry(
         stop=stop_after_attempt(5),
@@ -261,13 +261,13 @@ class ParadexClient(BaseExchangeClient):
         """Get orderbook using official SDK."""
         orderbook_data = self.paradex.api_client.fetch_orderbook(contract_id, {"depth": 1})
         if not orderbook_data:
-            self.logger.log("Failed to get orderbook", "ERROR")
+            self.logger.error("Failed to get orderbook")
             raise ValueError("Failed to get orderbook")
 
         bids = orderbook_data.get('bids', [])
         asks = orderbook_data.get('asks', [])
         if not bids or not asks:
-            self.logger.log("Failed to get bid/ask data", "ERROR")
+            self.logger.error("Failed to get bid/ask data")
             raise ValueError("Failed to get bid/ask data")
 
         # Get best bid and ask prices
@@ -275,7 +275,7 @@ class ParadexClient(BaseExchangeClient):
         best_ask = Decimal(asks[0][0])
 
         if best_bid <= 0 or best_ask <= 0:
-            self.logger.log("Invalid bid/ask prices", "ERROR")
+            self.logger.error("Invalid bid/ask prices")
             raise ValueError("Invalid bid/ask prices")
 
         return best_bid, best_ask
@@ -369,7 +369,7 @@ class ParadexClient(BaseExchangeClient):
         while True:
             attempt += 1
             if attempt % 5 == 0:
-                self.logger.log(f"[CLOSE] Attempt {attempt} to place order", "INFO")
+                self.logger.info(f"[CLOSE] Attempt {attempt} to place order")
                 current_close_orders = await self._get_active_close_orders(contract_id)
 
                 if current_close_orders - active_close_orders > 1:
@@ -453,7 +453,7 @@ class ParadexClient(BaseExchangeClient):
             )
 
         except Exception as e:
-            self.logger.log(f"Error getting order info: {e}", "ERROR")
+            self.logger.error(f"Error getting order info: {e}")
             return None
 
     @retry(
@@ -466,7 +466,7 @@ class ParadexClient(BaseExchangeClient):
         """Get orders using official SDK."""
         orders_response = self.paradex.api_client.fetch_orders({"market": contract_id, "status": "OPEN"})
         if not orders_response or 'results' not in orders_response:
-            self.logger.log("Failed to get orders", "ERROR")
+            self.logger.error("Failed to get orders")
             raise ValueError("Failed to get orders")
 
         return orders_response['results']
@@ -500,7 +500,7 @@ class ParadexClient(BaseExchangeClient):
         """Get positions using official SDK."""
         positions_response = self.paradex.api_client.fetch_positions()
         if not positions_response or 'results' not in positions_response:
-            self.logger.log("Failed to get positions", "ERROR")
+            self.logger.error("Failed to get positions")
             raise ValueError("Failed to get positions")
 
         return positions_response['results']
@@ -550,11 +550,11 @@ class ParadexClient(BaseExchangeClient):
         """Get market using official SDK."""
         market_response = self.paradex.api_client.fetch_markets({"market": symbol})
         if not market_response or 'results' not in market_response:
-            self.logger.log("Failed to get markets", "ERROR")
+            self.logger.error("Failed to get markets")
             raise ValueError("Failed to get markets")
 
         if not market_response['results']:
-            self.logger.log("Failed to get markets list", "ERROR")
+            self.logger.error("Failed to get markets list")
             raise ValueError("Failed to get markets list")
 
         market = market_response['results'][0]
@@ -571,7 +571,7 @@ class ParadexClient(BaseExchangeClient):
         """Get markets summary using official SDK."""
         market_summary_response = self.paradex.api_client.fetch_markets_summary({"market": symbol})
         if not market_summary_response or 'results' not in market_summary_response:
-            self.logger.log("Failed to get markets summary", "ERROR")
+            self.logger.error("Failed to get markets summary")
             raise ValueError("Failed to get markets summary")
         market_summary = market_summary_response['results'][0]
         return market_summary
@@ -580,7 +580,7 @@ class ParadexClient(BaseExchangeClient):
         """Get contract ID for a ticker."""
         ticker = self.config.ticker
         if len(ticker) == 0:
-            self.logger.log("Ticker is empty", "ERROR")
+            self.logger.error("Ticker is empty")
             raise ValueError("Ticker is empty")
 
         symbol = f"{ticker}-USD-PERP"
@@ -595,24 +595,24 @@ class ParadexClient(BaseExchangeClient):
         try:
             min_notional = Decimal(market.get('min_notional'))
         except Exception:
-            self.logger.log("Failed to get min notional", "ERROR")
+            self.logger.error("Failed to get min notional")
             raise ValueError("Failed to get min notional")
 
         try:
             self.order_size_increment = Decimal(market.get('order_size_increment'))
         except Exception:
-            self.logger.log("Failed to get min quantity", "ERROR")
+            self.logger.error("Failed to get min quantity")
             raise ValueError("Failed to get min quantity")
 
         order_notional = last_price * self.config.quantity
         if order_notional < min_notional:
-            self.logger.log(f"Order notional is less than min notional: {order_notional} < {min_notional}", "ERROR")
+            self.logger.error(f"Order notional is less than min notional: {order_notional} < {min_notional}")
             raise ValueError(f"Order notional is less than min notional: {order_notional} < {min_notional}")
 
         try:
             self.config.tick_size = Decimal(market.get('price_tick_size'))
         except Exception:
-            self.logger.log("Failed to get tick size", "ERROR")
+            self.logger.error("Failed to get tick size")
             raise ValueError("Failed to get tick size")
 
         return self.config.contract_id, self.config.tick_size

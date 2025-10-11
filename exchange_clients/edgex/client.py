@@ -11,7 +11,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from edgex_sdk import Client, OrderSide, WebSocketManager, CancelOrderParams, GetOrderBookDepthParams, GetActiveOrderParams
 
 from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
-from helpers.logger import TradingLogger
+from helpers.unified_logger import get_exchange_logger
 
 
 class EdgeXClient(BaseExchangeClient):
@@ -49,7 +49,7 @@ class EdgeXClient(BaseExchangeClient):
             raise
 
         # Initialize logger
-        self.logger = TradingLogger(exchange="edgex", ticker=self.config.ticker, log_to_console=False)
+        self.logger = get_exchange_logger("edgex", self.config.ticker)
 
         self._order_update_handler = None
 
@@ -83,7 +83,7 @@ class EdgeXClient(BaseExchangeClient):
                 lambda: self.logger.log("[WS] private connected", "INFO")
             )
         except Exception as e:
-            self.logger.log(f"[WS] failed to set hooks: {e}", "ERROR")
+            self.logger.error(f"[WS] failed to set hooks: {e}")
 
         if not self._ws_task or self._ws_task.done():
             self._ws_task = asyncio.create_task(self._run_private_ws())
@@ -98,7 +98,7 @@ class EdgeXClient(BaseExchangeClient):
             try:
                 # connect
                 self.ws_manager.connect_private()
-                self.logger.log("[WS] connected", "INFO")
+                self.logger.info("[WS] connected")
                 backoff = 1.0
 
                 # wait until either disconnect or stop
@@ -111,11 +111,10 @@ class EdgeXClient(BaseExchangeClient):
                 if self._ws_stop.is_set():
                     break
 
-                self.logger.log(
-                    "[WS] disconnected; attempting to reconnect…", "WARNING"
-                )
+                self.logger.warning(
+                    "[WS] disconnected; attempting to reconnect…")
             except Exception as e:
-                self.logger.log(f"[WS] connect error: {e}", "ERROR")
+                self.logger.error(f"[WS] connect error: {e}")
             finally:
                 # ensure socket is closed before retry
                 try:
@@ -148,7 +147,7 @@ class EdgeXClient(BaseExchangeClient):
             if hasattr(self, "ws_manager"):
                 self.ws_manager.disconnect_all()
         except Exception as e:
-            self.logger.log(f"Error during EdgeX disconnect: {e}", "ERROR")
+            self.logger.error(f"Error during EdgeX disconnect: {e}")
 
     # ---------------------------
     # Utility / Name
@@ -220,14 +219,14 @@ class EdgeXClient(BaseExchangeClient):
                                 })
 
             except Exception as e:
-                self.logger.log(f"Error handling order update: {e}", "ERROR")
-                self.logger.log(f"Traceback: {traceback.format_exc()}", "ERROR")
+                self.logger.error(f"Error handling order update: {e}")
+                self.logger.error(f"Traceback: {traceback.format_exc()}")
 
         try:
             private_client = self.ws_manager.get_private_client()
             private_client.on_message("trade-event", order_update_handler)
         except Exception as e:
-            self.logger.log(f"Could not add trade-event handler: {e}", "ERROR")
+            self.logger.error(f"Could not add trade-event handler: {e}")
 
     # ---------------------------
     # REST-ish helpers
@@ -295,7 +294,7 @@ class EdgeXClient(BaseExchangeClient):
             }
 
         except Exception as e:
-            self.logger.log(f"Error fetching order book depth: {e}", "ERROR")
+            self.logger.error(f"Error fetching order book depth: {e}")
             # Return empty order book on error
             return {'bids': [], 'asks': []}
 
@@ -366,7 +365,7 @@ class EdgeXClient(BaseExchangeClient):
                 )
                 
         except Exception as e:
-            self.logger.log(f"Error placing limit order: {e}", "ERROR")
+            self.logger.error(f"Error placing limit order: {e}")
             return OrderResult(
                 success=False,
                 error_message=f"Failed to place limit order: {str(e)}"
@@ -376,7 +375,7 @@ class EdgeXClient(BaseExchangeClient):
         """Get the price of an order with EdgeX using official SDK."""
         best_bid, best_ask = await self.fetch_bbo_prices(self.config.contract_id)
         if best_bid <= 0 or best_ask <= 0:
-            self.logger.log("Invalid bid/ask prices", "ERROR")
+            self.logger.error("Invalid bid/ask prices")
             raise ValueError("Invalid bid/ask prices")
 
 
@@ -453,7 +452,7 @@ class EdgeXClient(BaseExchangeClient):
                 )
                 
         except Exception as e:
-            self.logger.log(f"Error placing market order: {e}", "ERROR")
+            self.logger.error(f"Error placing market order: {e}")
             return OrderResult(success=False, error_message=str(e))
 
     async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
@@ -620,7 +619,7 @@ class EdgeXClient(BaseExchangeClient):
         """Get account positions using official SDK."""
         positions_data = await self.client.get_account_positions()
         if not positions_data or 'data' not in positions_data:
-            self.logger.log("No positions or failed to get positions", "WARNING")
+            self.logger.warning("No positions or failed to get positions")
             position_amt = 0
         else:
             # The API returns positions under data.positionList
@@ -663,18 +662,18 @@ class EdgeXClient(BaseExchangeClient):
         """Get contract ID for a ticker."""
         ticker = self.config.ticker
         if len(ticker) == 0:
-            self.logger.log("Ticker is empty", "ERROR")
+            self.logger.error("Ticker is empty")
             raise ValueError("Ticker is empty")
 
         response = await self.client.get_metadata()
         data = response.get('data', {})
         if not data:
-            self.logger.log("Failed to get metadata", "ERROR")
+            self.logger.error("Failed to get metadata")
             raise ValueError("Failed to get metadata")
 
         contract_list = data.get('contractList', [])
         if not contract_list:
-            self.logger.log("Failed to get contract list", "ERROR")
+            self.logger.error("Failed to get contract list")
             raise ValueError("Failed to get contract list")
 
         current_contract = None
@@ -684,13 +683,13 @@ class EdgeXClient(BaseExchangeClient):
                 break
 
         if not current_contract:
-            self.logger.log("Failed to get contract ID for ticker", "ERROR")
+            self.logger.error("Failed to get contract ID for ticker")
             raise ValueError("Failed to get contract ID for ticker")
 
         self.config.contract_id = current_contract.get('contractId')
         min_quantity = Decimal(current_contract.get('minOrderSize'))
         if self.config.quantity < min_quantity:
-            self.logger.log(f"Order quantity is less than min quantity: {self.config.quantity} < {min_quantity}", "ERROR")
+            self.logger.error(f"Order quantity is less than min quantity: {self.config.quantity} < {min_quantity}")
             raise ValueError(f"Order quantity is less than min quantity: {self.config.quantity} < {min_quantity}")
 
         self.config.tick_size = Decimal(current_contract.get('tickSize'))

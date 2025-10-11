@@ -12,7 +12,7 @@ from pysdk.grvt_ccxt_ws import GrvtCcxtWS
 from pysdk.grvt_ccxt_env import GrvtEnv, GrvtWSEndpointType
 
 from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
-from helpers.logger import TradingLogger
+from helpers.unified_logger import get_exchange_logger
 
 
 class GrvtClient(BaseExchangeClient):
@@ -38,7 +38,7 @@ class GrvtClient(BaseExchangeClient):
         self.env = env_map.get(self.environment.lower(), GrvtEnv.PROD)
 
         # Initialize logger
-        self.logger = TradingLogger(exchange="grvt", ticker=self.config.ticker, log_to_console=False)
+        self.logger = get_exchange_logger("grvt", self.config.ticker)
 
         # Initialize GRVT clients
         self._initialize_grvt_clients()
@@ -107,10 +107,10 @@ class GrvtClient(BaseExchangeClient):
             # If an order update callback was set before connect, subscribe now
             if self._order_update_callback is not None:
                 asyncio.create_task(self._subscribe_to_orders(self._order_update_callback))
-                self.logger.log(f"Deferred subscription started for {self.config.contract_id}", "INFO")
+                self.logger.info(f"Deferred subscription started for {self.config.contract_id}")
 
         except Exception as e:
-            self.logger.log(f"Error connecting to GRVT WebSocket: {e}", "ERROR")
+            self.logger.error(f"Error connecting to GRVT WebSocket: {e}")
             raise
 
     async def disconnect(self) -> None:
@@ -119,7 +119,7 @@ class GrvtClient(BaseExchangeClient):
             if self._ws_client:
                 await self._ws_client.__aexit__()
         except Exception as e:
-            self.logger.log(f"Error during GRVT disconnect: {e}", "ERROR")
+            self.logger.error(f"Error during GRVT disconnect: {e}")
 
     def get_exchange_name(self) -> str:
         """Get the exchange name."""
@@ -132,8 +132,8 @@ class GrvtClient(BaseExchangeClient):
         async def order_update_callback(message: Dict[str, Any]):
             """Handle order updates from WebSocket - match working test implementation."""
             # Log raw message for debugging
-            self.logger.log(f"Received WebSocket message: {message}", "DEBUG")
-            self.logger.log("**************************************************", "DEBUG")
+            self.logger.debug(f"Received WebSocket message: {message}")
+            self.logger.debug("**************************************************")
             try:
                 # Parse the message structure - match the working test implementation exactly
                 if 'feed' in message:
@@ -184,19 +184,19 @@ class GrvtClient(BaseExchangeClient):
                                         'filled_size': filled_size
                                     })
                             else:
-                                self.logger.log(f"Ignoring order update with status: {mapped_status}", "DEBUG")
+                                self.logger.debug(f"Ignoring order update with status: {mapped_status}")
                         else:
-                            self.logger.log(f"Order update missing order_id or status: {data}", "DEBUG")
+                            self.logger.debug(f"Order update missing order_id or status: {data}")
                     else:
-                        self.logger.log(f"Order update data is not dict or missing legs: {data}", "DEBUG")
+                        self.logger.debug(f"Order update data is not dict or missing legs: {data}")
                 else:
                     # Handle other message types (position, fill, etc.)
                     method = message.get('method', 'unknown')
-                    self.logger.log(f"Received non-order message: {method}", "DEBUG")
+                    self.logger.debug(f"Received non-order message: {method}")
 
             except Exception as e:
-                self.logger.log(f"Error handling order update: {e}", "ERROR")
-                self.logger.log(f"Message that caused error: {message}", "ERROR")
+                self.logger.error(f"Error handling order update: {e}")
+                self.logger.error(f"Message that caused error: {message}")
 
         # Store callback for use after connect
         self._order_update_callback = order_update_callback
@@ -205,12 +205,12 @@ class GrvtClient(BaseExchangeClient):
         if self._ws_client:
             try:
                 asyncio.create_task(self._subscribe_to_orders(self._order_update_callback))
-                self.logger.log(f"Successfully initiated subscription to order updates for {self.config.contract_id}", "INFO")
+                self.logger.info(f"Successfully initiated subscription to order updates for {self.config.contract_id}")
             except Exception as e:
-                self.logger.log(f"Error subscribing to order updates: {e}", "ERROR")
+                self.logger.error(f"Error subscribing to order updates: {e}")
                 raise
         else:
-            self.logger.log("WebSocket not ready yet; will subscribe after connect()", "INFO")
+            self.logger.info("WebSocket not ready yet; will subscribe after connect()")
 
     async def _subscribe_to_orders(self, callback):
         """Subscribe to order updates asynchronously."""
@@ -222,9 +222,9 @@ class GrvtClient(BaseExchangeClient):
                 params={"instrument": self.config.contract_id}
             )
             await asyncio.sleep(0)  # Small delay like in test file
-            self.logger.log(f"Successfully subscribed to order updates for {self.config.contract_id}", "INFO")
+            self.logger.info(f"Successfully subscribed to order updates for {self.config.contract_id}")
         except Exception as e:
-            self.logger.log(f"Error in subscription task: {e}", "ERROR")
+            self.logger.error(f"Error in subscription task: {e}")
 
     @query_retry(reraise=True)
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
@@ -263,7 +263,7 @@ class GrvtClient(BaseExchangeClient):
             order_book = self.rest_client.fetch_order_book(contract_id, limit=levels)
 
             if not order_book or 'bids' not in order_book or 'asks' not in order_book:
-                self.logger.log("Unable to get order book from GRVT", "WARNING")
+                self.logger.warning("Unable to get order book from GRVT")
                 return {'bids': [], 'asks': []}
 
             # Extract bids and asks
@@ -285,7 +285,7 @@ class GrvtClient(BaseExchangeClient):
             }
 
         except Exception as e:
-            self.logger.log(f"Error fetching order book depth: {e}", "ERROR")
+            self.logger.error(f"Error fetching order book depth: {e}")
             # Return empty order book on error
             return {'bids': [], 'asks': []}
 
@@ -415,7 +415,7 @@ class GrvtClient(BaseExchangeClient):
             )
                 
         except Exception as e:
-            self.logger.log(f"Error placing market order: {e}", "ERROR")
+            self.logger.error(f"Error placing market order: {e}")
             return OrderResult(success=False, error_message=str(e))
 
     async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
@@ -426,7 +426,7 @@ class GrvtClient(BaseExchangeClient):
         while True:
             attempt += 1
             if attempt % 5 == 0:
-                self.logger.log(f"[CLOSE] Attempt {attempt} to place order", "INFO")
+                self.logger.info(f"[CLOSE] Attempt {attempt} to place order")
                 current_close_orders = await self._get_active_close_orders(contract_id)
 
                 if current_close_orders - active_close_orders > 1:
@@ -451,7 +451,7 @@ class GrvtClient(BaseExchangeClient):
             try:
                 order_info = await self.place_limit_order(contract_id, quantity, adjusted_price, side)
             except Exception as e:
-                self.logger.log(f"[CLOSE] Error placing order: {e}", "ERROR")
+                self.logger.error(f"[CLOSE] Error placing order: {e}")
                 continue
 
             order_status = order_info.status
