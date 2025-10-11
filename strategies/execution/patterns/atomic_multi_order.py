@@ -393,12 +393,30 @@ class AtomicMultiOrderExecutor:
                                 self.logger.info(f"✅ Started Aster order book depth stream for {normalized_symbol}")
                         
                         elif exchange_name == "lighter":
-                            # Lighter uses market_id, already subscribed to order book
-                            # The order book WebSocket is already running from connect()
-                            self.logger.info(f"✅ Lighter order book WebSocket already active for {symbol}")
+                            # Lighter WebSocket needs to switch to the correct market
+                            # Get market_id for the opportunity symbol (not the startup default!)
+                            try:
+                                market_id = await exchange_client._get_market_id_for_symbol(symbol)
+                                if market_id is None:
+                                    self.logger.warning(f"⚠️  Could not find market_id for {symbol} on Lighter")
+                                    continue
+                                
+                                if hasattr(ws_manager, 'switch_market'):
+                                    # Switch to the opportunity's market
+                                    success = await ws_manager.switch_market(market_id)
+                                    if success:
+                                        self.logger.info(f"✅ Lighter order book WebSocket switched to market {market_id} ({symbol})")
+                                    else:
+                                        self.logger.warning(f"⚠️  Failed to switch Lighter WebSocket to market {market_id}")
+                                else:
+                                    self.logger.info(f"✅ Lighter order book WebSocket already active for {symbol}")
+                            except Exception as e:
+                                self.logger.error(f"Error switching Lighter market: {e}")
             
-            # Give WebSockets a moment to receive first updates (BBO + order book depth)
-            await asyncio.sleep(1.0)
+            # Give WebSockets time to receive first updates:
+            # - Aster: book ticker + depth stream subscription (~1s)
+            # - Lighter: market switch + order book snapshot (~0.5s)
+            await asyncio.sleep(2.0)
             
             # ========================================================================
             # CHECK 1: Account Balance Validation (CRITICAL FIX)

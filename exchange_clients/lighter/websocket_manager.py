@@ -160,6 +160,60 @@ class LighterWebSocketManager:
             self._log(f"Error validating order book integrity: {e}", "ERROR")
             return False
 
+    async def switch_market(self, new_market_id: int):
+        """
+        Switch to a different market for order book updates.
+        
+        This is necessary when an opportunity is found for a symbol different
+        from the one configured at startup.
+        
+        Args:
+            new_market_id: Market ID to switch to (e.g., 79 for SKY)
+        """
+        try:
+            if not self.ws or not self.running:
+                self._log(f"Cannot switch market: WebSocket not connected", "WARNING")
+                return False
+            
+            # If already subscribed to this market, no need to switch
+            if self.market_index == new_market_id:
+                self._log(f"Already subscribed to market {new_market_id}", "DEBUG")
+                return True
+            
+            self._log(f"🔄 Switching order book from market {self.market_index} to {new_market_id}", "INFO")
+            
+            # Unsubscribe from current market
+            unsubscribe_msg = json.dumps({
+                "type": "unsubscribe",
+                "channel": f"order_book/{self.market_index}"
+            })
+            await self.ws.send(unsubscribe_msg)
+            
+            # Update market index
+            old_market_id = self.market_index
+            self.market_index = new_market_id
+            
+            # Reset order book state
+            await self.reset_order_book()
+            
+            # Subscribe to new market
+            subscribe_msg = json.dumps({
+                "type": "subscribe",
+                "channel": f"order_book/{new_market_id}"
+            })
+            await self.ws.send(subscribe_msg)
+            
+            self._log(f"✅ Switched order book from market {old_market_id} to {new_market_id}", "INFO")
+            
+            # Wait for initial snapshot
+            await asyncio.sleep(0.5)
+            
+            return True
+            
+        except Exception as e:
+            self._log(f"Error switching market: {e}", "ERROR")
+            return False
+
     async def request_fresh_snapshot(self):
         """Request a fresh order book snapshot when we detect inconsistencies."""
         try:
