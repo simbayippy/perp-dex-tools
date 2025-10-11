@@ -131,7 +131,6 @@ class TradingBot:
         
         # Initialize account monitor (monitors account health)
         self.account_monitor = AccountMonitor(self.exchange_client, self.config)
-        await self.account_monitor.initialize()
 
     async def graceful_shutdown(self, reason: str = "Unknown"):
         """Perform graceful shutdown of the trading bot."""
@@ -270,6 +269,9 @@ class TradingBot:
             
             # Initialize strategy after connection
             await self.strategy.initialize()
+            
+            # Initialize account monitor after connection
+            await self.account_monitor.initialize()
 
             # Main trading loop
             while not self.shutdown_requested:
