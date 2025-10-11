@@ -85,13 +85,13 @@ class UnifiedLogger:
                 
                 # Pad the source location to a fixed width for alignment
                 source_location = f"{short_name}:{record['function']}:{record['line']}"
-                record["extra"]["short_name"] = f"{source_location:<50}"  # Left-align with 50 char width
+                record["extra"]["short_name"] = f"{source_location:<60}"  # Increase to 60 char width for better alignment
                 return True
                 
             console_format = (
                 "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
                 "<level>{level: <8}</level> | "
-                "<cyan>{extra[short_name]}</cyan> - "
+                "<cyan>{extra[short_name]}</cyan> | "
                 "<level>{message}</level>"
             )
             
@@ -118,13 +118,13 @@ class UnifiedLogger:
             
             # Pad the source location to a fixed width for alignment in files too
             source_location = f"{short_name}:{record['function']}:{record['line']}"
-            record["extra"]["short_name"] = f"{source_location:<50}"  # Left-align with 50 char width
+            record["extra"]["short_name"] = f"{source_location:<60}"  # Increase to 60 char width for better alignment
             return True
             
         file_format = (
             "{time:YYYY-MM-DD HH:mm:ss} | "
             "{level: <8} | "
-            "{extra[short_name]} - "
+            "{extra[short_name]} | "
             "{message}"
         )
         
@@ -153,7 +153,7 @@ class UnifiedLogger:
             
             # Pad the source location to a fixed width for alignment in error logs too
             source_location = f"{short_name}:{record['function']}:{record['line']}"
-            record["extra"]["short_name"] = f"{source_location:<50}"  # Left-align with 50 char width
+            record["extra"]["short_name"] = f"{source_location:<60}"  # Increase to 60 char width for better alignment
             return True
             
         _logger.add(
