@@ -698,6 +698,11 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 f"✅ [VALIDATION] {symbol} is tradeable on both exchanges",
                 "INFO"
             )
+
+            # Separator to indicate leverage checks are starting
+            self.logger.info("=" * 55)
+            self.logger.info("🔍 CHECKING LEVERAGE LIMITS ON BOTH EXCHANGES")
+            self.logger.info("=" * 55)
             
             # ⭐ LEVERAGE CHECK: Reduce size if needed ⭐
             # Import leverage validator
@@ -712,6 +717,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 requested_size_usd=size_usd,
                 check_balance=True
             )
+            
             
             # Adjust size if needed
             if max_size < size_usd:
@@ -740,6 +746,11 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 f"Divergence: {opportunity.divergence*100:.3f}%",
                 "INFO"
             )
+
+            # Separator to indicate leverage checks are complete
+            self.logger.info("=" * 55)
+            self.logger.info("✅ LEVERAGE CHECKS COMPLETE - PROCEEDING TO ATOMIC MULTI-ORDER PLACEMENT")
+            self.logger.info("=" * 55)
             
             # ⭐ ATOMIC EXECUTION: Both sides fill or neither ⭐
             result: AtomicExecutionResult = await self.atomic_executor.execute_atomically(
