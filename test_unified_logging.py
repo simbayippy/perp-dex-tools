@@ -111,13 +111,52 @@ def test_backward_compatibility():
     
     logger = get_exchange_logger("backpack", "SOL")
     
-    # Old style calls should still work
-    logger.log("Connected to Backpack WebSocket", "INFO")
-    logger.log("Debug message", "DEBUG") 
-    logger.log("Warning message", "WARNING")
-    logger.log("Error occurred", "ERROR")
+    # Old style calls should still work AND show correct source location
+    logger.log("📍 Connected to Backpack WebSocket (old style)", "INFO")
+    logger.log("📍 Debug message (old style)", "DEBUG") 
+    logger.log("📍 Warning message (old style)", "WARNING")
+    logger.log("📍 Error occurred (old style)", "ERROR")
     
     print("✅ Backward compatibility confirmed!")
+    print("   Check that source location shows THIS function, not the logger wrapper")
+
+
+def test_source_location_tracking():
+    """Test that source locations show the actual calling code, not the wrapper."""
+    print("\n📍 Testing Source Location Tracking")
+    print("=" * 50)
+    
+    logger = get_exchange_logger("aster", "BTC")
+    
+    # These should show THIS function as the source, not the logger wrapper
+    logger.info("📍 This should show test_source_location_tracking as the source")
+    logger.debug("📍 Debug message from line " + str(sys._getframe().f_lineno + 1))
+    logger.warning("📍 Warning message from test script")
+    logger.error("📍 Error message with actual source location")
+    
+    # Test backward compatibility - should also show correct source
+    logger.log("📍 Backward compatibility test", "INFO")
+    
+    print("✅ Check the log output above - source should show 'test_unified_logging:test_source_location_tracking:XX'")
+    print("   NOT 'helpers.unified_logger:info:XX'")
+
+
+def test_nested_function_calls():
+    """Test source location tracking through nested function calls."""
+    print("\n🔗 Testing Nested Function Calls")
+    print("=" * 50)
+    
+    def inner_function():
+        logger = get_strategy_logger("funding_arbitrage")
+        logger.info("📍 This should show inner_function as the source")
+        return logger
+    
+    def outer_function():
+        inner_logger = inner_function()
+        inner_logger.warning("📍 This should show outer_function as the source")
+    
+    outer_function()
+    print("✅ Check that nested calls show the correct function names in source location")
 
 
 def main():
@@ -134,6 +173,8 @@ def main():
         test_service_logging()
         test_core_logging()
         test_backward_compatibility()
+        test_source_location_tracking()
+        test_nested_function_calls()
         
         print("\n" + "=" * 60)
         print("✅ All logging tests completed successfully!")
