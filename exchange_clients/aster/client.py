@@ -590,6 +590,54 @@ class AsterClient(BaseExchangeClient):
                 return position_amt
 
         return Decimal(0)
+    
+    async def get_account_balance(self) -> Optional[Decimal]:
+        """
+        Get available account balance from Aster.
+        
+        Uses GET /fapi/v4/account endpoint to get account information.
+        Returns available balance that can be used to open new positions.
+        
+        Returns:
+            Available balance in USDT, or None if query fails
+        """
+        try:
+            result = await self._make_request('GET', '/fapi/v4/account')
+            
+            # Get available balance from response
+            # Can use either:
+            # 1. availableBalance (top-level, total available across all assets)
+            # 2. assets[].availableBalance (per-asset breakdown)
+            
+            available_balance = result.get('availableBalance')
+            if available_balance is not None:
+                balance = Decimal(str(available_balance))
+                self.logger.debug(
+                    f"[ASTER] Available balance: ${balance:.2f}"
+                )
+                return balance
+            
+            # Fallback: Sum available balance from assets array
+            assets = result.get('assets', [])
+            total_available = Decimal('0')
+            for asset in assets:
+                if asset.get('asset') == 'USDT':  # Primary trading asset
+                    asset_available = asset.get('availableBalance', 0)
+                    total_available += Decimal(str(asset_available))
+            
+            if total_available > 0:
+                self.logger.debug(
+                    f"[ASTER] Available balance (from assets): ${total_available:.2f}"
+                )
+                return total_available
+            
+            # No balance data available
+            self.logger.warning("[ASTER] No balance data in account response")
+            return None
+            
+        except Exception as e:
+            self.logger.warning(f"[ASTER] Failed to get account balance: {e}")
+            return None
 
     async def get_account_leverage(self, symbol: str) -> Optional[int]:
         """
@@ -850,12 +898,6 @@ class AsterClient(BaseExchangeClient):
                 effective_leverage = Decimal(str(account_leverage))
                 leverage_info['margin_requirement'] = Decimal('1') / effective_leverage
                 
-                # Warn if account leverage exceeds symbol limits
-                if leverage_info['max_leverage'] and effective_leverage > leverage_info['max_leverage']:
-                    self.logger.warning(
-                        f"⚠️  [ASTER] Account leverage ({account_leverage}x) exceeds "
-                        f"symbol max ({leverage_info['max_leverage']}x) for {symbol}!"
-                    )
             else:
                 # No account leverage set - this will likely cause trading errors!
                 self.logger.warning(

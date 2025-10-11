@@ -522,6 +522,19 @@ class ParadexClient(BaseExchangeClient):
 
         return Decimal(0)
     
+    async def get_account_balance(self) -> Optional[Decimal]:
+        """
+        Get available account balance from Paradex.
+        
+        TODO: Implement when Paradex trading is in production.
+        Need to query Paradex API for available balance.
+        
+        Returns:
+            None (not yet implemented)
+        """
+        self.logger.log("[PARADEX] get_account_balance not yet implemented", "DEBUG")
+        return None
+    
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
         """
         Get leverage information for Paradex.

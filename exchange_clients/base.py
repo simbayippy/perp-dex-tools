@@ -502,18 +502,42 @@ class BaseExchangeClient(ABC):
         """
         pass
 
+    @abstractmethod
     async def get_account_balance(self) -> Optional[Decimal]:
         """
-        Get current account balance.
+        Get current available account balance for trading.
+        
+        ⚠️ IMPORTANT: This should return AVAILABLE balance (not total balance).
+        Available balance = What can be used to open new positions right now.
         
         Returns:
-            Account balance in USD/base currency, or None if not supported
+            Available balance in USD/base currency, or None if not supported
             
-        Note:
-            Override this method if exchange supports balance queries.
-            Default implementation returns None.
+        Implementation Notes:
+            - Return available/free balance (not total wallet balance)
+            - For cross-margin: Use crossWalletBalance or availableBalance
+            - For isolated-margin: Sum available balance across all assets
+            - Return None only if exchange doesn't support this query
+            
+        Example Implementation (with balance support):
+            ```python
+            async def get_account_balance(self) -> Optional[Decimal]:
+                try:
+                    result = await self._make_request('GET', '/api/v1/account')
+                    return Decimal(str(result.get('availableBalance', 0)))
+                except Exception as e:
+                    self.logger.warning(f"Failed to get balance: {e}")
+                    return None
+            ```
+            
+        Example Implementation (no balance support):
+            ```python
+            async def get_account_balance(self) -> Optional[Decimal]:
+                # Exchange doesn't support balance queries
+                return None
+            ```
         """
-        return None
+        pass
     
     async def get_detailed_positions(self) -> List[Dict[str, Any]]:
         """

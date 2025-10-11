@@ -511,6 +511,19 @@ class BackpackClient(BaseExchangeClient):
                 break
         return position_amt
     
+    async def get_account_balance(self) -> Optional[Decimal]:
+        """
+        Get available account balance from Backpack.
+        
+        TODO: Implement when Backpack trading is in production.
+        Need to query Backpack API for available balance.
+        
+        Returns:
+            None (not yet implemented)
+        """
+        self.logger.debug("[BACKPACK] get_account_balance not yet implemented")
+        return None
+    
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
         """
         Get leverage information for Backpack.

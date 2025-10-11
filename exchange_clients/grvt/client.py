@@ -570,6 +570,19 @@ class GrvtClient(BaseExchangeClient):
 
         return Decimal(0)
     
+    async def get_account_balance(self) -> Optional[Decimal]:
+        """
+        Get available account balance from GRVT.
+        
+        TODO: Implement when GRVT trading is in production.
+        Need to query GRVT API for available balance.
+        
+        Returns:
+            None (not yet implemented)
+        """
+        self.logger.log("[GRVT] get_account_balance not yet implemented", "DEBUG")
+        return None
+    
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
         """
         Get leverage information for GRVT.
