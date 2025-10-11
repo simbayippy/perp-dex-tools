@@ -246,7 +246,7 @@ class OrderExecutor:
             contract_id = getattr(exchange_client.config, 'contract_id', symbol)
             
             self.logger.info(
-                f"Placing limit {side} {symbol} (contract_id={contract_id}): "
+                f"[{exchange_client.exchange_name.upper()}] Placing limit {side} {symbol} (contract_id={contract_id}): "
                 f"{quantity} @ ${limit_price} (mid: ${mid_price}, offset: {price_offset_pct}%)"
             )
             
@@ -280,7 +280,7 @@ class OrderExecutor:
                     filled_qty = Decimal(str(order_info.filled_size))
                     
                     self.logger.info(
-                        f"Limit order filled: {filled_qty} @ ${fill_price}"
+                        f"[{exchange_client.exchange_name.upper()}] Limit order filled: {filled_qty} @ ${fill_price}"
                     )
                     
                     # Calculate slippage (should be near zero for maker orders)
@@ -305,7 +305,7 @@ class OrderExecutor:
             
             # Timeout - cancel order
             self.logger.warning(
-                f"Limit order timeout after {timeout_seconds}s, canceling {order_id}"
+                f"[{exchange_client.exchange_name.upper()}] Limit order timeout after {timeout_seconds}s, canceling {order_id}"
             )
             
             try:
@@ -366,7 +366,7 @@ class OrderExecutor:
             contract_id = getattr(exchange_client.config, 'contract_id', symbol)
             
             self.logger.info(
-                f"Placing market {side} {symbol} (contract_id={contract_id}): "
+                f"[{exchange_client.exchange_name.upper()}] Placing market {side} {symbol} (contract_id={contract_id}): "
                 f"{quantity} @ ~${expected_price}"
             )
             
@@ -394,7 +394,7 @@ class OrderExecutor:
             slippage_pct = abs(fill_price - expected_price) / expected_price if expected_price > 0 else Decimal('0')
             
             self.logger.info(
-                f"Market order filled: {filled_qty} @ ${fill_price} "
+                f"[{exchange_client.exchange_name.upper()}] Market order filled: {filled_qty} @ ${fill_price} "
                 f"(slippage: ${slippage_usd:.2f} / {slippage_pct*100:.3f}%)"
             )
             

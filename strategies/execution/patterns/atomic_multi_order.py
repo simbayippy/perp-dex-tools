@@ -604,10 +604,11 @@ class AtomicMultiOrderExecutor:
                     f"{fill['filled_quantity']} @ market"
                 )
                 
-                # 🔧 FIX: Get proper contract_id from exchange client
-                # Some exchanges (Aster) need "ZORAUSDT", not just "ZORA"
-                contract_attrs = await fill['exchange_client'].get_contract_attributes(fill['symbol'])
-                contract_id = contract_attrs.get('contract_id', fill['symbol'])
+                # 🔧 FIX: Get contract_id from exchange client config
+                # get_contract_attributes() doesn't take arguments - it uses self.config.ticker
+                # The contract_id is already set during exchange client initialization
+                exchange_client = fill['exchange_client']
+                contract_id = getattr(exchange_client.config, 'contract_id', fill['symbol'])
                 
                 self.logger.debug(
                     f"Rollback: Using contract_id='{contract_id}' for symbol '{fill['symbol']}'"
