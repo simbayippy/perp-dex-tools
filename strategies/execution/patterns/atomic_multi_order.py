@@ -24,9 +24,9 @@ from dataclasses import dataclass
 from enum import Enum
 import time
 import asyncio
-import logging
+from helpers.unified_logger import get_core_logger
 
-logger = logging.getLogger(__name__)
+logger = get_core_logger("atomic_multi_order")
 
 
 @dataclass
@@ -105,7 +105,7 @@ class AtomicMultiOrderExecutor:
             price_provider: Optional PriceProvider for shared price caching
         """
         self.price_provider = price_provider
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_core_logger("atomic_multi_order")
     
     async def execute_atomically(
         self,

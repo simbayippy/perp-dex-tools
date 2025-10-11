@@ -20,9 +20,9 @@ Example:
 
 from typing import Any, List, Optional, Dict, Tuple
 from decimal import Decimal
-import logging
+from helpers.unified_logger import get_core_logger
 
-logger = logging.getLogger(__name__)
+logger = get_core_logger("leverage_validator")
 
 
 class LeverageInfo:
@@ -96,7 +96,7 @@ class LeverageValidator:
     """
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_core_logger("leverage_validator")
         self._leverage_cache: Dict[Tuple[str, str], LeverageInfo] = {}
     
     async def get_leverage_info(
