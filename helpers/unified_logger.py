@@ -75,11 +75,19 @@ class UnifiedLogger:
         
         # Console handler with colors and source location
         if log_to_console:
+            def format_record(record):
+                # Truncate the file path to last 2 segments
+                name_parts = record["name"].split(".")
+                if len(name_parts) >= 2:
+                    record["extra"]["short_name"] = f"{name_parts[-2]}.{name_parts[-1]}"
+                else:
+                    record["extra"]["short_name"] = record["name"]
+                return True
+                
             console_format = (
                 "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
                 "<level>{level: <8}</level> | "
-                "<blue>{extra[component_id]}</blue> | "
-                "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+                "<cyan>{extra[short_name]}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
                 "<level>{message}</level>"
             )
             
@@ -88,18 +96,27 @@ class UnifiedLogger:
                 format=console_format,
                 level=self.log_level,
                 colorize=True,
-                filter=lambda record: record["extra"].get("component_id") == self.component_id,
+                filter=lambda record: record["extra"].get("component_id") == self.component_id and format_record(record),
                 backtrace=True,
                 diagnose=True
             )
         
         # File handler for all logs (no colors, includes extra context)
         log_file = logs_dir / f"{self.component_type.lower()}_{self.component_name.lower()}_activity.log"
+        
+        def format_record_file(record):
+            # Truncate the file path to last 2 segments for file logs too
+            name_parts = record["name"].split(".")
+            if len(name_parts) >= 2:
+                record["extra"]["short_name"] = f"{name_parts[-2]}.{name_parts[-1]}"
+            else:
+                record["extra"]["short_name"] = record["name"]
+            return True
+            
         file_format = (
             "{time:YYYY-MM-DD HH:mm:ss} | "
             "{level: <8} | "
-            "{extra[component_id]} | "
-            "{name}:{function}:{line} - "
+            "{extra[short_name]}:{function}:{line} - "
             "{message}"
         )
         
@@ -110,13 +127,23 @@ class UnifiedLogger:
             rotation="100 MB",
             retention="7 days",
             compression="zip",
-            filter=lambda record: record["extra"].get("component_id") == self.component_id,
+            filter=lambda record: record["extra"].get("component_id") == self.component_id and format_record_file(record),
             backtrace=True,
             diagnose=True
         )
         
         # Error-specific file handler
         error_log_file = logs_dir / f"{self.component_type.lower()}_{self.component_name.lower()}_errors.log"
+        
+        def format_record_error(record):
+            # Truncate the file path to last 2 segments for error logs too
+            name_parts = record["name"].split(".")
+            if len(name_parts) >= 2:
+                record["extra"]["short_name"] = f"{name_parts[-2]}.{name_parts[-1]}"
+            else:
+                record["extra"]["short_name"] = record["name"]
+            return True
+            
         _logger.add(
             str(error_log_file),
             format=file_format,
@@ -124,7 +151,7 @@ class UnifiedLogger:
             rotation="10 MB",
             retention="30 days",
             compression="zip",
-            filter=lambda record: record["extra"].get("component_id") == self.component_id,
+            filter=lambda record: record["extra"].get("component_id") == self.component_id and format_record_error(record),
             backtrace=True,
             diagnose=True
         )

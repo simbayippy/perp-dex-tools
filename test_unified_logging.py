@@ -129,16 +129,36 @@ def test_source_location_tracking():
     logger = get_exchange_logger("aster", "BTC")
     
     # These should show THIS function as the source, not the logger wrapper
-    logger.info("📍 This should show test_source_location_tracking as the source")
-    logger.debug("📍 Debug message from line " + str(sys._getframe().f_lineno + 1))
-    logger.warning("📍 Warning message from test script")
-    logger.error("📍 Error message with actual source location")
+    # AND should show truncated path like "test_unified_logging:test_source_location_tracking:XX"
+    logger.info("📍 This should show truncated path and correct function")
+    logger.debug("📍 Debug message - path should be truncated")
+    logger.warning("📍 Warning message - no verbose component context")
+    logger.error("📍 Error message with clean, short source location")
     
     # Test backward compatibility - should also show correct source
-    logger.log("📍 Backward compatibility test", "INFO")
+    logger.log("📍 Backward compatibility test with clean format", "INFO")
     
-    print("✅ Check the log output above - source should show 'test_unified_logging:test_source_location_tracking:XX'")
-    print("   NOT 'helpers.unified_logger:info:XX'")
+    print("✅ Check the log output above:")
+    print("   - Source should show 'test_unified_logging:test_source_location_tracking:XX'")
+    print("   - NO verbose component context like 'STRATEGY:FUNDING_ARBITRAGE:exchange=...'")
+    print("   - Clean, concise format!")
+
+
+def test_path_truncation():
+    """Test that file paths are properly truncated to last 2 segments."""
+    print("\n✂️ Testing Path Truncation")
+    print("=" * 50)
+    
+    # Test different component types to see path truncation
+    exchange_logger = get_exchange_logger("aster", "BTC")
+    strategy_logger = get_strategy_logger("funding_arbitrage")
+    service_logger = get_service_logger("funding_rate_service")
+    
+    exchange_logger.info("📁 Exchange log - should show truncated path")
+    strategy_logger.info("📁 Strategy log - should show truncated path")
+    service_logger.info("📁 Service log - should show truncated path")
+    
+    print("✅ All paths should be truncated to 'module.file:function:line' format")
 
 
 def test_nested_function_calls():
@@ -174,6 +194,7 @@ def main():
         test_core_logging()
         test_backward_compatibility()
         test_source_location_tracking()
+        test_path_truncation()
         test_nested_function_calls()
         
         print("\n" + "=" * 60)
