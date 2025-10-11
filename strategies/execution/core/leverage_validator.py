@@ -148,16 +148,24 @@ class LeverageValidator:
             leverage_data = await exchange_client.get_leverage_info(symbol)
             
             # Convert to LeverageInfo object
-            return LeverageInfo(
+            leverage_info = LeverageInfo(
                 exchange_name=exchange_name,
                 symbol=symbol,
                 max_leverage=leverage_data.get('max_leverage'),
                 max_notional=leverage_data.get('max_notional'),
                 margin_requirement=leverage_data.get('margin_requirement')
             )
+            
+            self.logger.debug(
+                f"✅ [{exchange_name.upper()}] Leverage info for {symbol}: {leverage_info}"
+            )
+            
+            return leverage_info
         
         except Exception as e:
-            self.logger.error(f"Error querying leverage for {exchange_name}:{symbol}: {e}")
+            self.logger.warning(
+                f"⚠️  [{exchange_name.upper()}] Could not query leverage for {symbol}: {e}"
+            )
             # Return conservative default
             return LeverageInfo(
                 exchange_name=exchange_name,
@@ -204,8 +212,10 @@ class LeverageValidator:
             if check_balance:
                 try:
                     available_balance = await client.get_account_balance()
-                except:
-                    self.logger.warning(f"Could not get balance for {exchange_name}")
+                except Exception as e:
+                    self.logger.warning(
+                        f"⚠️  Could not get balance for {exchange_name}: {e}"
+                    )
             
             # Calculate max size for this exchange
             exchange_max = leverage_info.get_max_size_usd(available_balance)
@@ -217,7 +227,13 @@ class LeverageValidator:
                 )
                 max_size = exchange_max
                 limiting_exchange = exchange_name
+            else:
+                self.logger.debug(
+                    f"✅ [{exchange_name.upper()}] Can support ${requested_size_usd:.2f} "
+                    f"(max: ${exchange_max if exchange_max else 'unlimited'})"
+                )
         
+        # All exchanges validated successfully
         if limiting_exchange:
             self.logger.info(
                 f"📊 [LEVERAGE] Position size adjusted: ${requested_size_usd:.2f} → ${max_size:.2f} "
@@ -229,6 +245,115 @@ class LeverageValidator:
             )
         
         return max_size, limiting_exchange
+    
+    async def normalize_and_set_leverage(
+        self,
+        exchange_clients: List[Any],
+        symbol: str,
+        requested_size_usd: Decimal
+    ) -> Tuple[Optional[int], Optional[str]]:
+        """
+        Calculate minimum leverage across exchanges and SET it on all exchanges.
+        
+        ⭐ CRITICAL for delta-neutral strategies ⭐
+        
+        When executing on multiple exchanges, both sides must use the SAME leverage.
+        This method:
+        1. Queries leverage limits on all exchanges
+        2. Calculates the minimum (most restrictive)
+        3. Sets this leverage on ALL exchanges before execution
+        
+        Args:
+            exchange_clients: List of exchange clients
+            symbol: Trading symbol
+            requested_size_usd: Requested position size in USD
+            
+        Returns:
+            (min_leverage, limiting_exchange) tuple
+            min_leverage: Minimum leverage to use across all exchanges
+            limiting_exchange: Which exchange had the lowest limit
+            
+        Example:
+            # MON: Aster supports 5x, Lighter supports 3x
+            min_leverage, limiting = await validator.normalize_and_set_leverage(
+                [aster_client, lighter_client],
+                "MON",
+                Decimal("100")
+            )
+            # Returns: (3, "lighter")
+            # Both exchanges are now set to 3x leverage
+        """
+        min_leverage = None
+        limiting_exchange = None
+        leverage_per_exchange = {}
+        
+        # Step 1: Query leverage limits from all exchanges
+        for client in exchange_clients:
+            exchange_name = client.get_exchange_name()
+            
+            # Get leverage info
+            leverage_info = await self.get_leverage_info(client, symbol)
+            
+            if leverage_info.max_leverage is not None:
+                max_lev = int(leverage_info.max_leverage)
+                leverage_per_exchange[exchange_name] = max_lev
+                
+                # Track minimum
+                if min_leverage is None or max_lev < min_leverage:
+                    min_leverage = max_lev
+                    limiting_exchange = exchange_name
+                
+                self.logger.info(
+                    f"📊 [{exchange_name.upper()}] Max leverage for {symbol}: {max_lev}x"
+                )
+            else:
+                self.logger.warning(
+                    f"⚠️  [{exchange_name.upper()}] Could not determine max leverage for {symbol}"
+                )
+        
+        if min_leverage is None:
+            self.logger.warning(
+                "⚠️  Could not determine leverage limits for any exchange. "
+                "Skipping leverage normalization."
+            )
+            return None, None
+        
+        # Step 2: Set the minimum leverage on ALL exchanges
+        self.logger.info(
+            f"🔧 [LEVERAGE] Normalizing to minimum leverage: {min_leverage}x "
+            f"(limited by {limiting_exchange})"
+        )
+        
+        for client in exchange_clients:
+            exchange_name = client.get_exchange_name()
+            
+            # Check if exchange supports setting leverage
+            if not hasattr(client, 'set_account_leverage'):
+                self.logger.warning(
+                    f"⚠️  [{exchange_name.upper()}] Does not support set_account_leverage(), skipping"
+                )
+                continue
+            
+            try:
+                success = await client.set_account_leverage(symbol, min_leverage)
+                if success:
+                    self.logger.info(
+                        f"✅ [{exchange_name.upper()}] Leverage set to {min_leverage}x for {symbol}"
+                    )
+                else:
+                    self.logger.error(
+                        f"❌ [{exchange_name.upper()}] Failed to set leverage to {min_leverage}x"
+                    )
+            except Exception as e:
+                self.logger.error(
+                    f"❌ [{exchange_name.upper()}] Error setting leverage: {e}"
+                )
+        
+        self.logger.info(
+            f"✅ [LEVERAGE] All exchanges normalized to {min_leverage}x for {symbol}"
+        )
+        
+        return min_leverage, limiting_exchange
     
     def clear_cache(self):
         """Clear leverage info cache."""

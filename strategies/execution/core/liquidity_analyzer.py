@@ -127,6 +127,9 @@ class LiquidityAnalyzer:
             LiquidityReport with recommendation
         """
         try:
+            # Get exchange name for logging
+            exchange_name = getattr(exchange_client, 'get_exchange_name', lambda: 'UNKNOWN')()
+            
             # Get order book depth
             # Note: Each exchange client handles symbol normalization internally
             order_book = await exchange_client.get_order_book_depth(
@@ -167,17 +170,13 @@ class LiquidityAnalyzer:
             
             # Log order book summary
             self.logger.info(
-                f"📊 [LIQUIDITY] {symbol}: {bids_count} bids, {asks_count} asks | "
+                f"📊 [LIQUIDITY-{exchange_name}] {symbol}: {bids_count} bids, {asks_count} asks | "
                 f"Best: {best_bid}/{best_ask} | Spread: {spread_bps} bps"
             )
             
             # Determine which side of book to check
             book_side = order_book['asks'] if side == 'buy' else order_book['bids']
             side_name = "asks (selling to us)" if side == 'buy' else "bids (buying from us)"
-            
-            self.logger.info(
-                f"💰 [LIQUIDITY] Analyzing {side} order for ${size_usd} on {side_name}"
-            )
             
             # Calculate expected fill
             fill_analysis = self._analyze_order_fill(
@@ -188,7 +187,7 @@ class LiquidityAnalyzer:
             
             # Log fill analysis results
             self.logger.info(
-                f"📈 [LIQUIDITY] Fill analysis: "
+                f"📈 [LIQUIDITY-{exchange_name}] Fill analysis: "
                 f"Can fill: {fill_analysis['filled_completely']}, "
                 f"Levels needed: {fill_analysis['levels_consumed']}/{len(book_side)}, "
                 f"Total available: ${fill_analysis['total_cost']:.2f}"
@@ -196,7 +195,7 @@ class LiquidityAnalyzer:
             
             if not fill_analysis['filled_completely']:
                 self.logger.warning(
-                    f"⚠️  [LIQUIDITY] INSUFFICIENT DEPTH! "
+                    f"⚠️  [LIQUIDITY-{exchange_name}] INSUFFICIENT DEPTH! "
                     f"Need ${size_usd}, only ${fill_analysis['total_cost']:.2f} available. "
                     f"Shortfall: ${fill_analysis['remaining_usd']:.2f}"
                 )
@@ -248,7 +247,7 @@ class LiquidityAnalyzer:
             # Log final verdict
             verdict_emoji = "✅" if recommendation in ["use_limit", "use_market"] else "❌"
             self.logger.info(
-                f"{verdict_emoji} [LIQUIDITY] VERDICT for {side} ${size_usd} {symbol}: "
+                f"{verdict_emoji} [LIQUIDITY-{exchange_name}] VERDICT for {side} ${size_usd} {symbol}: "
                 f"Recommendation='{recommendation}' | "
                 f"Score={liquidity_score:.2f} | "
                 f"Slippage={slippage_pct*100:.3f}% | "
@@ -270,7 +269,9 @@ class LiquidityAnalyzer:
             )
         
         except Exception as e:
-            self.logger.error(f"Liquidity analysis failed: {e}", exc_info=True)
+            # Get exchange name for error logging
+            exchange_name = getattr(exchange_client, 'get_exchange_name', lambda: 'UNKNOWN')()
+            self.logger.error(f"[LIQUIDITY-{exchange_name}] Liquidity analysis failed: {e}", exc_info=True)
             # Return pessimistic report on error
             return LiquidityReport(
                 depth_sufficient=False,
@@ -285,7 +286,6 @@ class LiquidityAnalyzer:
                 best_bid=Decimal('0'),
                 best_ask=Decimal('0')
             )
-    
     def _analyze_order_fill(
         self,
         book_side: List[Dict],

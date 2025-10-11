@@ -226,8 +226,9 @@ class OrderExecutor:
         ⭐ Pattern from Hummingbot's PositionExecutor ⭐
         """
         try:
-            # Get current prices
-            best_bid, best_ask = await self._fetch_bbo_prices(exchange_client, symbol)
+            # 🔴 CRITICAL: Get FRESH prices for limit orders (Issue #3 fix)
+            # Use WebSocket BBO if available (real-time), else force fresh REST fetch
+            best_bid, best_ask = await self._fetch_bbo_prices_for_limit_order(exchange_client, symbol)
             mid_price = (best_bid + best_ask) / 2
             
             # Calculate limit price (maker order with small improvement)
@@ -245,8 +246,9 @@ class OrderExecutor:
             # Each exchange has already normalized the symbol during initialization
             contract_id = getattr(exchange_client.config, 'contract_id', symbol)
             
+            exchange_name = exchange_client.get_exchange_name()
             self.logger.info(
-                f"Placing limit {side} {symbol} (contract_id={contract_id}): "
+                f"[{exchange_name.upper()}] Placing limit {side} {symbol} (contract_id={contract_id}): "
                 f"{quantity} @ ${limit_price} (mid: ${mid_price}, offset: {price_offset_pct}%)"
             )
             
@@ -279,8 +281,9 @@ class OrderExecutor:
                     fill_price = Decimal(str(order_info.price))
                     filled_qty = Decimal(str(order_info.filled_size))
                     
+                    exchange_name = exchange_client.get_exchange_name()
                     self.logger.info(
-                        f"Limit order filled: {filled_qty} @ ${fill_price}"
+                        f"[{exchange_name.upper()}] Limit order filled: {filled_qty} @ ${fill_price}"
                     )
                     
                     # Calculate slippage (should be near zero for maker orders)
@@ -304,8 +307,9 @@ class OrderExecutor:
                 await asyncio.sleep(wait_interval)
             
             # Timeout - cancel order
+            exchange_name = exchange_client.get_exchange_name()
             self.logger.warning(
-                f"Limit order timeout after {timeout_seconds}s, canceling {order_id}"
+                f"[{exchange_name.upper()}] Limit order timeout after {timeout_seconds}s, canceling {order_id}"
             )
             
             try:
@@ -365,8 +369,9 @@ class OrderExecutor:
             # Get the exchange-specific contract ID (normalized symbol)
             contract_id = getattr(exchange_client.config, 'contract_id', symbol)
             
+            exchange_name = exchange_client.get_exchange_name()
             self.logger.info(
-                f"Placing market {side} {symbol} (contract_id={contract_id}): "
+                f"[{exchange_name.upper()}] Placing market {side} {symbol} (contract_id={contract_id}): "
                 f"{quantity} @ ~${expected_price}"
             )
             
@@ -393,8 +398,9 @@ class OrderExecutor:
             slippage_usd = abs(fill_price - expected_price) * filled_qty
             slippage_pct = abs(fill_price - expected_price) / expected_price if expected_price > 0 else Decimal('0')
             
+            exchange_name = exchange_client.get_exchange_name()
             self.logger.info(
-                f"Market order filled: {filled_qty} @ ${fill_price} "
+                f"[{exchange_name.upper()}] Market order filled: {filled_qty} @ ${fill_price} "
                 f"(slippage: ${slippage_usd:.2f} / {slippage_pct*100:.3f}%)"
             )
             
@@ -430,6 +436,73 @@ class OrderExecutor:
                 execution_mode_used="market_error"
             )
     
+    async def _fetch_bbo_prices_for_limit_order(
+        self,
+        exchange_client: Any,
+        symbol: str
+    ) -> tuple[Decimal, Decimal]:
+        """
+        Fetch FRESH BBO prices specifically for limit order placement.
+        
+        🔴 CRITICAL (Issue #3 fix): Limit orders need real-time prices, not cached data!
+        
+        Priority for limit orders:
+        1. WebSocket BBO (real-time) - PREFERRED
+        2. Fresh REST API call (bypass cache) - FALLBACK
+        
+        This ensures limit orders are placed at current market prices, not stale cached prices
+        from liquidity checks that happened 1-2 seconds ago.
+        
+        Returns:
+            (best_bid, best_ask) as Decimals
+        """
+        exchange_name = exchange_client.get_exchange_name()
+        
+        try:
+            # 🔴 Priority 1: Try WebSocket BBO (real-time, zero latency)
+            if hasattr(exchange_client, 'ws_manager') and exchange_client.ws_manager:
+                ws_manager = exchange_client.ws_manager
+                
+                # Check if WebSocket has fresh BBO data
+                if hasattr(ws_manager, 'best_bid') and hasattr(ws_manager, 'best_ask'):
+                    if ws_manager.best_bid is not None and ws_manager.best_ask is not None:
+                        bid = Decimal(str(ws_manager.best_bid))
+                        ask = Decimal(str(ws_manager.best_ask))
+                        
+                        self.logger.info(
+                            f"🔴 [PRICE] Using WebSocket BBO for {exchange_name}:{symbol} "
+                            f"(bid={bid}, ask={ask}) - REAL-TIME"
+                        )
+                        return bid, ask
+            
+            # 🔄 Priority 2: Force fresh REST API fetch (bypass cache)
+            self.logger.info(
+                f"🔄 [PRICE] Fetching FRESH BBO for {exchange_name}:{symbol} "
+                f"(WebSocket not available, forcing REST API call)"
+            )
+            
+            # Bypass PriceProvider cache - go direct to exchange
+            if hasattr(exchange_client, 'fetch_bbo_prices'):
+                bid, ask = await exchange_client.fetch_bbo_prices(symbol)
+                return Decimal(str(bid)), Decimal(str(ask))
+            
+            # Fallback: Get from order book
+            if hasattr(exchange_client, 'get_order_book_depth'):
+                book = await exchange_client.get_order_book_depth(symbol)
+                if book['bids'] and book['asks']:
+                    best_bid = Decimal(str(book['bids'][0]['price']))
+                    best_ask = Decimal(str(book['asks'][0]['price']))
+                    return best_bid, best_ask
+            
+            # Last resort: Error
+            raise NotImplementedError(
+                f"{exchange_name} must implement fetch_bbo_prices() or get_order_book_depth()"
+            )
+        
+        except Exception as e:
+            self.logger.error(f"Failed to fetch fresh BBO prices for limit order: {e}")
+            raise
+    
     async def _fetch_bbo_prices(
         self,
         exchange_client: Any,
@@ -462,7 +535,7 @@ class OrderExecutor:
             
             # Fallback: Get from order book
             if hasattr(exchange_client, 'get_order_book_depth'):
-                book = await exchange_client.get_order_book_depth(symbol, levels=1)
+                book = await exchange_client.get_order_book_depth(symbol)
                 best_bid = Decimal(str(book['bids'][0]['price']))
                 best_ask = Decimal(str(book['asks'][0]['price']))
                 return best_bid, best_ask

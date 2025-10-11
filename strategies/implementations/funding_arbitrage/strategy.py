@@ -179,6 +179,13 @@ class FundingArbitrageStrategy(StatefulStrategy):
         
         # Tracking
         self.cumulative_funding = {}  # {position_id: Decimal}
+        self.failed_symbols = set()  # Track symbols that failed validation (avoid retrying same cycle)
+        
+        # 🔒 Session-level position limit (Issue #4 fix)
+        # Set to True to limit strategy to 1 position per bot session
+        # Set to False to allow multiple positions based on max_positions config
+        self.one_position_per_session = True  # Keep it simple for now
+        self.position_opened_this_session = False
     
     
     def get_strategy_name(self) -> str:
@@ -253,6 +260,9 @@ class FundingArbitrageStrategy(StatefulStrategy):
             StrategyResult with actions taken
         """
         actions_taken = []
+        
+        # Reset failed symbols at start of each cycle (allow retry on next cycle)
+        self.failed_symbols.clear()
         
         try:
             # Phase 1: Monitor existing positions
@@ -504,9 +514,18 @@ class FundingArbitrageStrategy(StatefulStrategy):
             # Take top opportunities up to limit
             max_new = self.config.max_new_positions_per_cycle
             for opp in opportunities[:max_new]:
+                # Skip symbols that failed in this cycle
+                if opp.symbol in self.failed_symbols:
+                    self.logger.log(
+                        f"⏭️  Skipping {opp.symbol} - already failed validation this cycle",
+                        "DEBUG"
+                    )
+                    continue
+                
                 if self._should_take_opportunity(opp):
-                    await self._open_position(opp)
-                    actions.append(f"Opened {opp.symbol} on {opp.long_dex}/{opp.short_dex}")
+                    success = await self._open_position(opp)
+                    if success:
+                        actions.append(f"Opened {opp.symbol} on {opp.long_dex}/{opp.short_dex}")
                     
                     # Stop if we hit capacity
                     if not self._has_capacity():
@@ -643,7 +662,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
             self.logger.log(f"Traceback: {traceback.format_exc()}", "DEBUG")
             return False
     
-    async def _open_position(self, opportunity):
+    async def _open_position(self, opportunity) -> bool:
         """
         Open delta-neutral position from opportunity using atomic execution.
         
@@ -651,6 +670,9 @@ class FundingArbitrageStrategy(StatefulStrategy):
         
         Args:
             opportunity: ArbitrageOpportunity object
+            
+        Returns:
+            True if position opened successfully, False otherwise
         """
         try:
             symbol = opportunity.symbol
@@ -666,11 +688,19 @@ class FundingArbitrageStrategy(StatefulStrategy):
             short_client = self.exchange_clients.get(short_dex)
             
             if long_client is None:
-                self.logger.log(f"ERROR: No exchange client found for long_dex: {long_dex}")
-                return
+                self.logger.log(
+                    f"❌ No exchange client found for long_dex: {long_dex}",
+                    "ERROR"
+                )
+                self.failed_symbols.add(symbol)
+                return False
             if short_client is None:
-                self.logger.log(f"ERROR: No exchange client found for short_dex: {short_dex}")
-                return
+                self.logger.log(
+                    f"❌ No exchange client found for short_dex: {short_dex}",
+                    "ERROR"
+                )
+                self.failed_symbols.add(symbol)
+                return False
             
             # ⭐ CRITICAL: Initialize contract attributes for this symbol
             self.logger.log(
@@ -686,13 +716,15 @@ class FundingArbitrageStrategy(StatefulStrategy):
                     f"⛔ [SKIP] Cannot trade {symbol}: Not supported on {long_dex.upper()} (long side)",
                     "WARNING"
                 )
-                return
+                self.failed_symbols.add(symbol)
+                return False
             if not short_init_ok:
                 self.logger.log(
                     f"⛔ [SKIP] Cannot trade {symbol}: Not supported on {short_dex.upper()} (short side)",
                     "WARNING"
                 )
-                return
+                self.failed_symbols.add(symbol)
+                return False
             
             self.logger.log(
                 f"✅ [VALIDATION] {symbol} is tradeable on both exchanges",
@@ -711,13 +743,21 @@ class FundingArbitrageStrategy(StatefulStrategy):
             leverage_validator = LeverageValidator()
             
             # Check if both exchanges can support the requested size
-            max_size, limiting_exchange = await leverage_validator.get_max_position_size(
-                exchange_clients=[long_client, short_client],
-                symbol=symbol,
-                requested_size_usd=size_usd,
-                check_balance=True
-            )
-            
+            try:
+                max_size, limiting_exchange = await leverage_validator.get_max_position_size(
+                    exchange_clients=[long_client, short_client],
+                    symbol=symbol,
+                    requested_size_usd=size_usd,
+                    check_balance=True
+                )
+            except Exception as e:
+                # Leverage validation failed - log once and track
+                self.logger.log(
+                    f"⛔ [SKIP] {symbol}: Leverage validation failed - {e}",
+                    "WARNING"
+                )
+                self.failed_symbols.add(symbol)
+                return False
             
             # Adjust size if needed
             if max_size < size_usd:
@@ -734,10 +774,11 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 # Check if reduced size is still profitable
                 if size_usd < Decimal('5'):  # Minimum $5 position
                     self.logger.log(
-                        f"⛔ [SKIP] Position size too small after leverage adjustment: ${size_usd:.2f}",
+                        f"⛔ [SKIP] {symbol}: Position size too small after leverage adjustment (${size_usd:.2f})",
                         "WARNING"
                     )
-                    return
+                    self.failed_symbols.add(symbol)
+                    return False
             
             self.logger.log(
                 f"🎯 [EXECUTION PLAN] {symbol} | "
@@ -779,7 +820,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
             # Check if atomic execution succeeded
             if not result.all_filled:
                 self.logger.log(
-                    f"❌ Atomic execution failed for {symbol}: {result.error_message}",
+                    f"❌ {symbol}: Atomic execution failed - {result.error_message}",
                     "ERROR"
                 )
                 
@@ -789,7 +830,8 @@ class FundingArbitrageStrategy(StatefulStrategy):
                         "WARNING"
                     )
                 
-                return  # Don't create position if execution failed
+                self.failed_symbols.add(symbol)
+                return False  # Don't create position if execution failed
             
             # ✅ Both sides filled successfully
             long_fill = result.filled_orders[0]
@@ -819,6 +861,9 @@ class FundingArbitrageStrategy(StatefulStrategy):
             
             await self.position_manager.add_position(position)
             
+            # 🔒 Mark that we've opened a position this session (Issue #4 fix)
+            self.position_opened_this_session = True
+            
             self.logger.log(
                 f"✅ Position opened {symbol}: "
                 f"Long @ ${long_fill['fill_price']}, "
@@ -828,12 +873,21 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 "INFO"
             )
             
+            if self.one_position_per_session:
+                self.logger.log(
+                    "📊 Session limit: Will not open more positions this session (one_position_per_session=True)",
+                    "INFO"
+                )
+            
+            return True  # Success
+            
         except Exception as e:
             self.logger.log(
-                f"Error opening position for {opportunity.symbol}: {e}",
+                f"❌ {opportunity.symbol}: Unexpected error - {e}",
                 "ERROR"
             )
-            raise
+            self.failed_symbols.add(opportunity.symbol)
+            return False
     
     # ========================================================================
     # Helper Methods
@@ -843,13 +897,29 @@ class FundingArbitrageStrategy(StatefulStrategy):
         """
         Check if can open more positions.
         
+        Checks both:
+        1. Global position limit (max_positions config)
+        2. Session-level limit (one_position_per_session flag)
+        
         Returns:
-            True if under max position limit
+            True if under max position limit AND session limit allows
         """
-        # Use synchronous call since we're in sync context
-        # In real implementation, would use async properly
+        # Check global position limit
         open_count = len(self.position_manager._positions)
-        return open_count < self.config.max_positions
+        if open_count >= self.config.max_positions:
+            return False
+        
+        # 🔒 Check session-level limit (Issue #4 fix)
+        # If one_position_per_session is enabled and we've already opened one, stop
+        if self.one_position_per_session and self.position_opened_this_session:
+            self.logger.log(
+                "📊 Session limit reached: Already opened 1 position this session. "
+                "Set one_position_per_session=False to allow multiple positions.",
+                "INFO"
+            )
+            return False
+        
+        return True
     
     def _calculate_total_exposure(self) -> Decimal:
         """

@@ -17,7 +17,7 @@ import websockets
 
 
 class AsterWebSocketManager:
-    """WebSocket manager for Aster order updates."""
+    """WebSocket manager for Aster order updates and order book."""
 
     def __init__(self, config: Dict[str, Any], api_key: str, secret_key: str, order_update_callback: Callable):
         self.api_key = api_key
@@ -32,6 +32,20 @@ class AsterWebSocketManager:
         self._keepalive_task = None
         self._last_ping_time = None
         self.config = config
+        
+        # 📊 Order book state (for real-time BBO via book ticker)
+        self.best_bid = None
+        self.best_ask = None
+        self._book_ticker_ws = None  # Separate WebSocket for book ticker
+        self._book_ticker_task = None
+        self._current_book_ticker_symbol = None  # Track which symbol we're subscribed to
+        
+        # 📚 Full order book state (for liquidity checks via depth stream)
+        self.order_book = {"bids": [], "asks": []}  # Snapshot format: [{'price': Decimal, 'size': Decimal}, ...]
+        self._depth_ws = None  # Separate WebSocket for order book depth
+        self._depth_task = None
+        self._current_depth_symbol = None
+        self.order_book_ready = False
 
     def _generate_signature(self, params: Dict[str, Any]) -> str:
         """Generate HMAC SHA256 signature for Aster API authentication."""
@@ -172,14 +186,14 @@ class AsterWebSocketManager:
                 await asyncio.sleep(60)
 
     async def connect(self):
-        """Connect to Aster WebSocket."""
+        """Connect to Aster WebSocket for order updates and book ticker."""
         try:
-            # Get listen key
+            # Get listen key for user data stream
             self.listen_key = await self._get_listen_key()
             if not self.listen_key:
                 raise Exception("Failed to get listen key")
 
-            # Connect to WebSocket
+            # Connect to user data stream (order updates)
             ws_url = f"{self.ws_url}/ws/{self.listen_key}"
             self.websocket = await websockets.connect(ws_url)
             self.running = True
@@ -189,6 +203,9 @@ class AsterWebSocketManager:
 
             # Start keepalive task
             self._keepalive_task = asyncio.create_task(self._start_keepalive_task())
+            
+            # 📊 Note: Book ticker WebSocket is started on-demand via start_book_ticker(symbol)
+            # Don't start it here since we don't know which symbol to trade yet
 
             # Start listening for messages
             await self._listen()
@@ -293,6 +310,286 @@ class AsterWebSocketManager:
             if self.logger:
                 self.logger.error(f"Error handling order update: {e}")
 
+    async def start_book_ticker(self, symbol: str):
+        """
+        Start book ticker WebSocket for a specific symbol.
+        
+        This should be called AFTER identifying the opportunity symbol,
+        not during initial connection.
+        
+        Args:
+            symbol: Normalized symbol (e.g., "MONUSDT", "SKYUSDT")
+        """
+        # If already subscribed to this symbol, no need to restart
+        if self._current_book_ticker_symbol == symbol and self._book_ticker_task and not self._book_ticker_task.done():
+            if self.logger:
+                self.logger.debug(f"Already subscribed to book ticker for {symbol}")
+            return
+        
+        # Cancel existing book ticker task if different symbol
+        if self._book_ticker_task and not self._book_ticker_task.done():
+            if self.logger:
+                self.logger.info(f"Switching book ticker from {self._current_book_ticker_symbol} to {symbol}")
+            self._book_ticker_task.cancel()
+            try:
+                await self._book_ticker_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Start new book ticker task
+        self._current_book_ticker_symbol = symbol
+        self._book_ticker_task = asyncio.create_task(self._connect_book_ticker(symbol))
+        
+        if self.logger:
+            self.logger.info(f"📊 Started book ticker WebSocket for {symbol}")
+    
+    async def _connect_book_ticker(self, symbol: str):
+        """
+        Connect to book ticker stream for real-time BBO updates.
+        
+        Stream: <symbol>@bookTicker
+        Pushes any update to the best bid or ask's price or quantity in real-time.
+        
+        Args:
+            symbol: Symbol to subscribe to (e.g., "MONUSDT")
+        """
+        try:
+            
+            # Construct book ticker stream URL
+            stream_name = f"{symbol.lower()}@bookTicker"
+            book_ticker_url = f"{self.ws_url}/ws/{stream_name}"
+            
+            if self.logger:
+                self.logger.info(f"📊 Connecting to Aster book ticker: {stream_name}")
+            
+            # Connect with reconnection logic
+            reconnect_delay = 1
+            max_reconnect_delay = 30
+            
+            while self.running:
+                try:
+                    async with websockets.connect(book_ticker_url) as ws:
+                        self._book_ticker_ws = ws
+                        
+                        if self.logger:
+                            self.logger.info(f"✅ Connected to Aster book ticker for {symbol}")
+                        
+                        # Reset reconnect delay on successful connection
+                        reconnect_delay = 1
+                        
+                        # Listen for book ticker updates
+                        async for message in ws:
+                            if not self.running:
+                                break
+                            
+                            try:
+                                data = json.loads(message)
+                                await self._handle_book_ticker(data)
+                            except json.JSONDecodeError as e:
+                                if self.logger:
+                                    self.logger.error(f"Failed to parse book ticker message: {e}")
+                            except Exception as e:
+                                if self.logger:
+                                    self.logger.error(f"Error handling book ticker: {e}")
+                
+                except websockets.exceptions.ConnectionClosed:
+                    if self.logger and self.running:
+                        self.logger.warning("Book ticker WebSocket closed, reconnecting...")
+                except Exception as e:
+                    if self.logger and self.running:
+                        self.logger.error(f"Book ticker WebSocket error: {e}")
+                
+                # Reconnect with exponential backoff
+                if self.running:
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
+        
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Failed to start book ticker WebSocket: {e}")
+    
+    async def _handle_book_ticker(self, data: Dict[str, Any]):
+        """
+        Handle book ticker updates.
+        
+        Format:
+        {
+          "e": "bookTicker",     // Event type
+          "u": 400900217,        // Order book updateId
+          "s": "BNBUSDT",        // Symbol
+          "b": "25.35190000",    // Best bid price
+          "B": "31.21000000",    // Best bid qty
+          "a": "25.36520000",    // Best ask price
+          "A": "40.66000000"     // Best ask qty
+        }
+        """
+        try:
+            if data.get('e') != 'bookTicker':
+                return
+            
+            # Extract best bid and ask
+            best_bid_str = data.get('b')
+            best_ask_str = data.get('a')
+            
+            if best_bid_str and best_ask_str:
+                self.best_bid = float(best_bid_str)
+                self.best_ask = float(best_ask_str)
+                
+                if self.logger:
+                    self.logger.debug(
+                        f"📊 [ASTER] Book ticker update: "
+                        f"bid={self.best_bid}, ask={self.best_ask}"
+                    )
+        
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error processing book ticker: {e}")
+    
+    async def start_order_book_stream(self, symbol: str):
+        """
+        Start order book depth stream for a specific symbol.
+        
+        Uses partial depth stream (@depth20@100ms) for real-time order book snapshots.
+        This provides top 20 bids and asks with 100ms updates, sufficient for liquidity checks.
+        
+        Args:
+            symbol: Normalized symbol (e.g., "MONUSDT", "SKYUSDT")
+        """
+        # If already subscribed to this symbol, no need to restart
+        if self._current_depth_symbol == symbol and self._depth_task and not self._depth_task.done():
+            if self.logger:
+                self.logger.debug(f"Already subscribed to depth stream for {symbol}")
+            return
+        
+        # Cancel existing depth task if different symbol
+        if self._depth_task and not self._depth_task.done():
+            if self.logger:
+                self.logger.info(f"Switching depth stream from {self._current_depth_symbol} to {symbol}")
+            self._depth_task.cancel()
+            try:
+                await self._depth_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Start new depth task
+        self._current_depth_symbol = symbol
+        self._depth_task = asyncio.create_task(self._connect_depth_stream(symbol))
+        
+        if self.logger:
+            self.logger.info(f"📚 Started order book depth stream for {symbol}")
+    
+    async def _connect_depth_stream(self, symbol: str):
+        """
+        Connect to order book depth stream.
+        
+        Stream: <symbol>@depth20@100ms
+        Provides top 20 bids and asks every 100ms.
+        
+        Args:
+            symbol: Symbol to subscribe to (e.g., "MONUSDT")
+        """
+        try:
+            # Use partial depth stream: top 20 levels at 100ms
+            stream_name = f"{symbol.lower()}@depth20@100ms"
+            depth_url = f"{self.ws_url}/ws/{stream_name}"
+            
+            if self.logger:
+                self.logger.info(f"📚 [ASTER] Connecting to depth stream: {stream_name}")
+            
+            reconnect_delay = 1
+            max_reconnect_delay = 60
+            
+            while self.running:
+                try:
+                    async with websockets.connect(depth_url) as ws:
+                        self._depth_ws = ws
+                        
+                        if self.logger:
+                            self.logger.info(f"📚 [ASTER] Connected to depth stream for {symbol}")
+                        
+                        # Reset reconnect delay on successful connection
+                        reconnect_delay = 1
+                        
+                        # Listen for depth updates
+                        async for message in ws:
+                            if not self.running:
+                                break
+                            
+                            try:
+                                data = json.loads(message)
+                                await self._handle_depth_update(data)
+                            except json.JSONDecodeError as e:
+                                if self.logger:
+                                    self.logger.error(f"Failed to parse depth message: {e}")
+                            except Exception as e:
+                                if self.logger:
+                                    self.logger.error(f"Error handling depth update: {e}")
+                
+                except websockets.exceptions.ConnectionClosed:
+                    if self.logger and self.running:
+                        self.logger.warning("Depth WebSocket closed, reconnecting...")
+                except Exception as e:
+                    if self.logger and self.running:
+                        self.logger.error(f"Depth WebSocket error: {e}")
+                
+                # Reconnect with exponential backoff
+                if self.running:
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
+        
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Failed to start depth WebSocket: {e}")
+    
+    async def _handle_depth_update(self, data: Dict[str, Any]):
+        """
+        Handle order book depth updates.
+        
+        Format (partial depth):
+        {
+          "e": "depthUpdate",
+          "E": 1571889248277,  // Event time
+          "s": "BTCUSDT",
+          "b": [["7403.89", "0.002"], ["7403.90", "3.906"], ...],  // Top 20 bids
+          "a": [["7405.96", "3.340"], ["7406.63", "4.525"], ...]   // Top 20 asks
+        }
+        """
+        try:
+            if data.get('e') != 'depthUpdate':
+                return
+            
+            # Extract bids and asks
+            bids_raw = data.get('b', [])
+            asks_raw = data.get('a', [])
+            
+            # Convert to standard format
+            from decimal import Decimal
+            
+            bids = [
+                {'price': Decimal(price), 'size': Decimal(qty)}
+                for price, qty in bids_raw
+            ]
+            asks = [
+                {'price': Decimal(price), 'size': Decimal(qty)}
+                for price, qty in asks_raw
+            ]
+            
+            # Update order book state (snapshot, not incremental)
+            self.order_book = {
+                'bids': bids,
+                'asks': asks
+            }
+            self.order_book_ready = True
+            
+            if self.logger:
+                self.logger.debug(
+                    f"📚 [ASTER] Depth update: {len(bids)} bids, {len(asks)} asks"
+                )
+        
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error processing depth update: {e}")
+
     async def disconnect(self):
         """Disconnect from WebSocket."""
         self.running = False
@@ -304,11 +601,35 @@ class AsterWebSocketManager:
                 await self._keepalive_task
             except asyncio.CancelledError:
                 pass
+        
+        # Cancel book ticker task
+        if self._book_ticker_task and not self._book_ticker_task.done():
+            self._book_ticker_task.cancel()
+            try:
+                await self._book_ticker_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Cancel depth stream task
+        if self._depth_task and not self._depth_task.done():
+            self._depth_task.cancel()
+            try:
+                await self._depth_task
+            except asyncio.CancelledError:
+                pass
 
+        # Close WebSockets
         if self.websocket:
             await self.websocket.close()
-            if self.logger:
-                self.logger.info("WebSocket disconnected")
+        
+        if self._book_ticker_ws:
+            await self._book_ticker_ws.close()
+        
+        if self._depth_ws:
+            await self._depth_ws.close()
+            
+        if self.logger:
+            self.logger.info("WebSocket disconnected")
 
     def set_logger(self, logger):
         """Set the logger instance."""

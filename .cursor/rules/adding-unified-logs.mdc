@@ -1,0 +1,4 @@
+---
+alwaysApply: true
+---
+If you are going to add logs, always use the /helper/unified-logs.py for adding logs. you can reference current code implementations for examples

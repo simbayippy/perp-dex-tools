@@ -640,6 +640,19 @@ class EdgeXClient(BaseExchangeClient):
                 position_amt = 0
         return position_amt
     
+    async def get_account_balance(self) -> Optional[Decimal]:
+        """
+        Get available account balance from EdgeX.
+        
+        TODO: Implement when EdgeX trading is in production.
+        Need to query EdgeX API for available balance.
+        
+        Returns:
+            None (not yet implemented)
+        """
+        self.logger.log("[EDGEX] get_account_balance not yet implemented", "DEBUG")
+        return None
+    
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
         """
         Get leverage information for EdgeX.
@@ -655,7 +668,8 @@ class EdgeXClient(BaseExchangeClient):
             'max_leverage': Decimal('10'),
             'max_notional': None,
             'margin_requirement': Decimal('0.10'),  # 10% margin = 10x leverage
-            'brackets': None
+            'brackets': None,
+            'error': None  # Using default values (not queried from API)
         }
 
     async def get_contract_attributes(self) -> Tuple[str, Decimal]:

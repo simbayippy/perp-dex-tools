@@ -1,6 +1,26 @@
 """
-Risk Management Module for Trading Bot
-Provides grid-specific stop-loss and margin monitoring capabilities.
+Account Health Monitoring Component
+
+Monitors exchange account health and triggers actions when thresholds are breached.
+
+Key Features:
+- Account balance/value tracking
+- Margin failure detection
+- Emergency position closure triggers
+- Time-based stall detection
+
+Note: This is separate from strategy-level risk management (e.g. funding_arbitrage/risk_management)
+      which handles position-specific exit logic.
+
+Usage:
+    from strategies.components.account_monitor import AccountMonitor, AccountAction, AccountThresholds
+    
+    monitor = AccountMonitor(exchange_client, config)
+    await monitor.initialize()
+    
+    action = await monitor.check_account_conditions()
+    if action == AccountAction.EMERGENCY_CLOSE_ALL:
+        # Handle emergency shutdown
 """
 
 import time
@@ -13,8 +33,8 @@ from enum import Enum
 from helpers.unified_logger import get_core_logger
 
 
-class RiskAction(Enum):
-    """Risk management actions."""
+class AccountAction(Enum):
+    """Account monitoring actions."""
     NONE = "none"
     CLOSE_WORST_POSITIONS = "close_worst_positions"
     EMERGENCY_CLOSE_ALL = "emergency_close_all"
@@ -22,8 +42,8 @@ class RiskAction(Enum):
 
 
 @dataclass
-class RiskThresholds:
-    """Risk management thresholds configuration."""
+class AccountThresholds:
+    """Account monitoring thresholds configuration."""
     # Margin failure monitoring
     margin_failure_threshold: int = 15  # consecutive margin failures
     
@@ -41,8 +61,8 @@ class RiskThresholds:
 
 
 @dataclass
-class RiskState:
-    """Current risk monitoring state."""
+class AccountState:
+    """Current account monitoring state."""
     consecutive_margin_failures: int = 0
     last_successful_order_time: float = 0
     initial_account_value: Optional[Decimal] = None
@@ -59,38 +79,87 @@ class RiskState:
         self.reset_margin_failures()
 
 
-class RiskManager:
-    """Grid-specific risk management system."""
+class AccountMonitor:
+    """
+    Exchange account health monitoring system.
     
-    def __init__(self, exchange_client, config, thresholds: Optional[RiskThresholds] = None):
-        """Initialize risk manager."""
+    Monitors account-level conditions and triggers protective actions:
+    - Balance/value tracking
+    - Margin failure detection
+    - Emergency shutdown triggers
+    - Time-based stall detection
+    
+    Requirements:
+        Exchange client should implement (optional, gracefully degrades if missing):
+        - get_total_asset_value() -> Optional[Decimal]
+        - get_account_pnl() -> Optional[Decimal]
+        - get_detailed_positions() -> List[Dict[str, Any]]
+    
+    Note:
+        This handles ACCOUNT-LEVEL risk (system health).
+        For STRATEGY-LEVEL risk (position exits), see strategy-specific risk managers
+        (e.g. funding_arbitrage/risk_management).
+    """
+    
+    def __init__(self, exchange_client, config, thresholds: Optional[AccountThresholds] = None):
+        """
+        Initialize account monitor.
+        
+        Args:
+            exchange_client: Exchange client instance
+            config: Trading config with exchange/ticker info
+            thresholds: Optional custom thresholds
+        """
         self.exchange_client = exchange_client
         self.config = config
-        self.thresholds = thresholds or RiskThresholds()
-        self.state = RiskState()
+        self.thresholds = thresholds or AccountThresholds()
+        self.state = AccountState()
         
-        # Only enable if exchange supports risk management
-        self.enabled = exchange_client.supports_risk_management()
+        # Check if exchange supports monitoring methods (duck typing)
+        self.enabled = self._check_exchange_support()
         
         # Initialize logger
         self.logger = get_core_logger(
-            "risk_manager", 
+            "account_monitor", 
             context={"exchange": config.exchange, "ticker": config.ticker}
         )
         
         if self.enabled:
             self.logger.info(
-                f"Risk management enabled with thresholds: "
+                f"Account monitoring enabled with thresholds: "
                 f"Margin failures: {self.thresholds.margin_failure_threshold}, "
                 f"Time stall: {self.thresholds.time_stall_threshold}s, "
                 f"Account loss: {self.thresholds.account_loss_threshold * 100}%, "
                 f"Position closure: {self.thresholds.position_closure_percent * 100}%"
             )
         else:
-            self.logger.info("Risk management disabled (exchange not supported)")
+            self.logger.info("Account monitoring disabled (exchange methods not available)")
+    
+    def _check_exchange_support(self) -> bool:
+        """
+        Check if exchange supports required monitoring methods.
+        
+        Uses duck typing - checks if methods exist and are callable.
+        
+        Returns:
+            True if exchange supports monitoring, False otherwise
+        """
+        required_methods = ['get_total_asset_value', 'get_detailed_positions']
+        
+        for method_name in required_methods:
+            if not hasattr(self.exchange_client, method_name):
+                self.logger.debug(f"Exchange missing method: {method_name}")
+                return False
+            
+            method = getattr(self.exchange_client, method_name)
+            if not callable(method):
+                self.logger.debug(f"Exchange method not callable: {method_name}")
+                return False
+        
+        return True
     
     async def initialize(self):
-        """Initialize risk manager with baseline data."""
+        """Initialize account monitor with baseline data."""
         if not self.enabled:
             return
             
@@ -105,35 +174,40 @@ class RiskManager:
             self.state.last_successful_order_time = time.time()
             
         except Exception as e:
-            self.logger.error(f"Error initializing risk manager: {e}")
+            self.logger.error(f"Error initializing account monitor: {e}")
     
-    async def check_risk_conditions(self) -> RiskAction:
-        """Check all risk conditions and return required action."""
+    async def check_account_conditions(self) -> AccountAction:
+        """
+        Check all account conditions and return required action.
+        
+        Returns:
+            AccountAction enum indicating what action to take
+        """
         if not self.enabled:
-            return RiskAction.NONE
+            return AccountAction.NONE
             
         try:
             # Check emergency conditions first
             emergency_action = await self._check_emergency_conditions()
-            if emergency_action != RiskAction.NONE:
+            if emergency_action != AccountAction.NONE:
                 return emergency_action
             
-            # Check standard risk conditions
+            # Check standard conditions
             return await self._check_standard_conditions()
             
         except Exception as e:
-            self.logger.error(f"Error checking risk conditions: {e}")
-            return RiskAction.NONE
+            self.logger.error(f"Error checking account conditions: {e}")
+            return AccountAction.NONE
     
-    async def _check_emergency_conditions(self) -> RiskAction:
+    async def _check_emergency_conditions(self) -> AccountAction:
         """Check emergency conditions that require immediate action."""
         if not self.state.initial_account_value:
-            return RiskAction.NONE
+            return AccountAction.NONE
             
         # Get current account value
         current_value = await self.exchange_client.get_total_asset_value()
         if not current_value:
-            return RiskAction.NONE
+            return AccountAction.NONE
         
         # Calculate account loss percentage
         loss_percent = (self.state.initial_account_value - current_value) / self.state.initial_account_value
@@ -142,12 +216,12 @@ class RiskManager:
             self.logger.error(
                 f"EMERGENCY: Account loss {loss_percent * 100:.2f}% >= {self.thresholds.emergency_loss_threshold * 100}%"
             )
-            return RiskAction.EMERGENCY_CLOSE_ALL
+            return AccountAction.EMERGENCY_CLOSE_ALL
         
-        return RiskAction.NONE
+        return AccountAction.NONE
     
-    async def _check_standard_conditions(self) -> RiskAction:
-        """Check standard risk conditions."""
+    async def _check_standard_conditions(self) -> AccountAction:
+        """Check standard account conditions."""
         current_time = time.time()
         
         # Check margin failure + time stall combination
@@ -156,15 +230,15 @@ class RiskManager:
             current_time - self.state.margin_failure_start_time >= self.thresholds.time_stall_threshold):
             
             self.logger.warning(
-                f"Risk threshold met: {self.state.consecutive_margin_failures} margin failures "
+                f"Account threshold met: {self.state.consecutive_margin_failures} margin failures "
                 f"+ {current_time - self.state.margin_failure_start_time:.0f}s stall"
             )
             
             # Check account loss threshold
             if await self._check_account_loss_threshold():
-                return RiskAction.CLOSE_WORST_POSITIONS
+                return AccountAction.CLOSE_WORST_POSITIONS
         
-        return RiskAction.NONE
+        return AccountAction.NONE
     
     async def _check_account_loss_threshold(self) -> bool:
         """Check if account loss threshold is exceeded."""
@@ -207,7 +281,7 @@ class RiskManager:
             return
             
         self.state.record_successful_order()
-        self.logger.info("Successful order recorded, risk counters reset")
+        self.logger.info("Successful order recorded, account counters reset")
     
     async def get_worst_positions(self) -> List[Dict[str, Any]]:
         """Get worst performing positions for closure."""
@@ -260,14 +334,17 @@ class RiskManager:
             self.logger.error(f"Error getting all positions: {e}")
             return []
     
-    async def get_risk_summary(self) -> Dict[str, Any]:
-        """Get current risk status summary."""
+    async def get_account_summary(self) -> Dict[str, Any]:
+        """Get current account status summary."""
         if not self.enabled:
             return {"enabled": False}
         
         try:
             current_value = await self.exchange_client.get_total_asset_value()
-            account_pnl = await self.exchange_client.get_account_pnl()
+            account_pnl = None
+            if hasattr(self.exchange_client, 'get_account_pnl'):
+                account_pnl = await self.exchange_client.get_account_pnl()
+            
             positions = await self.exchange_client.get_detailed_positions()
             
             summary = {
@@ -288,5 +365,6 @@ class RiskManager:
             return summary
             
         except Exception as e:
-            self.logger.error(f"Error getting risk summary: {e}")
+            self.logger.error(f"Error getting account summary: {e}")
             return {"enabled": True, "error": str(e)}
+

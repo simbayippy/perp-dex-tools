@@ -206,6 +206,40 @@ class AsterClient(BaseExchangeClient):
 
         return best_bid, best_ask
 
+    def get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
+        """
+        Get order book from WebSocket if available.
+        
+        Aster WebSocket maintains order book via partial depth stream (@depth20@100ms).
+        This provides top 20 bids and asks with 100ms updates.
+        
+        Returns:
+            Order book dict if WebSocket depth stream is active and has data, None otherwise
+        """
+        try:
+            if not self.ws_manager or not self.ws_manager.running:
+                return None
+            
+            if not self.ws_manager.order_book_ready:
+                return None
+            
+            # Check if order book has data
+            if not self.ws_manager.order_book.get('bids') or not self.ws_manager.order_book.get('asks'):
+                return None
+            
+            # Order book is already in standard format from websocket_manager
+            self.logger.info(
+                f"📡 [WEBSOCKET] Using real-time order book from WebSocket "
+                f"({len(self.ws_manager.order_book['bids'])} bids, "
+                f"{len(self.ws_manager.order_book['asks'])} asks)"
+            )
+            
+            return self.ws_manager.order_book
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to get order book from WebSocket: {e}")
+            return None
+
     async def get_order_book_depth(
         self, 
         contract_id: str, 
@@ -214,6 +248,8 @@ class AsterClient(BaseExchangeClient):
         """
         Get order book depth from Aster.
         
+        Tries WebSocket depth stream first (100ms snapshots), falls back to REST API.
+        
         Args:
             contract_id: Contract/symbol identifier
             levels: Number of price levels to fetch (default: 10)
@@ -221,6 +257,15 @@ class AsterClient(BaseExchangeClient):
         Returns:
             Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
         """
+        # 🔴 Priority 1: Try WebSocket depth stream (100ms snapshots, zero latency)
+        ws_book = self.get_order_book_from_websocket()
+        if ws_book:
+            return {
+                'bids': ws_book['bids'][:levels],
+                'asks': ws_book['asks'][:levels]
+            }
+        
+        # 🔄 Priority 2: Fall back to REST API
         # Normalize symbol to Aster's format (e.g., "ZORA" → "ZORAUSDT")
         normalized_symbol = self.normalize_symbol(contract_id)
         
@@ -244,16 +289,11 @@ class AsterClient(BaseExchangeClient):
             bids_raw = result.get('bids', [])
             asks_raw = result.get('asks', [])
             
-            self.logger.info(f"✅ [ASTER] Order book received: {len(bids_raw)} bids, {len(asks_raw)} asks for {contract_id}")
-            
 
             # Convert to standardized format
             bids = [{'price': Decimal(bid[0]), 'size': Decimal(bid[1])} for bid in bids_raw]
             asks = [{'price': Decimal(ask[0]), 'size': Decimal(ask[1])} for ask in asks_raw]
 
-            self.logger.info(
-                f"✅ [ASTER] get_order_book_depth finished executing for {contract_id}"
-            ) 
             return {
                 'bids': bids,
                 'asks': asks
@@ -590,6 +630,54 @@ class AsterClient(BaseExchangeClient):
                 return position_amt
 
         return Decimal(0)
+    
+    async def get_account_balance(self) -> Optional[Decimal]:
+        """
+        Get available account balance from Aster.
+        
+        Uses GET /fapi/v4/account endpoint to get account information.
+        Returns available balance that can be used to open new positions.
+        
+        Returns:
+            Available balance in USDT, or None if query fails
+        """
+        try:
+            result = await self._make_request('GET', '/fapi/v4/account')
+            
+            # Get available balance from response
+            # Can use either:
+            # 1. availableBalance (top-level, total available across all assets)
+            # 2. assets[].availableBalance (per-asset breakdown)
+            
+            available_balance = result.get('availableBalance')
+            if available_balance is not None:
+                balance = Decimal(str(available_balance))
+                self.logger.debug(
+                    f"[ASTER] Available balance: ${balance:.2f}"
+                )
+                return balance
+            
+            # Fallback: Sum available balance from assets array
+            assets = result.get('assets', [])
+            total_available = Decimal('0')
+            for asset in assets:
+                if asset.get('asset') == 'USDT':  # Primary trading asset
+                    asset_available = asset.get('availableBalance', 0)
+                    total_available += Decimal(str(asset_available))
+            
+            if total_available > 0:
+                self.logger.debug(
+                    f"[ASTER] Available balance (from assets): ${total_available:.2f}"
+                )
+                return total_available
+            
+            # No balance data available
+            self.logger.warning("[ASTER] No balance data in account response")
+            return None
+            
+        except Exception as e:
+            self.logger.warning(f"[ASTER] Failed to get account balance: {e}")
+            return None
 
     async def get_account_leverage(self, symbol: str) -> Optional[int]:
         """
@@ -734,42 +822,59 @@ class AsterClient(BaseExchangeClient):
                     {'symbol': normalized_symbol}
                 )
                 
-                # Response format (when symbol is specified):
-                # {
-                #   "symbol": "ETHUSDT",
-                #   "brackets": [
-                #     {
-                #       "bracket": 1,
-                #       "initialLeverage": 75,
-                #       "notionalCap": 10000,
-                #       "notionalFloor": 0,
-                #       "maintMarginRatio": 0.0065,
-                #       "cum": 0
-                #     }
-                #   ]
-                # }
+                self.logger.debug(
+                    f"[ASTER] Leverage brackets API response for {symbol}: {brackets_result}"
+                )
                 
-                if brackets_result and 'brackets' in brackets_result:
-                    leverage_info['brackets'] = brackets_result['brackets']
+                # Response format can be either:
+                # 1. List: [{"symbol": "PROVEUSDT", "brackets": [...]}] (when symbol specified)
+                # 2. Dict: {"symbol": "ETHUSDT", "brackets": [...]} (alternative format)
+                
+                symbol_data = None
+                if isinstance(brackets_result, list) and len(brackets_result) > 0:
+                    # Format 1: List response
+                    symbol_data = brackets_result[0]
+                elif isinstance(brackets_result, dict):
+                    # Format 2: Dict response
+                    symbol_data = brackets_result
+                
+                if symbol_data and 'brackets' in symbol_data:
+                    brackets = symbol_data['brackets']
+                    leverage_info['brackets'] = brackets
                     
-                    if leverage_info['brackets'] and len(leverage_info['brackets']) > 0:
-                        first_bracket = leverage_info['brackets'][0]
+                    if brackets and len(brackets) > 0:
+                        # 🔍 CRITICAL: Find the MAXIMUM leverage across all brackets
+                        # Bracket 1 typically has highest leverage (for smaller positions)
+                        # But let's find the actual maximum to be safe
+                        max_leverage_value = 0
+                        max_notional_value = None
                         
-                        # Max leverage from first bracket
-                        leverage_info['max_leverage'] = Decimal(
-                            str(first_bracket.get('initialLeverage', 10))
+                        for bracket in brackets:
+                            initial_leverage = bracket.get('initialLeverage', 0)
+                            if initial_leverage > max_leverage_value:
+                                max_leverage_value = initial_leverage
+                            
+                            # Get the highest notional cap (from the last bracket)
+                            notional_cap = bracket.get('notionalCap')
+                            if notional_cap:
+                                max_notional_value = max(
+                                    max_notional_value or 0, 
+                                    notional_cap
+                                )
+                        
+                        if max_leverage_value > 0:
+                            leverage_info['max_leverage'] = Decimal(str(max_leverage_value))
+                        
+                        if max_notional_value:
+                            leverage_info['max_notional'] = Decimal(str(max_notional_value))
+                    else:
+                        self.logger.warning(
+                            f"[ASTER] Symbol {symbol} has empty brackets array"
                         )
-                        
-                        # Max notional from first bracket
-                        notional_cap = first_bracket.get('notionalCap')
-                        if notional_cap:
-                            leverage_info['max_notional'] = Decimal(str(notional_cap))
-                        
-                        self.logger.debug(
-                            f"[ASTER] Leverage brackets for {symbol}: "
-                            f"max={leverage_info['max_leverage']}x, "
-                            f"notional_cap=${leverage_info['max_notional']}"
-                        )
+                else:
+                    self.logger.warning(
+                        f"[ASTER] Invalid leverage bracket response format for {symbol}"
+                    )
                         
             except Exception as e:
                 # Fallback: If leverageBracket endpoint fails, try exchangeInfo
@@ -798,6 +903,21 @@ class AsterClient(BaseExchangeClient):
                                 )
                         break
             
+            # VALIDATION: Check if we got valid leverage data
+            if leverage_info['max_leverage'] is None:
+                self.logger.warning(
+                    f"⚠️  [ASTER] Could not determine max leverage for {symbol}. "
+                    f"This could indicate the symbol is not supported for leverage trading on Aster."
+                )
+                # Don't fail completely - use conservative fallback
+                # But log clearly that this is estimated
+                leverage_info['max_leverage'] = Decimal('5')  # Conservative for most Aster symbols
+                leverage_info['margin_requirement'] = Decimal('0.20')  # 20% = 5x leverage
+                
+                self.logger.info(
+                    f"📊 [ASTER] Using conservative fallback for {symbol}: 5x leverage"
+                )
+            
             # Step 2: Get ACTUAL account leverage setting (CRITICAL!)
             # This is what the exchange actually uses for margin calculations
             # Endpoint: GET /fapi/v2/positionRisk
@@ -811,12 +931,6 @@ class AsterClient(BaseExchangeClient):
                 effective_leverage = Decimal(str(account_leverage))
                 leverage_info['margin_requirement'] = Decimal('1') / effective_leverage
                 
-                # Warn if account leverage exceeds symbol limits
-                if leverage_info['max_leverage'] and effective_leverage > leverage_info['max_leverage']:
-                    self.logger.warning(
-                        f"⚠️  [ASTER] Account leverage ({account_leverage}x) exceeds "
-                        f"symbol max ({leverage_info['max_leverage']}x) for {symbol}!"
-                    )
             else:
                 # No account leverage set - this will likely cause trading errors!
                 self.logger.warning(

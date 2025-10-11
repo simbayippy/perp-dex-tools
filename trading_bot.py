@@ -15,7 +15,7 @@ from exchange_clients.factory import ExchangeFactory
 from helpers.unified_logger import get_logger
 from helpers.lark_bot import LarkBot
 from helpers.telegram_bot import TelegramBot
-from helpers.risk_manager import RiskManager, RiskAction, RiskThresholds
+from strategies.components.account_monitor import AccountMonitor, AccountAction, AccountThresholds
 from strategies import StrategyFactory
 
 
@@ -129,13 +129,8 @@ class TradingBot:
         except ValueError as e:
             raise ValueError(f"Failed to create strategy: {e}")
         
-        # Initialize risk manager (only for supported exchanges, using primary exchange)
-        self.risk_manager = None
-        if self.exchange_client.supports_risk_management():
-            self.risk_manager = RiskManager(self.exchange_client, self.config)
-            self.logger.info("Risk management enabled")
-        else:
-            self.logger.info("Risk management not supported by exchange")
+        # Initialize account monitor (monitors account health)
+        self.account_monitor = AccountMonitor(self.exchange_client, self.config)
 
     async def graceful_shutdown(self, reason: str = "Unknown"):
         """Perform graceful shutdown of the trading bot."""
@@ -270,25 +265,24 @@ class TradingBot:
                 await self.exchange_client.connect()
 
             # wait for connection to establish
-            await asyncio.sleep(5)
+            # await asyncio.sleep(5)
             
             # Initialize strategy after connection
             await self.strategy.initialize()
             
-            # Initialize risk manager after connection
-            if self.risk_manager:
-                await self.risk_manager.initialize()
+            # Initialize account monitor after connection
+            await self.account_monitor.initialize()
 
             # Main trading loop
             while not self.shutdown_requested:
-                # Check risk conditions first
-                if self.risk_manager:
-                    risk_action = await self.risk_manager.check_risk_conditions()
-                    if risk_action != RiskAction.NONE:
-                        await self._handle_risk_action(risk_action)
-                        if risk_action == RiskAction.EMERGENCY_CLOSE_ALL:
-                            await self.graceful_shutdown("Emergency risk management triggered")
-                            break
+                # Check account conditions first
+                account_action = await self.account_monitor.check_account_conditions()
+                if account_action != AccountAction.NONE:
+                    await self._handle_account_action(account_action)
+                    if account_action == AccountAction.EMERGENCY_CLOSE_ALL:
+                        # TODO: add notification (telegram or lark)
+                        await self.graceful_shutdown("Emergency account action triggered")
+                        break
 
                 # Strategy-based execution (universal interface)
                 try:
@@ -308,8 +302,7 @@ class TradingBot:
         except KeyboardInterrupt:
             self.logger.info("Bot stopped by user")
             # Emergency close all positions on Ctrl+C
-            if self.risk_manager:
-                await self._emergency_close_all_positions()
+            await self._emergency_close_all_positions()
             await self.graceful_shutdown("User interruption (Ctrl+C)")
         except Exception as e:
             self.logger.error(f"Critical error: {e}")
@@ -403,23 +396,20 @@ class TradingBot:
             self.logger.error(f"Error executing order: {e}")
             return False
 
-    async def _handle_risk_action(self, risk_action: RiskAction):
-        """Handle risk management actions."""
-        if risk_action == RiskAction.CLOSE_WORST_POSITIONS:
+    async def _handle_account_action(self, account_action: AccountAction):
+        """Handle account monitoring actions."""
+        if account_action == AccountAction.CLOSE_WORST_POSITIONS:
             await self._close_worst_positions()
-        elif risk_action == RiskAction.EMERGENCY_CLOSE_ALL:
+        elif account_action == AccountAction.EMERGENCY_CLOSE_ALL:
             await self._emergency_close_all_positions()
-        elif risk_action == RiskAction.PAUSE_TRADING:
-            self.logger.warning("Risk management: Pausing trading")
+        elif account_action == AccountAction.PAUSE_TRADING:
+            self.logger.warning("Account monitoring: Pausing trading")
             await asyncio.sleep(30)  # Pause for 30 seconds
 
     async def _close_worst_positions(self):
         """Close worst performing positions."""
-        if not self.risk_manager:
-            return
-            
         try:
-            worst_positions = await self.risk_manager.get_worst_positions()
+            worst_positions = await self.account_monitor.get_worst_positions()
             if not worst_positions:
                 self.logger.info("No worst positions to close")
                 return
@@ -451,20 +441,16 @@ class TradingBot:
                 except Exception as e:
                     self.logger.error(f"Error closing position {position.get('symbol', 'unknown')}: {e}")
             
-            # Reset risk counters after successful action
-            if self.risk_manager:
-                self.risk_manager.record_successful_order()
+            # Reset account counters after successful action
+            self.account_monitor.record_successful_order()
                 
         except Exception as e:
             self.logger.error(f"Error in _close_worst_positions: {e}")
 
     async def _emergency_close_all_positions(self):
         """Emergency close all positions."""
-        if not self.risk_manager:
-            return
-            
         try:
-            all_positions = await self.risk_manager.get_all_positions()
+            all_positions = await self.account_monitor.get_all_positions()
             if not all_positions:
                 self.logger.info("No positions to close")
                 return

@@ -339,6 +339,85 @@ class AtomicMultiOrderExecutor:
             
             self.logger.info("✅ Leverage limits validated for all exchanges")
             
+            # 🔧 CRITICAL: Now SET the leverage to min(exchange1, exchange2)
+            # This ensures both sides use the same leverage (Issue #1 fix)
+            for symbol, symbol_orders in symbols_to_check.items():
+                exchange_clients = [order.exchange_client for order in symbol_orders]
+                requested_size = symbol_orders[0].size_usd
+                
+                self.logger.info(f"🔧 [LEVERAGE] Normalizing leverage for {symbol}...")
+                min_leverage, limiting = await leverage_validator.normalize_and_set_leverage(
+                    exchange_clients=exchange_clients,
+                    symbol=symbol,
+                    requested_size_usd=requested_size
+                )
+                
+                if min_leverage is not None:
+                    self.logger.info(
+                        f"✅ [LEVERAGE] {symbol} normalized to {min_leverage}x "
+                        f"(limited by {limiting})"
+                    )
+                else:
+                    self.logger.warning(
+                        f"⚠️  [LEVERAGE] Could not normalize leverage for {symbol}. "
+                        f"Orders may execute with different leverage!"
+                    )
+            
+            # ========================================================================
+            # SETUP: Start WebSocket book tickers for real-time BBO (Issue #3 fix)
+            # ========================================================================
+            self.logger.info("🔴 Starting WebSocket book tickers for real-time pricing...")
+            
+            for symbol, symbol_orders in symbols_to_check.items():
+                for order in symbol_orders:
+                    exchange_client = order.exchange_client
+                    exchange_name = exchange_client.get_exchange_name()
+                    
+                    # Start WebSocket streams if supported
+                    if hasattr(exchange_client, 'ws_manager') and exchange_client.ws_manager:
+                        ws_manager = exchange_client.ws_manager
+                        
+                        # Get normalized symbol for this exchange
+                        if exchange_name == "aster":
+                            # Aster needs full symbol like "SKYUSDT"
+                            normalized_symbol = getattr(exchange_client.config, 'contract_id', f"{symbol}USDT")
+                            
+                            # Start book ticker for BBO (limit orders)
+                            if hasattr(ws_manager, 'start_book_ticker'):
+                                await ws_manager.start_book_ticker(normalized_symbol)
+                                self.logger.info(f"✅ Started Aster book ticker for {normalized_symbol}")
+                            
+                            # Start order book depth stream for liquidity checks
+                            if hasattr(ws_manager, 'start_order_book_stream'):
+                                await ws_manager.start_order_book_stream(normalized_symbol)
+                                self.logger.info(f"✅ Started Aster order book depth stream for {normalized_symbol}")
+                        
+                        elif exchange_name == "lighter":
+                            # Lighter WebSocket needs to switch to the correct market
+                            # Get market_id for the opportunity symbol (not the startup default!)
+                            try:
+                                market_id = await exchange_client._get_market_id_for_symbol(symbol)
+                                if market_id is None:
+                                    self.logger.warning(f"⚠️  Could not find market_id for {symbol} on Lighter")
+                                    continue
+                                
+                                if hasattr(ws_manager, 'switch_market'):
+                                    # Switch to the opportunity's market
+                                    success = await ws_manager.switch_market(market_id)
+                                    if success:
+                                        self.logger.info(f"✅ Lighter order book WebSocket switched to market {market_id} ({symbol})")
+                                    else:
+                                        self.logger.warning(f"⚠️  Failed to switch Lighter WebSocket to market {market_id}")
+                                else:
+                                    self.logger.info(f"✅ Lighter order book WebSocket already active for {symbol}")
+                            except Exception as e:
+                                self.logger.error(f"Error switching Lighter market: {e}")
+            
+            # Give WebSockets time to receive first updates:
+            # - Aster: book ticker + depth stream subscription (~1s)
+            # - Lighter: market switch + order book snapshot (~0.5s)
+            await asyncio.sleep(2.0)
+            
             # ========================================================================
             # CHECK 1: Account Balance Validation (CRITICAL FIX)
             # ========================================================================
@@ -413,7 +492,11 @@ class AtomicMultiOrderExecutor:
             self.logger.info("Running liquidity checks...")
             
             # Use shared price_provider if available (enables caching)
-            analyzer = LiquidityAnalyzer(price_provider=self.price_provider)
+            # Increase spread tolerance for smaller tokens like PROVE
+            analyzer = LiquidityAnalyzer(
+                price_provider=self.price_provider,
+                max_spread_bps=100,  # Allow up to 100 bps (1%) for smaller tokens
+            )
             
             for i, order_spec in enumerate(orders):
                 # Check liquidity
@@ -600,10 +683,11 @@ class AtomicMultiOrderExecutor:
                     f"{fill['filled_quantity']} @ market"
                 )
                 
-                # 🔧 FIX: Get proper contract_id from exchange client
-                # Some exchanges (Aster) need "ZORAUSDT", not just "ZORA"
-                contract_attrs = await fill['exchange_client'].get_contract_attributes(fill['symbol'])
-                contract_id = contract_attrs.get('contract_id', fill['symbol'])
+                # 🔧 FIX: Get contract_id from exchange client config
+                # get_contract_attributes() doesn't take arguments - it uses self.config.ticker
+                # The contract_id is already set during exchange client initialization
+                exchange_client = fill['exchange_client']
+                contract_id = getattr(exchange_client.config, 'contract_id', fill['symbol'])
                 
                 self.logger.debug(
                     f"Rollback: Using contract_id='{contract_id}' for symbol '{fill['symbol']}'"

@@ -266,6 +266,41 @@ class BaseExchangeClient(ABC):
         """
         pass
 
+    def get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
+        """
+        Get order book from WebSocket if available (zero latency).
+        
+        ⚡ Performance Optimization: If the exchange WebSocket maintains a full order book,
+        this method can return it instantly from memory instead of making a REST API call.
+        
+        Returns:
+            Order book dict if WebSocket is connected and has data, None otherwise
+            
+        Example Return Value:
+            {
+                'bids': [
+                    {'price': Decimal('50000'), 'size': Decimal('1.5')},
+                    {'price': Decimal('49999'), 'size': Decimal('2.0')},
+                    ...
+                ],
+                'asks': [...]
+            }
+            
+        Implementation Notes:
+            - Return None if WebSocket doesn't maintain full order book (only BBO)
+            - Return None if WebSocket is not connected or data not ready
+            - Only return data if WebSocket has received and validated order book snapshot
+            
+        Exchange-Specific Behavior:
+            - Lighter: Returns full order book (WebSocket maintains complete depth)
+            - Aster: Returns None (WebSocket only maintains BBO, not full depth)
+            - Default: Returns None (override if exchange supports it)
+            
+        Default Implementation:
+            Returns None. Override in exchange client if WebSocket maintains order book.
+        """
+        return None
+
     @abstractmethod
     async def get_order_book_depth(
         self, 
@@ -274,6 +309,10 @@ class BaseExchangeClient(ABC):
     ) -> Dict[str, List[Dict[str, Decimal]]]:
         """
         Get order book depth for liquidity analysis.
+        
+        🔄 Smart Implementation Pattern:
+        1. Try get_order_book_from_websocket() first (zero latency)
+        2. Fall back to REST API if WebSocket data not available
         
         Args:
             contract_id: Contract/symbol identifier
@@ -295,6 +334,21 @@ class BaseExchangeClient(ABC):
                     ...
                 ]
             }
+            
+        Recommended Implementation:
+            ```python
+            async def get_order_book_depth(self, contract_id, levels=10):
+                # Try WebSocket first (zero latency)
+                ws_book = self.get_order_book_from_websocket()
+                if ws_book:
+                    return {
+                        'bids': ws_book['bids'][:levels],
+                        'asks': ws_book['asks'][:levels]
+                    }
+                
+                # Fall back to REST API
+                # ... REST API implementation ...
+            ```
         """
         pass
 
@@ -502,18 +556,42 @@ class BaseExchangeClient(ABC):
         """
         pass
 
+    @abstractmethod
     async def get_account_balance(self) -> Optional[Decimal]:
         """
-        Get current account balance.
+        Get current available account balance for trading.
+        
+        ⚠️ IMPORTANT: This should return AVAILABLE balance (not total balance).
+        Available balance = What can be used to open new positions right now.
         
         Returns:
-            Account balance in USD/base currency, or None if not supported
+            Available balance in USD/base currency, or None if not supported
             
-        Note:
-            Override this method if exchange supports balance queries.
-            Default implementation returns None.
+        Implementation Notes:
+            - Return available/free balance (not total wallet balance)
+            - For cross-margin: Use crossWalletBalance or availableBalance
+            - For isolated-margin: Sum available balance across all assets
+            - Return None only if exchange doesn't support this query
+            
+        Example Implementation (with balance support):
+            ```python
+            async def get_account_balance(self) -> Optional[Decimal]:
+                try:
+                    result = await self._make_request('GET', '/api/v1/account')
+                    return Decimal(str(result.get('availableBalance', 0)))
+                except Exception as e:
+                    self.logger.warning(f"Failed to get balance: {e}")
+                    return None
+            ```
+            
+        Example Implementation (no balance support):
+            ```python
+            async def get_account_balance(self) -> Optional[Decimal]:
+                # Exchange doesn't support balance queries
+                return None
+            ```
         """
-        return None
+        pass
     
     async def get_detailed_positions(self) -> List[Dict[str, Any]]:
         """
@@ -564,14 +642,6 @@ class BaseExchangeClient(ABC):
     # RISK MANAGEMENT & LEVERAGE
     # ========================================================================
 
-    def supports_risk_management(self) -> bool:
-        """
-        Check if exchange supports advanced risk management queries.
-        
-        Returns:
-            True if exchange implements balance, P&L, and asset value queries
-        """
-        return False
     
     @abstractmethod
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
@@ -591,29 +661,56 @@ class BaseExchangeClient(ABC):
                 'max_leverage': Decimal or None,        # e.g., Decimal('10') for 10x
                 'max_notional': Decimal or None,        # Max position value in USD
                 'margin_requirement': Decimal or None,  # e.g., Decimal('0.1') = 10% = 10x leverage
-                'brackets': List or None                # Leverage brackets if available
+                'brackets': List or None,               # Leverage brackets if available
+                'error': str or None                    # Error message if data unavailable (NEW)
             }
             
         Implementation Notes:
             - For production exchanges (Aster, Lighter): Query actual limits from API
             - For exchanges in development: Return conservative defaults (10x leverage)
             - Always return the same dict structure (even if values are None)
+            - 🔒 NEW: If symbol is not listed or leverage info cannot be determined,
+              set 'error' field with descriptive message and set other fields to None
+            
+        Error Handling:
+            - If symbol not found on exchange: Set error="Symbol XXX not listed on {exchange}"
+            - If API fails: Set error="Failed to query leverage info: {reason}"
+            - If data incomplete: Set error="Unable to determine leverage limits for {symbol}"
             
         Example Implementation (Query from API):
             ```python
             async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
-                normalized_symbol = f"{symbol}USDT"
-                result = await self._make_request('GET', '/api/v1/leverageBracket', 
-                                                   {'symbol': normalized_symbol})
-                brackets = result.get('brackets', [])
-                first_bracket = brackets[0] if brackets else {}
-                
-                return {
-                    'max_leverage': Decimal(str(first_bracket.get('initialLeverage', 10))),
-                    'max_notional': Decimal(str(first_bracket.get('notionalCap'))) if first_bracket.get('notionalCap') else None,
-                    'margin_requirement': Decimal('1') / Decimal(str(first_bracket.get('initialLeverage', 10))),
-                    'brackets': brackets
-                }
+                try:
+                    normalized_symbol = f"{symbol}USDT"
+                    result = await self._make_request('GET', '/api/v1/leverageBracket', 
+                                                       {'symbol': normalized_symbol})
+                    brackets = result.get('brackets', [])
+                    
+                    if not brackets:
+                        return {
+                            'max_leverage': None,
+                            'max_notional': None,
+                            'margin_requirement': None,
+                            'brackets': None,
+                            'error': f'No leverage data available for {symbol}'
+                        }
+                    
+                    first_bracket = brackets[0]
+                    return {
+                        'max_leverage': Decimal(str(first_bracket.get('initialLeverage', 10))),
+                        'max_notional': Decimal(str(first_bracket.get('notionalCap'))) if first_bracket.get('notionalCap') else None,
+                        'margin_requirement': Decimal('1') / Decimal(str(first_bracket.get('initialLeverage', 10))),
+                        'brackets': brackets,
+                        'error': None
+                    }
+                except Exception as e:
+                    return {
+                        'max_leverage': None,
+                        'max_notional': None,
+                        'margin_requirement': None,
+                        'brackets': None,
+                        'error': f'Failed to query leverage info: {str(e)}'
+                    }
             ```
         """
         pass
