@@ -178,10 +178,6 @@ class LiquidityAnalyzer:
             book_side = order_book['asks'] if side == 'buy' else order_book['bids']
             side_name = "asks (selling to us)" if side == 'buy' else "bids (buying from us)"
             
-            self.logger.info(
-                f"💰 [LIQUIDITY-{exchange_name}] Analyzing {side} order for ${size_usd} on {side_name}"
-            )
-            
             # Calculate expected fill
             fill_analysis = self._analyze_order_fill(
                 book_side=book_side,

@@ -397,10 +397,6 @@ class LighterClient(BaseExchangeClient):
                     bids_raw = data.get('bids', [])
                     asks_raw = data.get('asks', [])
                     
-                    self.logger.info(
-                        f"📊 [LIGHTER] Order book received: {len(bids_raw)} bids, {len(asks_raw)} asks for market_id={market_id}"
-                    )
-                    
                     # Convert to standardized format
                     # Lighter format: [{'price': '1243.5281', 'remaining_base_amount': '0.20'}, ...]
                     bids = [
@@ -417,10 +413,6 @@ class LighterClient(BaseExchangeClient):
                         } 
                         for ask in asks_raw
                     ]
-                    
-                    self.logger.info(
-                        f"✅ [LIGHTER] get_order_book_depth finished executing for {contract_id}"
-                    )
                     
                     return {
                         'bids': bids,

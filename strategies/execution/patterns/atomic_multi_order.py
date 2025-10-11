@@ -413,7 +413,11 @@ class AtomicMultiOrderExecutor:
             self.logger.info("Running liquidity checks...")
             
             # Use shared price_provider if available (enables caching)
-            analyzer = LiquidityAnalyzer(price_provider=self.price_provider)
+            # Increase spread tolerance for smaller tokens like PROVE
+            analyzer = LiquidityAnalyzer(
+                price_provider=self.price_provider,
+                max_spread_bps=100,  # Allow up to 100 bps (1%) for smaller tokens
+            )
             
             for i, order_spec in enumerate(orders):
                 # Check liquidity
