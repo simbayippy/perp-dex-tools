@@ -65,65 +65,80 @@ class UnifiedLogger:
     def _setup_logger(self, log_to_console: bool):
         """Setup loguru logger with unified formatting."""
         
-        # Remove any existing handlers for this logger to avoid duplicates
-        _logger.remove()
+        # 🔧 FIX: Use a global flag to ensure console handler is only set up once
+        if not hasattr(_logger, '_perp_dex_console_setup'):
+            # First time setup - remove default handler and set up shared console handler
+            _logger.remove()
+            
+            # Create logs directory
+            project_root = Path(__file__).parent.parent
+            logs_dir = project_root / "logs"
+            logs_dir.mkdir(exist_ok=True)
+            
+            # Console handler with colors and source location (SHARED by all components)
+            if log_to_console:
+                def format_record(record):
+                    # Truncate the file path to last 2 segments
+                    name_parts = record["name"].split(".")
+                    if len(name_parts) >= 2:
+                        short_name = f"{name_parts[-2]}.{name_parts[-1]}"
+                    else:
+                        short_name = record["name"]
+                    
+                    # Create source location string
+                    source_location = f"{short_name}:{record['function']}:{record['line']}"
+                    
+                    # Smart truncation if longer than 45 characters
+                    max_width = 45
+                    if len(source_location) > max_width:
+                        # Always preserve the line number at the end
+                        line_part = f":{record['line']}"
+                        available_space = max_width - len(line_part) - 3  # 3 for "..."
+                        
+                        if available_space > 10:  # Only truncate if we have reasonable space
+                            # Take first part and add ellipsis
+                            truncated = source_location[:available_space] + "..." + line_part
+                            source_location = truncated
+                        # If not enough space, just use the original (better than unreadable)
+                    
+                    # Pad to fixed width for alignment
+                    record["extra"]["short_name"] = f"{source_location:<45}"
+                    return True
+                    
+                console_format = (
+                    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+                    "<level>{level: <8}</level> | "
+                    "<cyan>{extra[short_name]}</cyan> | "
+                    "<level>{message}</level>"
+                )
+                
+                _logger.add(
+                    sys.stdout,
+                    format=console_format,
+                    level=self.log_level,
+                    colorize=True,
+                    filter=lambda record: record["extra"].get("component_id") and format_record(record),
+                    backtrace=True,
+                    diagnose=True
+                )
+            
+            # Mark console handler as set up
+            _logger._perp_dex_console_setup = True
         
-        # Create logs directory
+        # Create logs directory (in case it wasn't created above)
         project_root = Path(__file__).parent.parent
         logs_dir = project_root / "logs"
         logs_dir.mkdir(exist_ok=True)
         
-        # Console handler with colors and source location
-        if log_to_console:
-            def format_record(record):
-                # Truncate the file path to last 2 segments
-                name_parts = record["name"].split(".")
-                if len(name_parts) >= 2:
-                    short_name = f"{name_parts[-2]}.{name_parts[-1]}"
-                else:
-                    short_name = record["name"]
-                
-                # Create source location string
-                source_location = f"{short_name}:{record['function']}:{record['line']}"
-                
-                # Smart truncation if longer than 45 characters
-                max_width = 45
-                if len(source_location) > max_width:
-                    # Always preserve the line number at the end
-                    line_part = f":{record['line']}"
-                    available_space = max_width - len(line_part) - 3  # 3 for "..."
-                    
-                    if available_space > 10:  # Only truncate if we have reasonable space
-                        # Take first part and add ellipsis
-                        truncated = source_location[:available_space] + "..." + line_part
-                        source_location = truncated
-                    # If not enough space, just use the original (better than unreadable)
-                
-                # Pad to fixed width for alignment
-                record["extra"]["short_name"] = f"{source_location:<45}"
-                return True
-                
-            console_format = (
-                "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-                "<level>{level: <8}</level> | "
-                "<cyan>{extra[short_name]}</cyan> | "
-                "<level>{message}</level>"
-            )
-            
-            _logger.add(
-                sys.stdout,
-                format=console_format,
-                level=self.log_level,
-                colorize=True,
-                filter=lambda record: record["extra"].get("component_id") == self.component_id and format_record(record),
-                backtrace=True,
-                diagnose=True
-            )
-        
         # File handler for all logs (no colors, includes extra context)
+        # Each component gets its own file, so no need to check for duplicates here
         log_file = logs_dir / f"{self.component_type.lower()}_{self.component_name.lower()}_activity.log"
         
         def format_record_file(record):
+            # Only log records that match this component's ID
+            if record["extra"].get("component_id") != self.component_id:
+                return False
+                
             # Truncate the file path to last 2 segments for file logs too
             name_parts = record["name"].split(".")
             if len(name_parts) >= 2:
@@ -165,7 +180,7 @@ class UnifiedLogger:
             rotation="100 MB",
             retention="7 days",
             compression="zip",
-            filter=lambda record: record["extra"].get("component_id") == self.component_id and format_record_file(record),
+            filter=format_record_file,
             backtrace=True,
             diagnose=True
         )
@@ -174,6 +189,10 @@ class UnifiedLogger:
         error_log_file = logs_dir / f"{self.component_type.lower()}_{self.component_name.lower()}_errors.log"
         
         def format_record_error(record):
+            # Only log records that match this component's ID
+            if record["extra"].get("component_id") != self.component_id:
+                return False
+                
             # Truncate the file path to last 2 segments for error logs too
             name_parts = record["name"].split(".")
             if len(name_parts) >= 2:
@@ -208,7 +227,7 @@ class UnifiedLogger:
             rotation="10 MB",
             retention="30 days",
             compression="zip",
-            filter=lambda record: record["extra"].get("component_id") == self.component_id and format_record_error(record),
+            filter=format_record_error,
             backtrace=True,
             diagnose=True
         )
