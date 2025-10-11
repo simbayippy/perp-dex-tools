@@ -17,9 +17,9 @@ from typing import Any, Dict, Optional, Tuple
 from decimal import Decimal
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-import logging
+from helpers.unified_logger import get_core_logger
 
-logger = logging.getLogger(__name__)
+logger = get_core_logger("price_provider")
 
 
 @dataclass
@@ -144,7 +144,7 @@ class PriceProvider:
         """
         self.cache = PriceCache(default_ttl_seconds=cache_ttl_seconds)
         self.prefer_websocket = prefer_websocket
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_core_logger("price_provider")
     
     def _make_cache_key(self, exchange_name: str, symbol: str) -> str:
         """Generate cache key for exchange + symbol."""

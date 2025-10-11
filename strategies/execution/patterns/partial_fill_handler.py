@@ -21,9 +21,9 @@ Use cases:
 from typing import Any, Dict, Optional
 from decimal import Decimal
 from datetime import datetime
-import logging
+from helpers.unified_logger import get_core_logger
 
-logger = logging.getLogger(__name__)
+logger = get_core_logger("partial_fill_handler")
 
 
 class PartialFillHandler:
@@ -58,7 +58,7 @@ class PartialFillHandler:
     
     def __init__(self):
         """Initialize partial fill handler."""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_core_logger("partial_fill_handler")
         self.incident_log = []  # Track all partial fill incidents
     
     async def handle_one_sided_fill(
