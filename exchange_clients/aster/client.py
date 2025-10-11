@@ -738,42 +738,62 @@ class AsterClient(BaseExchangeClient):
                     f"[ASTER] Leverage brackets API response for {symbol}: {brackets_result}"
                 )
                 
-                # Response format (when symbol is specified):
-                # {
-                #   "symbol": "ETHUSDT",
-                #   "brackets": [
-                #     {
-                #       "bracket": 1,
-                #       "initialLeverage": 75,
-                #       "notionalCap": 10000,
-                #       "notionalFloor": 0,
-                #       "maintMarginRatio": 0.0065,
-                #       "cum": 0
-                #     }
-                #   ]
-                # }
+                # Response format can be either:
+                # 1. List: [{"symbol": "PROVEUSDT", "brackets": [...]}] (when symbol specified)
+                # 2. Dict: {"symbol": "ETHUSDT", "brackets": [...]} (alternative format)
                 
-                if brackets_result and 'brackets' in brackets_result:
-                    leverage_info['brackets'] = brackets_result['brackets']
+                symbol_data = None
+                if isinstance(brackets_result, list) and len(brackets_result) > 0:
+                    # Format 1: List response
+                    symbol_data = brackets_result[0]
+                elif isinstance(brackets_result, dict):
+                    # Format 2: Dict response
+                    symbol_data = brackets_result
+                
+                if symbol_data and 'brackets' in symbol_data:
+                    brackets = symbol_data['brackets']
+                    leverage_info['brackets'] = brackets
                     
-                    if leverage_info['brackets'] and len(leverage_info['brackets']) > 0:
-                        first_bracket = leverage_info['brackets'][0]
+                    if brackets and len(brackets) > 0:
+                        # 🔍 CRITICAL: Find the MAXIMUM leverage across all brackets
+                        # Bracket 1 typically has highest leverage (for smaller positions)
+                        # But let's find the actual maximum to be safe
+                        max_leverage_value = 0
+                        max_notional_value = None
                         
-                        # Max leverage from first bracket
-                        leverage_info['max_leverage'] = Decimal(
-                            str(first_bracket.get('initialLeverage', 10))
+                        for bracket in brackets:
+                            initial_leverage = bracket.get('initialLeverage', 0)
+                            if initial_leverage > max_leverage_value:
+                                max_leverage_value = initial_leverage
+                            
+                            # Get the highest notional cap (from the last bracket)
+                            notional_cap = bracket.get('notionalCap')
+                            if notional_cap:
+                                max_notional_value = max(
+                                    max_notional_value or 0, 
+                                    notional_cap
+                                )
+                        
+                        if max_leverage_value > 0:
+                            leverage_info['max_leverage'] = Decimal(str(max_leverage_value))
+                        
+                        if max_notional_value:
+                            leverage_info['max_notional'] = Decimal(str(max_notional_value))
+                        
+                        self.logger.info(
+                            f"📊 [ASTER] Parsed leverage brackets for {symbol}: "
+                            f"max_leverage={leverage_info['max_leverage']}x, "
+                            f"max_notional=${leverage_info['max_notional']}, "
+                            f"total_brackets={len(brackets)}"
                         )
-                        
-                        # Max notional from first bracket
-                        notional_cap = first_bracket.get('notionalCap')
-                        if notional_cap:
-                            leverage_info['max_notional'] = Decimal(str(notional_cap))
-                        
-                        self.logger.debug(
-                            f"[ASTER] Leverage brackets for {symbol}: "
-                            f"max={leverage_info['max_leverage']}x, "
-                            f"notional_cap=${leverage_info['max_notional']}"
+                    else:
+                        self.logger.warning(
+                            f"[ASTER] Symbol {symbol} has empty brackets array"
                         )
+                else:
+                    self.logger.warning(
+                        f"[ASTER] Invalid leverage bracket response format for {symbol}"
+                    )
                         
             except Exception as e:
                 # Fallback: If leverageBracket endpoint fails, try exchangeInfo
@@ -801,6 +821,21 @@ class AsterClient(BaseExchangeClient):
                                     str(leverage_info['brackets'][0].get('initialLeverage', 10))
                                 )
                         break
+            
+            # VALIDATION: Check if we got valid leverage data
+            if leverage_info['max_leverage'] is None:
+                self.logger.warning(
+                    f"⚠️  [ASTER] Could not determine max leverage for {symbol}. "
+                    f"This could indicate the symbol is not supported for leverage trading on Aster."
+                )
+                # Don't fail completely - use conservative fallback
+                # But log clearly that this is estimated
+                leverage_info['max_leverage'] = Decimal('5')  # Conservative for most Aster symbols
+                leverage_info['margin_requirement'] = Decimal('0.20')  # 20% = 5x leverage
+                
+                self.logger.info(
+                    f"📊 [ASTER] Using conservative fallback for {symbol}: 5x leverage"
+                )
             
             # Step 2: Get ACTUAL account leverage setting (CRITICAL!)
             # This is what the exchange actually uses for margin calculations

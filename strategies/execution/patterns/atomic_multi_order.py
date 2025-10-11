@@ -315,19 +315,13 @@ class AtomicMultiOrderExecutor:
                 # Get requested size (should be same for all orders in delta-neutral strategy)
                 requested_size = symbol_orders[0].size_usd
                 
-                try:
-                    # Check max size supported by ALL exchanges
-                    max_size, limiting_exchange = await leverage_validator.get_max_position_size(
-                        exchange_clients=exchange_clients,
-                        symbol=symbol,
-                        requested_size_usd=requested_size,
-                        check_balance=True  # Also consider available balance
-                    )
-                except ValueError as e:
-                    # Leverage validation failed - cannot trade this symbol
-                    error_msg = f"Leverage validation failed for {symbol}: {e}"
-                    self.logger.error(f"❌ {error_msg}")
-                    return False, error_msg
+                # Check max size supported by ALL exchanges
+                max_size, limiting_exchange = await leverage_validator.get_max_position_size(
+                    exchange_clients=exchange_clients,
+                    symbol=symbol,
+                    requested_size_usd=requested_size,
+                    check_balance=True  # Also consider available balance
+                )
                 
                 # If size needs adjustment, update all orders for this symbol
                 if max_size < requested_size:
