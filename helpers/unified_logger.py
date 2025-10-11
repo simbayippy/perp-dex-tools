@@ -85,7 +85,7 @@ class UnifiedLogger:
                 
                 # Pad the source location to a fixed width for alignment
                 source_location = f"{short_name}:{record['function']}:{record['line']}"
-                record["extra"]["short_name"] = f"{source_location:<60}"  # Increase to 60 char width for better alignment
+                record["extra"]["short_name"] = f"{source_location:<45}"  # Increase to 60 char width for better alignment
                 return True
                 
             console_format = (
