@@ -163,8 +163,8 @@ class LeverageValidator:
             return leverage_info
         
         except Exception as e:
-            self.logger.error(
-                f"❌ [{exchange_name.upper()}] Error querying leverage for {symbol}: {e}"
+            self.logger.warning(
+                f"⚠️  [{exchange_name.upper()}] Could not query leverage for {symbol}: {e}"
             )
             # Return conservative default
             return LeverageInfo(

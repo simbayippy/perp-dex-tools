@@ -734,7 +734,7 @@ class AsterClient(BaseExchangeClient):
                     {'symbol': normalized_symbol}
                 )
                 
-                self.logger.info(
+                self.logger.debug(
                     f"[ASTER] Leverage brackets API response for {symbol}: {brackets_result}"
                 )
                 
