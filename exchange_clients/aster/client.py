@@ -734,6 +734,10 @@ class AsterClient(BaseExchangeClient):
                     {'symbol': normalized_symbol}
                 )
                 
+                self.logger.debug(
+                    f"[ASTER] Leverage brackets API response for {symbol}: {brackets_result}"
+                )
+                
                 # Response format (when symbol is specified):
                 # {
                 #   "symbol": "ETHUSDT",
