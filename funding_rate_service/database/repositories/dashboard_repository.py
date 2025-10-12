@@ -4,7 +4,7 @@ Dashboard repository for persisting session snapshots and timeline events.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from typing import Any, Dict, Optional
 from uuid import UUID
@@ -64,7 +64,7 @@ class DashboardRepository:
                 "session_id": session_id,
                 "strategy": strategy,
                 "config_path": config_path,
-                "started_at": started_at,
+                "started_at": self._to_naive_utc(started_at),
                 "health": health,
                 "metadata": json.dumps(metadata or {}, default=str),
             },
@@ -88,7 +88,11 @@ class DashboardRepository:
         """
         await self._db.execute(
             query,
-            {"session_id": session_id, "ended_at": ended_at, "health": health},
+            {
+                "session_id": session_id,
+                "ended_at": self._to_naive_utc(ended_at),
+                "health": health,
+            },
         )
 
     # --------------------------------------------------------------------- #
@@ -118,7 +122,7 @@ class DashboardRepository:
             query,
             {
                 "session_id": session_id,
-                "generated_at": generated_at,
+                "generated_at": self._to_naive_utc(generated_at),
                 "payload": json.dumps(payload, default=str),
             },
         )
@@ -178,7 +182,7 @@ class DashboardRepository:
             query,
             {
                 "session_id": session_id,
-                "ts": ts,
+                "ts": self._to_naive_utc(ts),
                 "category": category,
                 "message": message,
                 "metadata": json.dumps(metadata or {}, default=str),
@@ -208,3 +212,10 @@ class DashboardRepository:
             )
         """
         await self._db.execute(query, {"session_id": session_id, "retain": retain})
+    @staticmethod
+    def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            return dt
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
