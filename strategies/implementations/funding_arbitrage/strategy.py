@@ -236,10 +236,47 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 "WARNING",
             )
 
+        renderer_factory = None
+        if self.dashboard_enabled:
+            renderer_name = (self.config.dashboard.renderer or "rich").lower()
+            if renderer_name == "rich":
+                try:
+                    from dashboard.renderers import RichDashboardRenderer
+
+                    refresh = self.config.dashboard.refresh_interval_seconds
+                    max_events = min(self.config.dashboard.event_retention, 20)
+                    renderer_factory = lambda: RichDashboardRenderer(
+                        refresh_interval_seconds=refresh,
+                        max_events=max_events,
+                    )
+                except Exception as exc:  # pylint: disable=broad-except
+                    self.logger.log(
+                        f"⚠️  Dashboard renderer unavailable: {exc}. Falling back to log output.",
+                        "WARNING",
+                    )
+                    renderer_factory = None
+            elif renderer_name == "plain":
+                try:
+                    from dashboard.renderers import PlainTextDashboardRenderer
+
+                    renderer_factory = lambda: PlainTextDashboardRenderer()
+                except Exception as exc:  # pylint: disable=broad-except
+                    self.logger.log(
+                        f"⚠️  Plain dashboard renderer unavailable: {exc}. Falling back to log output.",
+                        "WARNING",
+                    )
+                    renderer_factory = None
+            else:
+                self.logger.log(
+                    f"ℹ️  Dashboard renderer '{renderer_name}' not supported yet. Using log output.",
+                    "INFO",
+                )
+
         self.dashboard_service = DashboardService(
             session_state=session_state,
             settings=self.config.dashboard,
             repository=repository,
+            renderer_factory=renderer_factory,
         )
     
     

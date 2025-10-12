@@ -17,6 +17,7 @@ from .models import (
     TimelineCategory,
     TimelineEvent,
 )
+from .renderers import PlainTextDashboardRenderer, RichDashboardRenderer
 
 __all__ = [
     "DashboardSnapshot",
@@ -30,4 +31,6 @@ __all__ = [
     "SessionState",
     "TimelineCategory",
     "TimelineEvent",
+    "RichDashboardRenderer",
+    "PlainTextDashboardRenderer",
 ]
