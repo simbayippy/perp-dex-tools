@@ -18,23 +18,39 @@ from .config import FundingArbConfig
 from .models import FundingArbPosition, OpportunityData
 from .funding_analyzer import FundingRateAnalyzer
 
+from dashboard.config import DashboardSettings
+from dashboard.models import (
+    DashboardSnapshot,
+    FundingSnapshot,
+    LifecycleStage,
+    PortfolioSnapshot,
+    PositionLegSnapshot,
+    PositionSnapshot,
+    SessionHealth,
+    SessionState,
+    TimelineCategory,
+    TimelineEvent,
+)
+from dashboard.service import DashboardService
+
 # Direct imports from funding_rate_service (internal calls, no HTTP)
 # Make imports conditional to avoid config loading issues during import
 try:
     from funding_rate_service.core.opportunity_finder import OpportunityFinder
-    from funding_rate_service.database.repositories import FundingRateRepository
+    from funding_rate_service.database.repositories import FundingRateRepository, DashboardRepository
     from funding_rate_service.database.connection import database
     FUNDING_SERVICE_AVAILABLE = True
 except ImportError as e:
     # For testing or when funding service config is not available
     OpportunityFinder = None
     FundingRateRepository = None
+    DashboardRepository = None
     database = None
     FUNDING_SERVICE_AVAILABLE = False
 
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 # Execution layer imports
@@ -177,7 +193,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
         
         self.position_manager = FundingArbPositionManager()
         self.state_manager = FundingArbStateManager()
-        
+
         # Tracking
         self.cumulative_funding = {}  # {position_id: Decimal}
         self.failed_symbols = set()  # Track symbols that failed validation (avoid retrying same cycle)
@@ -187,6 +203,42 @@ class FundingArbitrageStrategy(StatefulStrategy):
         # Set to False to allow multiple positions based on max_positions config
         self.one_position_per_session = True  # Keep it simple for now
         self.position_opened_this_session = False
+
+        # Dashboard service (optional)
+        self.dashboard_enabled = bool(self.config.dashboard.enabled and FUNDING_SERVICE_AVAILABLE)
+        self._current_dashboard_stage: LifecycleStage = LifecycleStage.INITIALIZING
+        dashboard_metadata = {
+            "available_exchanges": available_exchanges,
+            "scan_exchanges": self.config.exchanges,
+        }
+        session_state = SessionState(
+            session_id=uuid4(),
+            strategy="funding_arbitrage",
+            config_path=getattr(self.config, "config_path", None),
+            started_at=datetime.now(timezone.utc),
+            last_heartbeat=datetime.now(timezone.utc),
+            health=SessionHealth.STARTING,
+            lifecycle_stage=LifecycleStage.INITIALIZING,
+            max_positions=self.config.max_positions,
+            max_total_exposure_usd=getattr(self.config, "max_total_exposure_usd", None),
+            dry_run=getattr(self.config, "dry_run", False),
+            metadata=dashboard_metadata,
+        )
+
+        repository = None
+        if self.dashboard_enabled and DashboardRepository is not None:
+            repository = DashboardRepository(database)
+        elif self.config.dashboard.enabled and not FUNDING_SERVICE_AVAILABLE:
+            self.logger.log(
+                "Dashboard persistence disabled – funding rate service database unavailable",
+                "WARNING",
+            )
+
+        self.dashboard_service = DashboardService(
+            session_state=session_state,
+            settings=self.config.dashboard,
+            repository=repository,
+        )
     
     
     def get_strategy_name(self) -> str:
@@ -434,6 +486,11 @@ class FundingArbitrageStrategy(StatefulStrategy):
             reason: Reason for closing
         """
         try:
+            await self._set_dashboard_stage(
+                LifecycleStage.CLOSING,
+                f"Closing {position.symbol} ({reason})",
+                category=TimelineCategory.EXECUTION,
+            )
             # Close long side
             long_client = self.exchange_clients[position.long_dex]
             await long_client.close_position(position.symbol)
@@ -458,6 +515,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 f"Age={position.get_age_hours():.1f}h",
                 "INFO"
             )
+            await self._publish_dashboard_snapshot(f"Closed {position.symbol} ({reason})")
             
         except Exception as e:
             self.logger.log(
@@ -710,6 +768,11 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 )
                 self.failed_symbols.add(symbol)
                 return False
+
+            await self._set_dashboard_stage(
+                LifecycleStage.OPENING,
+                f"Opening {symbol} position ({long_dex.upper()} vs {short_dex.upper()})",
+            )
             
             # ⭐ CRITICAL: Initialize contract attributes for this symbol
             log_stage(self.logger, f"{symbol} • Opportunity Validation", icon="📋", stage_id="1")
@@ -852,6 +915,36 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 opened_at=datetime.now(),
                 total_fees_paid=total_cost
             )
+
+            partial_fee = entry_fees / Decimal("2") if entry_fees else Decimal("0")
+            timestamp_iso = datetime.now(timezone.utc).isoformat()
+            position.metadata.update(
+                {
+                    "legs": {
+                        long_dex: {
+                            "side": "long",
+                            "entry_price": long_fill.get("fill_price"),
+                            "quantity": long_fill.get("filled_quantity"),
+                            "fees_paid": partial_fee,
+                            "slippage_usd": long_fill.get("slippage_usd"),
+                            "execution_mode": long_fill.get("execution_mode_used"),
+                            "exposure_usd": size_usd,
+                            "last_updated": timestamp_iso,
+                        },
+                        short_dex: {
+                            "side": "short",
+                            "entry_price": short_fill.get("fill_price"),
+                            "quantity": short_fill.get("filled_quantity"),
+                            "fees_paid": partial_fee,
+                            "slippage_usd": short_fill.get("slippage_usd"),
+                            "execution_mode": short_fill.get("execution_mode_used"),
+                            "exposure_usd": size_usd,
+                            "last_updated": timestamp_iso,
+                        },
+                    },
+                    "total_slippage_usd": result.total_slippage_usd,
+                }
+            )
             
             await self.position_manager.add_position(position)
             
@@ -872,6 +965,13 @@ class FundingArbitrageStrategy(StatefulStrategy):
                     "📊 Session limit: Will not open more positions this session (one_position_per_session=True)",
                     "INFO"
                 )
+
+            await self._set_dashboard_stage(
+                LifecycleStage.MONITORING,
+                f"Position opened {symbol}",
+                category=TimelineCategory.EXECUTION,
+            )
+            await self._publish_dashboard_snapshot(f"Position opened {symbol}")
             
             return True  # Success
             
@@ -951,6 +1051,208 @@ class FundingArbitrageStrategy(StatefulStrategy):
             "max_positions": self.config.max_positions,
             "positions": [p.to_dict() for p in positions]
         }
+
+    # ========================================================================
+    # Dashboard Helpers
+    # ========================================================================
+
+    async def _set_dashboard_stage(
+        self,
+        stage: LifecycleStage,
+        message: Optional[str] = None,
+        category: TimelineCategory = TimelineCategory.STAGE,
+    ) -> None:
+        if not getattr(self, "dashboard_service", None) or not self.dashboard_service.enabled:
+            return
+
+        stage_changed = stage != self._current_dashboard_stage
+        if stage_changed:
+            self._current_dashboard_stage = stage
+            self.dashboard_service.update_session(lifecycle_stage=stage)
+
+        if message and (stage_changed or category != TimelineCategory.STAGE):
+            event = TimelineEvent(
+                ts=datetime.now(timezone.utc),
+                category=category,
+                message=message,
+                metadata={},
+            )
+            await self.dashboard_service.publish_event(event)
+
+    async def _publish_dashboard_snapshot(self, note: Optional[str] = None) -> None:
+        if not getattr(self, "dashboard_service", None) or not self.dashboard_service.enabled:
+            return
+
+        positions = await self.position_manager.get_open_positions()
+        snapshot = self._build_dashboard_snapshot(positions)
+        await self.dashboard_service.publish_snapshot(snapshot)
+
+        if note:
+            event = TimelineEvent(
+                ts=datetime.now(timezone.utc),
+                category=TimelineCategory.INFO,
+                message=note,
+                metadata={},
+            )
+            await self.dashboard_service.publish_event(event)
+
+    def _build_dashboard_snapshot(self, positions: List[FundingArbPosition]) -> DashboardSnapshot:
+        position_snapshots = [self._position_to_snapshot(p) for p in positions]
+
+        total_notional = sum((p.size_usd for p in positions), start=Decimal("0"))
+        net_unrealized = sum((p.get_net_pnl() for p in positions), start=Decimal("0"))
+        funding_total = sum(
+            (self.position_manager.get_cumulative_funding(p.id) for p in positions),
+            start=Decimal("0"),
+        )
+
+        portfolio = PortfolioSnapshot(
+            total_positions=len(positions),
+            total_notional_usd=total_notional,
+            net_unrealized_pnl=net_unrealized,
+            net_realized_pnl=Decimal("0"),
+            funding_accrued=funding_total,
+            alerts=[],
+        )
+
+        funding_snapshot = FundingSnapshot(
+            total_accrued=funding_total,
+            weighted_average_rate=None,
+            next_event_countdown_seconds=None,
+            rates=[],
+        )
+
+        return DashboardSnapshot(
+            session=self.dashboard_service.session_state,
+            positions=position_snapshots,
+            portfolio=portfolio,
+            funding=funding_snapshot,
+            recent_events=[],
+            generated_at=datetime.now(timezone.utc),
+        )
+
+    def _position_to_snapshot(self, position: FundingArbPosition) -> PositionSnapshot:
+        legs_metadata = position.metadata.get("legs", {})
+        leg_snapshots: List[PositionLegSnapshot] = []
+
+        for venue, meta in legs_metadata.items():
+            entry_price = meta.get("entry_price")
+            if entry_price is not None and not isinstance(entry_price, Decimal):
+                entry_price = Decimal(str(entry_price))
+
+            quantity = meta.get("quantity")
+            if quantity is not None and not isinstance(quantity, Decimal):
+                quantity = Decimal(str(quantity))
+
+            exposure = meta.get("exposure_usd", position.size_usd)
+            if not isinstance(exposure, Decimal):
+                exposure = Decimal(str(exposure))
+
+            if quantity is None and entry_price and entry_price != 0:
+                quantity = exposure / entry_price
+            if quantity is None:
+                quantity = Decimal("0")
+
+            mark_price = meta.get("mark_price")
+            if mark_price is not None and not isinstance(mark_price, Decimal):
+                mark_price = Decimal(str(mark_price))
+
+            leverage = meta.get("leverage")
+            if leverage is not None and not isinstance(leverage, Decimal):
+                leverage = Decimal(str(leverage))
+
+            fees_paid = meta.get("fees_paid", Decimal("0"))
+            if not isinstance(fees_paid, Decimal):
+                fees_paid = Decimal(str(fees_paid))
+
+            funding_accrued = meta.get("funding_accrued", Decimal("0"))
+            if not isinstance(funding_accrued, Decimal):
+                funding_accrued = Decimal(str(funding_accrued))
+
+            realized_pnl = meta.get("realized_pnl", Decimal("0"))
+            if not isinstance(realized_pnl, Decimal):
+                realized_pnl = Decimal(str(realized_pnl))
+
+            margin_reserved = meta.get("margin_reserved")
+            if margin_reserved is not None and not isinstance(margin_reserved, Decimal):
+                margin_reserved = Decimal(str(margin_reserved))
+
+            updated_at = meta.get("last_updated", position.last_check or position.opened_at)
+            if isinstance(updated_at, str):
+                updated_at = datetime.fromisoformat(updated_at)
+
+            leg_snapshots.append(
+                PositionLegSnapshot(
+                    venue=venue,
+                    side=meta.get("side", "long"),
+                    quantity=quantity,
+                    exposure_usd=exposure,
+                    entry_price=entry_price or Decimal("0"),
+                    mark_price=mark_price,
+                    leverage=leverage,
+                    realized_pnl=realized_pnl,
+                    fees_paid=fees_paid,
+                    funding_accrued=funding_accrued,
+                    margin_reserved=margin_reserved,
+                    last_updated=updated_at,
+                )
+            )
+
+        if not leg_snapshots:
+            now = position.last_check or position.opened_at
+            leg_snapshots = [
+                PositionLegSnapshot(
+                    venue=position.long_dex,
+                    side="long",
+                    quantity=Decimal("0"),
+                    exposure_usd=position.size_usd,
+                    entry_price=Decimal("0"),
+                    last_updated=now,
+                ),
+                PositionLegSnapshot(
+                    venue=position.short_dex,
+                    side="short",
+                    quantity=Decimal("0"),
+                    exposure_usd=position.size_usd,
+                    entry_price=Decimal("0"),
+                    last_updated=now,
+                ),
+            ]
+
+        erosion_ratio = position.get_profit_erosion()
+        profit_erosion_pct = (Decimal("1") - erosion_ratio) * Decimal("100")
+
+        funding_accrued = self.position_manager.get_cumulative_funding(position.id)
+        lifecycle_stage = {
+            "open": LifecycleStage.MONITORING,
+            "pending_close": LifecycleStage.CLOSING,
+            "closed": LifecycleStage.COMPLETE,
+        }.get(position.status, LifecycleStage.MONITORING)
+
+        last_update = position.last_check or position.opened_at
+
+        return PositionSnapshot(
+            position_id=position.id,
+            symbol=position.symbol,
+            strategy_tag="funding_arbitrage",
+            opened_at=position.opened_at,
+            last_update=last_update,
+            lifecycle_stage=lifecycle_stage,
+            legs=leg_snapshots,
+            notional_exposure_usd=position.size_usd,
+            entry_divergence_pct=position.entry_divergence,
+            current_divergence_pct=position.current_divergence,
+            profit_erosion_pct=profit_erosion_pct,
+            unrealized_pnl=position.get_net_pnl(),
+            realized_pnl=position.pnl_usd or Decimal("0"),
+            funding_accrued=funding_accrued,
+            rebalance_pending=position.rebalance_pending,
+            max_position_age_seconds=int(self.config.risk_config.max_position_age_hours * 3600),
+            custom_metadata={
+                "rebalance_reason": position.rebalance_reason,
+                "exit_reason": position.exit_reason,
+            },
+        )
     
     # ========================================================================
     # Abstract Method Implementations (Required by BaseStrategy)
@@ -961,6 +1263,14 @@ class FundingArbitrageStrategy(StatefulStrategy):
         # Initialize position and state managers
         await self.position_manager.initialize()
         await self.state_manager.initialize()
+        if self.dashboard_service.enabled:
+            await self.dashboard_service.start()
+            await self._set_dashboard_stage(
+                LifecycleStage.IDLE,
+                "Strategy initialized",
+                category=TimelineCategory.INFO,
+            )
+            await self._publish_dashboard_snapshot("Startup state captured")
         
         self.logger.log("FundingArbitrageStrategy initialized successfully")
     
@@ -982,9 +1292,30 @@ class FundingArbitrageStrategy(StatefulStrategy):
         
         try:
             # Run the 3-phase execution loop
+            await self._set_dashboard_stage(
+                LifecycleStage.MONITORING,
+                "Monitoring active positions",
+            )
             await self._monitor_positions()
+            await self._publish_dashboard_snapshot()
+
+            await self._set_dashboard_stage(
+                LifecycleStage.CLOSING,
+                "Evaluating exit conditions",
+            )
             await self._check_exit_conditions() 
+
+            await self._set_dashboard_stage(
+                LifecycleStage.SCANNING,
+                "Scanning for new opportunities",
+            )
             await self._scan_opportunities()
+            await self._set_dashboard_stage(
+                LifecycleStage.IDLE,
+                "Funding arbitrage cycle completed",
+                category=TimelineCategory.INFO,
+            )
+            await self._publish_dashboard_snapshot()
             
             return StrategyResult(
                 action=StrategyAction.WAIT,
@@ -1021,6 +1352,8 @@ class FundingArbitrageStrategy(StatefulStrategy):
             await self.position_manager.close()
         if hasattr(self, 'state_manager'):
             await self.state_manager.close()
+        if getattr(self, "dashboard_service", None) and self.dashboard_service.enabled:
+            await self.dashboard_service.stop(health=SessionHealth.STOPPED)
         
         await super().cleanup()
     
