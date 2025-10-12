@@ -762,10 +762,6 @@ class AsterClient(BaseExchangeClient):
                 actual_leverage = result.get('leverage')
                 max_notional = result.get('maxNotionalValue')
                 
-                self.logger.info(
-                    f"✅ [ASTER] Leverage set for {symbol}: {actual_leverage}x "
-                    f"(max notional: ${max_notional})"
-                )
                 return True
             else:
                 self.logger.warning(

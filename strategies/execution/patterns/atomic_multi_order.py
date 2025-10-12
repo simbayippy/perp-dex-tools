@@ -111,7 +111,8 @@ class AtomicMultiOrderExecutor:
         self,
         orders: List[OrderSpec],
         rollback_on_partial: bool = True,
-        pre_flight_check: bool = True
+        pre_flight_check: bool = True,
+        skip_preflight_leverage: bool = False
     ) -> AtomicExecutionResult:
         """
         Execute all orders atomically. If any fail and rollback_on_partial=True,
@@ -120,7 +121,9 @@ class AtomicMultiOrderExecutor:
         Args:
             orders: List of order specifications
             rollback_on_partial: If True, rollback all on partial fill
-            pre_flight_check: If True, check liquidity before placing orders
+            pre_flight_check: If True, run pre-flight validation before placing
+            skip_preflight_leverage: If True, assume leverage has already been
+                validated/normalized by the caller (skips duplicate checks)
         
         Returns:
             AtomicExecutionResult with execution details
@@ -149,7 +152,10 @@ class AtomicMultiOrderExecutor:
                 self.logger.info("🔍 RUNNING PRE-FLIGHT CHECKS")
                 self.logger.info("=" * 55)
                 
-                preflight_ok, preflight_error = await self._run_preflight_checks(orders)
+                preflight_ok, preflight_error = await self._run_preflight_checks(
+                    orders,
+                    skip_leverage_check=skip_preflight_leverage
+                )
                 if not preflight_ok:
                     return AtomicExecutionResult(
                         success=False,
@@ -272,32 +278,21 @@ class AtomicMultiOrderExecutor:
     
     async def _run_preflight_checks(
         self,
-        orders: List[OrderSpec]
+        orders: List[OrderSpec],
+        skip_leverage_check: bool = False
     ) -> tuple[bool, Optional[str]]:
         """
         Run pre-flight checks on all orders.
         
-        Checks:
-        1. Account balance sufficiency (CRITICAL - prevents partial fills due to insufficient margin)
-        2. Liquidity availability (prevents high slippage)
+        Checks (unless skipped via flags):
+        1. Leverage limits & normalization
+        2. Account balance sufficiency (CRITICAL - prevents partial fills due to insufficient margin)
+        3. Liquidity availability (prevents high slippage)
         
         Returns:
             (all_checks_passed, error_message)
         """
         try:
-            # Import here to avoid circular dependency
-            from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
-            
-            # ========================================================================
-            # CHECK 0: Leverage Limit Validation (NEW - CRITICAL FOR DELTA NEUTRAL)
-            # ========================================================================
-            self.logger.info("🔍 Checking leverage limits across exchanges...")
-            
-            # Import leverage validator
-            from strategies.execution.core.leverage_validator import LeverageValidator
-            
-            leverage_validator = LeverageValidator()
-            
             # Group orders by symbol (for delta-neutral we need same size on both sides)
             symbols_to_check: Dict[str, List[OrderSpec]] = {}
             for order_spec in orders:
@@ -306,62 +301,68 @@ class AtomicMultiOrderExecutor:
                     symbols_to_check[symbol] = []
                 symbols_to_check[symbol].append(order_spec)
             
-            # For each symbol, verify all exchanges can support the requested size
-            adjusted_orders = []
-            for symbol, symbol_orders in symbols_to_check.items():
-                # Get all exchange clients for this symbol
-                exchange_clients = [order.exchange_client for order in symbol_orders]
+            # Import here to avoid circular dependency
+            from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
+            
+            if not skip_leverage_check:
+                # ====================================================================
+                # CHECK 0: Leverage Limit Validation (CRITICAL FOR DELTA NEUTRAL)
+                # ====================================================================
+                self.logger.info("🔍 Checking leverage limits across exchanges...")
                 
-                # Get requested size (should be same for all orders in delta-neutral strategy)
-                requested_size = symbol_orders[0].size_usd
+                # Import leverage validator
+                from strategies.execution.core.leverage_validator import LeverageValidator
                 
-                # Check max size supported by ALL exchanges
-                max_size, limiting_exchange = await leverage_validator.get_max_position_size(
-                    exchange_clients=exchange_clients,
-                    symbol=symbol,
-                    requested_size_usd=requested_size,
-                    check_balance=True  # Also consider available balance
-                )
+                leverage_validator = LeverageValidator()
                 
-                # If size needs adjustment, update all orders for this symbol
-                if max_size < requested_size:
-                    error_msg = (
-                        f"Position size too large for {symbol}: "
-                        f"Requested ${requested_size:.2f}, "
-                        f"maximum supported: ${max_size:.2f} "
-                        f"(limited by {limiting_exchange})"
-                    )
-                    self.logger.warning(f"⚠️  {error_msg}")
+                # For each symbol, verify all exchanges can support the requested size
+                for symbol, symbol_orders in symbols_to_check.items():
+                    # Get all exchange clients for this symbol
+                    exchange_clients = [order.exchange_client for order in symbol_orders]
                     
-                    # For atomic execution, we can't have mismatched sizes
-                    # Return error so strategy can decide (reduce size or skip)
-                    return False, error_msg
-            
-            self.logger.info("✅ Leverage limits validated for all exchanges")
-            
-            # 🔧 CRITICAL: Now SET the leverage to min(exchange1, exchange2)
-            # This ensures both sides use the same leverage (Issue #1 fix)
-            for symbol, symbol_orders in symbols_to_check.items():
-                exchange_clients = [order.exchange_client for order in symbol_orders]
-                requested_size = symbol_orders[0].size_usd
-                
-                self.logger.info(f"🔧 [LEVERAGE] Normalizing leverage for {symbol}...")
-                min_leverage, limiting = await leverage_validator.normalize_and_set_leverage(
-                    exchange_clients=exchange_clients,
-                    symbol=symbol,
-                    requested_size_usd=requested_size
-                )
-                
-                if min_leverage is not None:
-                    self.logger.info(
-                        f"✅ [LEVERAGE] {symbol} normalized to {min_leverage}x "
-                        f"(limited by {limiting})"
+                    # Get requested size (should be same for all orders in delta-neutral strategy)
+                    requested_size = symbol_orders[0].size_usd
+                    
+                    # Check max size supported by ALL exchanges
+                    max_size, limiting_exchange = await leverage_validator.get_max_position_size(
+                        exchange_clients=exchange_clients,
+                        symbol=symbol,
+                        requested_size_usd=requested_size,
+                        check_balance=True  # Also consider available balance
                     )
-                else:
-                    self.logger.warning(
-                        f"⚠️  [LEVERAGE] Could not normalize leverage for {symbol}. "
-                        f"Orders may execute with different leverage!"
+                    
+                    if max_size < requested_size:
+                        error_msg = (
+                            f"Position size too large for {symbol}: "
+                            f"Requested ${requested_size:.2f}, "
+                            f"maximum supported: ${max_size:.2f} "
+                            f"(limited by {limiting_exchange})"
+                        )
+                        self.logger.warning(f"⚠️  {error_msg}")
+                        return False, error_msg
+                
+                # 🔧 CRITICAL: Now set the leverage to min(exchange1, exchange2)
+                for symbol, symbol_orders in symbols_to_check.items():
+                    exchange_clients = [order.exchange_client for order in symbol_orders]
+                    requested_size = symbol_orders[0].size_usd
+                    
+                    self.logger.info(f"🔧 [LEVERAGE] Normalizing leverage for {symbol}...")
+                    min_leverage, limiting = await leverage_validator.normalize_and_set_leverage(
+                        exchange_clients=exchange_clients,
+                        symbol=symbol,
+                        requested_size_usd=requested_size
                     )
+                    
+                    if min_leverage is not None:
+                        self.logger.info(
+                            f"✅ [LEVERAGE] {symbol} normalized to {min_leverage}x "
+                            f"(limited by {limiting})"
+                        )
+                    else:
+                        self.logger.warning(
+                            f"⚠️  [LEVERAGE] Could not normalize leverage for {symbol}. "
+                            f"Orders may execute with different leverage!"
+                        )
             
             # ========================================================================
             # SETUP: Start WebSocket book tickers for real-time BBO (Issue #3 fix)
@@ -735,4 +736,3 @@ class AtomicMultiOrderExecutor:
         )
         
         return total_rollback_cost
-

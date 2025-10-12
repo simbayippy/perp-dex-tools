@@ -739,54 +739,41 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 "INFO"
             )
 
-            # Separator to indicate leverage checks are starting
+            # ⭐ LEVERAGE VALIDATION & NORMALIZATION ⭐
             self.logger.info("=" * 55)
-            self.logger.info("🔍 CHECKING LEVERAGE LIMITS ON BOTH EXCHANGES")
+            self.logger.info("🔍 LEVERAGE VALIDATION & NORMALIZATION")
             self.logger.info("=" * 55)
             
-            # ⭐ LEVERAGE CHECK: Reduce size if needed ⭐
-            # Import leverage validator
             from strategies.execution.core.leverage_validator import LeverageValidator
             
             leverage_validator = LeverageValidator()
             
-            # Check if both exchanges can support the requested size
             try:
-                max_size, limiting_exchange = await leverage_validator.get_max_position_size(
+                leverage_prep = await leverage_validator.prepare_leverage(
                     exchange_clients=[long_client, short_client],
                     symbol=symbol,
                     requested_size_usd=size_usd,
-                    check_balance=True
+                    min_position_usd=Decimal("5"),
+                    check_balance=True,
+                    normalize_leverage=True
                 )
             except Exception as e:
-                # Leverage validation failed - log once and track
                 self.logger.log(
-                    f"⛔ [SKIP] {symbol}: Leverage validation failed - {e}",
+                    f"⛔ [SKIP] {symbol}: Leverage preparation failed - {e}",
                     "WARNING"
                 )
                 self.failed_symbols.add(symbol)
                 return False
             
-            # Adjust size if needed
-            if max_size < size_usd:
-                original_size = size_usd
-                size_usd = max_size
-                
+            size_usd = leverage_prep.adjusted_size_usd
+            
+            if leverage_prep.below_minimum:
                 self.logger.log(
-                    f"⚙️  [AUTO-ADJUST] Reduced position size for {symbol}: "
-                    f"${original_size:.2f} → ${size_usd:.2f} "
-                    f"(limited by {limiting_exchange}'s leverage/balance)",
+                    f"⛔ [SKIP] {symbol}: Position size too small after leverage adjustment (${size_usd:.2f})",
                     "WARNING"
                 )
-                
-                # Check if reduced size is still profitable
-                if size_usd < Decimal('5'):  # Minimum $5 position
-                    self.logger.log(
-                        f"⛔ [SKIP] {symbol}: Position size too small after leverage adjustment (${size_usd:.2f})",
-                        "WARNING"
-                    )
-                    self.failed_symbols.add(symbol)
-                    return False
+                self.failed_symbols.add(symbol)
+                return False
             
             self.logger.log(
                 f"🎯 [EXECUTION PLAN] {symbol} | "
@@ -798,7 +785,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
 
             # Separator to indicate leverage checks are complete
             self.logger.info("=" * 55)
-            self.logger.info("✅ LEVERAGE CHECKS COMPLETE - PROCEEDING TO ATOMIC MULTI-ORDER PLACEMENT")
+            self.logger.info("✅ LEVERAGE READY - PROCEEDING TO ATOMIC MULTI-ORDER PLACEMENT")
             self.logger.info("=" * 55)
             
             # ⭐ ATOMIC EXECUTION: Both sides fill or neither ⭐
@@ -822,7 +809,8 @@ class FundingArbitrageStrategy(StatefulStrategy):
                     )
                 ],
                 rollback_on_partial=True,  # 🚨 CRITICAL: Both must fill or rollback
-                pre_flight_check=True  # Check liquidity before placing
+                pre_flight_check=True,  # Check liquidity before placing
+                skip_preflight_leverage=True  # Already validated & normalized
             )
             
             # Check if atomic execution succeeded
