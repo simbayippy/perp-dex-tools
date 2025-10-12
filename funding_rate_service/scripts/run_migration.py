@@ -13,8 +13,10 @@ import asyncio
 import sys
 from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add project root to sys.path so `funding_rate_service` resolves correctly
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from funding_rate_service.database.connection import database
 from funding_rate_service.utils.logger import logger
