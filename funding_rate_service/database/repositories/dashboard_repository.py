@@ -5,6 +5,7 @@ Dashboard repository for persisting session snapshots and timeline events.
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from typing import Any, Dict, Optional
 from uuid import UUID
 
@@ -65,7 +66,7 @@ class DashboardRepository:
                 "config_path": config_path,
                 "started_at": started_at,
                 "health": health,
-                "metadata": metadata or {},
+                "metadata": json.dumps(metadata or {}, default=str),
             },
         )
 
@@ -115,7 +116,11 @@ class DashboardRepository:
         """
         return await self._db.fetch_val(
             query,
-            {"session_id": session_id, "generated_at": generated_at, "payload": payload},
+            {
+                "session_id": session_id,
+                "generated_at": generated_at,
+                "payload": json.dumps(payload, default=str),
+            },
         )
 
     async def prune_snapshots(
@@ -176,7 +181,7 @@ class DashboardRepository:
                 "ts": ts,
                 "category": category,
                 "message": message,
-                "metadata": metadata or {},
+                "metadata": json.dumps(metadata or {}, default=str),
             },
         )
 
