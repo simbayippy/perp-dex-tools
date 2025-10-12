@@ -150,6 +150,15 @@ class AtomicMultiOrderExecutor:
                     return ".".join(parts)
                 return None
             
+            def _stage_id(*parts: str) -> Optional[str]:
+                if stage_prefix and parts:
+                    return ".".join([stage_prefix, *parts])
+                if stage_prefix and not parts:
+                    return stage_prefix
+                if parts:
+                    return ".".join(parts)
+                return None
+            
             self.logger.info(
                 f"Starting atomic execution of {len(orders)} orders "
                 f"(rollback_on_partial={rollback_on_partial})"
