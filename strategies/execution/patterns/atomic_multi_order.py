@@ -112,7 +112,8 @@ class AtomicMultiOrderExecutor:
         orders: List[OrderSpec],
         rollback_on_partial: bool = True,
         pre_flight_check: bool = True,
-        skip_preflight_leverage: bool = False
+        skip_preflight_leverage: bool = False,
+        stage_prefix: Optional[str] = None
     ) -> AtomicExecutionResult:
         """
         Execute all orders atomically. If any fail and rollback_on_partial=True,
@@ -140,18 +141,37 @@ class AtomicMultiOrderExecutor:
         partial_fills = []
         
         try:
+            def _stage_id(*parts: str) -> Optional[str]:
+                if stage_prefix and parts:
+                    return ".".join([stage_prefix, *parts])
+                if stage_prefix and not parts:
+                    return stage_prefix
+                if parts:
+                    return ".".join(parts)
+                return None
+            
             self.logger.info(
                 f"Starting atomic execution of {len(orders)} orders "
                 f"(rollback_on_partial={rollback_on_partial})"
             )
             
             # Step 1: Pre-flight checks (optional)
+            def _stage_id(*parts: str) -> Optional[str]:
+                if stage_prefix and parts:
+                    return ".".join([stage_prefix, *parts])
+                if stage_prefix and not parts:
+                    return stage_prefix
+                if parts:
+                    return ".".join(parts)
+                return None
+            
             if pre_flight_check:
-                log_stage(self.logger, "Pre-flight Checks", icon="🔍")
+                log_stage(self.logger, "Pre-flight Checks", icon="🔍", stage_id=_stage_id("1"))
                 
                 preflight_ok, preflight_error = await self._run_preflight_checks(
                     orders,
-                    skip_leverage_check=skip_preflight_leverage
+                    skip_leverage_check=skip_preflight_leverage,
+                    stage_prefix=_stage_id("1")
                 )
                 if not preflight_ok:
                     return AtomicExecutionResult(
@@ -273,7 +293,8 @@ class AtomicMultiOrderExecutor:
     async def _run_preflight_checks(
         self,
         orders: List[OrderSpec],
-        skip_leverage_check: bool = False
+        skip_leverage_check: bool = False,
+        stage_prefix: Optional[str] = None
     ) -> tuple[bool, Optional[str]]:
         """
         Run pre-flight checks on all orders.
@@ -299,7 +320,7 @@ class AtomicMultiOrderExecutor:
             from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
             
             if not skip_leverage_check:
-                log_stage(self.logger, "Leverage Validation", icon="📐")
+                log_stage(self.logger, "Leverage Validation", icon="📐", stage_id=_stage_id("1"))
                 # ====================================================================
                 # CHECK 0: Leverage Limit Validation (CRITICAL FOR DELTA NEUTRAL)
                 # ====================================================================
@@ -359,7 +380,7 @@ class AtomicMultiOrderExecutor:
                             f"Orders may execute with different leverage!"
                         )
             
-            log_stage(self.logger, "Market Data Streams", icon="📡")
+            log_stage(self.logger, "Market Data Streams", icon="📡", stage_id=_stage_id("2"))
             # ========================================================================
             # SETUP: Start WebSocket book tickers for real-time BBO (Issue #3 fix)
             # ========================================================================
@@ -415,7 +436,7 @@ class AtomicMultiOrderExecutor:
             # - Lighter: market switch + order book snapshot (~0.5s)
             await asyncio.sleep(2.0)
             
-            log_stage(self.logger, "Margin & Balance Checks", icon="💰")
+            log_stage(self.logger, "Margin & Balance Checks", icon="💰", stage_id=_stage_id("3"))
             # ========================================================================
             # CHECK 1: Account Balance Validation (CRITICAL FIX)
             # ========================================================================
@@ -484,7 +505,7 @@ class AtomicMultiOrderExecutor:
                         f"⚠️ Balance check failed for {exchange_name}: {e}"
                     )
             
-            log_stage(self.logger, "Order Book Liquidity", icon="🌊")
+            log_stage(self.logger, "Order Book Liquidity", icon="🌊", stage_id=_stage_id("4"))
             # ========================================================================
             # CHECK 2: Liquidity Analysis
             # ========================================================================

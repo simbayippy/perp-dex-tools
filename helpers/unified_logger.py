@@ -383,6 +383,7 @@ def log_stage(
     title: str,
     *,
     icon: Optional[str] = None,
+    stage_id: Optional[str] = None,
     border: str = "=",
     width: int = 55,
     level: str = "INFO"
@@ -396,6 +397,7 @@ def log_stage(
         logger_obj: Logger to emit messages on.
         title: Stage title to display.
         icon: Optional emoji/icon prefix.
+        stage_id: Optional hierarchical identifier (e.g., "1", "2.1").
         border: Character used for separator line.
         width: Width of separator line.
         level: Log level to use (INFO by default).
@@ -417,7 +419,13 @@ def log_stage(
                 logger_obj.info(message)
     
     border_line = border * width
-    label = f"{icon} {title}" if icon else title
+    label_parts = []
+    if stage_id:
+        label_parts.append(f"{stage_id}.")
+    if icon:
+        label_parts.append(icon)
+    label_parts.append(title)
+    label = " ".join(label_parts)
     
     _emit(border_line)
     _emit(label)

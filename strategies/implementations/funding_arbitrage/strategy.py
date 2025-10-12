@@ -712,7 +712,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 return False
             
             # ⭐ CRITICAL: Initialize contract attributes for this symbol
-            log_stage(self.logger, f"{symbol} • Opportunity Validation", icon="📋")
+            log_stage(self.logger, f"{symbol} • Opportunity Validation", icon="📋", stage_id="1")
             self.logger.log(
                 f"Ensuring {symbol} is tradeable on both {long_dex} and {short_dex}",
                 "INFO"
@@ -742,7 +742,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
             )
 
             # ⭐ LEVERAGE VALIDATION & NORMALIZATION ⭐
-            log_stage(self.logger, "Leverage Validation & Normalization", icon="🔍")
+            log_stage(self.logger, "Leverage Validation & Normalization", icon="🔍", stage_id="2")
             
             from strategies.execution.core.leverage_validator import LeverageValidator
             
@@ -783,7 +783,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 "INFO"
             )
 
-            log_stage(self.logger, "Atomic Multi-Order Execution", icon="🧨")
+            log_stage(self.logger, "Atomic Multi-Order Execution", icon="🧨", stage_id="3")
             
             # ⭐ ATOMIC EXECUTION: Both sides fill or neither ⭐
             result: AtomicExecutionResult = await self.atomic_executor.execute_atomically(
@@ -807,7 +807,8 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 ],
                 rollback_on_partial=True,  # 🚨 CRITICAL: Both must fill or rollback
                 pre_flight_check=True,  # Check liquidity before placing
-                skip_preflight_leverage=True  # Already validated & normalized
+                skip_preflight_leverage=True,  # Already validated & normalized
+                stage_prefix="3"
             )
             
             # Check if atomic execution succeeded
