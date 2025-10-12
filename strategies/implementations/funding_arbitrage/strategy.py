@@ -203,6 +203,8 @@ class FundingArbitrageStrategy(StatefulStrategy):
         # Set to False to allow multiple positions based on max_positions config
         self.one_position_per_session = True  # Keep it simple for now
         self.position_opened_this_session = False
+        self._session_limit_warning_logged = False
+        self._max_position_warning_logged = False
 
         # Dashboard service (optional)
         self.dashboard_enabled = bool(self.config.dashboard.enabled and FUNDING_SERVICE_AVAILABLE)
@@ -542,10 +544,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
         try:
             # Stop immediately if we've already hit our capacity for this session.
             if not self._has_capacity():
-                self.logger.log(
-                    "🚫 Capacity reached — skipping opportunity scan this cycle",
-                    "INFO"
-                )
                 return actions
             
             # ⭐ Direct internal service call (no HTTP)
@@ -1001,18 +999,31 @@ class FundingArbitrageStrategy(StatefulStrategy):
         # Check global position limit
         open_count = len(self.position_manager._positions)
         if open_count >= self.config.max_positions:
+            if not self._max_position_warning_logged:
+                self.logger.log(
+                    f"🚫 Max positions reached ({open_count}/{self.config.max_positions}). "
+                    "Skipping new opportunities until capacity frees up.",
+                    "INFO"
+                )
+                self._max_position_warning_logged = True
             return False
+        else:
+            self._max_position_warning_logged = False
         
         # 🔒 Check session-level limit (Issue #4 fix)
         # If one_position_per_session is enabled and we've already opened one, stop
         if self.one_position_per_session and self.position_opened_this_session:
-            self.logger.log(
-                "📊 Session limit reached: Already opened 1 position this session. "
-                "Set one_position_per_session=False to allow multiple positions.",
-                "INFO"
-            )
+            if not self._session_limit_warning_logged:
+                self.logger.log(
+                    "📊 Session limit reached: already opened 1 position this session. "
+                    "Set one_position_per_session=False to allow multiple positions.",
+                    "INFO"
+                )
+                self._session_limit_warning_logged = True
             return False
-        
+        else:
+            self._session_limit_warning_logged = False
+
         return True
     
     def _calculate_total_exposure(self) -> Decimal:
