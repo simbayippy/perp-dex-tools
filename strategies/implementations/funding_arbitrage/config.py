@@ -154,6 +154,11 @@ class FundingArbConfig(BaseModel):
         ...,
         description="PostgreSQL connection string"
     )
+
+    config_path: Optional[str] = Field(
+        default=None,
+        description="Source config path (populated when loaded from YAML)"
+    )
     
     # General settings
     exchange: str = Field(

@@ -337,12 +337,10 @@ class FundingArbitrageStrategy(StatefulStrategy):
             risk_config=RiskManagementConfig(),
             dashboard=dashboard_settings,
             # Ticker for logging
-            ticker=trading_config.ticker
+            ticker=trading_config.ticker,
+            config_path=config_path
             # Note: bridge_settings not implemented yet
         )
-        config_path = strategy_params.get("_config_path")
-        if config_path:
-            setattr(funding_config, "config_path", config_path)
         return funding_config
  
     # ========================================================================
