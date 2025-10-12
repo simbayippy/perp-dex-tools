@@ -394,7 +394,7 @@ class AtomicMultiOrderExecutor:
                             f"Orders may execute with different leverage!"
                         )
             
-            log_stage(self.logger, "Market Data Streams", icon="📡", stage_id=compose_stage("2"))
+            log_stage(self.logger, "Market Data Streams", icon="📡", stage_id=compose_stage("1"))
             # ========================================================================
             # SETUP: Start WebSocket book tickers for real-time BBO (Issue #3 fix)
             # ========================================================================
@@ -450,7 +450,7 @@ class AtomicMultiOrderExecutor:
             # - Lighter: market switch + order book snapshot (~0.5s)
             await asyncio.sleep(2.0)
             
-            log_stage(self.logger, "Margin & Balance Checks", icon="💰", stage_id=compose_stage("3"))
+            log_stage(self.logger, "Margin & Balance Checks", icon="💰", stage_id=compose_stage("2"))
             # ========================================================================
             # CHECK 1: Account Balance Validation (CRITICAL FIX)
             # ========================================================================
@@ -519,7 +519,7 @@ class AtomicMultiOrderExecutor:
                         f"⚠️ Balance check failed for {exchange_name}: {e}"
                     )
             
-            log_stage(self.logger, "Order Book Liquidity", icon="🌊", stage_id=compose_stage("4"))
+            log_stage(self.logger, "Order Book Liquidity", icon="🌊", stage_id=compose_stage("3"))
             # ========================================================================
             # CHECK 2: Liquidity Analysis
             # ========================================================================
