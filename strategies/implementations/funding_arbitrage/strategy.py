@@ -312,6 +312,8 @@ class FundingArbitrageStrategy(StatefulStrategy):
         # Get target exposure from strategy_params
         target_exposure = Decimal(str(strategy_params.get('target_exposure', 100.0)))
 
+        config_path = strategy_params.get("_config_path")
+
         dashboard_config = strategy_params.get('dashboard') or {}
         if isinstance(dashboard_config, DashboardSettings):
             dashboard_settings = dashboard_config
