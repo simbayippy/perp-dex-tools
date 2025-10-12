@@ -311,8 +311,16 @@ class FundingArbitrageStrategy(StatefulStrategy):
         
         # Get target exposure from strategy_params
         target_exposure = Decimal(str(strategy_params.get('target_exposure', 100.0)))
+
+        dashboard_config = strategy_params.get('dashboard') or {}
+        if isinstance(dashboard_config, DashboardSettings):
+            dashboard_settings = dashboard_config
+        elif isinstance(dashboard_config, dict):
+            dashboard_settings = DashboardSettings(**dashboard_config)
+        else:
+            dashboard_settings = DashboardSettings()
         
-        return FundingArbConfig(
+        funding_config = FundingArbConfig(
             exchange=trading_config.exchange,  # Primary exchange
             exchanges=exchanges,  # All exchanges for arbitrage
             symbols=[trading_config.ticker],
@@ -327,10 +335,15 @@ class FundingArbitrageStrategy(StatefulStrategy):
             database_url=settings.database_url,
             # Risk management defaults
             risk_config=RiskManagementConfig(),
+            dashboard=dashboard_settings,
             # Ticker for logging
             ticker=trading_config.ticker
             # Note: bridge_settings not implemented yet
         )
+        config_path = strategy_params.get("_config_path")
+        if config_path:
+            setattr(funding_config, "config_path", config_path)
+        return funding_config
  
     # ========================================================================
     # Main Execution Loop

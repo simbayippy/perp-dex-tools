@@ -196,6 +196,7 @@ async def main():
         loaded = load_config_from_yaml(config_path)
         strategy_name = loaded["strategy"]
         strategy_config = loaded["config"]
+        strategy_config["_config_path"] = str(config_path)
         
         print(f"\n✓ Loaded configuration from: {config_path}")
         print(f"  Strategy: {strategy_name}")
