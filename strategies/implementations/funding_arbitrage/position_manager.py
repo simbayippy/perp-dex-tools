@@ -850,45 +850,25 @@ class FundingArbPositionManager(BasePositionManager):
                 self._cumulative_funding[funding_position.id] = Decimal("0")
     
     async def get_position(self, position_id: UUID) -> Optional[Position]:
-        """Get position by ID (returns as generic Position)."""
-        funding_position = await self.get_funding_position(position_id)
-        if not funding_position:
-            return None
+        """
+        Get position by ID.
         
-        # Convert FundingArbPosition to generic Position
-        return Position(
-            id=funding_position.id,
-            symbol=funding_position.symbol,
-            size_usd=funding_position.size_usd,
-            entry_price=None,  # Not used in funding arb
-            long_dex=funding_position.long_dex,
-            short_dex=funding_position.short_dex,
-            entry_long_rate=funding_position.entry_long_rate,
-            entry_short_rate=funding_position.entry_short_rate,
-            opened_at=funding_position.opened_at,
-            status=funding_position.status
-        )
+        Returns the funding-specific position instance so callers retain access
+        to divergence/funding helpers without re-hydrating separately.
+        """
+        return await self.get_funding_position(position_id)
     
     async def get_open_positions(self) -> List[Position]:
-        """Get all open positions (returns as generic Positions)."""
-        # Get open positions from memory (loaded from DB during initialization)
-        open_funding_positions = [p for p in self._positions.values() if p.status == "open"]
+        """
+        Get all open positions.
         
-        # Convert to generic Position objects
+        Returns FundingArbPosition instances to preserve funding-specific fields
+        and utilities (profit erosion, divergence tracking, etc.).
+        """
         return [
-            Position(
-                id=p.id,
-                symbol=p.symbol,
-                size_usd=p.size_usd,
-                entry_price=None,
-                long_dex=p.long_dex,
-                short_dex=p.short_dex,
-                entry_long_rate=p.entry_long_rate,
-                entry_short_rate=p.entry_short_rate,
-                opened_at=p.opened_at,
-                status=p.status
-            )
-            for p in open_funding_positions
+            position
+            for position in self._positions.values()
+            if position.status == "open"
         ]
     
     async def update_position(self, position: Position) -> None:
@@ -933,4 +913,3 @@ class FundingArbPositionManager(BasePositionManager):
         if database.is_connected:
             await database.disconnect()
             self.logger.info("Database connection closed")
-
