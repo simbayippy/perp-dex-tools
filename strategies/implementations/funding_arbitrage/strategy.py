@@ -481,6 +481,14 @@ class FundingArbitrageStrategy(StatefulStrategy):
         actions = []
         
         try:
+            # Stop immediately if we've already hit our capacity for this session.
+            if not self._has_capacity():
+                self.logger.log(
+                    "🚫 Capacity reached — skipping opportunity scan this cycle",
+                    "INFO"
+                )
+                return actions
+            
             # ⭐ Direct internal service call (no HTTP)
             # Use opportunity finder to find opportunities
             from funding_rate_service.models.filters import OpportunityFilter
