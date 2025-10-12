@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from enum import Enum
 import time
 import asyncio
-from helpers.unified_logger import get_core_logger
+from helpers.unified_logger import get_core_logger, log_stage
 
 logger = get_core_logger("atomic_multi_order")
 
@@ -147,10 +147,7 @@ class AtomicMultiOrderExecutor:
             
             # Step 1: Pre-flight checks (optional)
             if pre_flight_check:
-                # Separator to indicate pre-flight checks are starting
-                self.logger.info("=" * 55)
-                self.logger.info("🔍 RUNNING PRE-FLIGHT CHECKS")
-                self.logger.info("=" * 55)
+                log_stage(self.logger, "Pre-flight Checks", icon="🔍")
                 
                 preflight_ok, preflight_error = await self._run_preflight_checks(
                     orders,
@@ -163,14 +160,11 @@ class AtomicMultiOrderExecutor:
                         filled_orders=[],
                         partial_fills=[],
                         total_slippage_usd=Decimal('0'),
-                        execution_time_ms=int((time.time() - start_time) * 1000),
-                        error_message=f"Pre-flight check failed: {preflight_error}"
-                    )
+                            execution_time_ms=int((time.time() - start_time) * 1000),
+                            error_message=f"Pre-flight check failed: {preflight_error}"
+                        )
                 
-                # Separator to indicate pre-flight checks are complete
-                self.logger.info("=" * 55)
-                self.logger.info("✅ PRE-FLIGHT CHECKS COMPLETE - PROCEEDING TO ORDER PLACEMENT")
-                self.logger.info("=" * 55)
+                self.logger.info("✅ Pre-flight checks complete — proceeding to order placement")
             
             # Step 2: Place all orders simultaneously
             self.logger.info("🚀 Placing all orders simultaneously...")

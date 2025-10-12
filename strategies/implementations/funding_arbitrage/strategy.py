@@ -44,6 +44,7 @@ from strategies.execution.patterns.atomic_multi_order import (
     AtomicExecutionResult
 )
 from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
+from helpers.unified_logger import log_stage
 
 
 class FundingArbitrageStrategy(StatefulStrategy):
@@ -711,8 +712,9 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 return False
             
             # ⭐ CRITICAL: Initialize contract attributes for this symbol
+            log_stage(self.logger, f"{symbol} • Opportunity Validation", icon="📋")
             self.logger.log(
-                f"📋 [VALIDATION] Checking if {symbol} is tradeable on both {long_dex} and {short_dex}...",
+                f"Ensuring {symbol} is tradeable on both {long_dex} and {short_dex}",
                 "INFO"
             )
             
@@ -735,14 +737,12 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 return False
             
             self.logger.log(
-                f"✅ [VALIDATION] {symbol} is tradeable on both exchanges",
+                f"✅ {symbol} available on both {long_dex.upper()} and {short_dex.upper()}",
                 "INFO"
             )
 
             # ⭐ LEVERAGE VALIDATION & NORMALIZATION ⭐
-            self.logger.info("=" * 55)
-            self.logger.info("🔍 LEVERAGE VALIDATION & NORMALIZATION")
-            self.logger.info("=" * 55)
+            log_stage(self.logger, "Leverage Validation & Normalization", icon="🔍")
             
             from strategies.execution.core.leverage_validator import LeverageValidator
             
@@ -769,24 +769,21 @@ class FundingArbitrageStrategy(StatefulStrategy):
             
             if leverage_prep.below_minimum:
                 self.logger.log(
-                    f"⛔ [SKIP] {symbol}: Position size too small after leverage adjustment (${size_usd:.2f})",
+                    f"⛔ {symbol}: Position size too small after leverage adjustment (${size_usd:.2f})",
                     "WARNING"
                 )
                 self.failed_symbols.add(symbol)
                 return False
             
             self.logger.log(
-                f"🎯 [EXECUTION PLAN] {symbol} | "
-                f"Long: {long_dex.upper()} (${size_usd:.2f}) | "
-                f"Short: {short_dex.upper()} (${size_usd:.2f}) | "
-                f"Divergence: {opportunity.divergence*100:.3f}%",
+                f"🎯 Execution plan for {symbol}: "
+                f"Long {long_dex.upper()} (${size_usd:.2f}) | "
+                f"Short {short_dex.upper()} (${size_usd:.2f}) | "
+                f"Divergence {opportunity.divergence*100:.3f}%",
                 "INFO"
             )
 
-            # Separator to indicate leverage checks are complete
-            self.logger.info("=" * 55)
-            self.logger.info("✅ LEVERAGE READY - PROCEEDING TO ATOMIC MULTI-ORDER PLACEMENT")
-            self.logger.info("=" * 55)
+            log_stage(self.logger, "Atomic Multi-Order Execution", icon="🧨")
             
             # ⭐ ATOMIC EXECUTION: Both sides fill or neither ⭐
             result: AtomicExecutionResult = await self.atomic_executor.execute_atomically(

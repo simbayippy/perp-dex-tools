@@ -376,3 +376,49 @@ def get_service_logger(service_name: str, **context) -> UnifiedLogger:
 def get_core_logger(module_name: str, **context) -> UnifiedLogger:
     """Get logger for core utilities."""
     return get_logger("core", module_name, context)
+
+
+def log_stage(
+    logger_obj: Any,
+    title: str,
+    *,
+    icon: Optional[str] = None,
+    border: str = "=",
+    width: int = 55,
+    level: str = "INFO"
+) -> None:
+    """
+    Log a formatted stage separator to highlight execution phases.
+    
+    Works with both UnifiedLogger instances and raw loguru logger objects.
+    
+    Args:
+        logger_obj: Logger to emit messages on.
+        title: Stage title to display.
+        icon: Optional emoji/icon prefix.
+        border: Character used for separator line.
+        width: Width of separator line.
+        level: Log level to use (INFO by default).
+    """
+    def _emit(message: str) -> None:
+        normalized_level = level.upper()
+        lower_level = normalized_level.lower()
+        
+        if hasattr(logger_obj, "log"):
+            logger_obj.log(message, level=normalized_level)
+        elif hasattr(logger_obj, lower_level):
+            getattr(logger_obj, lower_level)(message)
+        else:
+            # Fallback to loguru/global style
+            try:
+                logger_obj.log(normalized_level, message)
+            except AttributeError:
+                # Last resort printing
+                logger_obj.info(message)
+    
+    border_line = border * width
+    label = f"{icon} {title}" if icon else title
+    
+    _emit(border_line)
+    _emit(label)
+    _emit(border_line)
