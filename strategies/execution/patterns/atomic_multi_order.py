@@ -194,6 +194,12 @@ class AtomicMultiOrderExecutor:
                 self.logger.info("✅ Pre-flight checks complete — proceeding to order placement")
             
             # Step 2: Place all orders simultaneously
+            log_stage(
+                self.logger,
+                "Order Placement",
+                icon="🚀",
+                stage_id=compose_stage("2") 
+            )
             self.logger.info("🚀 Placing all orders simultaneously...")
             order_tasks = [
                 self._place_single_order(spec) for spec in orders
@@ -547,12 +553,7 @@ class AtomicMultiOrderExecutor:
                     return False, error_msg
             
             self.logger.info("✅ All pre-flight checks passed")
-            log_stage(
-                self.logger,
-                "Order Placement",
-                icon="🚀",
-                stage_id=compose_stage("5") if stage_prefix else None
-            )
+
             return True, None
         
         except Exception as e:
