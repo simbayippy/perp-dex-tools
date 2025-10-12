@@ -547,6 +547,12 @@ class AtomicMultiOrderExecutor:
                     return False, error_msg
             
             self.logger.info("✅ All pre-flight checks passed")
+            log_stage(
+                self.logger,
+                "Order Placement",
+                icon="🚀",
+                stage_id=compose_stage("5") if stage_prefix else None
+            )
             return True, None
         
         except Exception as e:
