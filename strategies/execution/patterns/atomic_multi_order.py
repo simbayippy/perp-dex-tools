@@ -107,6 +107,29 @@ class AtomicMultiOrderExecutor:
         self.price_provider = price_provider
         self.logger = get_core_logger("atomic_multi_order")
     
+    def _compose_stage_id(
+        self,
+        stage_prefix: Optional[str],
+        *parts: str
+    ) -> Optional[str]:
+        """
+        Compose hierarchical stage identifiers like "3.1.2".
+        
+        Args:
+            stage_prefix: Base prefix inherited from caller (e.g., "3")
+            *parts: Additional segments to append (e.g., "1", "2")
+        
+        Returns:
+            Combined identifier or None if no segments provided.
+        """
+        if stage_prefix:
+            if parts:
+                return ".".join([stage_prefix, *parts])
+            return stage_prefix
+        if parts:
+            return ".".join(parts)
+        return None
+    
     async def execute_atomically(
         self,
         orders: List[OrderSpec],
@@ -141,23 +164,7 @@ class AtomicMultiOrderExecutor:
         partial_fills = []
         
         try:
-            def _stage_id(*parts: str) -> Optional[str]:
-                if stage_prefix and parts:
-                    return ".".join([stage_prefix, *parts])
-                if stage_prefix and not parts:
-                    return stage_prefix
-                if parts:
-                    return ".".join(parts)
-                return None
-            
-            def _stage_id(*parts: str) -> Optional[str]:
-                if stage_prefix and parts:
-                    return ".".join([stage_prefix, *parts])
-                if stage_prefix and not parts:
-                    return stage_prefix
-                if parts:
-                    return ".".join(parts)
-                return None
+            compose_stage = lambda *parts: self._compose_stage_id(stage_prefix, *parts)
             
             self.logger.info(
                 f"Starting atomic execution of {len(orders)} orders "
@@ -165,22 +172,13 @@ class AtomicMultiOrderExecutor:
             )
             
             # Step 1: Pre-flight checks (optional)
-            def _stage_id(*parts: str) -> Optional[str]:
-                if stage_prefix and parts:
-                    return ".".join([stage_prefix, *parts])
-                if stage_prefix and not parts:
-                    return stage_prefix
-                if parts:
-                    return ".".join(parts)
-                return None
-            
             if pre_flight_check:
-                log_stage(self.logger, "Pre-flight Checks", icon="🔍", stage_id=_stage_id("1"))
+                log_stage(self.logger, "Pre-flight Checks", icon="🔍", stage_id=compose_stage("1"))
                 
                 preflight_ok, preflight_error = await self._run_preflight_checks(
                     orders,
                     skip_leverage_check=skip_preflight_leverage,
-                    stage_prefix=_stage_id("1")
+                    stage_prefix=compose_stage("1")
                 )
                 if not preflight_ok:
                     return AtomicExecutionResult(
@@ -317,6 +315,7 @@ class AtomicMultiOrderExecutor:
             (all_checks_passed, error_message)
         """
         try:
+            compose_stage = lambda *parts: self._compose_stage_id(stage_prefix, *parts)
             # Group orders by symbol (for delta-neutral we need same size on both sides)
             symbols_to_check: Dict[str, List[OrderSpec]] = {}
             for order_spec in orders:
@@ -329,7 +328,7 @@ class AtomicMultiOrderExecutor:
             from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
             
             if not skip_leverage_check:
-                log_stage(self.logger, "Leverage Validation", icon="📐", stage_id=_stage_id("1"))
+                log_stage(self.logger, "Leverage Validation", icon="📐", stage_id=compose_stage("1"))
                 # ====================================================================
                 # CHECK 0: Leverage Limit Validation (CRITICAL FOR DELTA NEUTRAL)
                 # ====================================================================
@@ -389,7 +388,7 @@ class AtomicMultiOrderExecutor:
                             f"Orders may execute with different leverage!"
                         )
             
-            log_stage(self.logger, "Market Data Streams", icon="📡", stage_id=_stage_id("2"))
+            log_stage(self.logger, "Market Data Streams", icon="📡", stage_id=compose_stage("2"))
             # ========================================================================
             # SETUP: Start WebSocket book tickers for real-time BBO (Issue #3 fix)
             # ========================================================================
@@ -445,7 +444,7 @@ class AtomicMultiOrderExecutor:
             # - Lighter: market switch + order book snapshot (~0.5s)
             await asyncio.sleep(2.0)
             
-            log_stage(self.logger, "Margin & Balance Checks", icon="💰", stage_id=_stage_id("3"))
+            log_stage(self.logger, "Margin & Balance Checks", icon="💰", stage_id=compose_stage("3"))
             # ========================================================================
             # CHECK 1: Account Balance Validation (CRITICAL FIX)
             # ========================================================================
@@ -514,7 +513,7 @@ class AtomicMultiOrderExecutor:
                         f"⚠️ Balance check failed for {exchange_name}: {e}"
                     )
             
-            log_stage(self.logger, "Order Book Liquidity", icon="🌊", stage_id=_stage_id("4"))
+            log_stage(self.logger, "Order Book Liquidity", icon="🌊", stage_id=compose_stage("4"))
             # ========================================================================
             # CHECK 2: Liquidity Analysis
             # ========================================================================
