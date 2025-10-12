@@ -299,10 +299,11 @@ class AtomicMultiOrderExecutor:
             from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
             
             if not skip_leverage_check:
+                log_stage(self.logger, "Leverage Validation", icon="📐")
                 # ====================================================================
                 # CHECK 0: Leverage Limit Validation (CRITICAL FOR DELTA NEUTRAL)
                 # ====================================================================
-                self.logger.info("🔍 Checking leverage limits across exchanges...")
+                self.logger.info("Checking leverage limits across exchanges...")
                 
                 # Import leverage validator
                 from strategies.execution.core.leverage_validator import LeverageValidator
@@ -340,7 +341,7 @@ class AtomicMultiOrderExecutor:
                     exchange_clients = [order.exchange_client for order in symbol_orders]
                     requested_size = symbol_orders[0].size_usd
                     
-                    self.logger.info(f"🔧 [LEVERAGE] Normalizing leverage for {symbol}...")
+                    self.logger.info(f"Normalizing leverage for {symbol}...")
                     min_leverage, limiting = await leverage_validator.normalize_and_set_leverage(
                         exchange_clients=exchange_clients,
                         symbol=symbol,
@@ -358,10 +359,11 @@ class AtomicMultiOrderExecutor:
                             f"Orders may execute with different leverage!"
                         )
             
+            log_stage(self.logger, "Market Data Streams", icon="📡")
             # ========================================================================
             # SETUP: Start WebSocket book tickers for real-time BBO (Issue #3 fix)
             # ========================================================================
-            self.logger.info("🔴 Starting WebSocket book tickers for real-time pricing...")
+            self.logger.info("Starting WebSocket book tickers for real-time pricing...")
             
             for symbol, symbol_orders in symbols_to_check.items():
                 for order in symbol_orders:
@@ -413,6 +415,7 @@ class AtomicMultiOrderExecutor:
             # - Lighter: market switch + order book snapshot (~0.5s)
             await asyncio.sleep(2.0)
             
+            log_stage(self.logger, "Margin & Balance Checks", icon="💰")
             # ========================================================================
             # CHECK 1: Account Balance Validation (CRITICAL FIX)
             # ========================================================================
@@ -481,6 +484,7 @@ class AtomicMultiOrderExecutor:
                         f"⚠️ Balance check failed for {exchange_name}: {e}"
                     )
             
+            log_stage(self.logger, "Order Book Liquidity", icon="🌊")
             # ========================================================================
             # CHECK 2: Liquidity Analysis
             # ========================================================================
