@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import uuid4
 
 from strategies.execution.patterns.atomic_multi_order import (
@@ -12,14 +12,11 @@ from strategies.execution.patterns.atomic_multi_order import (
     OrderSpec,
 )
 from helpers.unified_logger import log_stage
-from dashboard.models import LifecycleStage, TimelineCategory
 
 from ..models import FundingArbPosition
 
 if TYPE_CHECKING:
     from ..strategy import FundingArbitrageStrategy
-    from ..models import FundingArbPosition
-    from ..config import FundingArbConfig
 
 
 class PositionOpener:
@@ -28,8 +25,13 @@ class PositionOpener:
     def __init__(self, strategy: "FundingArbitrageStrategy") -> None:
         self._strategy = strategy
 
-    async def open(self, opportunity) -> bool:
-        """Attempt to open a position for the given opportunity."""
+    async def open(self, opportunity) -> Optional[FundingArbPosition]:
+        """
+        Attempt to open a position for the given opportunity.
+
+        Returns:
+            FundingArbPosition if the execution succeeds, otherwise None.
+        """
         strategy = self._strategy
         symbol = opportunity.symbol
         long_dex = opportunity.long_dex
@@ -41,7 +43,7 @@ class PositionOpener:
                 "WARNING",
             )
             strategy.failed_symbols.add(symbol)
-            return False
+            return None
 
         long_client = strategy.exchange_clients[long_dex]
         short_client = strategy.exchange_clients[short_dex]
@@ -70,7 +72,7 @@ class PositionOpener:
                         "WARNING",
                     )
                 strategy.failed_symbols.add(symbol)
-                return False
+                return None
 
             strategy.logger.log(
                 f"✅ {symbol} available on both {long_dex.upper()} and {short_dex.upper()}",
@@ -97,7 +99,7 @@ class PositionOpener:
                     "WARNING",
                 )
                 strategy.failed_symbols.add(symbol)
-                return False
+                return None
 
             size_usd = leverage_prep.adjusted_size_usd
 
@@ -107,7 +109,7 @@ class PositionOpener:
                     "WARNING",
                 )
                 strategy.failed_symbols.add(symbol)
-                return False
+                return None
 
             strategy.logger.log(
                 f"🎯 Execution plan for {symbol}: "
@@ -157,7 +159,7 @@ class PositionOpener:
                     )
 
                 strategy.failed_symbols.add(symbol)
-                return False
+                return None
 
             long_fill = result.filled_orders[0]
             short_fill = result.filled_orders[1]
@@ -228,14 +230,9 @@ class PositionOpener:
                     "INFO",
                 )
 
-            await strategy._set_dashboard_stage(
-                LifecycleStage.MONITORING,
-                f"Position opened {symbol}",
-                category=TimelineCategory.EXECUTION,
-            )
-            await strategy._publish_dashboard_snapshot(f"Position opened {symbol}")
+            await strategy.dashboard.position_opened(position)
 
-            return True
+            return position
 
         except Exception as exc:  # pragma: no cover - defensive logging
             strategy.logger.log(
@@ -243,7 +240,7 @@ class PositionOpener:
                 "ERROR",
             )
             strategy.failed_symbols.add(opportunity.symbol)
-            return False
+            return None
 
     async def _ensure_contract_attributes(self, exchange_client: Any, symbol: str) -> bool:
         """Ensure the given exchange client is prepared to trade the symbol."""

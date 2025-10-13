@@ -1601,10 +1601,10 @@ strategy = FundingArbitrageStrategy(config, exchange_clients)
   - The script is safe to run while the bot is active; it opens a DB connection, prints, and exits.
 
 - **Textual TUI (Step 3 foundation)**  
-  - `tui/dashboard_app.py` defines a Textual application with a simple menu (`View Latest Snapshot`, `Start Bot` placeholder, `Exit`).  
+  - `tui/dashboard_app.py` defines a Textual application with a minimal menu (`View Latest Snapshot`, `Exit`).  
   - Entry point: `python scripts/dashboard_tui.py`. Requires `textual>=0.44.0` plus existing dependencies (`rich`, `databases`).
-  - The TUI currently fetches on demand (no live polling). Future enhancements: periodic refresh, bot lifecycle controls, funding monitors.
-  - The control server (`dashboard/control_server.py`) exposes `/snapshot`, `/stream`, and `/commands` (WebSocket + REST) so future UIs can subscribe to live updates and issue actions (e.g., manual close). `FundingArbitrageStrategy` registers a handler when dashboard mode is enabled.
+  - The TUI fetches on demand and upgrades to a live stream when the control server is available; richer operator actions (bot lifecycle controls, funding monitors) will return in a future iteration.
+  - The control server (`dashboard/control_server.py`) exposes `/snapshot` and `/stream` so external UIs can subscribe to live updates. Command endpoints are intentionally deferred until the redesign is complete.
 
 - **Configuration defaults**  
   - `FundingArbConfig.dashboard` defaults to disabled, so the trading loop runs without rendering or persistence unless explicitly enabled in YAML.

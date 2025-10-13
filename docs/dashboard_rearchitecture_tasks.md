@@ -21,15 +21,15 @@
 - [x] Expose REST/WebSocket endpoints:
   - `GET /snapshot`
   - `WS /stream` (stream state updates)
-- [x] Define control commands schema (`ClosePosition`, `Ping`).
-- [x] Implement command handler inside strategy (invoked via controller).
-- [x] Confirm command execution updates `DashboardState` and emits confirmation events.
+- [ ] Define control commands schema (`ClosePosition`, `Ping`). *(Deferred)*
+- [ ] Implement command handler inside strategy (invoked via controller). *(Deferred)*
+- [ ] Confirm command execution updates `DashboardState` and emits confirmation events. *(Deferred)*
 - [x] Integration tests for command flow (mock exchanges & position manager).
 
 - [ ] Update Textual TUI to:
 -  - [x] Subscribe to live stream.
 -  - [x] Render updates w/o rereading DB.
--  - [x] Trigger commands via control API.
+-  - [ ] Trigger commands via control API. *(Deferred)*
 - [ ] Optionally add minimal web dashboard (FastAPI template or Streamlit) using same endpoints.
 - [ ] Document operator workflow for new tooling (CLI & web).
 

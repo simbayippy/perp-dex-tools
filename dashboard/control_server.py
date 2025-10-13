@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
 from aiohttp import web
 
@@ -14,11 +14,10 @@ from dashboard.event_bus import event_bus
 from dashboard.state import dashboard_state
 
 JsonDict = Dict[str, Any]
-CommandHandler = Callable[[JsonDict], Awaitable[JsonDict]]
 
 
 class DashboardControlServer:
-    """Expose snapshot stream and command endpoints over HTTP/WebSocket."""
+    """Expose snapshot and event stream endpoints over HTTP/WebSocket."""
 
     def __init__(self, *, host: str = "127.0.0.1", port: int = 8765) -> None:
         self._host = host
@@ -28,15 +27,10 @@ class DashboardControlServer:
             [
                 web.get("/snapshot", self._handle_snapshot),
                 web.get("/stream", self._handle_stream),
-                web.post("/commands", self._handle_command),
             ]
         )
         self._runner: Optional[web.AppRunner] = None
         self._site: Optional[web.TCPSite] = None
-        self._command_handler: Optional[CommandHandler] = None
-
-    def register_command_handler(self, handler: CommandHandler) -> None:
-        self._command_handler = handler
 
     async def start(self) -> None:
         if self._runner is not None:
@@ -77,19 +71,6 @@ class DashboardControlServer:
             await event_bus.unsubscribe(queue)
             await ws.close()
         return ws
-
-    async def _handle_command(self, request: web.Request) -> web.Response:
-        if not self._command_handler:
-            return web.json_response(
-                {"ok": False, "error": "command handler not registered"}, status=503
-            )
-
-        payload = await request.json()
-        try:
-            result = await self._command_handler(payload)
-        except Exception as exc:
-            return web.json_response({"ok": False, "error": str(exc)}, status=500)
-        return web.json_response(result)
 
 
 def _serialize_state(state: JsonDict) -> JsonDict:

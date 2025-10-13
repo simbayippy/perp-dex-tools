@@ -141,19 +141,15 @@ Continue using PostgreSQL:
 - Introduce a lightweight async server (FastAPI or bare `asyncio` websockets) that:
   - Serves `GET /snapshot` (return current state).
   - Streams events over WebSocket (`/stream`).
-  - Accepts commands (`POST /actions/close_position`, etc.).
-- Strategy registers callbacks with this server (e.g., a `Controller` object injected at startup).
-- Implement command routing for at least:
-  - `ClosePosition(position_id)`
-  - `PauseStrategy` / `ResumeStrategy`
-  - Possibly `AdjustRiskConfig`.
+  - (Command handling deferred; future versions may add `/actions/...` endpoints.)
+- Strategy registers callbacks with this server (e.g., a `Controller` object injected at startup) once command support returns.
 
-**Status:** Implemented via `dashboard/control_server.py` (aiohttp) with `/snapshot`, `/stream`, `/commands` and manual close handling in `FundingArbitrageStrategy`.
+**Status:** Control server (`dashboard/control_server.py`) currently exposes `/snapshot` and `/stream` via aiohttp. Command endpoints are postponed for a future iteration.
 
 ### Phase 3 – TUI/Web UI Integration
 - Update Textual app to connect to the control API:
   - Menu item “Live Monitor” opens a live-updating view (using WebSocket subscription).
-  - Commands (buttons/menu) call the control API endpoints and display confirmations.
+- Reintroduce command actions (e.g., close/pause) after the control API is redesigned.
 - Optionally build a basic web interface (FastAPI + `jinja2` or Streamlit) using the same API for operators preferring browser access.
 
 ### Phase 4 – Persistence Downshift

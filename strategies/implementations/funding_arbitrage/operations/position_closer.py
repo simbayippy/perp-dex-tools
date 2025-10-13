@@ -5,8 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
-from dashboard.models import LifecycleStage, TimelineCategory
-
 if TYPE_CHECKING:
     from ..models import FundingArbPosition
     from ..strategy import FundingArbitrageStrategy
@@ -54,11 +52,7 @@ class PositionCloser:
         strategy = self._strategy
 
         try:
-            await strategy._set_dashboard_stage(
-                LifecycleStage.CLOSING,
-                f"Closing {position.symbol} ({reason})",
-                category=TimelineCategory.EXECUTION,
-            )
+            await strategy.dashboard.position_closing(position, reason)
 
             long_client = strategy.exchange_clients[position.long_dex]
             short_client = strategy.exchange_clients[position.short_dex]
@@ -81,7 +75,7 @@ class PositionCloser:
                 "INFO",
             )
 
-            await strategy._publish_dashboard_snapshot(f"Closed {position.symbol} ({reason})")
+            await strategy.dashboard.position_closed(position, reason)
 
         except Exception as exc:  # pragma: no cover - defensive logging
             strategy.logger.log(
@@ -89,4 +83,3 @@ class PositionCloser:
                 "ERROR",
             )
             raise
-

@@ -16,8 +16,7 @@ from typing import Optional
 import aiohttp
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.message import Message
+from textual.containers import Horizontal
 from textual.reactive import reactive
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
@@ -32,16 +31,6 @@ from funding_rate_service.database.connection import database  # noqa: E402
 
 CONTROL_SERVER_HTTP = "http://127.0.0.1:8765"
 CONTROL_SERVER_WS = "ws://127.0.0.1:8765/stream"
-
-
-class MenuOptionSelected(Message):
-    """Custom message emitted when a menu option is activated."""
-
-    def __init__(self, option_id: str) -> None:
-        self.option_id = option_id
-        super().__init__()
-
-
 class DashboardApp(App):
     """Main Textual application for dashboard interaction."""
 
@@ -83,10 +72,6 @@ class DashboardApp(App):
         with Horizontal(id="body"):
             self.menu = ListView(
                 ListItem(Label("View Latest Snapshot"), id="view_snapshot"),
-                ListItem(Label("Close Latest Position"), id="close_latest"),
-                ListItem(Label("Pause Strategy"), id="pause_strategy"),
-                ListItem(Label("Resume Strategy"), id="resume_strategy"),
-                ListItem(Label("Start Bot (coming soon)"), id="start_bot"),
                 ListItem(Label("Exit"), id="exit_app"),
                 id="menu",
             )
@@ -123,14 +108,6 @@ class DashboardApp(App):
         if option_id == "view_snapshot":
             await self.show_latest_snapshot()
             await self._start_stream()
-        elif option_id == "close_latest":
-            await self._command_close_latest()
-        elif option_id == "start_bot":
-            self.content.update("[yellow]Bot start workflow is coming soon.[/]")
-        elif option_id == "pause_strategy":
-            await self._command_pause()
-        elif option_id == "resume_strategy":
-            await self._command_resume()
         elif option_id == "exit_app":
             await self.action_quit()
 
@@ -271,45 +248,6 @@ class DashboardApp(App):
             self._current_events,
         )
         self.call_from_thread(self.content.update, renderable)
-
-    async def _send_command(self, payload: dict) -> tuple[bool, str]:
-        if not self._http_session:
-            return False, "Control server unavailable"
-        try:
-            async with self._http_session.post(
-                f"{CONTROL_SERVER_HTTP}/commands", json=payload
-            ) as response:
-                data = await response.json()
-                ok = data.get("ok", response.status == 200)
-                message = data.get("message") or data.get("error") or response.reason
-                return ok and response.status == 200, message
-        except aiohttp.ClientError as exc:
-            return False, str(exc)
-
-    async def _command_close_latest(self) -> None:
-        if not self._current_snapshot:
-            api_state = await self._fetch_snapshot_via_api()
-            if api_state:
-                self._current_session_row, self._current_snapshot, self._current_events = api_state
-        if not self._current_snapshot or not self._current_snapshot.positions:
-            self.content.update("[yellow]No open positions to close.[/]")
-            return
-        position = self._current_snapshot.positions[0]
-        ok, message = await self._send_command(
-            {"type": "close_position", "position_id": str(position.position_id)}
-        )
-        color = "green" if ok else "red"
-        self.content.update(f"[{color}]{message}[/]")
-
-    async def _command_pause(self) -> None:
-        ok, message = await self._send_command({"type": "pause_strategy"})
-        color = "green" if ok else "red"
-        self.content.update(f"[{color}]{message}[/]")
-
-    async def _command_resume(self) -> None:
-        ok, message = await self._send_command({"type": "resume_strategy"})
-        color = "green" if ok else "red"
-        self.content.update(f"[{color}]{message}[/]")
 
 
 def run_dashboard_app() -> None:

@@ -352,14 +352,13 @@ python scripts/dashboard_tui.py
 ```
 
 Current capabilities:
-- Menu items for live monitoring, closing the most recent position, and pausing/resuming the strategy. Additional actions (starting bots, viewing funding feeds) are planned.
+- Menu items for live monitoring today; additional operator actions (manual close, pause/resume, start bot) will return in a future redesign.
 - Connects to the control server on `localhost:8765`: snapshots are fetched via REST, then refreshed continuously over the WebSocket stream; if the server is unavailable the app falls back to the most recent database snapshot.
 - Built with [Textual](https://textual.textualize.io/), so it supports keyboard navigation, theming, and future expansion to multi-pane layouts.
 - Control server endpoints (`dashboard/control_server.py`):
   - `GET /snapshot` – JSON view of the live cache.
   - `GET /stream` – WebSocket stream of snapshot/event updates (used by the TUI).
-  - `POST /commands` – issue actions such as `{"type": "close_position", "position_id": "..."}` (UI hooks coming soon).
-  These endpoints will power future UI actions (manual close, pause/resume, etc.).
+  These endpoints power the live view; action-oriented APIs are deferred until the new command architecture is defined.
 
 Future iterations will add more menu entries (bot lifecycle control, funding monitors) and eventually pave the way for a graphical or web dashboard.
 
