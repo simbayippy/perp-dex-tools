@@ -48,7 +48,10 @@ class OpportunityScanner:
                 f"Found {len(opportunities)} opportunities",
                 "INFO",
             )
-
+            strategy.logger.log(
+                f"HIII {len(opportunities)} opportunities",
+                "INFO",
+            )
             max_new = strategy.config.max_new_positions_per_cycle
             for opportunity in opportunities[:max_new]:
                 if opportunity.symbol in strategy.failed_symbols:
@@ -66,7 +69,11 @@ class OpportunityScanner:
 
         except Exception as exc:  # pragma: no cover - defensive logging
             strategy.logger.log(f"Error scanning opportunities: {exc}", "ERROR")
-
+      
+        strategy.logger.log(
+            f"CANDIDATES {len(candidates)} candidates {candidates}",
+            "INFO",
+        )
         return candidates
 
     def should_take(self, opportunity) -> bool:
