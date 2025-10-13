@@ -41,6 +41,7 @@ class PositionMonitor:
         if not positions:
             self._logger.log("No open positions to monitor", "DEBUG")
             return
+        self._logger.log(f"Monitoring {len(positions)} open positions, {positions}", "INFO")
 
         exchange_snapshots = await self._fetch_exchange_position_snapshots(positions)
 
@@ -106,6 +107,10 @@ class PositionMonitor:
         visited: Set[Tuple[str, str]] = set()
 
         for pos in positions:
+            self._logger.log(
+                f"Fetching live position snapshot - {pos}",
+                "INFO",
+            )
             symbol_key = pos.symbol.upper()
             for dex in (pos.long_dex, pos.short_dex):
                 if not dex:
@@ -122,15 +127,11 @@ class PositionMonitor:
                 visited.add(key)
 
                 try:
-                    self._logger.log(
-                        f"[{dex_key.upper()}] Fetching live position snapshot for {symbol_key}",
-                        "INFO",
-                    )
                     snapshot = await client.get_position_snapshot(pos.symbol)
                     if snapshot:
                         self._logger.log(
                             f"[{dex_key.upper()}] Snapshot for {symbol_key}: "
-                            f"qty={snapshot.quantity}, entry={snapshot.entry_price}, mark={snapshot.mark_price}",
+                            f"{snapshot}",
                             "INFO",
                         )
                     else:
