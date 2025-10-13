@@ -9,8 +9,7 @@ Funding Arbitrage Strategy - Main Orchestrator
 Pattern: Stateful strategy with multi-DEX support
 """
 
-from strategies.categories.stateful_strategy import StatefulStrategy
-from strategies.base_strategy import StrategyResult, StrategyAction
+from strategies.base_strategy import BaseStrategy, StrategyResult, StrategyAction
 from .config import FundingArbConfig
 from .models import FundingArbPosition
 from .funding_analyzer import FundingRateAnalyzer
@@ -57,7 +56,7 @@ from .monitoring import PositionMonitor
 from .operations import DashboardReporter, PositionOpener, OpportunityScanner, PositionCloser
 
 
-class FundingArbitrageStrategy(StatefulStrategy):
+class FundingArbitrageStrategy(BaseStrategy):
     """
     Delta-neutral funding rate arbitrage strategy.
     
@@ -100,7 +99,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 primary_exchange = funding_config.exchange
             exchange_clients = {primary_exchange: exchange_client}
         
-        # Pass exchange_clients dict to StatefulStrategy
+        # Pass exchange_clients dict to BaseStrategy
         super().__init__(funding_config, exchange_clients)
         self.config = funding_config  # Store the converted config
         
