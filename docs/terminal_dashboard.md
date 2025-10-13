@@ -343,6 +343,23 @@ This external viewer keeps the trading terminal clean while still providing an u
 
 ---
 
+## 12. Textual TUI (Step 3)
+
+A richer operator experience is available via the Textual terminal UI, which reuses the same snapshot data but provides persistent navigation:
+
+```bash
+python scripts/dashboard_tui.py
+```
+
+Features in the initial version:
+- Menu with options to view the latest snapshot (with auto-formatted tables) or exit; additional actions (starting bots, viewing funding feeds) are planned.
+- The TUI connects to the dashboard tables on startup and disconnects cleanly on exit.
+- Built with [Textual](https://textual.textualize.io/), so it supports keyboard navigation, theming, and future expansion to multi-pane layouts.
+
+Future iterations will add more menu entries (bot lifecycle control, funding monitors) and eventually pave the way for a graphical or web dashboard.
+
+---
+
 ## 10. FAQ
 
 **Q: What happens if the renderer crashes?**  

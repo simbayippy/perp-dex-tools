@@ -10,3 +10,4 @@ rich>=13.7.1
 # Interactive Configuration (Phase 2)
 questionary>=2.0.0
 pyyaml>=6.0
+textual>=0.44.0
