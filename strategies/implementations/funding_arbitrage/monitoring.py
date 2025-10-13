@@ -74,16 +74,6 @@ class PositionMonitor:
                 await self._position_manager.update_position(position)
 
                 erosion = position.get_profit_erosion()
-                self._logger.log(
-                    (
-                        f"Position {position.symbol}: "
-                        f"Entry={position.entry_divergence*100:.3f}%, "
-                        f"Current={position.current_divergence*100:.3f}%, "
-                        f"Erosion={erosion*100:.1f}%, "
-                        f"PnL=${position.get_net_pnl():.2f}"
-                    ),
-                    "INFO",
-                )
                 self._log_exchange_metrics(position)
             except Exception as exc:  # pragma: no cover - defensive logging
                 self._logger.log(
@@ -124,21 +114,7 @@ class PositionMonitor:
                 visited.add(key)
 
                 try:
-                    self._logger.log(
-                        f"[{dex_key.upper()}] Fetching snapshot for {symbol_key}",
-                        "INFO",
-                    )
                     snapshot = await client.get_position_snapshot(pos.symbol)
-                    if snapshot:
-                        self._logger.log(
-                            f"[{dex_key.upper()}] Snapshot for {symbol_key}: {snapshot}",
-                            "INFO",
-                        )
-                    else:
-                        self._logger.log(
-                            f"[{dex_key.upper()}] Snapshot for {symbol_key} returned empty payload",
-                            "INFO",
-                        )
                 except Exception as exc:
                     self._logger.log(
                         f"[{dex_key}] Failed to fetch position snapshot for {symbol_key}: {exc}",
@@ -272,7 +248,11 @@ class PositionMonitor:
         )
         legs_fragment = "; ".join(leg_fragments)
         self._logger.log(
-            f"Position {position.symbol} exchange snapshot -> {totals_fragment}; Legs: {legs_fragment}",
+            (
+                f"Position {position.symbol} exchange snapshot ->\n"
+                f"  {totals_fragment};\n"
+                f"  Legs:\n    {legs_fragment}"
+            ),
             "INFO",
         )
 
