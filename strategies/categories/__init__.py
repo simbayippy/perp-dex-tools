@@ -6,11 +6,11 @@ Provides strategy archetypes:
 - StatefulStrategy: For complex strategies (Funding Arb, Market Making)
 """
 
-from .stateless_strategy import StatelessStrategy
+# from .stateless_strategy import StatelessStrategy
 from .stateful_strategy import StatefulStrategy
 
 __all__ = [
-    'StatelessStrategy',
+    # 'StatelessStrategy',
     'StatefulStrategy',
 ]
 
