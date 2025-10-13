@@ -88,7 +88,8 @@ async def build_exchange_clients(trading_config, exchange_list: Iterable[str]):
 async def run_monitor(args: argparse.Namespace) -> None:
     logger = get_core_logger("funding_arb_manual_monitor")
 
-    loaded = load_config_from_yaml(args.config)
+    config_path = Path(args.config).expanduser()
+    loaded = load_config_from_yaml(config_path)
     strategy_name = loaded["strategy"].lower()
     if strategy_name != "funding_arbitrage":
         raise SystemExit("This helper only supports funding_arbitrage configs")
