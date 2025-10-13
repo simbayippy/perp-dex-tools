@@ -216,12 +216,11 @@ class PositionOpener:
             try:
                 # Persist to backing store when available; fall back to in-memory cache otherwise.
                 if getattr(position_manager, "_check_database_available", lambda: False)():
-                    strategy.logger.log(f"Persisting position {position.id} to strategy_positions", "INFO")
                     await position_manager.create_position(position)
                 else:
                     strategy.logger.log(
-                        f"Database unavailable; caching position {position.id} in memory",
-                        "INFO",
+                        f"⚠️ Database unavailable; caching position {position.id} in memory",
+                        "WARNING",
                     )
                     await position_manager.add_position(position)
             except Exception as exc:  # pragma: no cover - defensive fallback
@@ -230,6 +229,7 @@ class PositionOpener:
                     "WARNING",
                 )
                 await position_manager.add_position(position)
+
             strategy.position_opened_this_session = True
 
             strategy.logger.log(

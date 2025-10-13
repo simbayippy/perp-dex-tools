@@ -122,7 +122,24 @@ class FundingArbPositionManager(BasePositionManager):
         self.logger.info(
             f"Position manager initialized with {len(await self.get_open_positions())} open positions"
         )
-    
+
+    async def _ensure_mappers_loaded(self) -> None:
+        """Ensure DEX and symbol mappers are populated from the database."""
+        if not DATABASE_AVAILABLE:
+            return
+
+        try:
+            if (not dex_mapper.is_loaded() or not symbol_mapper.is_loaded()) and not database.is_connected:
+                await database.connect()
+
+            if not dex_mapper.is_loaded():
+                await dex_mapper.load_from_db(database)
+            if not symbol_mapper.is_loaded():
+                await symbol_mapper.load_from_db(database)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self.logger.error(f"Failed to load mapper data: {exc}")
+            raise
+
     async def _load_positions_from_db(self):
         """Load all open positions from database into memory cache."""
         if not self._check_database_available():
@@ -186,52 +203,7 @@ class FundingArbPositionManager(BasePositionManager):
             
             # Load funding payments for this position
             await self._load_funding_payments(position.id)
-    
-    async def _load_funding_payments(self, position_id: UUID):
-        """Load funding payment history for a position."""
-        query = """
-            SELECT payment_time, long_payment, short_payment, net_payment,
-                   long_rate, short_rate, divergence
-            FROM funding_payments
-            WHERE position_id = :position_id
-            ORDER BY payment_time ASC
-        """
-        
-        rows = await database.fetch_all(query, values={"position_id": position_id})
-        
-        payments = []
-        for row in rows:
-            payments.append({
-                'timestamp': row['payment_time'],
-                'long_payment': row['long_payment'],
-                'short_payment': row['short_payment'],
-                'net_payment': row['net_payment'],
-                'long_rate': row['long_rate'],
-                'short_rate': row['short_rate'],
-                'divergence': row['divergence']
-            })
-        
-        self._funding_payments[position_id] = payments
-    
-    async def _check_position_exists_in_db(self, position_id: UUID) -> bool:
-        """
-        Check if position exists in database.
-        
-        🔒 CRITICAL FIX: Prevents double-adding positions
-        
-        Args:
-            position_id: Position ID to check
-        
-        Returns:
-            True if position exists in database
-        """
-        if not self._check_database_available():
-            return False
-        
-        query = "SELECT COUNT(*) as count FROM strategy_positions WHERE id = :position_id"
-        result = await database.fetch_one(query, values={"position_id": position_id})
-        return result['count'] > 0 if result else False
-    
+
     async def _load_position_from_db(self, position_id: UUID) -> Optional[FundingArbPosition]:
         """
         Load a single position from database.
@@ -307,6 +279,51 @@ class FundingArbPositionManager(BasePositionManager):
         await self._load_funding_payments(position.id)
         
         return position
+
+    async def _load_funding_payments(self, position_id: UUID):
+        """Load funding payment history for a position."""
+        query = """
+            SELECT payment_time, long_payment, short_payment, net_payment,
+                   long_rate, short_rate, divergence
+            FROM funding_payments
+            WHERE position_id = :position_id
+            ORDER BY payment_time ASC
+        """
+        
+        rows = await database.fetch_all(query, values={"position_id": position_id})
+        
+        payments = []
+        for row in rows:
+            payments.append({
+                'timestamp': row['payment_time'],
+                'long_payment': row['long_payment'],
+                'short_payment': row['short_payment'],
+                'net_payment': row['net_payment'],
+                'long_rate': row['long_rate'],
+                'short_rate': row['short_rate'],
+                'divergence': row['divergence']
+            })
+        
+        self._funding_payments[position_id] = payments
+    
+    async def _check_position_exists_in_db(self, position_id: UUID) -> bool:
+        """
+        Check if position exists in database.
+        
+        🔒 CRITICAL FIX: Prevents double-adding positions
+        
+        Args:
+            position_id: Position ID to check
+        
+        Returns:
+            True if position exists in database
+        """
+        if not self._check_database_available():
+            return False
+        
+        query = "SELECT COUNT(*) as count FROM strategy_positions WHERE id = :position_id"
+        result = await database.fetch_one(query, values={"position_id": position_id})
+        return result['count'] > 0 if result else False
     
     async def create_position(
         self,
@@ -353,8 +370,6 @@ class FundingArbPositionManager(BasePositionManager):
             else:
                 raise ValueError(f"Position {position.id} exists in DB but failed to load")
         
-        await self._ensure_mappers_loaded()
-
         # Get IDs for foreign keys
         symbol_id = symbol_mapper.get_id(position.symbol)
         long_dex_id = dex_mapper.get_id(position.long_dex)
@@ -433,23 +448,6 @@ class FundingArbPositionManager(BasePositionManager):
         
         return position.id
 
-    async def _ensure_mappers_loaded(self) -> None:
-        """Ensure DEX and symbol mappers are populated from the database."""
-        if not DATABASE_AVAILABLE:
-            return
-
-        try:
-            if (not dex_mapper.is_loaded() or not symbol_mapper.is_loaded()) and not database.is_connected:
-                await database.connect()
-
-            if not dex_mapper.is_loaded():
-                await dex_mapper.load_from_db(database)
-            if not symbol_mapper.is_loaded():
-                await symbol_mapper.load_from_db(database)
-        except Exception as exc:  # pragma: no cover - defensive logging
-            self.logger.error(f"Failed to load mapper data: {exc}")
-            raise
-    
     async def record_funding_payment(
         self,
         position_id: UUID,
@@ -679,25 +677,29 @@ class FundingArbPositionManager(BasePositionManager):
                 # Use cumulative funding as baseline
                 final_pnl_usd = self._cumulative_funding.get(position_id, Decimal("0"))
             
-            # Update in database
             closed_at = datetime.now()
-            
-            query = """
-                UPDATE strategy_positions
-                SET status = 'closed',
-                    exit_reason = :exit_reason,
-                    closed_at = :closed_at,
-                    pnl_usd = :pnl_usd,
-                    rebalance_pending = FALSE
-                WHERE id = :position_id AND status = 'open'
-            """
-            
-            result = await database.execute(query, values={
-                "exit_reason": exit_reason,
-                "closed_at": closed_at,
-                "pnl_usd": final_pnl_usd,
-                "position_id": position_id
-            })
+
+            if self._check_database_available():
+                query = """
+                    UPDATE strategy_positions
+                    SET status = 'closed',
+                        exit_reason = :exit_reason,
+                        closed_at = :closed_at,
+                        pnl_usd = :pnl_usd,
+                        rebalance_pending = FALSE
+                    WHERE id = :position_id AND status = 'open'
+                """
+                try:
+                    await database.execute(query, values={
+                        "exit_reason": exit_reason,
+                        "closed_at": closed_at,
+                        "pnl_usd": final_pnl_usd,
+                        "position_id": position_id
+                    })
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    self.logger.error(
+                        f"Failed to persist close for {position_id}: {exc}; cache state updated only"
+                    )
             
             # Update in memory
             position.status = "closed"

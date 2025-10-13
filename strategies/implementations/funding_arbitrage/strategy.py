@@ -221,13 +221,13 @@ class FundingArbitrageStrategy(StatefulStrategy):
             await self.dashboard.publish_snapshot()
 
             # Phase 2: Check exit conditions & close
-            closed = await self.position_closer.evaluate()
+            closed = await self.position_closer.evaluateAndClosePositions()
             if closed:
                 await self.dashboard.set_stage(
                     LifecycleStage.CLOSING,
-                    "Evaluating exit conditions",
+                    "Exited",
                 )
-                self.logger.log("Phase 2: NEED TO EXIT!", "INFO")
+                self.logger.log("Phase 2: Exited", "INFO")
 
             # Phase 3: Scan for new opportunities
             if self.opportunity_scanner.has_capacity():

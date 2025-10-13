@@ -286,7 +286,7 @@ class TradingBot:
                     if await self.strategy.should_execute(None):
                         strategy_result = await self.strategy.execute_strategy(None)
 
-                        # HERE! we shouldnt handle strategy_result, but let the strategy handle its own
+                        # HERE! this is shit code but we're leaving as is for now.
                         await self._handle_strategy_result(strategy_result)
                     else:
                         await asyncio.sleep(1)  # Brief wait if strategy says not to execute
@@ -325,72 +325,24 @@ class TradingBot:
         """Handle the result from strategy execution."""
         from strategies.base_strategy import StrategyAction
         
-        if strategy_result.action == StrategyAction.PLACE_ORDER:
-            for order_params in strategy_result.orders:
-                success = await self._execute_order(order_params)
-                if success and hasattr(self.strategy, 'record_successful_order'):
-                    self.strategy.record_successful_order()
-                elif not success and self.risk_manager:
-                    # This might be a margin failure
-                    self.risk_manager.record_margin_failure()
-        
-        elif strategy_result.action == StrategyAction.WAIT:
+        if strategy_result.action == StrategyAction.WAIT:
             if strategy_result.wait_time > 0:
                 await asyncio.sleep(strategy_result.wait_time)
         
         elif strategy_result.action == StrategyAction.CLOSE_POSITION:
             # Handle position closing
-            for order_params in strategy_result.orders:
-                await self._execute_order(order_params)
+            self.logger.info("Strategy position closing requested, not implemented yet")
         
         elif strategy_result.action == StrategyAction.REBALANCE:
             # Handle rebalancing
-            self.logger.info("Strategy rebalancing requested")
-            for order_params in strategy_result.orders:
-                await self._execute_order(order_params)
+            self.logger.info("Strategy rebalancing requested, not implemented yet")
         
         if strategy_result.message:
             self.logger.info(f"Strategy: {strategy_result.message}")
 
-    async def _execute_order(self, order_params) -> bool:
-        """Execute an order based on order parameters."""
-        try:
-            if order_params.order_type == "market":
-                result = await self.exchange_client.place_market_order(
-                    contract_id=order_params.contract_id or self.config.contract_id,
-                    quantity=order_params.quantity,
-                    side=order_params.side
-                )
-            else:  # limit order
-                if order_params.price is None:
-                    # Get current market price for limit order
-                    best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(self.config.contract_id)
-                    order_params.price = best_ask if order_params.side == 'buy' else best_bid
-                
-                # Use place_limit_order for all limit orders
-                result = await self.exchange_client.place_limit_order(
-                    contract_id=order_params.contract_id or self.config.contract_id,
-                    quantity=order_params.quantity,
-                    price=order_params.price,
-                    side=order_params.side
-                )
-            
-            if result.success:
-                self.logger.info(f"Order executed: {order_params.side} {order_params.quantity} @ {order_params.price or result.price or 'market'}")
-                
-                # Notify strategy if order got filled (for state tracking)
-                if result.price and hasattr(self.strategy, 'notify_order_filled'):
-                    filled_quantity = result.filled_size or order_params.quantity
-                    self.strategy.notify_order_filled(result.price, filled_quantity)
-                
-                return True
-            else:
-                self.logger.error(f"Order failed: {result.error_message}")
-                return False
-                
-        except Exception as e:
-            self.logger.error(f"Error executing order: {e}")
-            return False
+    # ========================================================================
+    # ACCOUNT EMERGENCY ACTIONS
+    # ========================================================================
 
     async def _handle_account_action(self, account_action: AccountAction):
         """Handle account monitoring actions."""

@@ -16,20 +16,23 @@ class PositionCloser:
     def __init__(self, strategy: "FundingArbitrageStrategy") -> None:
         self._strategy = strategy
 
-    async def evaluate(self) -> List[str]:
+    async def evaluateAndClosePositions(self) -> List[str]:
         strategy = self._strategy
         actions: List[str] = []
         positions = await strategy.position_manager.get_open_positions()
-
+        
         for position in positions:
-            should_close, reason = self.should_close(position)
+            should_close, reason = self._should_close(position)
             if should_close:
                 await self.close(position, reason)
+                strategy.logger.log(f"Closed {position.symbol}: {reason}", "INFO")
                 actions.append(f"Closed {position.symbol}: {reason}")
+            else:
+                strategy.logger.log(f"Position {position.symbol} not closing: {reason}", "INFO")
 
         return actions
 
-    def should_close(self, position: "FundingArbPosition") -> Tuple[bool, Optional[str]]:
+    def _should_close(self, position: "FundingArbPosition") -> Tuple[bool, Optional[str]]:
         strategy = self._strategy
 
         if position.current_divergence and position.current_divergence < 0:
@@ -63,10 +66,15 @@ class PositionCloser:
             pnl = position.get_net_pnl()
             pnl_pct = position.get_net_pnl_pct()
 
-            position.status = "closed"
-            position.exit_reason = reason
-            position.closed_at = datetime.now()
-            await strategy.position_manager.update_position(position)
+            await strategy.position_manager.close_position(
+                position.id,
+                exit_reason=reason,
+                final_pnl_usd=pnl,
+            )
+
+            refreshed = await strategy.position_manager.get_funding_position(position.id)
+            if refreshed:
+                position = refreshed
 
             strategy.logger.log(
                 f"✅ Closed {position.symbol} ({reason}): "
