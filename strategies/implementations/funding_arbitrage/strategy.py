@@ -9,7 +9,8 @@ Funding Arbitrage Strategy - Main Orchestrator
 Pattern: Stateful strategy with multi-DEX support
 """
 
-from strategies.base_strategy import BaseStrategy, StrategyResult, StrategyAction
+from strategies.categories.stateful_strategy import StatefulStrategy
+from strategies.base_strategy import StrategyResult, StrategyAction
 from .config import FundingArbConfig
 from .models import FundingArbPosition
 from .funding_analyzer import FundingRateAnalyzer
@@ -56,7 +57,7 @@ from .monitoring import PositionMonitor
 from .operations import DashboardReporter, PositionOpener, OpportunityScanner, PositionCloser
 
 
-class FundingArbitrageStrategy(BaseStrategy):
+class FundingArbitrageStrategy(StatefulStrategy):
     """
     Delta-neutral funding rate arbitrage strategy.
     
@@ -99,7 +100,7 @@ class FundingArbitrageStrategy(BaseStrategy):
                 primary_exchange = funding_config.exchange
             exchange_clients = {primary_exchange: exchange_client}
         
-        # Pass exchange_clients dict to BaseStrategy
+        # Pass exchange_clients dict to StatefulStrategy
         super().__init__(funding_config, exchange_clients)
         self.config = funding_config  # Store the converted config
         
@@ -207,7 +208,6 @@ class FundingArbitrageStrategy(BaseStrategy):
         
         This is the main entry point called by the trading bot.
         """
-        actions_taken: List[str] = []
         self.failed_symbols.clear()
 
         try:
@@ -228,7 +228,6 @@ class FundingArbitrageStrategy(BaseStrategy):
                     "Evaluating exit conditions",
                 )
                 self.logger.log("Phase 2: NEED TO EXIT!", "INFO")
-            actions_taken.extend(closed)
 
             # Phase 3: Scan for new opportunities
             if self.opportunity_scanner.has_capacity():
@@ -243,29 +242,31 @@ class FundingArbitrageStrategy(BaseStrategy):
                         break
                     if not self.opportunity_scanner.should_take(opportunity):
                         continue
-                    position = await self.position_opener.open(opportunity)
-                    if position:
-                        actions_taken.append(
-                            f"Opened {opportunity.symbol} on {opportunity.long_dex}/{opportunity.short_dex}"
-                        )
+                    new_position = await self.position_opener.open(opportunity)
 
-            await self.dashboard.set_stage(
-                LifecycleStage.IDLE,
-                "Funding arbitrage cycle completed",
-                category=TimelineCategory.INFO,
-            )
+                    if new_position:
+                        self.logger.log(f"New position opened: {new_position}", "INFO")
+                    else:
+                        self.logger.log(f"No new position opened", "INFO")
+
+                await self.dashboard.set_stage(
+                    LifecycleStage.IDLE,
+                    "Funding arbitrage cycle completed",
+                    category=TimelineCategory.INFO,
+                )
+
             await self.dashboard.publish_snapshot()
 
             return StrategyResult(
-                action=StrategyAction.REBALANCE if actions_taken else StrategyAction.WAIT,
-                message=f"Cycle complete: {len(actions_taken)} actions taken",
+                action=StrategyAction.WAIT,
+                message=f"Cycle complete ",
                 wait_time=self.config.risk_config.check_interval_seconds,
             )
 
         except Exception as exc:
             self.logger.log(f"Strategy execution failed: {exc}", "ERROR")
             await self.dashboard.set_stage(
-                LifecycleStage.IDLE,
+                LifecycleStage.ERROR,
                 f"Funding arbitrage cycle error: {exc}",
                 category=TimelineCategory.ERROR,
             )

@@ -45,6 +45,7 @@ class LifecycleStage(str, Enum):
     CLOSING = "closing_position"
     COMPLETE = "cycle_complete"
     IDLE = "idle"
+    ERROR = "error"
 
 
 class TimelineCategory(str, Enum):
