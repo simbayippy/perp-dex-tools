@@ -238,6 +238,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
                     "Scanning for new opportunities",
                 )
                 opportunities = await self.opportunity_scanner.scan()
+                self.logger.log(f"Found {len(opportunities)} opportunities", "INFO")
                 for opportunity in opportunities:
                     if not self.opportunity_scanner.has_capacity():
                         self.logger.log("No capacity to open new positions", "INFO")
