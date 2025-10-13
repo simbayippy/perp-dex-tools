@@ -173,10 +173,6 @@ class StrategySchema:
                 return param
         return None
     
-    def get_required_parameters(self) -> List[ParameterSchema]:
-        """Get all required parameters."""
-        return [p for p in self.parameters if p.required]
-    
     def get_optional_parameters(self) -> List[ParameterSchema]:
         """Get all optional parameters."""
         return [p for p in self.parameters if not p.required]

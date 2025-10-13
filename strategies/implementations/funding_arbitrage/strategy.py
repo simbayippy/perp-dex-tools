@@ -202,7 +202,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
     # Main Execution Loop.
     # ========================================================================
        
-    async def execute_strategy(self, market_data) -> StrategyResult:
+    async def execute_strategy(self):
         """
         Execute the funding arbitrage strategy.
         
@@ -257,6 +257,10 @@ class FundingArbitrageStrategy(StatefulStrategy):
 
             await self.dashboard.publish_snapshot()
 
+            if self.config.risk_config.check_interval_seconds > 0:
+                self.logger.log(f"Sleeping for {self.config.risk_config.check_interval_seconds} seconds", "INFO")
+                await asyncio.sleep(self.config.risk_config.check_interval_seconds)
+
             return StrategyResult(
                 action=StrategyAction.WAIT,
                 message=f"Cycle complete ",
@@ -283,26 +287,26 @@ class FundingArbitrageStrategy(StatefulStrategy):
     def get_strategy_name(self) -> str:
         return "Funding Rate Arbitrage"
 
-    async def _initialize_strategy(self):
-        """Strategy-specific initialization logic."""
-        # Initialize position and state managers
-        await self.position_manager.initialize()
-        await self.state_manager.initialize()
-        if self.dashboard_service.enabled:
-            await self.dashboard_service.start()
-            await self.dashboard.set_stage(
-                LifecycleStage.IDLE,
-                "Strategy initialized",
-                category=TimelineCategory.INFO,
-            )
-            await self.dashboard.publish_snapshot("Startup state captured")
-            if self.control_server:
-                await self.control_server.start()
-                self._control_server_started = True
+    # async def _initialize_strategy(self):
+    #     """Strategy-specific initialization logic."""
+    #     # Initialize position and state managers
+    #     await self.position_manager.initialize()
+    #     await self.state_manager.initialize()
+    #     if self.dashboard_service.enabled:
+    #         await self.dashboard_service.start()
+    #         await self.dashboard.set_stage(
+    #             LifecycleStage.IDLE,
+    #             "Strategy initialized",
+    #             category=TimelineCategory.INFO,
+    #         )
+    #         await self.dashboard.publish_snapshot("Startup state captured")
+    #         if self.control_server:
+    #             await self.control_server.start()
+    #             self._control_server_started = True
 
-        self.logger.log("FundingArbitrageStrategy initialized successfully")
+    #     self.logger.log("FundingArbitrageStrategy initialized successfully")
     
-    async def should_execute(self, market_data) -> bool:
+    async def should_execute(self) -> bool:
         """
         Determine if strategy should execute based on market conditions.
 
@@ -310,15 +314,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
         """
         return True
 
-    
-    def get_required_parameters(self) -> List[str]:
-        """Get list of required strategy parameters."""
-        return [
-            "target_exposure",
-            "min_profit_rate", 
-            "exchanges"
-        ]
-    
     # ========================================================================
     # Helpers & Dashboard Helpers
     # ========================================================================

@@ -67,18 +67,6 @@ class OrderParams:
             self.metadata = {}
 
 
-@dataclass
-class StrategyResult:
-    """Result of strategy execution."""
-    action: StrategyAction
-    orders: List[OrderParams] = None
-    message: str = ""
-    wait_time: float = 0  # Seconds to wait before next check
-    
-    def __post_init__(self):
-        if self.orders is None:
-            self.orders = []
-
 
 @dataclass
 class MarketData:
@@ -141,17 +129,17 @@ class BaseStrategy(ABC):
         self.status = RunnableStatus.NOT_STARTED
         self._event_listeners: Dict[str, Callable] = {}
     
-    async def initialize(self):
-        """Initialize strategy-specific components."""
-        if not self.is_initialized:
-            await self._initialize_strategy()
-            self.is_initialized = True
-            self.logger.info(f"Strategy '{self.get_strategy_name()}' initialized")
+    # async def initialize(self):
+    #     """Initialize strategy-specific components."""
+    #     if not self.is_initialized:
+    #         await self._initialize_strategy()
+    #         self.is_initialized = True
+    #         self.logger.info(f"Strategy '{self.get_strategy_name()}' initialized")
     
-    @abstractmethod
-    async def _initialize_strategy(self):
-        """Strategy-specific initialization logic."""
-        pass
+    # @abstractmethod
+    # async def _initialize_strategy(self):
+    #     """Strategy-specific initialization logic."""
+    #     pass
     
     # ========================================================================
     # Event-Driven Pattern (from Hummingbot ExecutorBase)
@@ -237,12 +225,12 @@ class BaseStrategy(ABC):
             del self._event_listeners[event_name]
     
     @abstractmethod
-    async def should_execute(self, market_data: MarketData) -> bool:
+    async def should_execute(self) -> bool:
         """Determine if strategy should execute based on market conditions."""
         pass
     
     @abstractmethod
-    async def execute_strategy(self, market_data: MarketData) -> StrategyResult:
+    async def execute_strategy(self):
         """Execute the strategy and return the result."""
         pass
     
@@ -250,24 +238,6 @@ class BaseStrategy(ABC):
     def get_strategy_name(self) -> str:
         """Get the strategy name."""
         pass
-    
-    @abstractmethod
-    def get_required_parameters(self) -> List[str]:
-        """Get list of required strategy parameters."""
-        pass
-    
-    def validate_parameters(self) -> bool:
-        """Validate that all required parameters are present."""
-        required_params = self.get_required_parameters()
-        strategy_params = getattr(self.config, 'strategy_params', {})
-        
-        missing_params = [param for param in required_params if param not in strategy_params]
-        
-        if missing_params:
-            self.logger.log(f"Missing required parameters: {missing_params}", "ERROR")
-            return False
-        
-        return True
     
     def get_parameter(self, param_name: str, default_value: Any = None) -> Any:
         """Get strategy parameter with optional default."""

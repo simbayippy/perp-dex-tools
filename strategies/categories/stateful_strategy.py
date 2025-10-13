@@ -101,32 +101,6 @@ class StatefulStrategy(BaseStrategy):
         return InMemoryStateManager()
     
     # ========================================================================
-    # Initialization
-    # ========================================================================
-    
-    async def _initialize_strategy(self):
-        """
-        Default initialization for stateful strategies.
-        
-        Loads:
-        - Persisted state
-        - Open positions from storage
-        
-        Child can override to add custom initialization
-        """
-        # Load persisted state
-        state = await self.state_manager.load_state(self.get_strategy_name())
-        if state:
-            self.strategy_state = state
-        
-        # Log open positions
-        open_positions = await self.position_manager.get_open_positions()
-        self.logger.log(
-            f"Loaded {len(open_positions)} open positions",
-            "INFO"
-        )
-    
-    # ========================================================================
     # Execution (Child Has Full Control)
     # ========================================================================
     

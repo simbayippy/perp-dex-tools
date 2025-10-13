@@ -111,7 +111,7 @@ class StrategyFactory:
                 'strategy_params': {}
             })()
             temp_instance = strategy_class(temp_config, None)
-            required_params = temp_instance.get_required_parameters()
+            required_params = []
         except Exception:
             required_params = []
         

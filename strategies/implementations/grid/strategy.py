@@ -74,11 +74,11 @@ class GridStrategy(StatelessStrategy):
                 "INFO"
             )
     
-    async def initialize(self) -> None:
-        """Initialize strategy (called by base class)."""
-        # Load persisted state if available
-        # (In future, this would load from state_manager)
-        pass
+    # async def initialize(self) -> None:
+    #     """Initialize strategy (called by base class)."""
+    #     # Load persisted state if available
+    #     # (In future, this would load from state_manager)
+    #     pass
     
     async def should_execute(self) -> bool:
         """Determine if grid strategy should execute."""
