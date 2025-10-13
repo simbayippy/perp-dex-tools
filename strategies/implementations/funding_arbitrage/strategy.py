@@ -13,7 +13,6 @@ from strategies.categories.stateful_strategy import StatefulStrategy
 from strategies.base_strategy import StrategyResult, StrategyAction
 from .config import FundingArbConfig
 from .models import FundingArbPosition
-from .funding_analyzer import FundingRateAnalyzer
 
 from dashboard.config import DashboardSettings
 from dashboard.models import (
@@ -117,9 +116,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
             
         if not available_exchanges:
             raise ValueError(f"No trading-capable exchange clients available. At least one exchange with full trading support is required.")
-        
-        # ⭐ Core components from Hummingbot pattern
-        self.analyzer = FundingRateAnalyzer()
         
         # ⭐ Direct internal services (no HTTP, shared database)
         if not FUNDING_SERVICE_AVAILABLE:
