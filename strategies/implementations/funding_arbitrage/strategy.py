@@ -9,6 +9,7 @@ Funding Arbitrage Strategy - Main Orchestrator
 Pattern: Stateful strategy with multi-DEX support
 """
 
+import asyncio
 from strategies.categories.stateful_strategy import StatefulStrategy
 from strategies.base_strategy import StrategyAction
 from .config import FundingArbConfig
