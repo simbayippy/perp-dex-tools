@@ -39,7 +39,7 @@ class OpportunityScanner:
                 f"Filters - min_profit: {strategy.config.min_profit}, "
                 f"max_oi_usd: {strategy.config.max_oi_usd}, "
                 f"configured_dexes: {strategy.config.exchanges}, available_dexes: {available_exchanges}",
-                "DEBUG",
+                "INFO",
             )
 
             opportunities = await strategy.opportunity_finder.find_opportunities(filters)
