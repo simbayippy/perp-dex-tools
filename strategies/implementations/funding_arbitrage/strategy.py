@@ -10,7 +10,7 @@ Pattern: Stateful strategy with multi-DEX support
 """
 
 from strategies.categories.stateful_strategy import StatefulStrategy
-from strategies.base_strategy import StrategyResult, StrategyAction
+from strategies.base_strategy import StrategyAction
 from .config import FundingArbConfig
 from .models import FundingArbPosition
 from .funding_analyzer import FundingRateAnalyzer
@@ -261,11 +261,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 self.logger.log(f"Sleeping for {self.config.risk_config.check_interval_seconds} seconds", "INFO")
                 await asyncio.sleep(self.config.risk_config.check_interval_seconds)
 
-            return StrategyResult(
-                action=StrategyAction.WAIT,
-                message=f"Cycle complete ",
-                wait_time=self.config.risk_config.check_interval_seconds,
-            )
 
         except Exception as exc:
             self.logger.log(f"Strategy execution failed: {exc}", "ERROR")
@@ -273,11 +268,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 LifecycleStage.ERROR,
                 f"Funding arbitrage cycle error: {exc}",
                 category=TimelineCategory.ERROR,
-            )
-            return StrategyResult(
-                action=StrategyAction.WAIT,
-                message=f"Execution error: {exc}",
-                wait_time=60,
             )
 
     # ========================================================================

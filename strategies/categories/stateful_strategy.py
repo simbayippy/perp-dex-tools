@@ -13,7 +13,7 @@ Key characteristics:
 - Component composition (position manager, state manager)
 """
 
-from strategies.base_strategy import BaseStrategy, StrategyResult
+from strategies.base_strategy import BaseStrategy
 from strategies.components import BasePositionManager, BaseStateManager, InMemoryPositionManager, InMemoryStateManager
 from abc import abstractmethod
 from typing import Dict, Optional, Any
