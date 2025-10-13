@@ -12,7 +12,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 from uuid import UUID
 
@@ -20,8 +22,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from dashboard.models import DashboardSnapshot, TimelineCategory, TimelineEvent
-from funding_rate_service.database.connection import database
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from dashboard.models import DashboardSnapshot, TimelineCategory, TimelineEvent  # noqa: E402
+from funding_rate_service.database.connection import database  # noqa: E402
 
 
 console = Console()
