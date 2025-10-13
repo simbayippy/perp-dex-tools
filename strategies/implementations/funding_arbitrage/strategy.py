@@ -244,11 +244,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
                         continue
                     new_position = await self.position_opener.open(opportunity)
 
-                    if new_position:
-                        self.logger.log(f"New position opened: {new_position}", "INFO")
-                    else:
-                        self.logger.log(f"No new position opened", "INFO")
-
                 await self.dashboard.set_stage(
                     LifecycleStage.IDLE,
                     "Funding arbitrage cycle completed",

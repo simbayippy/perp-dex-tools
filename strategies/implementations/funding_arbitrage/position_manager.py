@@ -25,12 +25,16 @@ from .models import FundingArbPosition
 try:
     from funding_rate_service.database.connection import database
     from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
+    from funding_rate_service.database.repositories.symbol_repository import SymbolRepository
+    from funding_rate_service.database.repositories.dex_repository import DEXRepository
     DATABASE_AVAILABLE = True
 except ImportError:
     # For testing - database not available
     database = None
     dex_mapper = None
     symbol_mapper = None
+    SymbolRepository = None  # type: ignore
+    DEXRepository = None  # type: ignore
     DATABASE_AVAILABLE = False
 
 
@@ -108,6 +112,8 @@ class FundingArbPositionManager(BasePositionManager):
         if not database.is_connected:
             await database.connect()
             self.logger.info("Database connection established")
+
+        await self._ensure_mappers_loaded()
         
         # Load open positions from database
         await self._load_positions_from_db()
@@ -347,10 +353,41 @@ class FundingArbPositionManager(BasePositionManager):
             else:
                 raise ValueError(f"Position {position.id} exists in DB but failed to load")
         
+        await self._ensure_mappers_loaded()
+
         # Get IDs for foreign keys
         symbol_id = symbol_mapper.get_id(position.symbol)
         long_dex_id = dex_mapper.get_id(position.long_dex)
         short_dex_id = dex_mapper.get_id(position.short_dex)
+
+        if DATABASE_AVAILABLE:
+            if symbol_id is None:
+                symbol_repo = SymbolRepository(database)
+                symbol_id = await symbol_repo.get_or_create(position.symbol)
+                symbol_mapper.add(symbol_id, position.symbol)
+
+            if long_dex_id is None or short_dex_id is None:
+                dex_repo = DEXRepository(database)
+
+                if long_dex_id is None:
+                    long_row = await dex_repo.get_by_name(position.long_dex.lower())
+                    if not long_row:
+                        raise ValueError(f"Unknown DEX '{position.long_dex}'")
+                    long_dex_id = long_row["id"]
+                    dex_mapper.add(long_dex_id, long_row["name"])
+
+                if short_dex_id is None:
+                    short_row = await dex_repo.get_by_name(position.short_dex.lower())
+                    if not short_row:
+                        raise ValueError(f"Unknown DEX '{position.short_dex}'")
+                    short_dex_id = short_row["id"]
+                    dex_mapper.add(short_dex_id, short_row["name"])
+
+        if symbol_id is None or long_dex_id is None or short_dex_id is None:
+            raise ValueError(
+                f"Missing mapping for position {position.id}: "
+                f"symbol_id={symbol_id}, long_dex_id={long_dex_id}, short_dex_id={short_dex_id}"
+            )
         
         # Insert into database
         query = """
@@ -395,6 +432,23 @@ class FundingArbPositionManager(BasePositionManager):
         )
         
         return position.id
+
+    async def _ensure_mappers_loaded(self) -> None:
+        """Ensure DEX and symbol mappers are populated from the database."""
+        if not DATABASE_AVAILABLE:
+            return
+
+        try:
+            if (not dex_mapper.is_loaded() or not symbol_mapper.is_loaded()) and not database.is_connected:
+                await database.connect()
+
+            if not dex_mapper.is_loaded():
+                await dex_mapper.load_from_db(database)
+            if not symbol_mapper.is_loaded():
+                await symbol_mapper.load_from_db(database)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self.logger.error(f"Failed to load mapper data: {exc}")
+            raise
     
     async def record_funding_payment(
         self,
