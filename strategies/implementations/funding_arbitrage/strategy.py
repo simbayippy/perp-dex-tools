@@ -63,6 +63,12 @@ from strategies.execution.patterns.atomic_multi_order import (
 from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
 from helpers.unified_logger import log_stage
 
+# Funding_arb operation helpers
+from .monitoring import PositionMonitor
+from .operations.position_opener import PositionOpener
+from .operations.opportunity_scanner import OpportunityScanner
+from .operations.position_closer import PositionCloser
+
 
 class FundingArbitrageStrategy(StatefulStrategy):
     """
@@ -206,6 +212,17 @@ class FundingArbitrageStrategy(StatefulStrategy):
         self.position_opened_this_session = False
         self._session_limit_warning_logged = False
         self._max_position_warning_logged = False
+
+        # Position monitoring helper
+        self.position_monitor = PositionMonitor(
+            position_manager=self.position_manager,
+            funding_rate_repo=self.funding_rate_repo,
+            exchange_clients=self.exchange_clients,
+            logger=self.logger,
+        )
+        self.position_opener = PositionOpener(self)
+        self.opportunity_scanner = OpportunityScanner(self)
+        self.position_closer = PositionCloser(self)
 
 
         # Dashboard service (optional)
@@ -377,18 +394,27 @@ class FundingArbitrageStrategy(StatefulStrategy):
         try:
             # Phase 1: Monitor existing positions
             self.logger.log("Phase 1: Monitoring positions", "INFO")
-            await self._monitor_positions()
+            await self.position_monitor.monitor()
             
             # Phase 2: Check exits
             self.logger.log("Phase 2: Checking exit conditions", "INFO")
-            closed = await self._check_exit_conditions()
+            closed = await self.position_closer.evaluate()
             actions_taken.extend(closed)
             
             # Phase 3: New opportunities (if capacity available)
-            if self._has_capacity():
+            if self.opportunity_scanner.has_capacity():
                 self.logger.log("Phase 3: Scanning new opportunities", "INFO")
-                opened = await self._scan_opportunities()
-                actions_taken.extend(opened)
+                opportunities = await self.opportunity_scanner.scan()
+                for opportunity in opportunities:
+                    if not self.opportunity_scanner.has_capacity():
+                        break
+                    if not self.opportunity_scanner.should_take(opportunity):
+                        continue
+                    opened = await self.position_opener.open(opportunity)
+                    if opened:
+                        actions_taken.append(
+                            f"Opened {opportunity.symbol} on {opportunity.long_dex}/{opportunity.short_dex}"
+                        )
             else:
                 self.logger.log("Phase 3: At max capacity, skipping new opportunities", "INFO")
             
@@ -405,692 +431,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 message=f"Error: {e}",
                 wait_time=60
             )
-    
-    # ========================================================================
-    # Phase 1: Monitor Positions
-    # ========================================================================
-    
-    async def _monitor_positions(self):
-        """
-        Update position states with current funding rates.
-        
-        For each position:
-        1. Fetch current funding rates
-        2. Update position state
-        3. Calculate current profitability
-        """
-        positions = await self.position_manager.get_open_positions()
-        
-        if not positions:
-            self.logger.log("No open positions to monitor", "DEBUG")
-            return
-        
-        for position in positions:
-            try:
-                # ⭐ Direct repository call (no HTTP)
-                # Get current rates from funding rate repository
-                from funding_rate_service.core.mappers import symbol_mapper
-                
-                # Fetch latest rates
-                rate1_data = await self.funding_rate_repo.get_latest_specific(
-                    position.long_dex, position.symbol
-                )
-                rate2_data = await self.funding_rate_repo.get_latest_specific(
-                    position.short_dex, position.symbol
-                )
-                
-                if rate1_data and rate2_data:
-                    rate1 = Decimal(str(rate1_data['funding_rate']))
-                    rate2 = Decimal(str(rate2_data['funding_rate']))
-                    divergence = rate2 - rate1
-                    
-                    # Update position
-                    position.current_divergence = divergence
-                    position.last_check = datetime.now()
-                    await self.position_manager.update_position(position)
-                else:
-                    self.logger.log(
-                        f"Could not fetch rates for {position.symbol}",
-                        "WARNING"
-                    )
-                    continue
-                
-                # Log status
-                erosion = position.get_profit_erosion()
-                self.logger.log(
-                    f"Position {position.symbol}: "
-                    f"Entry={position.entry_divergence*100:.3f}%, "
-                    f"Current={position.current_divergence*100:.3f}%, "
-                    f"Erosion={erosion*100:.1f}%, "
-                    f"PnL=${position.get_net_pnl():.2f}",
-                    "INFO"
-                )
-                
-            except Exception as e:
-                self.logger.log(
-                    f"Error monitoring position {position.id}: {e}",
-                    "ERROR"
-                )
-    
-    # ========================================================================
-    # Phase 2: Exit Conditions
-    # ========================================================================
-    
-    async def _check_exit_conditions(self) -> List[str]:
-        """
-        ⭐ FROM v2_funding_rate_arb.py stop_actions_proposal() ⭐
-        
-        Check if any positions should close.
-        
-        Returns:
-            List of action descriptions
-        """
-        actions = []
-        positions = await self.position_manager.get_open_positions()
-        
-        for position in positions:
-            should_close, reason = self._should_close_position(position)
-            
-            if should_close:
-                await self._close_position(position, reason)
-                actions.append(f"Closed {position.symbol}: {reason}")
-        
-        return actions
-    
-    def _should_close_position(
-        self,
-        position: FundingArbPosition
-    ) -> Tuple[bool, str]:
-        """
-        Determine if position should be closed.
-        
-        Exit conditions (from Hummingbot + your risk management):
-        1. Funding rate flipped (critical - immediate exit)
-        2. Profit erosion (divergence dropped too much)
-        3. Time limit (held too long)
-        4. Better opportunity exists
-        
-        Returns:
-            (should_close, reason)
-        """
-        # 1. Funding rate flipped (CRITICAL - losing money!)
-        if position.current_divergence and position.current_divergence < 0:
-            return True, "FUNDING_FLIP"
-        
-        # 2. Profit erosion (divergence dropped significantly)
-        erosion = position.get_profit_erosion()
-        if erosion < self.config.risk_config.min_erosion_threshold:
-            return True, "PROFIT_EROSION"
-        
-        # 3. Time limit (max position age)
-        if position.get_age_hours() > self.config.risk_config.max_position_age_hours:
-            return True, "TIME_LIMIT"
-        
-        # 4. Better opportunity exists (optional)
-        if self.config.risk_config.enable_better_opportunity:
-            # Check if a significantly better opportunity exists for same symbol
-            # TODO: Implement better opportunity check
-            pass
-        
-        return False, None
-    
-    async def _close_position(self, position: FundingArbPosition, reason: str):
-        """
-        Close both sides of delta-neutral position.
-        
-        Args:
-            position: Position to close
-            reason: Reason for closing
-        """
-        try:
-            await self._set_dashboard_stage(
-                LifecycleStage.CLOSING,
-                f"Closing {position.symbol} ({reason})",
-                category=TimelineCategory.EXECUTION,
-            )
-            # Close long side
-            long_client = self.exchange_clients[position.long_dex]
-            await long_client.close_position(position.symbol)
-            
-            # Close short side
-            short_client = self.exchange_clients[position.short_dex]
-            await short_client.close_position(position.symbol)
-            
-            # Calculate final PnL
-            pnl = position.get_net_pnl()
-            pnl_pct = position.get_net_pnl_pct()
-            
-            # Mark as closed
-            position.status = "closed"
-            position.exit_reason = reason
-            position.closed_at = datetime.now()
-            await self.position_manager.update_position(position)
-            
-            self.logger.log(
-                f"✅ Closed {position.symbol} ({reason}): "
-                f"PnL=${pnl:.2f} ({pnl_pct*100:.2f}%), "
-                f"Age={position.get_age_hours():.1f}h",
-                "INFO"
-            )
-            await self._publish_dashboard_snapshot(f"Closed {position.symbol} ({reason})")
-            
-        except Exception as e:
-            self.logger.log(
-                f"Error closing position {position.id}: {e}",
-                "ERROR"
-            )
-            raise
-    
-    # ========================================================================
-    # Phase 3: New Opportunities
-    # ========================================================================
-    
-    async def _scan_opportunities(self) -> List[str]:
-        """
-        ⭐ FROM v2_funding_rate_arb.py create_actions_proposal() ⭐
-        
-        Find and open new positions.
-        
-        Returns:
-            List of action descriptions
-        """
-        actions = []
-        
-        try:
-            # Stop immediately if we've already hit our capacity for this session.
-            if not self._has_capacity():
-                return actions
-            
-            # ⭐ Direct internal service call (no HTTP)
-            # Use opportunity finder to find opportunities
-            from funding_rate_service.models.filters import OpportunityFilter
-            
-            # Get list of AVAILABLE exchanges (those with valid trading clients)
-            # This filters out exchanges that were skipped due to missing credentials
-            available_exchanges = list(self.exchange_clients.keys())
-            
-            filters = OpportunityFilter(
-                min_profit_percent=self.config.min_profit,
-                max_oi_usd=self.config.max_oi_usd,
-                whitelist_dexes=available_exchanges if available_exchanges else None,
-                symbol=None,  # Don't filter by symbol - look at all opportunities
-                limit=10
-            )
-            
-            # 🔍 DEBUG: Log the filters being used
-            self.logger.log(
-                f"Filters - min_profit: {self.config.min_profit}, max_oi_usd: {self.config.max_oi_usd}, "
-                f"configured_dexes: {self.config.exchanges}, available_dexes: {available_exchanges}",
-                "DEBUG"
-            )
-            
-            opportunities = await self.opportunity_finder.find_opportunities(filters)
-            
-            self.logger.log(
-                f"Found {len(opportunities)} opportunities",
-                "INFO"
-            )
-            
-            # Take top opportunities up to limit
-            max_new = self.config.max_new_positions_per_cycle
-            for opp in opportunities[:max_new]:
-                # Skip symbols that failed in this cycle
-                if opp.symbol in self.failed_symbols:
-                    self.logger.log(
-                        f"⏭️  Skipping {opp.symbol} - already failed validation this cycle",
-                        "DEBUG"
-                    )
-                    continue
-                
-                if self._should_take_opportunity(opp):
-                    success = await self._open_position(opp)
-                    if success:
-                        actions.append(f"Opened {opp.symbol} on {opp.long_dex}/{opp.short_dex}")
-                    
-                    # Stop if we hit capacity
-                    if not self._has_capacity():
-                        break
-            
-        except Exception as e:
-            self.logger.log(f"Error scanning opportunities: {e}", "ERROR")
-        
-        return actions
-    
-    def _should_take_opportunity(self, opportunity) -> bool:
-        """
-        Apply client-side filters to opportunity.
-        
-        Args:
-            opportunity: ArbitrageOpportunity object
-            
-        Returns:
-            True if should take this opportunity
-        """
-        # ⭐ Safety check: Verify we have trading clients for both sides
-        # NOTE: This should rarely trigger since we filter at the opportunity finder level,
-        # but it's kept as a defensive safety net in case of race conditions or stale data
-        long_dex = opportunity.long_dex
-        short_dex = opportunity.short_dex
-        
-        if long_dex not in self.exchange_clients:
-            self.logger.log(
-                f"⚠️  SAFETY CHECK: Skipping {opportunity.symbol} opportunity - "
-                f"{long_dex} (long side) not in available clients (should have been filtered earlier)",
-                "WARNING"
-            )
-            return False
-        
-        if short_dex not in self.exchange_clients:
-            self.logger.log(
-                f"⚠️  SAFETY CHECK: Skipping {opportunity.symbol} opportunity - "
-                f"{short_dex} (short side) not in available clients (should have been filtered earlier)",
-                "WARNING"
-            )
-            return False
-        
-        # Check position size limits
-        # (size is based on config, not from opportunity)
-        size_usd = self.config.default_position_size_usd
-        if size_usd > self.config.max_position_size_usd:
-            return False
-        
-        # Check total exposure
-        current_exposure = self._calculate_total_exposure()
-        if current_exposure + size_usd > self.config.max_total_exposure_usd:
-            return False
-        
-        # Add more filters as needed
-        return True
-    
-    async def _ensure_contract_attributes(self, exchange_client: Any, symbol: str) -> bool:
-        """
-        Ensure exchange client has contract attributes initialized for symbol.
-        
-        For multi-symbol strategies, contract attributes (tick_size, multipliers, etc.)
-        need to be initialized per-symbol before trading.
-        
-        Args:
-            exchange_client: Exchange client instance
-            symbol: Trading symbol
-            
-        Returns:
-            True if successful and symbol is tradeable, False otherwise
-        """
-        try:
-            exchange_name = exchange_client.get_exchange_name()
-            
-            # Check if we need to initialize (config has ticker="ALL" for multi-symbol)
-            if not hasattr(exchange_client.config, 'contract_id') or exchange_client.config.ticker == "ALL":
-                self.logger.log(
-                    f"🔧 [{exchange_name.upper()}] Initializing contract attributes for {symbol}",
-                    "INFO"
-                )
-                
-                # Temporarily set ticker to specific symbol for initialization
-                original_ticker = exchange_client.config.ticker
-                exchange_client.config.ticker = symbol
-                
-                # Get contract attributes (initializes multipliers, tick_size, contract_id)
-                try:
-                    contract_id, tick_size = await exchange_client.get_contract_attributes()
-                    
-                    # Additional validation: contract_id should be meaningful
-                    if not contract_id or contract_id == "":
-                        self.logger.log(
-                            f"❌ [{exchange_name.upper()}] Symbol {symbol} initialization returned empty contract_id",
-                            "WARNING"
-                        )
-                        return False
-                    
-                    self.logger.log(
-                        f"✅ [{exchange_name.upper()}] {symbol} initialized → "
-                        f"contract_id={contract_id}, tick_size={tick_size}",
-                        "INFO"
-                    )
-                    
-                except ValueError as e:
-                    # Specific handling for "symbol not found" errors
-                    error_msg = str(e).lower()
-                    if "not found" in error_msg or "not supported" in error_msg:
-                        self.logger.log(
-                            f"⚠️  [{exchange_name.upper()}] Symbol {symbol} is NOT TRADEABLE on {exchange_name} "
-                            f"(not listed or not supported)",
-                            "WARNING"
-                        )
-                    else:
-                        self.logger.log(
-                            f"❌ [{exchange_name.upper()}] Failed to initialize {symbol}: {e}",
-                            "ERROR"
-                        )
-                    return False
-                
-                finally:
-                    # Always restore original ticker
-                    if original_ticker != symbol:
-                        exchange_client.config.ticker = original_ticker
-                
-                return True
-            
-            return True  # Already initialized
-            
-        except Exception as e:
-            self.logger.log(
-                f"❌ [{exchange_name.upper()}] Unexpected error initializing {symbol}: {e}",
-                "ERROR"
-            )
-            import traceback
-            self.logger.log(f"Traceback: {traceback.format_exc()}", "DEBUG")
-            return False
-    
-    async def _open_position(self, opportunity) -> bool:
-        """
-        Open delta-neutral position from opportunity using atomic execution.
-        
-        ⭐ Uses AtomicMultiOrderExecutor for safety ⭐
-        
-        Args:
-            opportunity: ArbitrageOpportunity object
-            
-        Returns:
-            True if position opened successfully, False otherwise
-        """
-        try:
-            symbol = opportunity.symbol
-            long_dex = opportunity.long_dex
-            short_dex = opportunity.short_dex
-            size_usd = self.config.default_position_size_usd
-            
-            # Get exchange clients
-            self.logger.log(f"Available exchange clients: {list(self.exchange_clients.keys())}", "DEBUG")
-            self.logger.log(f"Looking for long_dex: {long_dex}, short_dex: {short_dex}", "DEBUG")
-            
-            long_client = self.exchange_clients.get(long_dex)
-            short_client = self.exchange_clients.get(short_dex)
-            
-            if long_client is None:
-                self.logger.log(
-                    f"❌ No exchange client found for long_dex: {long_dex}",
-                    "ERROR"
-                )
-                self.failed_symbols.add(symbol)
-                return False
-            if short_client is None:
-                self.logger.log(
-                    f"❌ No exchange client found for short_dex: {short_dex}",
-                    "ERROR"
-                )
-                self.failed_symbols.add(symbol)
-                return False
 
-            await self._set_dashboard_stage(
-                LifecycleStage.OPENING,
-                f"Opening {symbol} position ({long_dex.upper()} vs {short_dex.upper()})",
-            )
-            
-            # ⭐ CRITICAL: Initialize contract attributes for this symbol
-            log_stage(self.logger, f"{symbol} • Opportunity Validation", icon="📋", stage_id="1")
-            self.logger.log(
-                f"Ensuring {symbol} is tradeable on both {long_dex} and {short_dex}",
-                "INFO"
-            )
-            
-            long_init_ok = await self._ensure_contract_attributes(long_client, symbol)
-            short_init_ok = await self._ensure_contract_attributes(short_client, symbol)
-            
-            if not long_init_ok:
-                self.logger.log(
-                    f"⛔ [SKIP] Cannot trade {symbol}: Not supported on {long_dex.upper()} (long side)",
-                    "WARNING"
-                )
-                self.failed_symbols.add(symbol)
-                return False
-            if not short_init_ok:
-                self.logger.log(
-                    f"⛔ [SKIP] Cannot trade {symbol}: Not supported on {short_dex.upper()} (short side)",
-                    "WARNING"
-                )
-                self.failed_symbols.add(symbol)
-                return False
-            
-            self.logger.log(
-                f"✅ {symbol} available on both {long_dex.upper()} and {short_dex.upper()}",
-                "INFO"
-            )
-
-            # ⭐ LEVERAGE VALIDATION & NORMALIZATION ⭐
-            log_stage(self.logger, "Leverage Validation & Normalization", icon="🔍", stage_id="2")
-            
-            from strategies.execution.core.leverage_validator import LeverageValidator
-            
-            leverage_validator = LeverageValidator()
-            
-            try:
-                leverage_prep = await leverage_validator.prepare_leverage(
-                    exchange_clients=[long_client, short_client],
-                    symbol=symbol,
-                    requested_size_usd=size_usd,
-                    min_position_usd=Decimal("5"),
-                    check_balance=True,
-                    normalize_leverage=True
-                )
-            except Exception as e:
-                self.logger.log(
-                    f"⛔ [SKIP] {symbol}: Leverage preparation failed - {e}",
-                    "WARNING"
-                )
-                self.failed_symbols.add(symbol)
-                return False
-            
-            size_usd = leverage_prep.adjusted_size_usd
-            
-            if leverage_prep.below_minimum:
-                self.logger.log(
-                    f"⛔ {symbol}: Position size too small after leverage adjustment (${size_usd:.2f})",
-                    "WARNING"
-                )
-                self.failed_symbols.add(symbol)
-                return False
-            
-            self.logger.log(
-                f"🎯 Execution plan for {symbol}: "
-                f"Long {long_dex.upper()} (${size_usd:.2f}) | "
-                f"Short {short_dex.upper()} (${size_usd:.2f}) | "
-                f"Divergence {opportunity.divergence*100:.3f}%",
-                "INFO"
-            )
-
-            log_stage(self.logger, "Atomic Multi-Order Execution", icon="🧨", stage_id="3")
-            
-            # ⭐ ATOMIC EXECUTION: Both sides fill or neither ⭐
-            result: AtomicExecutionResult = await self.atomic_executor.execute_atomically(
-                orders=[
-                    OrderSpec(
-                        exchange_client=long_client,
-                        symbol=symbol,
-                        side="buy",
-                        size_usd=size_usd,
-                        execution_mode="limit_with_fallback",
-                        timeout_seconds=30.0
-                    ),
-                    OrderSpec(
-                        exchange_client=short_client,
-                        symbol=symbol,
-                        side="sell",
-                        size_usd=size_usd,
-                        execution_mode="limit_with_fallback",
-                        timeout_seconds=30.0
-                    )
-                ],
-                rollback_on_partial=True,  # 🚨 CRITICAL: Both must fill or rollback
-                pre_flight_check=True,  # Check liquidity before placing
-                skip_preflight_leverage=True,  # Already validated & normalized
-                stage_prefix="3"
-            )
-            
-            # Check if atomic execution succeeded
-            if not result.all_filled:
-                self.logger.log(
-                    f"❌ {symbol}: Atomic execution failed - {result.error_message}",
-                    "ERROR"
-                )
-                
-                if result.rollback_performed:
-                    self.logger.log(
-                        f"🔄 Emergency rollback performed, cost: ${result.rollback_cost_usd:.2f}",
-                        "WARNING"
-                    )
-                
-                self.failed_symbols.add(symbol)
-                return False  # Don't create position if execution failed
-            
-            # ✅ Both sides filled successfully
-            long_fill = result.filled_orders[0]
-            short_fill = result.filled_orders[1]
-            
-            # Calculate entry fees
-            entry_fees = self.fee_calculator.calculate_total_cost(
-                long_dex, short_dex, size_usd, is_maker=True
-            )
-            
-            # Add actual slippage
-            total_cost = entry_fees + result.total_slippage_usd
-            
-            # Create position record
-            position = FundingArbPosition(
-                id=uuid4(),
-                symbol=symbol,
-                long_dex=long_dex,
-                short_dex=short_dex,
-                size_usd=size_usd,
-                entry_long_rate=opportunity.long_rate,
-                entry_short_rate=opportunity.short_rate,
-                entry_divergence=opportunity.divergence,
-                opened_at=datetime.now(),
-                total_fees_paid=total_cost
-            )
-
-            partial_fee = entry_fees / Decimal("2") if entry_fees else Decimal("0")
-            timestamp_iso = datetime.now(timezone.utc).isoformat()
-            position.metadata.update(
-                {
-                    "legs": {
-                        long_dex: {
-                            "side": "long",
-                            "entry_price": long_fill.get("fill_price"),
-                            "quantity": long_fill.get("filled_quantity"),
-                            "fees_paid": partial_fee,
-                            "slippage_usd": long_fill.get("slippage_usd"),
-                            "execution_mode": long_fill.get("execution_mode_used"),
-                            "exposure_usd": size_usd,
-                            "last_updated": timestamp_iso,
-                        },
-                        short_dex: {
-                            "side": "short",
-                            "entry_price": short_fill.get("fill_price"),
-                            "quantity": short_fill.get("filled_quantity"),
-                            "fees_paid": partial_fee,
-                            "slippage_usd": short_fill.get("slippage_usd"),
-                            "execution_mode": short_fill.get("execution_mode_used"),
-                            "exposure_usd": size_usd,
-                            "last_updated": timestamp_iso,
-                        },
-                    },
-                    "total_slippage_usd": result.total_slippage_usd,
-                }
-            )
-            
-            await self.position_manager.add_position(position)
-            
-            # 🔒 Mark that we've opened a position this session (Issue #4 fix)
-            self.position_opened_this_session = True
-            
-            self.logger.log(
-                f"✅ Position opened {symbol}: "
-                f"Long @ ${long_fill['fill_price']}, "
-                f"Short @ ${short_fill['fill_price']}, "
-                f"Slippage: ${result.total_slippage_usd:.2f}, "
-                f"Fees: ${entry_fees:.2f}",
-                "INFO"
-            )
-            
-            if self.one_position_per_session:
-                self.logger.log(
-                    "📊 Session limit: Will not open more positions this session (one_position_per_session=True)",
-                    "INFO"
-                )
-
-            await self._set_dashboard_stage(
-                LifecycleStage.MONITORING,
-                f"Position opened {symbol}",
-                category=TimelineCategory.EXECUTION,
-            )
-            await self._publish_dashboard_snapshot(f"Position opened {symbol}")
-            
-            return True  # Success
-            
-        except Exception as e:
-            self.logger.log(
-                f"❌ {opportunity.symbol}: Unexpected error - {e}",
-                "ERROR"
-            )
-            self.failed_symbols.add(opportunity.symbol)
-            return False
-    
-    # ========================================================================
-    # Helper Methods
-    # ========================================================================
-    
-    def _has_capacity(self) -> bool:
-        """
-        Check if can open more positions.
-        
-        Checks both:
-        1. Global position limit (max_positions config)
-        2. Session-level limit (one_position_per_session flag)
-        
-        Returns:
-            True if under max position limit AND session limit allows
-        """
-        # Check global position limit
-        open_count = len(self.position_manager._positions)
-        if open_count >= self.config.max_positions:
-            if not self._max_position_warning_logged:
-                self.logger.log(
-                    f"🚫 Max positions reached ({open_count}/{self.config.max_positions}). "
-                    "Skipping new opportunities until capacity frees up.",
-                    "INFO"
-                )
-                self._max_position_warning_logged = True
-            return False
-        else:
-            self._max_position_warning_logged = False
-        
-        # 🔒 Check session-level limit (Issue #4 fix)
-        # If one_position_per_session is enabled and we've already opened one, stop
-        if self.one_position_per_session and self.position_opened_this_session:
-            if not self._session_limit_warning_logged:
-                self.logger.log(
-                    "📊 Session limit reached: already opened 1 position this session. "
-                    "Set one_position_per_session=False to allow multiple positions.",
-                    "INFO"
-                )
-                self._session_limit_warning_logged = True
-            return False
-        else:
-            self._session_limit_warning_logged = False
-
-        return True
-    
-    def _calculate_total_exposure(self) -> Decimal:
-        """
-        Calculate total exposure across all positions.
-        
-        Returns:
-            Total USD exposure
-        """
-        positions = self.position_manager._positions.values()
-        return sum(p.size_usd for p in positions if p.status == "open")
-    
     # ========================================================================
     # Strategy Status
     # ========================================================================
@@ -1104,7 +445,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
         """
         positions = await self.position_manager.get_open_positions()
         
-        total_exposure = self._calculate_total_exposure()
+        total_exposure = self.opportunity_scanner.calculate_total_exposure()
         total_pnl = sum(p.get_net_pnl() for p in positions)
         
         return {
@@ -1393,7 +734,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 f"Manual close requested for {position.symbol}",
                 category=TimelineCategory.EXECUTION,
             )
-            await self._close_position(position, "MANUAL_CLOSE")
+            await self.position_closer.close(position, "MANUAL_CLOSE")
             await self.dashboard_service.publish_event(
                 TimelineEvent(
                     ts=datetime.now(timezone.utc),
@@ -1453,20 +794,27 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 LifecycleStage.MONITORING,
                 "Monitoring active positions",
             )
-            await self._monitor_positions()
+            await self.position_monitor.monitor()
             await self._publish_dashboard_snapshot()
 
             await self._set_dashboard_stage(
                 LifecycleStage.CLOSING,
                 "Evaluating exit conditions",
             )
-            await self._check_exit_conditions() 
+            
+            await self.position_closer.evaluate() 
 
             await self._set_dashboard_stage(
                 LifecycleStage.SCANNING,
                 "Scanning for new opportunities",
             )
-            await self._scan_opportunities()
+            opportunities = await self.opportunity_scanner.scan()
+            for opportunity in opportunities:
+                if not self.opportunity_scanner.has_capacity():
+                    break
+                if not self.opportunity_scanner.should_take(opportunity):
+                    continue
+                await self.position_opener.open(opportunity)
             await self._set_dashboard_stage(
                 LifecycleStage.IDLE,
                 "Funding arbitrage cycle completed",
@@ -1476,7 +824,8 @@ class FundingArbitrageStrategy(StatefulStrategy):
             
             return StrategyResult(
                 action=StrategyAction.WAIT,
-                message="Funding arbitrage cycle completed"
+                message="Funding arbitrage cycle completed",
+                wait_time=self.config.risk_config.check_interval_seconds,
             )
             
         except Exception as e:

@@ -7,12 +7,21 @@ import asyncio
 import time
 import hmac
 import hashlib
-from decimal import Decimal
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import urlencode
 import aiohttp
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
+from exchange_clients.base import (
+    BaseExchangeClient,
+    OrderResult,
+    OrderInfo,
+    ExchangePositionSnapshot,
+    query_retry,
+    MissingCredentialsError,
+    validate_credentials,
+)
 from exchange_clients.aster.common import get_aster_symbol_format
 from exchange_clients.aster.websocket_manager import AsterWebSocketManager
 from helpers.unified_logger import get_exchange_logger
@@ -630,7 +639,77 @@ class AsterClient(BaseExchangeClient):
                 return position_amt
 
         return Decimal(0)
-    
+
+    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+        """
+        Return the current position snapshot for a symbol.
+        """
+        formatted_symbol = symbol.upper()
+        if not formatted_symbol.endswith("USDT"):
+            formatted_symbol = get_aster_symbol_format(formatted_symbol)
+
+        def to_decimal(value: Any) -> Optional[Decimal]:
+            if value is None or value == "":
+                return None
+            try:
+                return Decimal(str(value))
+            except (InvalidOperation, TypeError, ValueError):
+                return None
+
+        try:
+            result = await self._make_request('GET', '/fapi/v2/positionRisk', {'symbol': formatted_symbol})
+        except Exception as exc:
+            self.logger.warning(f"[ASTER] Failed to fetch position risk for {symbol}: {exc}")
+            return None
+
+        if not isinstance(result, list):
+            return None
+
+        for position in result:
+            if position.get('symbol') != formatted_symbol:
+                continue
+
+            quantity = to_decimal(position.get('positionAmt')) or Decimal("0")
+            entry_price = to_decimal(position.get('entryPrice'))
+            mark_price = to_decimal(position.get('markPrice'))
+            unrealized = to_decimal(position.get('unRealizedProfit'))
+            leverage = to_decimal(position.get('leverage'))
+            isolated_margin = to_decimal(position.get('isolatedMargin'))
+            liquidation_price = to_decimal(position.get('liquidationPrice'))
+            notional = to_decimal(position.get('notional'))
+
+            exposure = notional.copy_abs() if notional is not None else None
+            if exposure is None and mark_price is not None and quantity != 0:
+                exposure = mark_price * quantity.copy_abs()
+
+            metadata: Dict[str, Any] = {
+                "margin_type": position.get('marginType'),
+                "position_side": position.get('positionSide'),
+            }
+            if notional is not None:
+                metadata["notional"] = notional
+
+            side = "long" if quantity > 0 else "short" if quantity < 0 else None
+
+            return ExchangePositionSnapshot(
+                symbol=formatted_symbol,
+                quantity=quantity,
+                side=side,
+                entry_price=entry_price,
+                mark_price=mark_price,
+                exposure_usd=exposure,
+                unrealized_pnl=unrealized,
+                realized_pnl=None,
+                funding_accrued=None,
+                margin_reserved=isolated_margin,
+                leverage=leverage,
+                liquidation_price=liquidation_price,
+                timestamp=datetime.now(timezone.utc),
+                metadata={k: v for k, v in metadata.items() if v is not None},
+            )
+
+        return None
+
     async def get_account_balance(self) -> Optional[Decimal]:
         """
         Get available account balance from Aster.

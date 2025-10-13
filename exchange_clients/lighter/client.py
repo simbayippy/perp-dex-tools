@@ -5,11 +5,20 @@ Lighter exchange client implementation for trading execution.
 import os
 import asyncio
 import time
+from datetime import datetime, timezone
 import aiohttp
 from decimal import Decimal
 from typing import Dict, Any, List, Optional, Tuple
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
+from exchange_clients.base import (
+    BaseExchangeClient,
+    OrderResult,
+    OrderInfo,
+    ExchangePositionSnapshot,
+    query_retry,
+    MissingCredentialsError,
+    validate_credentials,
+)
 from helpers.unified_logger import get_exchange_logger
 
 # Import official Lighter SDK for API client
@@ -882,6 +891,66 @@ class LighterClient(BaseExchangeClient):
             self.logger.error(f"Error getting detailed positions: {e}")
             return []
 
+    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+        """
+        Retrieve detailed metrics for a specific symbol.
+        """
+        try:
+            positions = await self.get_detailed_positions()
+        except Exception as exc:
+            self.logger.warning(f"[LIGHTER] Failed to fetch positions for snapshot: {exc}")
+            return None
+
+        normalized_symbol = self.normalize_symbol(symbol).upper()
+
+        for pos in positions:
+            pos_symbol = (pos.get("symbol") or "").upper()
+            if pos_symbol != normalized_symbol:
+                continue
+
+            quantity: Decimal = pos.get("position") or Decimal("0")
+            entry_price: Optional[Decimal] = pos.get("avg_entry_price")
+            exposure: Optional[Decimal] = pos.get("position_value")
+            if exposure is not None:
+                exposure = exposure.copy_abs()
+
+            mark_price: Optional[Decimal] = None
+            if exposure is not None and quantity != 0:
+                mark_price = exposure / quantity.copy_abs()
+
+            unrealized: Optional[Decimal] = pos.get("unrealized_pnl")
+            realized: Optional[Decimal] = pos.get("realized_pnl")
+            margin_reserved: Optional[Decimal] = pos.get("allocated_margin")
+            liquidation_price: Optional[Decimal] = pos.get("liquidation_price")
+
+            side = "long" if quantity > 0 else "short" if quantity < 0 else pos.get("sign")
+            if isinstance(side, int):
+                side = "long" if side > 0 else "short" if side < 0 else None
+
+            metadata: Dict[str, Any] = {
+                "market_id": pos.get("market_id"),
+                "raw_sign": pos.get("sign"),
+            }
+
+            return ExchangePositionSnapshot(
+                symbol=normalized_symbol,
+                quantity=quantity,
+                side=side if isinstance(side, str) else None,
+                entry_price=entry_price,
+                mark_price=mark_price,
+                exposure_usd=exposure,
+                unrealized_pnl=unrealized,
+                realized_pnl=realized,
+                funding_accrued=None,
+                margin_reserved=margin_reserved,
+                leverage=None,
+                liquidation_price=liquidation_price,
+                timestamp=datetime.now(timezone.utc),
+                metadata={k: v for k, v in metadata.items() if v is not None},
+            )
+
+        return None
+
     async def get_account_pnl(self) -> Optional[Decimal]:
         """Get account P&L using Lighter SDK."""
         try:
@@ -1150,6 +1219,3 @@ class LighterClient(BaseExchangeClient):
                 success=False,
                 error_message=f"Market order exception: {e}"
             )
-
-
-
