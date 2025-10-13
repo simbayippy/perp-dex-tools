@@ -34,21 +34,23 @@ console = Console()
 
 
 async def fetch_latest_session(session_id: Optional[str]) -> Optional[dict]:
+    row = None
     if session_id:
         query = """
             SELECT session_id, strategy, config_path, started_at, health
             FROM dashboard_sessions
             WHERE session_id = :session_id
         """
-        return await database.fetch_one(query, {"session_id": UUID(session_id)})
-
-    query = """
-        SELECT session_id, strategy, config_path, started_at, health
-        FROM dashboard_sessions
-        ORDER BY started_at DESC
-        LIMIT 1
-    """
-    return await database.fetch_one(query)
+        row = await database.fetch_one(query, {"session_id": UUID(session_id)})
+    else:
+        query = """
+            SELECT session_id, strategy, config_path, started_at, health
+            FROM dashboard_sessions
+            ORDER BY started_at DESC
+            LIMIT 1
+        """
+        row = await database.fetch_one(query)
+    return dict(row) if row else None
 
 
 async def fetch_latest_snapshot(session_id: UUID) -> Optional[dict]:
@@ -59,7 +61,8 @@ async def fetch_latest_snapshot(session_id: UUID) -> Optional[dict]:
         ORDER BY generated_at DESC
         LIMIT 1
     """
-    return await database.fetch_one(query, {"session_id": session_id})
+    row = await database.fetch_one(query, {"session_id": session_id})
+    return dict(row) if row else None
 
 
 async def fetch_recent_events(session_id: UUID, limit: int = 10) -> list[TimelineEvent]:
@@ -73,6 +76,7 @@ async def fetch_recent_events(session_id: UUID, limit: int = 10) -> list[Timelin
     rows = await database.fetch_all(query, {"session_id": session_id, "limit": limit})
     events: list[TimelineEvent] = []
     for row in rows:
+        row = dict(row)
         metadata = row["metadata"]
         if isinstance(metadata, str):
             metadata = json.loads(metadata)
