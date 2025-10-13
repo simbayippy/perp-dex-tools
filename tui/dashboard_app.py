@@ -192,6 +192,9 @@ class MainMenuScreen(Screen):
             self.menu.focus()
         self._update_notice()
 
+    def on_show(self) -> None:
+        self._update_notice()
+
     def _update_notice(self) -> None:
         if not self.notice:
             return
@@ -238,6 +241,9 @@ class StrategySelectScreen(Screen):
         self._refresh()
         if self.list_view:
             self.list_view.focus()
+
+    def on_show(self) -> None:
+        self._refresh()
 
     def action_back(self) -> None:
         self.app.pop_screen()
@@ -332,6 +338,10 @@ class PositionsScreen(Screen):
         self._refresh_table()
         if self.table:
             self.table.focus()
+
+    def on_show(self) -> None:
+        self._refresh_sessions()
+        self._refresh_table()
 
     def action_back(self) -> None:
         self.app.pop_screen()

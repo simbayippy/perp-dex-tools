@@ -122,7 +122,22 @@ class PositionMonitor:
                 visited.add(key)
 
                 try:
+                    self._logger.log(
+                        f"[{dex_key.upper()}] Fetching live position snapshot for {symbol_key}",
+                        "INFO",
+                    )
                     snapshot = await client.get_position_snapshot(pos.symbol)
+                    if snapshot:
+                        self._logger.log(
+                            f"[{dex_key.upper()}] Snapshot for {symbol_key}: "
+                            f"qty={snapshot.quantity}, entry={snapshot.entry_price}, mark={snapshot.mark_price}",
+                            "INFO",
+                        )
+                    else:
+                        self._logger.log(
+                            f"[{dex_key.upper()}] Snapshot for {symbol_key} returned empty payload",
+                            "INFO",
+                        )
                 except Exception as exc:
                     self._logger.log(
                         f"[{dex_key}] Failed to fetch position snapshot for {symbol_key}: {exc}",
@@ -218,4 +233,3 @@ class PositionMonitor:
         if has_updates:
             position.metadata["legs"] = legs_metadata
             position.metadata["exchange_unrealized_pnl"] = total_unrealized
-
