@@ -19,6 +19,8 @@ from dashboard.models import (
     SessionState,
     TimelineEvent,
 )
+from dashboard.state import dashboard_state
+from dashboard.event_bus import event_bus
 if TYPE_CHECKING:
     from funding_rate_service.database.repositories import DashboardRepository
 else:
@@ -102,6 +104,7 @@ class DashboardService:
 
     async def start(self) -> None:
         """Initialize persistence and renderer tasks."""
+        await dashboard_state.set_session_state(self._session_state)
         if not self._enabled or self._running:
             return
 
@@ -125,6 +128,7 @@ class DashboardService:
     async def stop(self, *, health: SessionHealth = SessionHealth.STOPPED) -> None:
         """Stop background tasks and finalise persistence."""
         if not self._enabled:
+            await dashboard_state.clear()
             return
 
         self._running = False
@@ -146,12 +150,13 @@ class DashboardService:
                 ended_at=datetime.now(timezone.utc),
                 health=health.value,
             )
+        await dashboard_state.clear()
 
     # ------------------------------------------------------------------ #
     # Session updates                                                    #
     # ------------------------------------------------------------------ #
 
-    def update_session(
+    async def update_session(
         self,
         *,
         health: Optional[SessionHealth] = None,
@@ -159,9 +164,6 @@ class DashboardService:
         metadata: Optional[dict] = None,
     ) -> None:
         """Update cached session metadata."""
-        if not self._enabled:
-            return
-
         update_payload = {}
         if health:
             update_payload["health"] = health
@@ -174,6 +176,10 @@ class DashboardService:
 
         if update_payload:
             self._session_state = self._session_state.model_copy(update=update_payload)
+            await dashboard_state.set_session_state(self._session_state)
+
+        if not self._enabled:
+            return
 
     # ------------------------------------------------------------------ #
     # Publishing                                                         #
@@ -181,17 +187,21 @@ class DashboardService:
 
     async def publish_snapshot(self, snapshot: DashboardSnapshot) -> None:
         """Queue a snapshot for persistence and rendering."""
-        if not self._enabled:
-            return
-
         heartbeat = snapshot.generated_at
         self._session_state = self._session_state.model_copy(update={"last_heartbeat": heartbeat})
 
         snapshot = snapshot.model_copy(update={"session": self._session_state})
+        await dashboard_state.update_snapshot(snapshot)
+
+        if not self._enabled:
+            return
+
         await self._queue.put(_SnapshotEnvelope(snapshot=snapshot))
 
     async def publish_event(self, event: TimelineEvent) -> None:
         """Queue a timeline event for persistence."""
+        await dashboard_state.add_event(event)
+
         if not self._enabled:
             return
 
@@ -251,10 +261,24 @@ class DashboardService:
             )
             self._last_persisted_at = now
 
+        await event_bus.broadcast(
+            {
+                "type": "snapshot",
+                "payload": snapshot.model_dump(mode="json"),
+            }
+        )
+
         if self._renderer:
             await self._renderer.render(snapshot)
 
     async def _handle_event(self, event: TimelineEvent) -> None:
+        await event_bus.broadcast(
+            {
+                "type": "event",
+                "payload": event.model_dump(mode="json"),
+            }
+        )
+
         if self._repository:
             await self._repository.insert_event(
                 session_id=self._session_state.session_id,

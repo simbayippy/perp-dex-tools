@@ -32,6 +32,7 @@ from dashboard.models import (
     TimelineEvent,
 )
 from dashboard.service import DashboardService
+from dashboard import control_server
 
 # Direct imports from funding_rate_service (internal calls, no HTTP)
 # Make imports conditional to avoid config loading issues during import
@@ -51,7 +52,7 @@ except ImportError as e:
 from typing import Dict, Any, List, Tuple, Optional
 from decimal import Decimal
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 # Execution layer imports
 from strategies.execution.patterns.atomic_multi_order import (
@@ -206,7 +207,9 @@ class FundingArbitrageStrategy(StatefulStrategy):
         self._session_limit_warning_logged = False
         self._max_position_warning_logged = False
 
+
         # Dashboard service (optional)
+        self._manual_pause = False
         self.dashboard_enabled = bool(self.config.dashboard.enabled and FUNDING_SERVICE_AVAILABLE)
         self._current_dashboard_stage: LifecycleStage = LifecycleStage.INITIALIZING
         dashboard_metadata = {
@@ -278,6 +281,8 @@ class FundingArbitrageStrategy(StatefulStrategy):
             repository=repository,
             renderer_factory=renderer_factory,
         )
+        self.control_server = control_server if self.dashboard_enabled else None
+        self._control_server_started = False
     
     
     def get_strategy_name(self) -> str:
@@ -1129,7 +1134,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
         stage_changed = stage != self._current_dashboard_stage
         if stage_changed:
             self._current_dashboard_stage = stage
-            self.dashboard_service.update_session(lifecycle_stage=stage)
+            await self.dashboard_service.update_session(lifecycle_stage=stage)
 
         if message and (stage_changed or category != TimelineCategory.STAGE):
             event = TimelineEvent(
@@ -1314,6 +1319,93 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 "exit_reason": position.exit_reason,
             },
         )
+
+    async def _handle_dashboard_command(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        command_type = payload.get("type")
+        if command_type == "ping":
+            return {"ok": True, "message": "pong"}
+
+        if command_type == "close_position":
+            position_id_raw = payload.get("position_id")
+            if not position_id_raw:
+                return {"ok": False, "error": "position_id missing"}
+            try:
+                position_id = UUID(str(position_id_raw))
+            except ValueError:
+                return {"ok": False, "error": "invalid position_id"}
+
+            success, message = await self._handle_close_position_command(position_id)
+            return {"ok": success, "message": message}
+
+        if command_type == "pause_strategy":
+            if self._manual_pause:
+                return {"ok": True, "message": "Strategy already paused"}
+            self._manual_pause = True
+            await self._set_dashboard_stage(
+                LifecycleStage.IDLE,
+                "Strategy paused via control API",
+                category=TimelineCategory.INFO,
+            )
+            await self.dashboard_service.publish_event(
+                TimelineEvent(
+                    ts=datetime.now(timezone.utc),
+                    category=TimelineCategory.INFO,
+                    message="Strategy paused via control API",
+                    metadata={},
+                )
+            )
+            self.logger.log("Strategy paused via control API", "INFO")
+            return {"ok": True, "message": "Strategy paused"}
+
+        if command_type == "resume_strategy":
+            if not self._manual_pause:
+                return {"ok": True, "message": "Strategy already running"}
+            self._manual_pause = False
+            await self._set_dashboard_stage(
+                LifecycleStage.IDLE,
+                "Strategy resumed via control API",
+                category=TimelineCategory.INFO,
+            )
+            await self.dashboard_service.publish_event(
+                TimelineEvent(
+                    ts=datetime.now(timezone.utc),
+                    category=TimelineCategory.INFO,
+                    message="Strategy resumed via control API",
+                    metadata={},
+                )
+            )
+            self.logger.log("Strategy resumed via control API", "INFO")
+            return {"ok": True, "message": "Strategy resumed"}
+
+        return {"ok": False, "error": f"unknown command '{command_type}'"}
+
+    async def _handle_close_position_command(self, position_id: UUID) -> Tuple[bool, str]:
+        position = await self.position_manager.get_position(position_id)
+        if not isinstance(position, FundingArbPosition):
+            return False, "Position not found or already closed"
+
+        if position.status != "open":
+            return False, f"Position status is '{position.status}', cannot close"
+
+        try:
+            await self._set_dashboard_stage(
+                LifecycleStage.CLOSING,
+                f"Manual close requested for {position.symbol}",
+                category=TimelineCategory.EXECUTION,
+            )
+            await self._close_position(position, "MANUAL_CLOSE")
+            await self.dashboard_service.publish_event(
+                TimelineEvent(
+                    ts=datetime.now(timezone.utc),
+                    category=TimelineCategory.INFO,
+                    message=f"Manual close executed for {position.symbol}",
+                    metadata={"position_id": str(position_id)},
+                )
+            )
+            return True, "Close initiated"
+        except Exception as exc:  # pragma: no cover - log and surface error
+            self.logger.log(f"Manual close failed for {position_id}: {exc}", "ERROR")
+            return False, str(exc)
     
     # ========================================================================
     # Abstract Method Implementations (Required by BaseStrategy)
@@ -1332,16 +1424,20 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 category=TimelineCategory.INFO,
             )
             await self._publish_dashboard_snapshot("Startup state captured")
-        
+            if self.control_server:
+                self.control_server.register_command_handler(self._handle_dashboard_command)
+                await self.control_server.start()
+                self._control_server_started = True
+
         self.logger.log("FundingArbitrageStrategy initialized successfully")
     
     async def should_execute(self, market_data) -> bool:
         """
         Determine if strategy should execute based on market conditions.
-        
+
         For funding arbitrage, we always check for opportunities.
         """
-        return True
+        return not self._manual_pause
     
     async def execute_strategy(self, market_data):
         """
@@ -1415,6 +1511,9 @@ class FundingArbitrageStrategy(StatefulStrategy):
             await self.state_manager.close()
         if getattr(self, "dashboard_service", None) and self.dashboard_service.enabled:
             await self.dashboard_service.stop(health=SessionHealth.STOPPED)
-        
+        if getattr(self, "_control_server_started", False) and self.control_server:
+            await self.control_server.stop()
+            self._control_server_started = False
+
         await super().cleanup()
     

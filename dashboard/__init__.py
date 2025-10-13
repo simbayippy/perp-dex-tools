@@ -18,6 +18,9 @@ from .models import (
     TimelineEvent,
 )
 from .renderers import PlainTextDashboardRenderer, RichDashboardRenderer
+from .event_bus import DashboardEventBus, event_bus
+from .state import DashboardState, dashboard_state
+from .control_server import DashboardControlServer, control_server
 
 __all__ = [
     "DashboardSnapshot",
@@ -33,4 +36,10 @@ __all__ = [
     "TimelineEvent",
     "RichDashboardRenderer",
     "PlainTextDashboardRenderer",
+    "DashboardState",
+    "dashboard_state",
+    "DashboardEventBus",
+    "event_bus",
+    "DashboardControlServer",
+    "control_server",
 ]

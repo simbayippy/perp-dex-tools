@@ -18,6 +18,7 @@
 8. [Component Interaction Diagram](#component-interaction-diagram)
 9. [Execution Flow Example](#execution-flow-example)
 10. [Key Design Decisions](#key-design-decisions)
+11. [Operator Tooling & Dashboard](#operator-tooling--dashboard)
 
 ---
 
@@ -1588,6 +1589,31 @@ strategy = FundingArbitrageStrategy(config, exchange_clients)
 
 ---
 
+## Operator Tooling & Dashboard
+
+- **Dashboard snapshots/events (DB-backed)**  
+  - `dashboard/models.py` defines the Pydantic schema (`DashboardSnapshot`, `TimelineEvent`, etc.) shared across the strategy and tooling.
+  - `dashboard/service.py` runs inside the strategy but stays dormant unless `dashboard.enabled` is true. It mirrors session heartbeat, optionally persists to PostgreSQL (`dashboard_sessions`, `dashboard_snapshots`, `dashboard_events`), and can drive renderers.
+  - Persistence uses lightweight repo wrappers (`funding_rate_service/database/repositories/dashboard_repository.py`) with JSON/UTC-safe encoding.
+
+- **Headless scripts**  
+  - `scripts/dashboard_viewer.py` renders the latest snapshot as a static Rich summary, decoupled from the bot terminal. This leverages `dashboard/viewer_utils.py` for loading and formatting.
+  - The script is safe to run while the bot is active; it opens a DB connection, prints, and exits.
+
+- **Textual TUI (Step 3 foundation)**  
+  - `tui/dashboard_app.py` defines a Textual application with a simple menu (`View Latest Snapshot`, `Start Bot` placeholder, `Exit`).  
+  - Entry point: `python scripts/dashboard_tui.py`. Requires `textual>=0.44.0` plus existing dependencies (`rich`, `databases`).
+  - The TUI currently fetches on demand (no live polling). Future enhancements: periodic refresh, bot lifecycle controls, funding monitors.
+  - The control server (`dashboard/control_server.py`) exposes `/snapshot`, `/stream`, and `/commands` (WebSocket + REST) so future UIs can subscribe to live updates and issue actions (e.g., manual close). `FundingArbitrageStrategy` registers a handler when dashboard mode is enabled.
+
+- **Configuration defaults**  
+  - `FundingArbConfig.dashboard` defaults to disabled, so the trading loop runs without rendering or persistence unless explicitly enabled in YAML.
+  - Offline tools rely on the stored snapshots; they are unaffected when in-process rendering is turned off.
+
+These additions let operators monitor state after the fact or in a dedicated terminal, while paving the way for a richer CLI/TUI experience without disturbing the core trading architecture.
+
+---
+
 ## Summary
 
 This architecture provides:
@@ -1613,4 +1639,7 @@ This architecture provides:
 - See `docs/CLI_COMMANDS.md` for command reference
 - See `funding_rate_service/docs/API_ENDPOINTS.md` for API documentation
 - See `strategies/implementations/funding_arbitrage/` for strategy implementation
-
+### Live Snapshot Cache
+- `dashboard/state.py` maintains an in-memory `DashboardState` that stores the most recent `DashboardSnapshot`, session metadata, and a rolling buffer of `TimelineEvent`s.
+- `dashboard_service` updates this cache on every snapshot/event publication, even when persistence/rendering are disabled. It acts as the authoritative live view for downstream consumers (UI, control plane) while PostgreSQL retains historical snapshots.
+- Future iterations will expose this state via a control API/event stream so new UIs don’t have to poll the database for up-to-date metrics.

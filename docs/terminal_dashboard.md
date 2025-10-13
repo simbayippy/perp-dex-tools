@@ -351,10 +351,15 @@ A richer operator experience is available via the Textual terminal UI, which reu
 python scripts/dashboard_tui.py
 ```
 
-Features in the initial version:
-- Menu with options to view the latest snapshot (with auto-formatted tables) or exit; additional actions (starting bots, viewing funding feeds) are planned.
-- The TUI connects to the dashboard tables on startup and disconnects cleanly on exit.
+Current capabilities:
+- Menu items for live monitoring, closing the most recent position, and pausing/resuming the strategy. Additional actions (starting bots, viewing funding feeds) are planned.
+- Connects to the control server on `localhost:8765`: snapshots are fetched via REST, then refreshed continuously over the WebSocket stream; if the server is unavailable the app falls back to the most recent database snapshot.
 - Built with [Textual](https://textual.textualize.io/), so it supports keyboard navigation, theming, and future expansion to multi-pane layouts.
+- Control server endpoints (`dashboard/control_server.py`):
+  - `GET /snapshot` – JSON view of the live cache.
+  - `GET /stream` – WebSocket stream of snapshot/event updates (used by the TUI).
+  - `POST /commands` – issue actions such as `{"type": "close_position", "position_id": "..."}` (UI hooks coming soon).
+  These endpoints will power future UI actions (manual close, pause/resume, etc.).
 
 Future iterations will add more menu entries (bot lifecycle control, funding monitors) and eventually pave the way for a graphical or web dashboard.
 
