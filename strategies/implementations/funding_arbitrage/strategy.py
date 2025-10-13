@@ -199,7 +199,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
 
  
     # ========================================================================
-    # Main Execution Loop
+    # Main Execution Loop.
     # ========================================================================
        
     async def execute_strategy(self, market_data) -> StrategyResult:
