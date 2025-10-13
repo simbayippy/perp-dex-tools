@@ -6,7 +6,7 @@ Concrete strategy implementations organized by type:
 - funding_arbitrage: Cross-exchange funding rate arbitrage
 """
 
-from .grid import GridStrategy, GridConfig
+# from .grid import GridStrategy, GridConfig
 from .funding_arbitrage import (
     FundingArbitrageStrategy,
     FundingArbConfig,
@@ -15,8 +15,8 @@ from .funding_arbitrage import (
 
 __all__ = [
     # Grid trading
-    'GridStrategy',
-    'GridConfig',
+    # 'GridStrategy',
+    # 'GridConfig',
     
     # Funding arbitrage
     'FundingArbitrageStrategy',

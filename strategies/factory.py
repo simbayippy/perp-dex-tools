@@ -5,7 +5,7 @@ Creates strategy instances based on configuration.
 
 from typing import Dict, Type, List
 from .base_strategy import BaseStrategy
-from .implementations.grid import GridStrategy
+# from .implementations.grid import GridStrategy
 from .implementations.funding_arbitrage import FundingArbitrageStrategy
 
 
@@ -14,7 +14,7 @@ class StrategyFactory:
     
     # Registry of available strategies
     _strategies: Dict[str, Type[BaseStrategy]] = {
-        'grid': GridStrategy,
+        # 'grid': GridStrategy,
         'funding_arbitrage': FundingArbitrageStrategy,
     }
     

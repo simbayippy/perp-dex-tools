@@ -12,7 +12,7 @@ from .base_strategy import BaseStrategy, OrderParams, StrategyAction, RunnableSt
 from .factory import StrategyFactory
 
 # Strategy implementations
-from .implementations.grid import GridStrategy, GridConfig
+# from .implementations.grid import GridStrategy, GridConfig
 from .implementations.funding_arbitrage import (
     FundingArbitrageStrategy,
     FundingArbConfig,
@@ -28,8 +28,8 @@ __all__ = [
     'StrategyFactory',
     
     # Grid strategy
-    'GridStrategy',
-    'GridConfig',
+    # 'GridStrategy',
+    # 'GridConfig',
     
     # Funding arbitrage strategy
     'FundingArbitrageStrategy',
