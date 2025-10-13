@@ -40,7 +40,7 @@ except ImportError as e:
     database = None
     FUNDING_SERVICE_AVAILABLE = False
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from decimal import Decimal
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -211,82 +211,12 @@ class FundingArbitrageStrategy(StatefulStrategy):
         self.position_closer = PositionCloser(self)
 
         # Dashboard service (optional)
-        dashboard_settings = getattr(self.config, "dashboard", None)
-        if not isinstance(dashboard_settings, DashboardSettings):
-            dashboard_settings = DashboardSettings()
-        self.dashboard_settings = dashboard_settings
+        self.dashboard_settings = self._resolve_dashboard_settings()
         self.dashboard_enabled = bool(self.dashboard_settings.enabled and FUNDING_SERVICE_AVAILABLE)
         self._current_dashboard_stage: LifecycleStage = LifecycleStage.INITIALIZING
-        dashboard_metadata = {
-            "available_exchanges": available_exchanges,
-            "scan_exchanges": self.config.exchanges,
-        }
-        session_state = SessionState(
-            session_id=uuid4(),
-            strategy="funding_arbitrage",
-            config_path=getattr(self.config, "config_path", None),
-            started_at=datetime.now(timezone.utc),
-            last_heartbeat=datetime.now(timezone.utc),
-            health=SessionHealth.STARTING,
-            lifecycle_stage=LifecycleStage.INITIALIZING,
-            max_positions=self.config.max_positions,
-            max_total_exposure_usd=getattr(self.config, "max_total_exposure_usd", None),
-            dry_run=getattr(self.config, "dry_run", False),
-            metadata=dashboard_metadata,
+        self.dashboard_service, self.control_server = self._create_dashboard_resources(
+            available_exchanges
         )
-
-        repository = None
-        if self.dashboard_enabled and DashboardRepository is not None:
-            repository = DashboardRepository(database)
-        elif self.dashboard_settings.enabled and not FUNDING_SERVICE_AVAILABLE:
-            self.logger.log(
-                "Dashboard persistence disabled – funding rate service database unavailable",
-                "WARNING",
-            )
-
-        renderer_factory = None
-        if self.dashboard_enabled:
-            renderer_name = (self.dashboard_settings.renderer or "rich").lower()
-            if renderer_name == "rich":
-                try:
-                    from dashboard.renderers import RichDashboardRenderer
-
-                    refresh = self.dashboard_settings.refresh_interval_seconds
-                    max_events = min(self.dashboard_settings.event_retention, 20)
-                    renderer_factory = lambda: RichDashboardRenderer(
-                        refresh_interval_seconds=refresh,
-                        max_events=max_events,
-                    )
-                except Exception as exc:  # pylint: disable=broad-except
-                    self.logger.log(
-                        f"⚠️  Dashboard renderer unavailable: {exc}. Falling back to log output.",
-                        "WARNING",
-                    )
-                    renderer_factory = None
-            elif renderer_name == "plain":
-                try:
-                    from dashboard.renderers import PlainTextDashboardRenderer
-
-                    renderer_factory = lambda: PlainTextDashboardRenderer()
-                except Exception as exc:  # pylint: disable=broad-except
-                    self.logger.log(
-                        f"⚠️  Plain dashboard renderer unavailable: {exc}. Falling back to log output.",
-                        "WARNING",
-                    )
-                    renderer_factory = None
-            else:
-                self.logger.log(
-                    f"ℹ️  Dashboard renderer '{renderer_name}' not supported yet. Using log output.",
-                    "INFO",
-                )
-
-        self.dashboard_service = DashboardService(
-            session_state=session_state,
-            settings=self.dashboard_settings,
-            repository=repository,
-            renderer_factory=renderer_factory,
-        )
-        self.control_server = control_server if self.dashboard_enabled else None
         self._control_server_started = False
     
     
@@ -541,6 +471,108 @@ class FundingArbitrageStrategy(StatefulStrategy):
             "exchanges"
         ]
     
+    # ========================================================================
+    # Dashboard Helpers
+    # ========================================================================
+
+    def _resolve_dashboard_settings(self) -> DashboardSettings:
+        """
+        Derive dashboard settings from config if supplied, otherwise fallback to defaults.
+        """
+        candidate = getattr(self.config, "dashboard", None)
+
+        if isinstance(candidate, DashboardSettings):
+            return candidate
+
+        if isinstance(candidate, dict):
+            try:
+                return DashboardSettings(**candidate)
+            except Exception as exc:  # pylint: disable=broad-except
+                self.logger.log(
+                    f"⚠️  Invalid dashboard config ({exc}); falling back to defaults.",
+                    "WARNING",
+                )
+
+        defaults = DashboardSettings()
+        defaults.enabled = True
+        return defaults
+
+    def _create_dashboard_resources(
+        self, available_exchanges: List[str]
+    ) -> Tuple[DashboardService, Optional[Any]]:
+        dashboard_metadata = {
+            "available_exchanges": available_exchanges,
+            "scan_exchanges": self.config.exchanges,
+        }
+
+        session_state = SessionState(
+            session_id=uuid4(),
+            strategy="funding_arbitrage",
+            config_path=getattr(self.config, "config_path", None),
+            started_at=datetime.now(timezone.utc),
+            last_heartbeat=datetime.now(timezone.utc),
+            health=SessionHealth.STARTING,
+            lifecycle_stage=LifecycleStage.INITIALIZING,
+            max_positions=self.config.max_positions,
+            max_total_exposure_usd=getattr(self.config, "max_total_exposure_usd", None),
+            dry_run=getattr(self.config, "dry_run", False),
+            metadata=dashboard_metadata,
+        )
+
+        repository = None
+        if self.dashboard_enabled and DashboardRepository is not None:
+            repository = DashboardRepository(database)
+        elif self.dashboard_settings.enabled and not FUNDING_SERVICE_AVAILABLE:
+            self.logger.log(
+                "Dashboard persistence disabled – funding rate service database unavailable",
+                "WARNING",
+            )
+
+        renderer_factory = None
+        if self.dashboard_enabled:
+            renderer_name = (self.dashboard_settings.renderer or "rich").lower()
+            if renderer_name == "rich":
+                try:
+                    from dashboard.renderers import RichDashboardRenderer
+
+                    refresh = self.dashboard_settings.refresh_interval_seconds
+                    max_events = min(self.dashboard_settings.event_retention, 20)
+                    renderer_factory = lambda: RichDashboardRenderer(
+                        refresh_interval_seconds=refresh,
+                        max_events=max_events,
+                    )
+                except Exception as exc:  # pylint: disable=broad-except
+                    self.logger.log(
+                        f"⚠️  Dashboard renderer unavailable: {exc}. Falling back to log output.",
+                        "WARNING",
+                    )
+                    renderer_factory = None
+            elif renderer_name == "plain":
+                try:
+                    from dashboard.renderers import PlainTextDashboardRenderer
+
+                    renderer_factory = lambda: PlainTextDashboardRenderer()
+                except Exception as exc:  # pylint: disable=broad-except
+                    self.logger.log(
+                        f"⚠️  Plain dashboard renderer unavailable: {exc}. Falling back to log output.",
+                        "WARNING",
+                    )
+                    renderer_factory = None
+            else:
+                self.logger.log(
+                    f"ℹ️  Dashboard renderer '{renderer_name}' not supported yet. Using log output.",
+                    "INFO",
+                )
+
+        service = DashboardService(
+            session_state=session_state,
+            settings=self.dashboard_settings,
+            repository=repository,
+            renderer_factory=renderer_factory,
+        )
+        control = control_server if self.dashboard_enabled else None
+        return service, control
+
     # ========================================================================
     # Cleanup
     # ========================================================================
