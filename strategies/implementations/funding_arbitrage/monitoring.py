@@ -36,6 +36,7 @@ class PositionMonitor:
 
     async def monitor(self) -> None:
         """Refresh open positions with latest funding rates and exchange data."""
+        # this is getting from a cache, not DB
         positions = await self._position_manager.get_open_positions()
 
         if not positions:
@@ -83,6 +84,7 @@ class PositionMonitor:
                     ),
                     "INFO",
                 )
+                self._log_exchange_metrics(position)
             except Exception as exc:  # pragma: no cover - defensive logging
                 self._logger.log(
                     f"Error monitoring position {position.id}: {exc}",
@@ -235,3 +237,52 @@ class PositionMonitor:
             position.metadata["legs"] = legs_metadata
             position.metadata["exchange_unrealized_pnl"] = total_unrealized
             position.metadata["exchange_funding"] = total_funding
+
+    def _log_exchange_metrics(self, position: FundingArbPosition) -> None:
+        """
+        Emit an INFO log with the latest per-leg metrics and aggregate exchange figures.
+        Useful for verifying delta-neutral hedges after position openings.
+        """
+        legs_metadata = position.metadata.get("legs")
+        if not legs_metadata:
+            return
+
+        total_unrealized = position.metadata.get("exchange_unrealized_pnl")
+        total_funding = position.metadata.get("exchange_funding")
+
+        leg_fragments = []
+        for dex, meta in legs_metadata.items():
+            side = meta.get("side", "n/a")
+            quantity = self._format_decimal(meta.get("quantity"), precision=3)
+            mark_price = self._format_decimal(meta.get("mark_price"), precision=6)
+            entry_price = self._format_decimal(meta.get("entry_price"), precision=6)
+            unrealized = self._format_decimal(meta.get("unrealized_pnl"))
+            funding = self._format_decimal(meta.get("funding_accrued"))
+            exposure = self._format_decimal(meta.get("exposure_usd"))
+
+            leg_fragments.append(
+                f"{dex.upper()} side={side} qty={quantity} mark={mark_price} "
+                f"entry={entry_price} exposure=${exposure} "
+                f"uPnL=${unrealized} funding=${funding}"
+            )
+
+        totals_fragment = (
+            f"Total uPnL=${self._format_decimal(total_unrealized)} "
+            f"Total funding=${self._format_decimal(total_funding)}"
+        )
+        legs_fragment = "; ".join(leg_fragments)
+        self._logger.log(
+            f"Position {position.symbol} exchange snapshot -> {totals_fragment}; Legs: {legs_fragment}",
+            "INFO",
+        )
+
+    @staticmethod
+    def _format_decimal(value: Optional[Decimal], precision: int = 2) -> str:
+        """Format Decimal values consistently for logging."""
+        if value is None:
+            return "n/a"
+
+        try:
+            return f"{value:.{precision}f}"
+        except Exception:  # pragma: no cover - fallback for non-decimal types
+            return str(value)
