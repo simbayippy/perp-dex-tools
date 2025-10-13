@@ -324,6 +324,25 @@ LIMIT 1;
 
 ---
 
+## 11. Standalone Viewer (Step 2)
+
+When the in-process dashboard is disabled, you can inspect snapshots using the standalone viewer:
+
+```bash
+python scripts/dashboard_viewer.py            # render most recent session
+python scripts/dashboard_viewer.py --session-id <uuid>
+python scripts/dashboard_viewer.py --events 20
+```
+
+- The viewer connects to the same PostgreSQL database (`funding_rate_service` settings).
+- By default it selects the latest `dashboard_session` and prints the newest snapshot plus recent events.
+- Use `--session-id <uuid>` to target a specific run or `--events N` to change the number of timeline entries displayed.
+- Output uses Rich tables when run in a TTY; otherwise it falls back to plain text automatically (Rich handles the detection).
+
+This external viewer keeps the trading terminal clean while still providing an up-to-date summary. It’s the first step toward the menu-driven CLI/TUI described in the roadmap.
+
+---
+
 ## 10. FAQ
 
 **Q: What happens if the renderer crashes?**  
@@ -341,4 +360,3 @@ A: Use SQL `DELETE` statements or add a cron job to remove rows older than N day
 ---
 
 For deeper architectural context, see `docs/ARCHITECTURE.md` and `docs/terminal_dashboard_plan.md`. Contributions welcome—ensure new features extend the Pydantic models and renderer interfaces in a backwards-compatible manner.
-
