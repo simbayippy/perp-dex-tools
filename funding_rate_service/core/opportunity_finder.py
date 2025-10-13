@@ -118,7 +118,7 @@ class OpportunityFinder:
         
         # Apply limit
         limited_opportunities = sorted_opportunities[:filters.limit]
-        
+        print(f"Found {len(opportunities)} raw opportunities, {len(filtered_opportunities)} after filtering, returning top {len(limited_opportunities)}")
         logger.info(
             f"Found {len(opportunities)} raw opportunities, "
             f"{len(filtered_opportunities)} after filtering, "
