@@ -160,6 +160,7 @@ class PositionMonitor:
         total_unrealized = Decimal("0")
         has_updates = False
         now_ts = datetime.now(timezone.utc)
+        total_funding = Decimal("0")
 
         legs = [
             (position.long_dex, "long"),
@@ -209,6 +210,7 @@ class PositionMonitor:
 
             if snapshot.funding_accrued is not None:
                 leg_meta["funding_accrued"] = snapshot.funding_accrued
+                total_funding += snapshot.funding_accrued
 
             if snapshot.margin_reserved is not None:
                 leg_meta["margin_reserved"] = snapshot.margin_reserved
@@ -232,3 +234,4 @@ class PositionMonitor:
         if has_updates:
             position.metadata["legs"] = legs_metadata
             position.metadata["exchange_unrealized_pnl"] = total_unrealized
+            position.metadata["exchange_funding"] = total_funding
