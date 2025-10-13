@@ -21,6 +21,8 @@ from pathlib import Path
 from decimal import Decimal
 from typing import Iterable, Optional
 
+from dotenv import load_dotenv
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -87,6 +89,8 @@ async def build_exchange_clients(trading_config, exchange_list: Iterable[str]):
 
 async def run_monitor(args: argparse.Namespace) -> None:
     logger = get_core_logger("funding_arb_manual_monitor")
+
+    load_dotenv(PROJECT_ROOT / ".env")
 
     config_path = Path(args.config).expanduser()
     loaded = load_config_from_yaml(config_path)
