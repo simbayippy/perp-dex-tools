@@ -286,69 +286,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
         return funding_config
  
     # ========================================================================
-    # Main Execution Loop
-    # ========================================================================
-    
-    async def execute_cycle(self) -> StrategyResult:
-        """
-        Main 3-phase execution loop.
-        
-        Phase 1: Monitor existing positions
-        Phase 2: Check exit conditions & close
-        Phase 3: Scan for new opportunities
-        
-        Called every minute by trading_bot.py.
-        
-        Returns:
-            StrategyResult with actions taken
-        """
-        actions_taken = []
-        
-        # Reset failed symbols at start of each cycle (allow retry on next cycle)
-        self.failed_symbols.clear()
-        
-        try:
-            # Phase 1: Monitor existing positions
-            self.logger.log("Phase 1: Monitoring positions", "INFO")
-            await self.position_monitor.monitor()
-            
-            # Phase 2: Check exits
-            self.logger.log("Phase 2: Checking exit conditions", "INFO")
-            closed = await self.position_closer.evaluate()
-            actions_taken.extend(closed)
-            
-            # Phase 3: New opportunities (if capacity available)
-            if self.opportunity_scanner.has_capacity():
-                self.logger.log("Phase 3: Scanning new opportunities", "INFO")
-                opportunities = await self.opportunity_scanner.scan()
-                for opportunity in opportunities:
-                    if not self.opportunity_scanner.has_capacity():
-                        break
-                    if not self.opportunity_scanner.should_take(opportunity):
-                        continue
-                    position = await self.position_opener.open(opportunity)
-                    if position:
-                        actions_taken.append(
-                            f"Opened {opportunity.symbol} on {opportunity.long_dex}/{opportunity.short_dex}"
-                        )
-            else:
-                self.logger.log("Phase 3: At max capacity, skipping new opportunities", "INFO")
-            
-            return StrategyResult(
-                action=StrategyAction.REBALANCE if actions_taken else StrategyAction.WAIT,
-                message=f"Cycle complete: {len(actions_taken)} actions taken",
-                wait_time=self.config.risk_config.check_interval_seconds
-            )
-            
-        except Exception as e:
-            self.logger.log(f"Error in execute_cycle: {e}", "ERROR")
-            return StrategyResult(
-                action=StrategyAction.WAIT,
-                message=f"Error: {e}",
-                wait_time=60
-            )
-
-    # ========================================================================
     # Strategy Status
     # ========================================================================
     
@@ -398,22 +335,22 @@ class FundingArbitrageStrategy(StatefulStrategy):
 
         self.logger.log("FundingArbitrageStrategy initialized successfully")
     
-    async def should_execute(self, market_data) -> bool:
-        """
-        Determine if strategy should execute based on market conditions.
-
-        For funding arbitrage, we always check for opportunities.
-        """
-        return True
-    
-    async def execute_strategy(self, market_data):
+    # ========================================================================
+    # Main Execution Loop
+    # ========================================================================
+       
+    async def execute_strategy(self, market_data) -> StrategyResult:
         """
         Execute the funding arbitrage strategy.
         
         This is the main entry point called by the trading bot.
         """
+        actions_taken: List[str] = []
+        self.failed_symbols.clear()
+
         try:
-            # Run the 3-phase execution loop
+            # Phase 1: Monitor existing positions
+            self.logger.log("Phase 1: Monitoring positions", "INFO")
             await self.dashboard.set_stage(
                 LifecycleStage.MONITORING,
                 "Monitoring active positions",
@@ -421,23 +358,35 @@ class FundingArbitrageStrategy(StatefulStrategy):
             await self.position_monitor.monitor()
             await self.dashboard.publish_snapshot()
 
+            # Phase 2: Check exit conditions & close
+            self.logger.log("Phase 2: Checking exit conditions", "INFO")
             await self.dashboard.set_stage(
                 LifecycleStage.CLOSING,
                 "Evaluating exit conditions",
             )
-            await self.position_closer.evaluate()
+            closed = await self.position_closer.evaluate()
+            actions_taken.extend(closed)
 
-            await self.dashboard.set_stage(
-                LifecycleStage.SCANNING,
-                "Scanning for new opportunities",
-            )
-            opportunities = await self.opportunity_scanner.scan()
-            for opportunity in opportunities:
-                if not self.opportunity_scanner.has_capacity():
-                    break
-                if not self.opportunity_scanner.should_take(opportunity):
-                    continue
-                await self.position_opener.open(opportunity)
+            # Phase 3: Scan for new opportunities
+            if self.opportunity_scanner.has_capacity():
+                self.logger.log("Phase 3: Scanning new opportunities", "INFO")
+                await self.dashboard.set_stage(
+                    LifecycleStage.SCANNING,
+                    "Scanning for new opportunities",
+                )
+                opportunities = await self.opportunity_scanner.scan()
+                for opportunity in opportunities:
+                    if not self.opportunity_scanner.has_capacity():
+                        break
+                    if not self.opportunity_scanner.should_take(opportunity):
+                        continue
+                    position = await self.position_opener.open(opportunity)
+                    if position:
+                        actions_taken.append(
+                            f"Opened {opportunity.symbol} on {opportunity.long_dex}/{opportunity.short_dex}"
+                        )
+            else:
+                self.logger.log("Phase 3: At max capacity, skipping new opportunities", "INFO")
 
             await self.dashboard.set_stage(
                 LifecycleStage.IDLE,
@@ -445,20 +394,34 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 category=TimelineCategory.INFO,
             )
             await self.dashboard.publish_snapshot()
-            
+
             return StrategyResult(
-                action=StrategyAction.WAIT,
-                message="Funding arbitrage cycle completed",
+                action=StrategyAction.REBALANCE if actions_taken else StrategyAction.WAIT,
+                message=f"Cycle complete: {len(actions_taken)} actions taken",
                 wait_time=self.config.risk_config.check_interval_seconds,
             )
-            
-        except Exception as e:
-            self.logger.log(f"Strategy execution failed: {e}")
-            return StrategyResult(
-                action=StrategyAction.NONE,
-                message=f"Execution error: {e}"
+
+        except Exception as exc:
+            self.logger.log(f"Strategy execution failed: {exc}", "ERROR")
+            await self.dashboard.set_stage(
+                LifecycleStage.IDLE,
+                f"Funding arbitrage cycle error: {exc}",
+                category=TimelineCategory.ERROR,
             )
-    
+            return StrategyResult(
+                action=StrategyAction.WAIT,
+                message=f"Execution error: {exc}",
+                wait_time=60,
+            )
+
+    async def should_execute(self, market_data) -> bool:
+        """
+        Determine if strategy should execute based on market conditions.
+
+        For funding arbitrage, we always check for opportunities.
+        """
+        return True
+
     def get_strategy_name(self) -> str:
         """Get the strategy name."""
         return "funding_arbitrage"

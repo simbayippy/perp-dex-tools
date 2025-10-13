@@ -130,42 +130,9 @@ class StatefulStrategy(BaseStrategy):
     # Execution (Child Has Full Control)
     # ========================================================================
     
-    @abstractmethod
-    async def execute_cycle(self) -> StrategyResult:
-        """
-        Child has FULL CONTROL over execution flow.
-        
-        No template method - child implements entire logic:
-        - Phase 1: Monitor positions
-        - Phase 2: Rebalance if needed
-        - Phase 3: Open new positions
-        - Phase 4: Handle operations (fund transfers, etc.)
-        
-        Rationale: Complex strategies have unique flows
-        
-        Example:
-        --------
-        async def execute_cycle(self):
-            actions = []
-            
-            # Phase 1: Monitor
-            await self._monitor_positions()
-            
-            # Phase 2: Rebalance
-            closed = await self._check_exit_conditions()
-            actions.extend(closed)
-            
-            # Phase 3: New opportunities
-            if self._has_capacity():
-                opened = await self._scan_opportunities()
-                actions.extend(opened)
-            
-            return StrategyResult(
-                action=StrategyAction.REBALANCE if actions else StrategyAction.WAIT,
-                message=f"{len(actions)} actions taken"
-            )
-        """
-        pass
+    # Stateful strategies are expected to implement BaseStrategy.execute_strategy()
+    # and orchestrate their own multi-phase loops there. No additional template
+    # is enforced here – child classes retain full control over execution flow.
     
     # ========================================================================
     # Cleanup with State Saving
@@ -219,4 +186,3 @@ class StatefulStrategy(BaseStrategy):
                 f"Position {position.id}: {position.symbol} @ ${position.size_usd}",
                 "INFO"
             )
-
