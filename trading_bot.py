@@ -264,9 +264,6 @@ class TradingBot:
                 # Single exchange mode
                 await self.exchange_client.connect()
 
-            # wait for connection to establish
-            # await asyncio.sleep(5)
-            
             # Initialize strategy after connection
             await self.strategy.initialize()
             
@@ -286,11 +283,10 @@ class TradingBot:
 
                 # Strategy-based execution (universal interface)
                 try:
-                    # For strategies that need market data, they can fetch it internally
-                    # This simplifies the interface and allows strategies to get their own data
                     if await self.strategy.should_execute(None):
-                        # All strategies use the same interface
                         strategy_result = await self.strategy.execute_strategy(None)
+
+                        # HERE! we shouldnt handle strategy_result, but let the strategy handle its own
                         await self._handle_strategy_result(strategy_result)
                     else:
                         await asyncio.sleep(1)  # Brief wait if strategy says not to execute
