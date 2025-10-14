@@ -738,7 +738,8 @@ class AtomicMultiOrderExecutor:
                 # get_contract_attributes() doesn't take arguments - it uses self.config.ticker
                 # The contract_id is already set during exchange client initialization
                 exchange_client = fill['exchange_client']
-                contract_id = getattr(exchange_client.config, 'contract_id', fill['symbol'])
+                exchange_config = getattr(exchange_client, 'config', None)
+                contract_id = getattr(exchange_config, 'contract_id', fill['symbol'])
                 
                 self.logger.debug(
                     f"Rollback: Using contract_id='{contract_id}' for symbol '{fill['symbol']}'"
