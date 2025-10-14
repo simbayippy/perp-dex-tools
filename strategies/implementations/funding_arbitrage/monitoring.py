@@ -63,7 +63,7 @@ class PositionMonitor:
                     position.last_check = datetime.now()
                 else:
                     self._refresh_position_leg_metrics(position, exchange_snapshots)
-                    await self._position_manager.update_position(position)
+                    await self._position_manager.update(position)
                     self._logger.log(
                         f"Could not fetch rates for {position.symbol}",
                         "WARNING",
@@ -71,7 +71,7 @@ class PositionMonitor:
                     continue
 
                 self._refresh_position_leg_metrics(position, exchange_snapshots)
-                await self._position_manager.update_position(position)
+                await self._position_manager.update(position)
 
                 erosion = position.get_profit_erosion()
                 self._log_exchange_metrics(position)

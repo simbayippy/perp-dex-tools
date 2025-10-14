@@ -64,13 +64,13 @@ class PositionCloser:
             pnl = position.get_net_pnl()
             pnl_pct = position.get_net_pnl_pct()
 
-            await strategy.position_manager.close_position(
+            await strategy.position_manager.close(
                 position.id,
                 exit_reason=reason,
-                final_pnl_usd=pnl,
+                pnl_usd=pnl,
             )
 
-            refreshed = await strategy.position_manager.get_funding_position(position.id)
+            refreshed = await strategy.position_manager.get(position.id)
             if refreshed:
                 position = refreshed
 

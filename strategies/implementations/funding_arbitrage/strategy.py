@@ -11,7 +11,7 @@ Pattern: Stateful strategy with multi-DEX support
 
 import asyncio
 
-from strategies.categories.stateful_strategy import StatefulStrategy
+from strategies.base_strategy import BaseStrategy
 from .config import FundingArbConfig
 from .models import FundingArbPosition
 
@@ -46,7 +46,7 @@ from .monitoring import PositionMonitor
 from .operations import PositionOpener, OpportunityScanner, PositionCloser
 
 
-class FundingArbitrageStrategy(StatefulStrategy):
+class FundingArbitrageStrategy(BaseStrategy):
     """
     Delta-neutral funding rate arbitrage strategy.
     
@@ -57,7 +57,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
     3. Collect funding rate divergence (paid periodically)
     4. Close when divergence shrinks or better opportunity exists
     
-    Complexity: Multi-DEX, stateful, requires careful monitoring
+    Complexity: Multi-DEX, requires careful monitoring
     """
     
     def __init__(self, config, exchange_client):
@@ -89,9 +89,12 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 primary_exchange = funding_config.exchange
             exchange_clients = {primary_exchange: exchange_client}
         
-        # Pass exchange_clients dict to StatefulStrategy
-        super().__init__(funding_config, exchange_clients)
+        # Initialize BaseStrategy (note: no exchange_client for multi-DEX)
+        super().__init__(funding_config, exchange_client=None)
         self.config = funding_config  # Store the converted config
+        
+        # Store exchange clients dict (multi-DEX support)
+        self.exchange_clients = exchange_clients
         
         available_exchanges = list(exchange_clients.keys())
         required_exchanges = funding_config.exchanges  # These are from scan_exchanges
@@ -144,6 +147,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
         )
         
         # ⭐ Position and state management (database-backed)
+        # Compose what we need directly - no factory methods
         from .position_manager import FundingArbPositionManager
         from .state_manager import FundingArbStateManager
         
@@ -151,7 +155,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
         self.state_manager = FundingArbStateManager()
 
         # Tracking
-        self.cumulative_funding = {}  # {position_id: Decimal}
         self.failed_symbols = set()  # Track symbols that failed validation (avoid retrying same cycle)
         
         self.position_opened_this_session = False

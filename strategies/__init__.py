@@ -2,10 +2,14 @@
 Trading Strategies Module
 Provides strategy abstraction and implementations for multi-strategy trading.
 
-Architecture:
-- Level 1: BaseStrategy (minimal interface)
-- Level 2: StatelessStrategy, StatefulStrategy (categories)
-- Level 3: GridStrategy, FundingArbitrageStrategy (implementations)
+Simplified Architecture:
+- BaseStrategy: Minimal abstract interface that all strategies implement
+- Concrete Strategies: GridStrategy, FundingArbitrageStrategy, etc.
+  - Each strategy inherits from BaseStrategy
+  - Each strategy composes what it needs (position managers, state managers, etc.)
+  - No forced intermediate layers - simple and flexible
+
+Philosophy: Composition over Inheritance
 """
 
 from .base_strategy import BaseStrategy

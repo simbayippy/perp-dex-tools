@@ -1,8 +1,8 @@
 """
 Grid Trading Strategy
 
-Migrated from legacy grid_strategy.py to new architecture.
-Uses StatelessStrategy base for single-exchange grid trading.
+Single-exchange grid trading implementation.
+Inherits directly from BaseStrategy and composes what it needs.
 """
 
 import time
@@ -11,12 +11,12 @@ import asyncio
 from decimal import Decimal
 from typing import List, Dict, Any, Optional
 
-from strategies.categories.stateless_strategy import StatelessStrategy
+from strategies.base_strategy import BaseStrategy
 from .config import GridConfig
 from .models import GridState, GridOrder, GridCycleState
 
 
-class GridStrategy(StatelessStrategy):
+class GridStrategy(BaseStrategy):
     """
     Grid trading strategy implementation.
     
@@ -31,8 +31,7 @@ class GridStrategy(StatelessStrategy):
     def __init__(
         self,
         config: GridConfig,
-        exchange_client,
-        logger=None
+        exchange_client
     ):
         """
         Initialize grid strategy.
@@ -40,12 +39,10 @@ class GridStrategy(StatelessStrategy):
         Args:
             config: GridConfig instance with strategy parameters
             exchange_client: Exchange client for trading
-            logger: Optional logger instance
         """
         super().__init__(
             config=config,
-            exchange_client=exchange_client,
-            logger=logger
+            exchange_client=exchange_client
         )
         
         # Initialize grid state
@@ -73,7 +70,7 @@ class GridStrategy(StatelessStrategy):
                 "INFO"
             )
     
-    async def initialize(self) -> None:
+    async def _initialize_strategy(self):
         """Initialize strategy (called by base class)."""
         # Load persisted state if available
         # (In future, this would load from state_manager)
@@ -125,7 +122,7 @@ class GridStrategy(StatelessStrategy):
             self.logger.log(f"Error in should_execute: {e}", "ERROR")
             return False
     
-    async def execute(self) -> Dict[str, Any]:
+    async def execute_strategy(self, market_data=None) -> Dict[str, Any]:
         """
         Execute grid strategy using state machine pattern.
         
@@ -133,6 +130,9 @@ class GridStrategy(StatelessStrategy):
         1. 'READY' → Place open order
         2. 'WAITING_FOR_FILL' → Check if filled, then place close order  
         3. 'COMPLETE' → Reset state
+        
+        Args:
+            market_data: Optional market data (not used, grid fetches its own)
         
         Returns:
             Dictionary with execution result
@@ -497,4 +497,18 @@ class GridStrategy(StatelessStrategy):
                 "strategy": "grid",
                 "error": str(e)
             }
+    
+    def get_strategy_name(self) -> str:
+        """Get the strategy name."""
+        return "Grid Trading"
+    
+    def get_required_parameters(self) -> List[str]:
+        """Get list of required strategy parameters."""
+        return [
+            "take_profit",
+            "grid_step",
+            "direction",
+            "max_orders",
+            "wait_time"
+        ]
 
