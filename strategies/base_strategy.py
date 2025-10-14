@@ -43,18 +43,6 @@ class OrderParams:
             self.metadata = {}
 
 
-@dataclass
-class StrategyResult:
-    """Result of strategy execution."""
-    orders: List[OrderParams] = None
-    message: str = ""
-    wait_time: float = 0  # Seconds to wait before next check
-    
-    def __post_init__(self):
-        if self.orders is None:
-            self.orders = []
-
-
 class BaseStrategy(ABC):
     """
     Base class for all trading strategies.
@@ -179,7 +167,7 @@ class BaseStrategy(ABC):
         pass
     
     @abstractmethod
-    async def execute_strategy(self) -> StrategyResult:
+    async def execute_strategy(self):
         """Execute the strategy and return the result."""
         pass
     

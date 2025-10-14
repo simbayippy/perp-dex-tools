@@ -12,7 +12,7 @@ Key characteristics:
 - Helper methods for common operations
 """
 
-from strategies.base_strategy import BaseStrategy, StrategyResult
+from strategies.base_strategy import BaseStrategy
 from abc import abstractmethod
 import time
 
@@ -50,7 +50,7 @@ class StatelessStrategy(BaseStrategy):
     # Template Method Pattern
     # ========================================================================
     
-    async def execute_cycle(self) -> StrategyResult:
+    async def execute_cycle(self) :
         """
         Template method pattern - defines execution flow.
         
@@ -72,17 +72,9 @@ class StatelessStrategy(BaseStrategy):
             if await self.should_execute(market_data):
                 return await self.execute_strategy(market_data)
             
-            return StrategyResult(
-                message="Conditions not met",
-                wait_time=self.config.strategy_params.get('check_interval', 60)
-            )
             
         except Exception as e:
             self.logger.log(f"Error in execute_cycle: {e}", "ERROR")
-            return StrategyResult(
-                message=f"Error: {e}",
-                wait_time=60
-            )
     
     # ========================================================================
     # Abstract Methods (Child Implements)
@@ -107,19 +99,16 @@ class StatelessStrategy(BaseStrategy):
         pass
     
     @abstractmethod
-    async def execute_strategy(self) -> StrategyResult:
+    async def execute_strategy(self) :
         """
         Execute the strategy logic.
         
         Child implements:
         - Calculate order parameters
-        - Return StrategyResult with orders
         
         Args:
             market_data: Current market data
             
-        Returns:
-            StrategyResult with action and orders
         """
         pass
     

@@ -10,7 +10,6 @@ Pattern: Stateful strategy with multi-DEX support
 """
 
 from strategies.categories.stateful_strategy import StatefulStrategy
-from strategies.base_strategy import StrategyResult
 from .config import FundingArbConfig
 from .models import FundingArbPosition
 
@@ -177,7 +176,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
     # Main Execution Loop.
     # ========================================================================
        
-    async def execute_strategy(self, market_data) -> StrategyResult:
+    async def execute_strategy(self, market_data):
         """
         Execute the funding arbitrage strategy.
         
@@ -209,17 +208,11 @@ class FundingArbitrageStrategy(StatefulStrategy):
                     new_position = await self.position_opener.open(opportunity)
 
 
-            return StrategyResult(
-                message=f"Cycle complete ",
-                wait_time=self.config.risk_config.check_interval_seconds,
-            )
+            return wait_time=self.config.risk_config.check_interval_seconds,
+            
 
         except Exception as exc:
             self.logger.log(f"Strategy execution failed: {exc}", "ERROR")
-            return StrategyResult(
-                message=f"Execution error: {exc}",
-                wait_time=60,
-            )
 
     # ========================================================================
     # Abstract Method Implementations (Required by BaseStrategy)

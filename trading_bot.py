@@ -284,10 +284,10 @@ class TradingBot:
                 # Strategy-based execution (universal interface)
                 try:
                     if await self.strategy.should_execute(None):
-                        strategy_result = await self.strategy.execute_strategy(None)
+                        result = await self.strategy.execute_strategy(None)
 
                         # HERE! this is shit code but we're leaving as is for now.
-                        await self._handle_strategy_result(strategy_result)
+                        await self._handle_strategy_result(result)
                     else:
                         await asyncio.sleep(1)  # Brief wait if strategy says not to execute
                         
@@ -321,15 +321,11 @@ class TradingBot:
             except Exception as e:
                 self.logger.error(f"Error disconnecting from exchange: {e}")
 
-    async def _handle_strategy_result(self, strategy_result):
+    async def _handle_strategy_result(self, result):
         """Handle the result from strategy execution."""
+        if result > 0:
+            await asyncio.sleep(result)
         
-        if strategy_result.wait_time > 0:
-            await asyncio.sleep(strategy_result.wait_time)
-        
-        if strategy_result.message:
-            self.logger.info(f"Strategy: {strategy_result.message}")
-
     # ========================================================================
     # ACCOUNT EMERGENCY ACTIONS
     # ========================================================================
