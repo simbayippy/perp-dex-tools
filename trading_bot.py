@@ -108,6 +108,63 @@ class TradingBot:
         except ValueError as e:
             raise ValueError(f"Failed to create strategy: {e}")
         
+    async def _setup_contract_attributes(self):
+        """Setup contract attributes based on strategy type."""
+        multi_symbol_strategies = ['funding_arbitrage']
+        
+        if self.config.strategy not in multi_symbol_strategies:
+            self.config.contract_id, self.config.tick_size = await self.exchange_client.get_contract_attributes()
+        else:
+            # Multi-symbol strategy - set placeholder values
+            self.config.contract_id = "MULTI_SYMBOL"
+            self.config.tick_size = Decimal("0.01")  # Placeholder
+            self.logger.info("Multi-symbol strategy: Contract attributes will be fetched per-symbol")
+
+    def _log_configuration(self):
+        """Log the current trading configuration."""
+        multi_symbol_strategies = ['funding_arbitrage']
+        
+        self.logger.info("=== Trading Configuration ===")
+        self.logger.info(f"Ticker: {self.config.ticker}")
+        if self.config.strategy not in multi_symbol_strategies:
+            self.logger.info(f"Contract ID: {self.config.contract_id}")
+        self.logger.info(f"Quantity: {self.config.quantity}")
+        self.logger.info(f"Exchange: {self.config.exchange}")
+        self.logger.info(f"Strategy: {self.config.strategy}")
+        
+        # Log strategy parameters
+        if self.config.strategy_params:
+            self.logger.info("Strategy Parameters:")
+            for key, value in self.config.strategy_params.items():
+                self.logger.info(f"  {key}: {value}")
+            
+        self.logger.info("=============================")
+
+    async def _connect_exchanges(self):
+        """Connect to exchange(s) based on mode."""
+        if self.exchange_clients:
+            # Multi-exchange mode: connect all clients
+            for exchange_name, client in self.exchange_clients.items():
+                self.logger.info(f"Connecting to {exchange_name}...")
+                await client.connect()
+                self.logger.info(f"Connected to {exchange_name}")
+        else:
+            # Single exchange mode
+            await self.exchange_client.connect()
+
+    async def _run_trading_loop(self):
+        """Execute the main trading loop."""
+        while not self.shutdown_requested:
+            try:
+                if await self.strategy.should_execute(None):
+                    await self.strategy.execute_strategy(None)
+                else:
+                    await asyncio.sleep(1)  # Brief wait if strategy says not to execute
+                    
+            except Exception as e:
+                self.logger.error(f"Strategy execution error: {e}")
+                await asyncio.sleep(5)  # Wait longer on error
+
     async def graceful_shutdown(self, reason: str = "Unknown"):
         """Perform graceful shutdown of the trading bot."""
         self.logger.info(f"Starting graceful shutdown: {reason}")
@@ -139,70 +196,22 @@ class TradingBot:
     async def run(self):
         """Main trading loop."""
         try:
-            # For single-symbol strategies (grid), get contract attributes
-            # For multi-symbol strategies (funding_arbitrage), skip this - they handle symbols dynamically
-            multi_symbol_strategies = ['funding_arbitrage']
+            # Setup phase
+            await self._setup_contract_attributes()
+            self._log_configuration()
             
-            if self.config.strategy not in multi_symbol_strategies:
-                self.config.contract_id, self.config.tick_size = await self.exchange_client.get_contract_attributes()
-            else:
-                # Multi-symbol strategy - set placeholder values
-                self.config.contract_id = "MULTI_SYMBOL"
-                self.config.tick_size = Decimal("0.01")  # Placeholder
-                self.logger.info("Multi-symbol strategy: Contract attributes will be fetched per-symbol")
-
-            # Log current configuration
-            self.logger.info("=== Trading Configuration ===")
-            self.logger.info(f"Ticker: {self.config.ticker}")
-            if self.config.strategy not in multi_symbol_strategies:
-                self.logger.info(f"Contract ID: {self.config.contract_id}")
-            self.logger.info(f"Quantity: {self.config.quantity}")
-            self.logger.info(f"Exchange: {self.config.exchange}")
-            self.logger.info(f"Strategy: {self.config.strategy}")
-            
-            # Log strategy parameters
-            if self.config.strategy_params:
-                self.logger.info("Strategy Parameters:")
-                for key, value in self.config.strategy_params.items():
-                    self.logger.info(f"  {key}: {value}")
-                
-            self.logger.info("=============================")
-
             # Capture the running event loop for thread-safe callbacks
             self.loop = asyncio.get_running_loop()
             
-            # Connect to exchange(s)
-            if self.exchange_clients:
-                # Multi-exchange mode: connect all clients
-                for exchange_name, client in self.exchange_clients.items():
-                    self.logger.info(f"Connecting to {exchange_name}...")
-                    await client.connect()
-                    self.logger.info(f"Connected to {exchange_name}")
-            else:
-                # Single exchange mode
-                await self.exchange_client.connect()
-
-            # Initialize strategy after connection
+            # Connection phase
+            await self._connect_exchanges()
             await self.strategy.initialize()
             
-            # Main trading loop
-            while not self.shutdown_requested:
-                # Strategy-based execution (universal interface)
-                try:
-                    if await self.strategy.should_execute(None):
-                        await self.strategy.execute_strategy(None)
-
-                    else:
-                        await asyncio.sleep(1)  # Brief wait if strategy says not to execute
-                        
-                except Exception as e:
-                    self.logger.error(f"Strategy execution error: {e}")
-                    await asyncio.sleep(5)  # Wait longer on error
+            # Execution phase
+            await self._run_trading_loop()
 
         except KeyboardInterrupt:
             self.logger.info("Bot stopped by user")
-            # Emergency close all positions on Ctrl+C
-            await self._emergency_close_all_positions()
             await self.graceful_shutdown("User interruption (Ctrl+C)")
         except Exception as e:
             self.logger.error(f"Critical error: {e}")

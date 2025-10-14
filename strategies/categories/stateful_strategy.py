@@ -126,13 +126,6 @@ class StatefulStrategy(BaseStrategy):
             "INFO"
         )
     
-    # ========================================================================
-    # Execution (Child Has Full Control)
-    # ========================================================================
-    
-    # Stateful strategies are expected to implement BaseStrategy.execute_strategy()
-    # and orchestrate their own multi-phase loops there. No additional template
-    # is enforced here – child classes retain full control over execution flow.
     
     # ========================================================================
     # Cleanup with State Saving
