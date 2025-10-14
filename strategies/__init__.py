@@ -8,7 +8,7 @@ Architecture:
 - Level 3: GridStrategy, FundingArbitrageStrategy (implementations)
 """
 
-from .base_strategy import BaseStrategy, OrderParams, StrategyResult, StrategyAction, RunnableStatus
+from .base_strategy import BaseStrategy, OrderParams, StrategyResult, StrategyAction
 from .factory import StrategyFactory
 
 # Strategy implementations
@@ -25,7 +25,6 @@ __all__ = [
     'OrderParams',
     'StrategyResult',
     'StrategyAction',
-    'RunnableStatus',
     'StrategyFactory',
     
     # Grid strategy

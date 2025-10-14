@@ -12,7 +12,7 @@ Key characteristics:
 - Helper methods for common operations
 """
 
-from strategies.base_strategy import BaseStrategy, StrategyResult, MarketData, StrategyAction
+from strategies.base_strategy import BaseStrategy, StrategyResult, StrategyAction
 from abc import abstractmethod
 import time
 
@@ -91,7 +91,7 @@ class StatelessStrategy(BaseStrategy):
     # ========================================================================
     
     @abstractmethod
-    async def should_execute(self, market_data: MarketData) -> bool:
+    async def should_execute(self) -> bool:
         """
         Check if strategy should execute.
         
@@ -109,7 +109,7 @@ class StatelessStrategy(BaseStrategy):
         pass
     
     @abstractmethod
-    async def execute_strategy(self, market_data: MarketData) -> StrategyResult:
+    async def execute_strategy(self) -> StrategyResult:
         """
         Execute the strategy logic.
         
