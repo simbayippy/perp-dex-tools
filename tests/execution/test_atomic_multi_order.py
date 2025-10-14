@@ -237,6 +237,79 @@ async def test_partial_fill_triggers_rollback(executor):
         assert len(mock_client_1.placed_orders) > 0  # Market close order placed
 
 
+@pytest.mark.asyncio
+async def test_partial_fill_rollback_uses_cached_quantity_when_exchange_reports_zero(executor):
+    """
+    Ensure rollback still closes exposure when the exchange reports 0 filled size after cancellation.
+    """
+    mock_client_1 = MockExchangeClient("exchange1", should_fill=True)
+    mock_client_2 = MockExchangeClient("exchange2", should_fill=False)
+
+    # Simulate exchange returning zero on post-cancel order info query
+    mock_client_1.get_order_info = AsyncMock(
+        return_value=OrderInfo(
+            order_id="order_1",
+            side="buy",
+            size=Decimal("1.0"),
+            price=Decimal("50000"),
+            status="CANCELED",
+            filled_size=Decimal("0"),
+            remaining_size=Decimal("0"),
+        )
+    )
+
+    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_executor_class:
+        mock_executor = AsyncMock()
+        mock_executor_class.return_value = mock_executor
+
+        # First order appears filled, second fails to fill
+        mock_executor.execute_order.side_effect = [
+            type('ExecutionResult', (), {
+                'success': True,
+                'filled': True,
+                'fill_price': Decimal('50000'),
+                'filled_quantity': Decimal('1.0'),
+                'slippage_usd': Decimal('5.0'),
+                'execution_mode_used': 'limit',
+                'order_id': 'order_1'
+            })(),
+            type('ExecutionResult', (), {
+                'success': False,
+                'filled': False,
+                'fill_price': None,
+                'filled_quantity': Decimal('0'),
+                'slippage_usd': Decimal('0'),
+                'execution_mode_used': None,
+                'order_id': None
+            })()
+        ]
+
+        orders = [
+            OrderSpec(
+                exchange_client=mock_client_1,
+                symbol='BTC-PERP',
+                side='buy',
+                size_usd=Decimal('50000')
+            ),
+            OrderSpec(
+                exchange_client=mock_client_2,
+                symbol='BTC-PERP',
+                side='sell',
+                size_usd=Decimal('50000')
+            )
+        ]
+
+        result = await executor.execute_atomically(
+            orders=orders,
+            rollback_on_partial=True,
+            pre_flight_check=False
+        )
+
+    assert result.rollback_performed is True
+    assert len(mock_client_1.placed_orders) == 1  # Market close executed
+    assert mock_client_1.placed_orders[0]['quantity'] == pytest.approx(1.0)
+
+
 # =============================================================================
 # TEST: CRITICAL FIX #1 - Rollback Race Condition
 # =============================================================================
@@ -605,4 +678,3 @@ async def test_rollback_handles_missing_order_id():
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
-

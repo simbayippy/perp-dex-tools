@@ -19,7 +19,7 @@ Use cases:
 """
 
 from typing import Any, List, Optional, Dict
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 from enum import Enum
 import time
@@ -663,48 +663,64 @@ class AtomicMultiOrderExecutor:
         self.logger.info("Step 2/3: Querying actual filled amounts...")
         actual_fills = []
         for order in filled_orders:
-            if order.get('order_id'):
+            exchange_client = order['exchange_client']
+            symbol = order['symbol']
+            side = order['side']
+            order_id = order.get('order_id')
+            fallback_quantity = self._coerce_decimal(order.get('filled_quantity'))
+            fallback_price = self._coerce_decimal(order.get('fill_price')) or Decimal('0')
+
+            actual_quantity: Optional[Decimal] = None
+
+            if order_id:
                 try:
-                    order_info = await order['exchange_client'].get_order_info(order['order_id'])
-                    if order_info and order_info.filled_size > 0:
-                        actual_fills.append({
-                            'exchange_client': order['exchange_client'],
-                            'symbol': order['symbol'],
-                            'side': order['side'],
-                            'filled_quantity': order_info.filled_size,  # ✅ ACTUAL filled amount
-                            'fill_price': order['fill_price']  # Use original price for cost calc
-                        })
-                        
-                        # Warn if fill amount changed
-                        original_qty = order['filled_quantity']
-                        actual_qty = order_info.filled_size
-                        if abs(actual_qty - original_qty) > Decimal('0.0001'):
-                            self.logger.warning(
-                                f"⚠️ Fill amount changed for {order['symbol']}: "
-                                f"{original_qty} → {actual_qty} "
-                                f"(Δ={actual_qty - original_qty})"
-                            )
+                    order_info = await exchange_client.get_order_info(order_id)
                 except Exception as e:
                     self.logger.error(
-                        f"Failed to get actual fill for {order.get('order_id')}: {e}"
+                        f"Failed to get actual fill for {order_id}: {e}"
                     )
-                    # Fallback to original quantity (pessimistic approach)
-                    actual_fills.append({
-                        'exchange_client': order['exchange_client'],
-                        'symbol': order['symbol'],
-                        'side': order['side'],
-                        'filled_quantity': order['filled_quantity'],
-                        'fill_price': order['fill_price']
-                    })
-            else:
-                # No order ID (shouldn't happen, but handle gracefully)
-                actual_fills.append({
-                    'exchange_client': order['exchange_client'],
-                    'symbol': order['symbol'],
-                    'side': order['side'],
-                    'filled_quantity': order['filled_quantity'],
-                    'fill_price': order['fill_price']
-                })
+                    order_info = None
+
+                if order_info is not None:
+                    reported_qty = self._coerce_decimal(getattr(order_info, 'filled_size', None))
+
+                    if reported_qty is not None and reported_qty > Decimal('0'):
+                        actual_quantity = reported_qty
+
+                        if fallback_quantity is not None and abs(reported_qty - fallback_quantity) > Decimal('0.0001'):
+                            self.logger.warning(
+                                f"⚠️ Fill amount changed for {symbol}: "
+                                f"{fallback_quantity} → {reported_qty} "
+                                f"(Δ={reported_qty - fallback_quantity})"
+                            )
+                    else:
+                        # Some exchanges report 0 after cancellation; fallback to cached quantity
+                        if fallback_quantity is not None and fallback_quantity > Decimal('0'):
+                            self.logger.warning(
+                                f"⚠️ Exchange reported 0 filled size for {symbol} after cancel; "
+                                f"falling back to cached filled quantity {fallback_quantity}"
+                            )
+                            actual_quantity = fallback_quantity
+                        else:
+                            self.logger.warning(
+                                f"⚠️ No filled quantity reported for {symbol} ({order_id}); nothing to close"
+                            )
+            if actual_quantity is None:
+                if fallback_quantity is not None and fallback_quantity > Decimal('0'):
+                    actual_quantity = fallback_quantity
+                else:
+                    self.logger.warning(
+                        f"⚠️ Skipping rollback close for {symbol}: unable to determine filled quantity"
+                    )
+                    continue
+
+            actual_fills.append({
+                'exchange_client': exchange_client,
+                'symbol': symbol,
+                'side': side,
+                'filled_quantity': actual_quantity,
+                'fill_price': fallback_price
+            })
         
         # Step 3: Close actual filled amounts
         self.logger.info(f"Step 3/3: Closing {len(actual_fills)} filled positions...")
@@ -770,3 +786,15 @@ class AtomicMultiOrderExecutor:
         )
         
         return total_rollback_cost
+
+    @staticmethod
+    def _coerce_decimal(value: Any) -> Optional[Decimal]:
+        """Best-effort conversion to Decimal for heterogeneous exchange payloads."""
+        if isinstance(value, Decimal):
+            return value
+        if value is None:
+            return None
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            return None
