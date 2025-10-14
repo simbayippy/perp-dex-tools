@@ -361,6 +361,80 @@ class FundingArbPositionManager(BasePositionManager):
             positions.append(position)
         
         return positions
+
+    async def find_open_position(
+        self,
+        symbol: str,
+        long_dex: str,
+        short_dex: str,
+    ) -> Optional[FundingArbPosition]:
+        """
+        Find an open position matching the provided symbol/DEX tuple.
+
+        Args:
+            symbol: Trading symbol (e.g., "BTC")
+            long_dex: Long-side DEX name
+            short_dex: Short-side DEX name
+
+        Returns:
+            Matching FundingArbPosition or None if not found
+        """
+        if not self._check_database_available():
+            return None
+
+        await self._ensure_mappers_loaded()
+
+        symbol_id = symbol_mapper.get_id(symbol)
+        long_dex_id = dex_mapper.get_id(long_dex)
+        short_dex_id = dex_mapper.get_id(short_dex)
+
+        if symbol_id is None and SymbolRepository:
+            symbol_repo = SymbolRepository(database)
+            symbol_row = await symbol_repo.get_by_name(symbol)
+            if symbol_row:
+                symbol_id = symbol_row["id"]
+                symbol_mapper.add(symbol_id, symbol_row["symbol"])
+
+        if (long_dex_id is None or short_dex_id is None) and DEXRepository:
+            dex_repo = DEXRepository(database)
+            if long_dex_id is None:
+                long_row = await dex_repo.get_by_name(long_dex.lower())
+                if long_row:
+                    long_dex_id = long_row["id"]
+                    dex_mapper.add(long_dex_id, long_row["name"])
+            if short_dex_id is None:
+                short_row = await dex_repo.get_by_name(short_dex.lower())
+                if short_row:
+                    short_dex_id = short_row["id"]
+                    dex_mapper.add(short_dex_id, short_row["name"])
+
+        if symbol_id is None or long_dex_id is None or short_dex_id is None:
+            return None
+
+        query = """
+            SELECT id
+            FROM strategy_positions
+            WHERE status = 'open'
+              AND strategy_name = 'funding_arbitrage'
+              AND symbol_id = :symbol_id
+              AND long_dex_id = :long_dex_id
+              AND short_dex_id = :short_dex_id
+            LIMIT 1
+        """
+
+        row = await database.fetch_one(
+            query,
+            values={
+                "symbol_id": symbol_id,
+                "long_dex_id": long_dex_id,
+                "short_dex_id": short_dex_id,
+            },
+        )
+
+        if not row:
+            return None
+
+        return await self.get(row["id"])
     
     async def update(self, position: FundingArbPosition) -> None:
         """
@@ -386,6 +460,9 @@ class FundingArbPositionManager(BasePositionManager):
                 long_dex_id = :long_dex_id,
                 short_dex_id = :short_dex_id,
                 size_usd = :size_usd,
+                entry_long_rate = :entry_long_rate,
+                entry_short_rate = :entry_short_rate,
+                entry_divergence = :entry_divergence,
                 current_divergence = :current_divergence,
                 last_check = :last_check,
                 status = :status,
@@ -403,6 +480,9 @@ class FundingArbPositionManager(BasePositionManager):
             "long_dex_id": long_dex_id,
             "short_dex_id": short_dex_id,
             "size_usd": position.size_usd,
+            "entry_long_rate": position.entry_long_rate,
+            "entry_short_rate": position.entry_short_rate,
+            "entry_divergence": position.entry_divergence,
             "current_divergence": position.current_divergence,
             "last_check": position.last_check or datetime.now(),
             "status": position.status,
