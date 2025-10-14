@@ -241,14 +241,6 @@ class PositionOpener:
                 "INFO",
             )
 
-            if strategy.one_position_per_session:
-                strategy.logger.log(
-                    "📊 Session limit: Will not open more positions this session (one_position_per_session=True)",
-                    "INFO",
-                )
-
-            await strategy.dashboard.position_opened(position)
-
             return position
 
         except Exception as exc:  # pragma: no cover - defensive logging

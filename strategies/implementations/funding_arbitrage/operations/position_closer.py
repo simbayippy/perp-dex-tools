@@ -55,8 +55,6 @@ class PositionCloser:
         strategy = self._strategy
 
         try:
-            await strategy.dashboard.position_closing(position, reason)
-
             long_client = strategy.exchange_clients[position.long_dex]
             short_client = strategy.exchange_clients[position.short_dex]
 
@@ -82,8 +80,6 @@ class PositionCloser:
                 f"Age={position.get_age_hours():.1f}h",
                 "INFO",
             )
-
-            await strategy.dashboard.position_closed(position, reason)
 
         except Exception as exc:  # pragma: no cover - defensive logging
             strategy.logger.log(

@@ -116,17 +116,6 @@ class OpportunityScanner:
 
         strategy._max_position_warning_logged = False
 
-        if strategy.one_position_per_session and strategy.position_opened_this_session:
-            if not strategy._session_limit_warning_logged:
-                strategy.logger.log(
-                    "📊 Session limit reached: already opened 1 position this session. "
-                    "Set one_position_per_session=False to allow multiple positions.",
-                    "INFO",
-                )
-                strategy._session_limit_warning_logged = True
-            return False
-
-        strategy._session_limit_warning_logged = False
         return True
 
     def calculate_total_exposure(self) -> Decimal:

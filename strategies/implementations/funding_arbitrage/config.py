@@ -9,8 +9,6 @@ from pydantic import BaseModel, Field
 from decimal import Decimal
 from typing import List, Optional
 
-from dashboard.config import DashboardSettings
-
 # ============================================================================
 # Risk Management Configuration
 # ============================================================================
@@ -142,11 +140,6 @@ class FundingArbConfig(BaseModel):
     risk_config: RiskManagementConfig = Field(
         default_factory=RiskManagementConfig,
         description="Risk management settings"
-    )
-
-    dashboard: DashboardSettings = Field(
-        default_factory=DashboardSettings,
-        description="Terminal dashboard configuration"
     )
     
     # Database (shared with funding_rate_service via direct imports)

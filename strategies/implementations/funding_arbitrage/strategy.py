@@ -14,28 +14,17 @@ from strategies.base_strategy import StrategyResult, StrategyAction
 from .config import FundingArbConfig
 from .models import FundingArbPosition
 
-from dashboard.config import DashboardSettings
-from dashboard.models import (
-    LifecycleStage,
-    SessionHealth,
-    SessionState,
-    TimelineCategory,
-)
-from dashboard.service import DashboardService
-from dashboard import control_server
-
 # Direct imports from funding_rate_service (internal calls, no HTTP)
 # Make imports conditional to avoid config loading issues during import
 try:
     from funding_rate_service.core.opportunity_finder import OpportunityFinder
-    from funding_rate_service.database.repositories import FundingRateRepository, DashboardRepository
+    from funding_rate_service.database.repositories import FundingRateRepository
     from funding_rate_service.database.connection import database
     FUNDING_SERVICE_AVAILABLE = True
 except ImportError as e:
     # For testing or when funding service config is not available
     OpportunityFinder = None
     FundingRateRepository = None
-    DashboardRepository = None
     database = None
     FUNDING_SERVICE_AVAILABLE = False
 
@@ -53,7 +42,7 @@ from strategies.execution.patterns.atomic_multi_order import (
 from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
 from .monitoring import PositionMonitor
 # Funding_arb operation helpers
-from .operations import DashboardReporter, PositionOpener, OpportunityScanner, PositionCloser
+from .operations import PositionOpener, OpportunityScanner, PositionCloser
 
 
 class FundingArbitrageStrategy(StatefulStrategy):
@@ -164,11 +153,9 @@ class FundingArbitrageStrategy(StatefulStrategy):
         self.cumulative_funding = {}  # {position_id: Decimal}
         self.failed_symbols = set()  # Track symbols that failed validation (avoid retrying same cycle)
         
-        # 🔒 Session-level position limit (Issue #4 fix)
-        # Set to True to limit strategy to 1 position per bot session
-        # Set to False to allow multiple positions based on max_positions config
-        self.one_position_per_session = True  # Keep it simple for now
         self.position_opened_this_session = False
+        
+        # Keep track of warnings, to prevent spam
         self._session_limit_warning_logged = False
         self._max_position_warning_logged = False
 
@@ -179,18 +166,10 @@ class FundingArbitrageStrategy(StatefulStrategy):
             exchange_clients=self.exchange_clients,
             logger=self.logger,
         )
-        self.dashboard = DashboardReporter(self)
         self.position_opener = PositionOpener(self)
         self.opportunity_scanner = OpportunityScanner(self)
         self.position_closer = PositionCloser(self)
 
-        # Dashboard service (optional)
-        self.dashboard_settings = self._resolve_dashboard_settings()
-        self.dashboard_enabled = bool(self.dashboard_settings.enabled and FUNDING_SERVICE_AVAILABLE)
-        self._current_dashboard_stage: LifecycleStage = LifecycleStage.INITIALIZING
-        self.dashboard_service, self.control_server = self._create_dashboard_resources(
-            available_exchanges
-        )
         self._control_server_started = False
 
  
@@ -209,29 +188,18 @@ class FundingArbitrageStrategy(StatefulStrategy):
         try:
             # Phase 1: Monitor existing positions
             self.logger.log("Phase 1: Monitoring positions", "INFO")
-            await self.dashboard.set_stage(
-                LifecycleStage.MONITORING,
-                "Monitoring active positions",
-            )
+
+            # This position_monitor.monitor() will actually call the exchange_clients to get snapshot of position
             await self.position_monitor.monitor()
-            await self.dashboard.publish_snapshot()
 
             # Phase 2: Check exit conditions & close
             closed = await self.position_closer.evaluateAndClosePositions()
             if closed:
-                await self.dashboard.set_stage(
-                    LifecycleStage.CLOSING,
-                    "Exited",
-                )
                 self.logger.log("Phase 2: Exited", "INFO")
 
             # Phase 3: Scan for new opportunities
             if self.opportunity_scanner.has_capacity():
                 self.logger.log("Phase 3: Scanning new opportunities", "INFO")
-                await self.dashboard.set_stage(
-                    LifecycleStage.SCANNING,
-                    "Scanning for new opportunities",
-                )
                 opportunities = await self.opportunity_scanner.scan()
                 for opportunity in opportunities:
                     if not self.opportunity_scanner.has_capacity():
@@ -240,13 +208,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
                         continue
                     new_position = await self.position_opener.open(opportunity)
 
-                await self.dashboard.set_stage(
-                    LifecycleStage.IDLE,
-                    "Funding arbitrage cycle completed",
-                    category=TimelineCategory.INFO,
-                )
-
-            await self.dashboard.publish_snapshot()
 
             return StrategyResult(
                 action=StrategyAction.WAIT,
@@ -256,11 +217,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
 
         except Exception as exc:
             self.logger.log(f"Strategy execution failed: {exc}", "ERROR")
-            await self.dashboard.set_stage(
-                LifecycleStage.ERROR,
-                f"Funding arbitrage cycle error: {exc}",
-                category=TimelineCategory.ERROR,
-            )
             return StrategyResult(
                 action=StrategyAction.WAIT,
                 message=f"Execution error: {exc}",
@@ -279,18 +235,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
         # Initialize position and state managers
         await self.position_manager.initialize()
         await self.state_manager.initialize()
-        if self.dashboard_service.enabled:
-            await self.dashboard_service.start()
-            await self.dashboard.set_stage(
-                LifecycleStage.IDLE,
-                "Strategy initialized",
-                category=TimelineCategory.INFO,
-            )
-            await self.dashboard.publish_snapshot("Startup state captured")
-            if self.control_server:
-                await self.control_server.start()
-                self._control_server_started = True
-
         self.logger.log("FundingArbitrageStrategy initialized successfully")
     
     async def should_execute(self, market_data) -> bool:
@@ -311,7 +255,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
         ]
     
     # ========================================================================
-    # Helpers & Dashboard Helpers
+    # Helpers
     # ========================================================================
     
     def _convert_trading_config(self, trading_config) -> FundingArbConfig:
@@ -345,13 +289,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
 
         config_path = strategy_params.get("_config_path")
 
-        dashboard_config = strategy_params.get('dashboard') or {}
-        if isinstance(dashboard_config, DashboardSettings):
-            dashboard_settings = dashboard_config
-        elif isinstance(dashboard_config, dict):
-            dashboard_settings = DashboardSettings(**dashboard_config)
-        else:
-            dashboard_settings = DashboardSettings()
         
         funding_config = FundingArbConfig(
             exchange=trading_config.exchange,  # Primary exchange
@@ -368,111 +305,12 @@ class FundingArbitrageStrategy(StatefulStrategy):
             database_url=settings.database_url,
             # Risk management defaults
             risk_config=RiskManagementConfig(),
-            dashboard=dashboard_settings,
             # Ticker for logging
             ticker=trading_config.ticker,
             config_path=config_path
             # Note: bridge_settings not implemented yet
         )
         return funding_config
-
-    def _resolve_dashboard_settings(self) -> DashboardSettings:
-        """
-        Derive dashboard settings from config if supplied, otherwise fallback to defaults.
-        """
-        candidate = getattr(self.config, "dashboard", None)
-
-        if isinstance(candidate, DashboardSettings):
-            return candidate
-
-        if isinstance(candidate, dict):
-            try:
-                return DashboardSettings(**candidate)
-            except Exception as exc:  # pylint: disable=broad-except
-                self.logger.log(
-                    f"⚠️  Invalid dashboard config ({exc}); falling back to defaults.",
-                    "WARNING",
-                )
-
-        defaults = DashboardSettings()
-        defaults.enabled = True
-        return defaults
-
-    def _create_dashboard_resources(
-        self, available_exchanges: List[str]
-    ) -> Tuple[DashboardService, Optional[Any]]:
-        dashboard_metadata = {
-            "available_exchanges": available_exchanges,
-            "scan_exchanges": self.config.exchanges,
-        }
-
-        session_state = SessionState(
-            session_id=uuid4(),
-            strategy="funding_arbitrage",
-            config_path=getattr(self.config, "config_path", None),
-            started_at=datetime.now(timezone.utc),
-            last_heartbeat=datetime.now(timezone.utc),
-            health=SessionHealth.STARTING,
-            lifecycle_stage=LifecycleStage.INITIALIZING,
-            max_positions=self.config.max_positions,
-            max_total_exposure_usd=getattr(self.config, "max_total_exposure_usd", None),
-            dry_run=getattr(self.config, "dry_run", False),
-            metadata=dashboard_metadata,
-        )
-
-        repository = None
-        if self.dashboard_enabled and DashboardRepository is not None:
-            repository = DashboardRepository(database)
-        elif self.dashboard_settings.enabled and not FUNDING_SERVICE_AVAILABLE:
-            self.logger.log(
-                "Dashboard persistence disabled – funding rate service database unavailable",
-                "WARNING",
-            )
-
-        renderer_factory = None
-        if self.dashboard_enabled:
-            renderer_name = (self.dashboard_settings.renderer or "rich").lower()
-            if renderer_name == "rich":
-                try:
-                    from dashboard.renderers import RichDashboardRenderer
-
-                    refresh = self.dashboard_settings.refresh_interval_seconds
-                    max_events = min(self.dashboard_settings.event_retention, 20)
-                    renderer_factory = lambda: RichDashboardRenderer(
-                        refresh_interval_seconds=refresh,
-                        max_events=max_events,
-                    )
-                except Exception as exc:  # pylint: disable=broad-except
-                    self.logger.log(
-                        f"⚠️  Dashboard renderer unavailable: {exc}. Falling back to log output.",
-                        "WARNING",
-                    )
-                    renderer_factory = None
-            elif renderer_name == "plain":
-                try:
-                    from dashboard.renderers import PlainTextDashboardRenderer
-
-                    renderer_factory = lambda: PlainTextDashboardRenderer()
-                except Exception as exc:  # pylint: disable=broad-except
-                    self.logger.log(
-                        f"⚠️  Plain dashboard renderer unavailable: {exc}. Falling back to log output.",
-                        "WARNING",
-                    )
-                    renderer_factory = None
-            else:
-                self.logger.log(
-                    f"ℹ️  Dashboard renderer '{renderer_name}' not supported yet. Using log output.",
-                    "INFO",
-                )
-
-        service = DashboardService(
-            session_state=session_state,
-            settings=self.dashboard_settings,
-            repository=repository,
-            renderer_factory=renderer_factory,
-        )
-        control = control_server if self.dashboard_enabled else None
-        return service, control
 
     # ========================================================================
     # Cleanup
@@ -485,8 +323,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
             await self.position_manager.close()
         if hasattr(self, 'state_manager'):
             await self.state_manager.close()
-        if getattr(self, "dashboard_service", None) and self.dashboard_service.enabled:
-            await self.dashboard_service.stop(health=SessionHealth.STOPPED)
         if getattr(self, "_control_server_started", False) and self.control_server:
             await self.control_server.stop()
             self._control_server_started = False
