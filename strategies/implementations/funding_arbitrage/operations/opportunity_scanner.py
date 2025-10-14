@@ -21,7 +21,7 @@ class OpportunityScanner:
         candidates: List["OpportunityData"] = []
 
         try:
-            if not self.has_capacity():
+            if not await self.has_capacity():
                 return candidates
 
             from funding_rate_service.models.filters import OpportunityFilter
@@ -58,10 +58,10 @@ class OpportunityScanner:
                     )
                     continue
 
-                if not self.has_capacity():
+                if not await self.has_capacity():
                     break
 
-                if self.should_take(opportunity):
+                if await self.should_take(opportunity):
                     candidates.append(opportunity)
 
         except Exception as exc:  # pragma: no cover - defensive logging
@@ -69,7 +69,7 @@ class OpportunityScanner:
       
         return candidates
 
-    def should_take(self, opportunity) -> bool:
+    async def should_take(self, opportunity) -> bool:
         strategy = self._strategy
         long_dex = opportunity.long_dex
         short_dex = opportunity.short_dex
@@ -94,15 +94,16 @@ class OpportunityScanner:
         if size_usd > strategy.config.max_position_size_usd:
             return False
 
-        current_exposure = self.calculate_total_exposure()
+        current_exposure = await self.calculate_total_exposure()
         if current_exposure + size_usd > strategy.config.max_total_exposure_usd:
             return False
 
         return True
 
-    def has_capacity(self) -> bool:
+    async def has_capacity(self) -> bool:
         strategy = self._strategy
-        open_count = len(strategy.position_manager._positions)
+        open_positions = await strategy.position_manager.get_open_positions()
+        open_count = len(open_positions)
 
         if open_count >= strategy.config.max_positions:
             if not strategy._max_position_warning_logged:
@@ -118,7 +119,7 @@ class OpportunityScanner:
 
         return True
 
-    def calculate_total_exposure(self) -> Decimal:
+    async def calculate_total_exposure(self) -> Decimal:
         strategy = self._strategy
-        positions = strategy.position_manager._positions.values()
+        positions = await strategy.position_manager.get_open_positions()
         return sum(p.size_usd for p in positions if p.status == "open")

@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Any
 from decimal import Decimal
 from datetime import datetime
 from uuid import UUID
+import json
 from helpers.unified_logger import get_core_logger
 
 from strategies.components.base_components import BasePositionManager, Position
@@ -353,6 +354,9 @@ class FundingArbPositionManager(BasePositionManager):
         long_dex_id = dex_mapper.get_id(position.long_dex)
         short_dex_id = dex_mapper.get_id(position.short_dex)
         
+        # Convert metadata dict to JSON string for PostgreSQL
+        metadata_json = json.dumps(position.metadata) if position.metadata else None
+        
         query = """
             UPDATE strategy_positions
             SET symbol_id = :symbol_id,
@@ -367,7 +371,7 @@ class FundingArbPositionManager(BasePositionManager):
                 exit_reason = :exit_reason,
                 closed_at = :closed_at,
                 pnl_usd = :pnl_usd,
-                metadata = :metadata
+                metadata = :metadata::jsonb
             WHERE id = :position_id
         """
         
@@ -384,7 +388,7 @@ class FundingArbPositionManager(BasePositionManager):
             "exit_reason": position.exit_reason,
             "closed_at": position.closed_at,
             "pnl_usd": position.pnl_usd,
-            "metadata": position.metadata,
+            "metadata": metadata_json,
             "position_id": position.id
         })
     

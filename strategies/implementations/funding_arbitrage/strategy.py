@@ -202,13 +202,13 @@ class FundingArbitrageStrategy(BaseStrategy):
                 self.logger.log("Phase 2: Exited", "INFO")
 
             # Phase 3: Scan for new opportunities
-            if self.opportunity_scanner.has_capacity():
+            if await self.opportunity_scanner.has_capacity():
                 self.logger.log("Phase 3: Scanning new opportunities", "INFO")
                 opportunities = await self.opportunity_scanner.scan()
                 for opportunity in opportunities:
-                    if not self.opportunity_scanner.has_capacity():
+                    if not await self.opportunity_scanner.has_capacity():
                         break
-                    if not self.opportunity_scanner.should_take(opportunity):
+                    if not await self.opportunity_scanner.should_take(opportunity):
                         continue
                     new_position = await self.position_opener.open(opportunity)
 
