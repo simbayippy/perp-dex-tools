@@ -83,15 +83,14 @@ async def test_create_inserts_position(manager, db_env, sample_position):
     await manager.create(sample_position)
 
     database.execute.assert_awaited_once()
-    args = database.execute.await_args.kwargs
-    values = args["values"]
+    values = database.execute.await_args.kwargs["values"]
     assert values["symbol_id"] == symbol_mapper.get_id(sample_position.symbol)
     assert values["long_dex_id"] == dex_mapper.get_id(sample_position.long_dex)
     assert values["short_dex_id"] == dex_mapper.get_id(sample_position.short_dex)
 
 
 @pytest.mark.asyncio
-async def test_create_missing_mapping_raises(manager, db_env, sample_position, monkeypatch):
+async def test_create_missing_mapping_raises(manager, db_env, sample_position):
     database, symbol_mapper, dex_mapper = db_env
     symbol_mapper.mapping.pop(sample_position.symbol, None)
     dex_mapper.mapping.pop(sample_position.long_dex, None)
@@ -103,10 +102,7 @@ async def test_create_missing_mapping_raises(manager, db_env, sample_position, m
 
 
 @pytest.mark.asyncio
-async def test_get_returns_position(manager, db_env, sample_position)
-*** End Patch
-@pytest.mark.asyncio
-def test_get_returns_position(manager, db_env, sample_position):
+async def test_get_returns_position(manager, db_env, sample_position):
     database, symbol_mapper, dex_mapper = db_env
     row = {
         'id': sample_position.id,
@@ -187,13 +183,10 @@ async def test_update_persists_changes(manager, db_env, sample_position):
 
 
 @pytest.mark.asyncio
-async def test_close_updates_status(manager, db_env, sample_position, monkeypatch):
+async def test_close_updates_status(manager, db_env, sample_position):
     database, *_ = db_env
 
-    closing_position = sample_position
-    closing_position.status = 'open'
-
-    manager.get = AsyncMock(return_value=closing_position)
+    manager.get = AsyncMock(return_value=sample_position)
     manager.get_cumulative_funding = AsyncMock(return_value=Decimal('5'))
 
     await manager.close(sample_position.id, exit_reason='TEST', pnl_usd=None)
@@ -268,4 +261,3 @@ async def test_initialize_without_database(monkeypatch):
     manager = pm.FundingArbPositionManager()
     await manager.initialize()
     assert manager._initialized is True
-
