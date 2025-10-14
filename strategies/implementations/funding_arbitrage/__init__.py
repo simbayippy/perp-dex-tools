@@ -17,7 +17,6 @@ Components:
 from .config import FundingArbConfig, RiskManagementConfig
 from .models import FundingArbPosition, OpportunityData, TransferOperation
 from .position_manager import FundingArbPositionManager
-from .state_manager import FundingArbStateManager
 from .strategy import FundingArbitrageStrategy
 
 # Risk management (factory pattern)
@@ -44,7 +43,6 @@ __all__ = [
     
     # Core components
     'FundingArbPositionManager',
-    'FundingArbStateManager',
     
     # Risk management
     'get_risk_manager',

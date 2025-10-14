@@ -149,10 +149,8 @@ class FundingArbitrageStrategy(BaseStrategy):
         # ⭐ Position and state management (database-backed)
         # Compose what we need directly - no factory methods
         from .position_manager import FundingArbPositionManager
-        from .state_manager import FundingArbStateManager
         
         self.position_manager = FundingArbPositionManager()
-        self.state_manager = FundingArbStateManager()
 
         # Tracking
         self.failed_symbols = set()  # Track symbols that failed validation (avoid retrying same cycle)
@@ -230,7 +228,6 @@ class FundingArbitrageStrategy(BaseStrategy):
         """Strategy-specific initialization logic."""
         # Initialize position and state managers
         await self.position_manager.initialize()
-        await self.state_manager.initialize()
         self.logger.log("FundingArbitrageStrategy initialized successfully")
     
     async def should_execute(self, market_data) -> bool:
@@ -317,8 +314,6 @@ class FundingArbitrageStrategy(BaseStrategy):
         # Close position and state managers
         if hasattr(self, 'position_manager'):
             await self.position_manager.close()
-        if hasattr(self, 'state_manager'):
-            await self.state_manager.close()
         if getattr(self, "_control_server_started", False) and self.control_server:
             await self.control_server.stop()
             self._control_server_started = False
