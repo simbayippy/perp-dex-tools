@@ -17,32 +17,6 @@ import time
 from helpers.unified_logger import get_strategy_logger
 
 
-# ============================================================================
-# Enums
-# ============================================================================
-
-@dataclass
-class OrderParams:
-    """Parameters for order placement."""
-    side: str  # 'buy' or 'sell'
-    quantity: Decimal
-    price: Optional[Decimal] = None  # None for market orders
-    order_type: str = "limit"  # 'limit', 'market'
-    reduce_only: bool = False
-    time_in_force: str = "GTC"  # 'GTC', 'IOC', 'FOK'
-    
-    # Multi-exchange support
-    exchange: Optional[str] = None
-    contract_id: Optional[str] = None
-    
-    # Strategy-specific metadata
-    metadata: Dict[str, Any] = None
-    
-    def __post_init__(self):
-        if self.metadata is None:
-            self.metadata = {}
-
-
 class BaseStrategy(ABC):
     """
     Base class for all trading strategies.
