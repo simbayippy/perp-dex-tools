@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 from uuid import uuid4
 
 from strategies.execution.patterns.atomic_multi_order import (
@@ -274,6 +275,55 @@ class PositionOpener:
         short_client: Any,
         requested_size: Decimal,
     ) -> Optional[Decimal]:
+        """Normalize leverage and confirm balances."""
+        strategy = self._strategy
+        log_stage(strategy.logger, "Leverage Validation & Normalization", icon="🔍", stage_id="2")
+
+        from strategies.execution.core.leverage_validator import LeverageValidator
+
+        leverage_validator = LeverageValidator()
+
+        try:
+            leverage_prep = await leverage_validator.prepare_leverage(
+                exchange_clients=[long_client, short_client],
+                symbol=symbol,
+                requested_size_usd=requested_size,
+                min_position_usd=Decimal("5"),
+                check_balance=True,
+                normalize_leverage=True,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            strategy.logger.log(
+                f"⛔ [SKIP] {symbol}: Leverage preparation failed - {exc}",
+                "WARNING",
+            )
+            return None
+
+        adjusted_size = leverage_prep.adjusted_size_usd
+
+        if leverage_prep.below_minimum:
+            strategy.logger.log(
+                f"⛔ {symbol}: Position size too small after leverage adjustment (${adjusted_size:.2f})",
+                "WARNING",
+            )
+            return None
+
+        return adjusted_size
+
+    def _build_new_position(
+        self,
+        *,
+        symbol: str,
+        long_dex: str,
+        short_dex: str,
+        size_usd: Decimal,
+        opportunity,
+        entry_fees: Decimal,
+        total_cost: Decimal,
+        long_fill: dict,
+        short_fill: dict,
+        total_slippage: Decimal,
+    ) -> tuple[FundingArbPosition, str]:
         """Instantiate a FundingArbPosition populated with initial metadata."""
         partial_fee = entry_fees / Decimal("2") if entry_fees else Decimal("0")
         timestamp_iso = datetime.now(timezone.utc).isoformat()
@@ -320,6 +370,42 @@ class PositionOpener:
         )
 
         return position, timestamp_iso
+
+    def _log_open_success(
+        self,
+        *,
+        symbol: str,
+        long_fill: dict,
+        short_fill: dict,
+        entry_fees: Decimal,
+        total_slippage: Decimal,
+        size_usd: Decimal,
+        merged: bool,
+        updated_size: Optional[Decimal],
+        additional_size: Optional[Decimal],
+    ) -> None:
+        """Emit final log entry summarizing the persistence outcome."""
+        logger = self._strategy.logger
+
+        if merged and updated_size is not None and additional_size is not None:
+            logger.log(
+                f"🔁 Position increased {symbol}: "
+                f"New size ${updated_size:.2f} (added ${additional_size:.2f}), "
+                f"Long @ ${long_fill['fill_price']}, "
+                f"Short @ ${short_fill['fill_price']}, "
+                f"Fees Δ ${entry_fees:.2f}, Slippage Δ ${total_slippage:.2f}",
+                "INFO",
+            )
+        else:
+            logger.log(
+                f"✅ Position opened {symbol}: "
+                f"Long @ ${long_fill['fill_price']}, "
+                f"Short @ ${short_fill['fill_price']}, "
+                f"Size ${size_usd:.2f}, "
+                f"Slippage: ${total_slippage:.2f}, "
+                f"Fees: ${entry_fees:.2f}",
+                "INFO",
+            )
 
     def _merge_existing_position(
         self,
@@ -478,3 +564,26 @@ class PositionOpener:
                 "ERROR",
             )
             return False
+
+
+@dataclass
+class TradeExecutionResult:
+    """Container for the result of executing the opening hedge."""
+
+    position: FundingArbPosition
+    timestamp_iso: str
+    result: AtomicExecutionResult
+    long_fill: Dict[str, Any]
+    short_fill: Dict[str, Any]
+    entry_fees: Decimal
+    total_cost: Decimal
+
+
+@dataclass
+class PersistenceOutcome:
+    """Describes how the position was persisted (merged or created)."""
+
+    type: str  # "merged" | "created"
+    position: FundingArbPosition
+    updated_size: Optional[Decimal] = None
+    additional_size: Optional[Decimal] = None
