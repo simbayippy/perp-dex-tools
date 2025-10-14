@@ -335,10 +335,11 @@ class PositionCloser:
         if pos_upper == event_upper:
             return True
 
-        if event_upper.endswith(pos_upper):  # e.g., BTCUSDT vs BTC
+        if event_upper.endswith(pos_upper) or event_upper.startswith(pos_upper):
+            # e.g., BTCUSDT vs BTC, BTC-USD vs BTC
             return True
 
-        if pos_upper.endswith(event_upper):
+        if pos_upper.endswith(event_upper) or pos_upper.startswith(event_upper):
             return True
 
         return False
