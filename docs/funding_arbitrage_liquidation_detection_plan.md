@@ -1,11 +1,5 @@
 ## Funding-Arb Liquidation Detection Plan
 
-### Current State
-- `PositionMonitor.monitor()` polls exchange leg snapshots on a fixed cadence (`risk_config.check_interval_seconds`, default 60s).
-- Liquidation is inferred when `get_position_snapshot()` shows zero quantity for one leg while the opposite leg remains open.
-- No real-time stream or asynchronous callbacks feed the strategy yet; exposure can persist between polls.
-- Some exchanges drop/lag REST requests; missing data can mask liquidations until a later retry.
-
 ### Issues
 - **Detection latency**: up to the polling interval (≥60s) before directional exposure is noticed.
 - **Single data source**: relies solely on polling; exchange outages or API rate limits delay detection.
@@ -54,7 +48,7 @@
 
 ---
 
-### Implementation Summary (Current State)
+## Implementation Summary (Current State)
 
 **Event Infrastructure**
 - Added `exchange_clients/events.py` with a normalized `LiquidationEvent` dataclass and `LiquidationEventDispatcher` fan‑out queue.

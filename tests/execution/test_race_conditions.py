@@ -219,10 +219,9 @@ async def test_close_multiple_calls_update_once(monkeypatch):
     manager.get = AsyncMock(side_effect=[open_position, closed_position, closed_position])
 
     await asyncio.gather(
-        manager.close(open_position.id, 'TEST'),
-        manager.close(open_position.id, 'TEST'),
-        manager.close(open_position.id, 'TEST'),
+        manager.close(open_position.id, exit_reason='TEST'),
+        manager.close(open_position.id, exit_reason='TEST'),
+        manager.close(open_position.id, exit_reason='TEST'),
     )
 
     assert database.execute.await_count == 1
-

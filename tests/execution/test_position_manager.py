@@ -47,8 +47,8 @@ def db_env(monkeypatch):
     monkeypatch.setattr(pm, "database", database)
     monkeypatch.setattr(pm, "symbol_mapper", symbol_mapper)
     monkeypatch.setattr(pm, "dex_mapper", dex_mapper)
-    monkeypatch.setattr(pm, "SymbolRepository", None)
-    monkeypatch.setattr(pm, "DEXRepository", None)
+    monkeypatch.setattr(pm, "SymbolRepository", SimpleNamespace)
+    monkeypatch.setattr(pm, "DEXRepository", SimpleNamespace)
     return database, symbol_mapper, dex_mapper
 
 
