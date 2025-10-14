@@ -172,6 +172,11 @@ class FundingArbitrageStrategy(BaseStrategy):
         self.opportunity_scanner = OpportunityScanner(self)
         self.position_closer = PositionCloser(self)
 
+        # Async orchestration helpers
+        self._monitor_task = None
+        self._monitor_stop_event = None
+        self._last_opportunity_scan_ts = 0.0
+
         self._control_server_started = False
 
  
@@ -179,40 +184,29 @@ class FundingArbitrageStrategy(BaseStrategy):
     # Main Execution Loop.
     # ========================================================================
        
-    async def execute_strategy(self, market_data):
+    async def execute_strategy(self):
         """
         Execute the funding arbitrage strategy.
         
         This is the main entry point called by the trading bot.
         """
         self.failed_symbols.clear()
+        loop = asyncio.get_running_loop()
+        self._last_opportunity_scan_ts = loop.time()
 
         try:
-            # Phase 1: Monitor existing positions
-            self.logger.log("Phase 1: Monitoring positions", "INFO")
+            if not await self.opportunity_scanner.has_capacity():
+                self.logger.log("No capacity for new positions; skipping opportunity scan", "DEBUG")
+                return
 
-            # This position_monitor.monitor() will actually call the exchange_clients to get snapshot of position
-            await self.position_monitor.monitor()
-
-            # Phase 2: Check exit conditions & close
-            closed = await self.position_closer.evaluateAndClosePositions()
-            if closed:
-                self.logger.log("Phase 2: Exited", "INFO")
-
-            # Phase 3: Scan for new opportunities
-            if await self.opportunity_scanner.has_capacity():
-                self.logger.log("Phase 3: Scanning new opportunities", "INFO")
-                opportunities = await self.opportunity_scanner.scan()
-                for opportunity in opportunities:
-                    if not await self.opportunity_scanner.has_capacity():
-                        break
-                    if not await self.opportunity_scanner.should_take(opportunity):
-                        continue
-                    new_position = await self.position_opener.open(opportunity)
-
-            
-            # sleep for check_interval_seconds defined = 60
-            await asyncio.sleep(self.config.risk_config.check_interval_seconds)
+            self.logger.log("Scanning for new funding arbitrage opportunities", "INFO")
+            opportunities = await self.opportunity_scanner.scan()
+            for opportunity in opportunities:
+                if not await self.opportunity_scanner.has_capacity():
+                    break
+                if not await self.opportunity_scanner.should_take(opportunity):
+                    continue
+                await self.position_opener.open(opportunity)
 
         except Exception as exc:
             self.logger.log(f"Strategy execution failed: {exc}", "ERROR")
@@ -229,14 +223,20 @@ class FundingArbitrageStrategy(BaseStrategy):
         # Initialize position and state managers
         await self.position_manager.initialize()
         self.logger.log("FundingArbitrageStrategy initialized successfully")
+        if self._monitor_task is None:
+            self._monitor_stop_event = asyncio.Event()
+            self._monitor_task = asyncio.create_task(self._monitor_positions_loop(), name="funding-arb-monitor")
+            self.logger.log("Started background monitor loop", "DEBUG")
     
-    async def should_execute(self, market_data) -> bool:
+    async def should_execute(self) -> bool:
         """
         Determine if strategy should execute based on market conditions.
 
         For funding arbitrage, we always check for opportunities.
         """
-        return True
+        interval = max(self.config.risk_config.check_interval_seconds, 1)
+        now = asyncio.get_running_loop().time()
+        return (now - self._last_opportunity_scan_ts) >= interval
 
     
     def get_required_parameters(self) -> List[str]:
@@ -306,11 +306,51 @@ class FundingArbitrageStrategy(BaseStrategy):
         return funding_config
 
     # ========================================================================
+    # Internal Loops
+    # ========================================================================
+
+    async def _monitor_positions_loop(self):
+        """Background loop to refresh and close existing positions."""
+        interval = max(self.config.risk_config.check_interval_seconds, 1)
+        stop_event = self._monitor_stop_event
+
+        try:
+            while stop_event and not stop_event.is_set():
+                try:
+                    await self.position_monitor.monitor()
+                    await self.position_closer.evaluateAndClosePositions()
+                except Exception as exc:
+                    self.logger.log(f"Monitor loop error: {exc}", "ERROR")
+
+                if stop_event.is_set():
+                    break
+
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=interval)
+                except asyncio.TimeoutError:
+                    continue
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self.logger.log("Background monitor loop stopped", "DEBUG")
+
+    # ========================================================================
     # Cleanup
     # ========================================================================
     
     async def cleanup(self):
         """Cleanup strategy resources."""
+        if self._monitor_stop_event:
+            self._monitor_stop_event.set()
+        if self._monitor_task:
+            try:
+                await self._monitor_task
+            except asyncio.CancelledError:
+                pass
+            self._monitor_task = None
+        self._monitor_stop_event = None
+        self._last_opportunity_scan_ts = 0.0
+
         # Close position and state managers
         if hasattr(self, 'position_manager'):
             await self.position_manager.close()

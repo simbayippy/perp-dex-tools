@@ -156,8 +156,8 @@ class TradingBot:
         """Execute the main trading loop."""
         while not self.shutdown_requested:
             try:
-                if await self.strategy.should_execute(None):
-                    await self.strategy.execute_strategy(None)
+                if await self.strategy.should_execute():
+                    await self.strategy.execute_strategy()
                 else:
                     await asyncio.sleep(1)  # Brief wait if strategy says not to execute
                     
