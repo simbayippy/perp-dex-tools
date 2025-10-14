@@ -1,19 +1,10 @@
-"""
-Pytest configuration and shared fixtures
-
-This file is automatically loaded by pytest and provides:
-- Python path setup
-- Shared fixtures
-- Test environment configuration
-"""
+"""Pytest configuration for funding arb tests."""
 
 import sys
 from pathlib import Path
 
-# Add project root to Python path
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
+PROJECT_ROOT = Path(__file__).parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-# Pytest configuration
-pytest_plugins = ['pytest_asyncio']
-
+pytest_plugins = ["pytest_asyncio"]

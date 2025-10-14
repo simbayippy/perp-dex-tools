@@ -41,4 +41,4 @@ clean: ## Remove virtual environment
 
 test: ## Run all pytest suites under ./tests
 	@echo "$(YELLOW)Running pytest ($(PYTEST))...$(NC)"
-	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PYTEST) tests
+	@$(PYTEST) tests
