@@ -155,61 +155,6 @@ class BasePositionManager(ABC):
 
 
 # ============================================================================
-# State Manager Interface
-# ============================================================================
-
-class BaseStateManager(ABC):
-    """
-    Interface for strategy state persistence.
-    
-    Supports multiple backends:
-    - PostgreSQL (recommended for production)
-    - SQLite (for local testing)
-    - In-memory (for unit tests)
-    
-    Pattern: Backend-agnostic interface for state storage.
-    """
-    
-    @abstractmethod
-    async def save_state(
-        self, 
-        strategy_name: str, 
-        state_data: Dict[str, Any]
-    ) -> None:
-        """
-        Save strategy state.
-        
-        Args:
-            strategy_name: Unique strategy identifier
-            state_data: State to persist (must be JSON-serializable)
-        """
-        pass
-    
-    @abstractmethod
-    async def load_state(self, strategy_name: str) -> Dict[str, Any]:
-        """
-        Load strategy state.
-        
-        Args:
-            strategy_name: Strategy identifier
-            
-        Returns:
-            Saved state dict, or {} if not found
-        """
-        pass
-    
-    @abstractmethod
-    async def clear_state(self, strategy_name: str) -> None:
-        """
-        Clear strategy state.
-        
-        Args:
-            strategy_name: Strategy to clear
-        """
-        pass
-
-
-# ============================================================================
 # Concrete Implementations (Simple Versions)
 # ============================================================================
 
@@ -269,29 +214,3 @@ class InMemoryPositionManager(BasePositionManager):
             'status': position.status,
             'opened_at': position.opened_at
         }
-
-
-class InMemoryStateManager(BaseStateManager):
-    """
-    Simple in-memory state manager for testing.
-    
-    For production, use PostgreSQL-backed implementation.
-    """
-    
-    def __init__(self):
-        self._state: Dict[str, Dict[str, Any]] = {}
-    
-    async def save_state(
-        self, 
-        strategy_name: str, 
-        state_data: Dict[str, Any]
-    ) -> None:
-        self._state[strategy_name] = state_data
-    
-    async def load_state(self, strategy_name: str) -> Dict[str, Any]:
-        return self._state.get(strategy_name, {})
-    
-    async def clear_state(self, strategy_name: str) -> None:
-        if strategy_name in self._state:
-            del self._state[strategy_name]
-
