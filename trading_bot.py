@@ -37,23 +37,6 @@ class TradingConfig:
         if self.strategy_params is None:
             self.strategy_params = {}
 
-
-@dataclass
-class OrderMonitor:
-    """Thread-safe order monitoring state."""
-    order_id: Optional[str] = None
-    filled: bool = False
-    filled_price: Optional[Decimal] = None
-    filled_qty: Decimal = 0.0
-
-    def reset(self):
-        """Reset the monitor state."""
-        self.order_id = None
-        self.filled = False
-        self.filled_price = None
-        self.filled_qty = 0.0
-
-
 class TradingBot:
     """Modular Trading Bot - Main trading logic supporting multiple exchanges."""
 
@@ -104,9 +87,6 @@ class TradingBot:
         self.shutdown_requested = False
         self.loop = None
 
-        # Register order callback (only for primary exchange in multi-exchange mode)
-        self._setup_websocket_handlers()
-        
         # Initialize strategy
         try:
             if is_multi_exchange:
@@ -155,64 +135,6 @@ class TradingBot:
 
         except Exception as e:
             self.logger.error(f"Error during graceful shutdown: {e}")
-
-    def _setup_websocket_handlers(self):
-        """Setup WebSocket handlers for order updates."""
-        def order_update_handler(message):
-            """Handle order updates from WebSocket."""
-            try:
-                # Check if this is for our contract
-                if message.get('contract_id') != self.config.contract_id:
-                    return
-
-                order_id = message.get('order_id')
-                status = message.get('status')
-                side = message.get('side', '')
-                order_type = message.get('order_type', '')
-                filled_size = Decimal(message.get('filled_size', 0))
-
-                # Log order updates
-                if status == 'FILLED':
-                    self.logger.info(f"[{order_type}] [{order_id}] {status} "
-                                    f"{message.get('size')} @ {message.get('price')}")
-                    self.logger.log_transaction(order_id, side, message.get('size'), message.get('price'), status)
-                    
-                    # Notify strategy of successful order
-                    if self.risk_manager:
-                        self.risk_manager.record_successful_order()
-                        
-                elif status == "CANCELED":
-                    self.logger.info(f"[{order_type}] [{order_id}] {status} "
-                                    f"{message.get('size')} @ {message.get('price')}")
-                    
-                    if filled_size > 0:
-                        self.logger.log_transaction(order_id, side, filled_size, message.get('price'), status)
-                        
-                elif status == "PARTIALLY_FILLED":
-                    self.logger.info(f"[{order_type}] [{order_id}] {status} "
-                                    f"{filled_size} @ {message.get('price')}")
-                else:
-                    self.logger.info(f"[{order_type}] [{order_id}] {status} "
-                                    f"{message.get('size')} @ {message.get('price')}")
-
-            except Exception as e:
-                self.logger.error(f"Error handling order update: {e}")
-                self.logger.error(f"Traceback: {traceback.format_exc()}")
-
-        # Setup order update handler
-        self.exchange_client.setup_order_update_handler(order_update_handler)
-
-    async def send_notification(self, message: str):
-        lark_token = os.getenv("LARK_TOKEN")
-        if lark_token:
-            async with LarkBot(lark_token) as lark_bot:
-                await lark_bot.send_text(message)
-
-        telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
-        telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        if telegram_token and telegram_chat_id:
-            with TelegramBot(telegram_token, telegram_chat_id) as tg_bot:
-                tg_bot.send_text(message)
 
     async def run(self):
         """Main trading loop."""
@@ -287,18 +209,3 @@ class TradingBot:
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             await self.graceful_shutdown(f"Critical error: {e}")
             raise
-        finally:
-            # Ensure all connections are closed even if graceful shutdown fails
-            try:
-                if self.exchange_clients:
-                    # Multi-exchange mode
-                    for client in self.exchange_clients.values():
-                        try:
-                            await client.disconnect()
-                        except:
-                            pass
-                else:
-                    # Single exchange mode
-                    await self.exchange_client.disconnect()
-            except Exception as e:
-                self.logger.error(f"Error disconnecting from exchange: {e}")
