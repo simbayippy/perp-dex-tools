@@ -17,93 +17,6 @@ import time
 from helpers.unified_logger import get_strategy_logger
 
 
-# ============================================================================
-# Enums
-# ============================================================================
-
-class RunnableStatus(Enum):
-    """
-    Strategy lifecycle states.
-    
-    Pattern from Hummingbot ExecutorBase.
-    
-    Transitions:
-    NOT_STARTED → RUNNING → SHUTTING_DOWN → TERMINATED
-    """
-    NOT_STARTED = 1
-    RUNNING = 2
-    SHUTTING_DOWN = 3
-    TERMINATED = 4
-
-
-class StrategyAction(Enum):
-    """Strategy action types."""
-    NONE = "none"
-    PLACE_ORDER = "place_order"
-    CLOSE_POSITION = "close_position"
-    REBALANCE = "rebalance"
-    WAIT = "wait"
-
-
-@dataclass
-class OrderParams:
-    """Parameters for order placement."""
-    side: str  # 'buy' or 'sell'
-    quantity: Decimal
-    price: Optional[Decimal] = None  # None for market orders
-    order_type: str = "limit"  # 'limit', 'market'
-    reduce_only: bool = False
-    time_in_force: str = "GTC"  # 'GTC', 'IOC', 'FOK'
-    
-    # Multi-exchange support
-    exchange: Optional[str] = None
-    contract_id: Optional[str] = None
-    
-    # Strategy-specific metadata
-    metadata: Dict[str, Any] = None
-    
-    def __post_init__(self):
-        if self.metadata is None:
-            self.metadata = {}
-
-
-@dataclass
-class StrategyResult:
-    """Result of strategy execution."""
-    action: StrategyAction
-    orders: List[OrderParams] = None
-    message: str = ""
-    wait_time: float = 0  # Seconds to wait before next check
-    
-    def __post_init__(self):
-        if self.orders is None:
-            self.orders = []
-
-
-@dataclass
-class MarketData:
-    """Market data container for strategy decisions."""
-    ticker: str
-    best_bid: Decimal
-    best_ask: Decimal
-    mid_price: Decimal
-    timestamp: float
-    
-    # Additional data
-    volume_24h: Optional[Decimal] = None
-    funding_rate: Optional[Decimal] = None
-    open_interest: Optional[Decimal] = None
-    
-    # Multi-exchange data
-    exchange_data: Dict[str, Dict[str, Any]] = None
-    
-    def __post_init__(self):
-        if self.exchange_data is None:
-            self.exchange_data = {}
-        if self.mid_price == 0:
-            self.mid_price = (self.best_bid + self.best_ask) / 2
-
-
 class BaseStrategy(ABC):
     """
     Base class for all trading strategies.
@@ -137,8 +50,6 @@ class BaseStrategy(ABC):
         self.last_action_time = 0
         self.strategy_state = {}
         
-        # Event-driven pattern from Hummingbot
-        self.status = RunnableStatus.NOT_STARTED
         self._event_listeners: Dict[str, Callable] = {}
     
     async def initialize(self):
@@ -165,18 +76,11 @@ class BaseStrategy(ABC):
         1. Register event listeners
         2. Set status to RUNNING
         """
-        if self.status != RunnableStatus.NOT_STARTED:
-            self.logger.warning(
-                f"Cannot start strategy in status {self.status}"
-            )
-            return
         
         # Register event listeners (child can override)
         self.register_events()
         
         # Start running
-        self.status = RunnableStatus.RUNNING
-        
         self.logger.info(f"Strategy '{self.get_strategy_name()}' started")
     
     def stop(self):
@@ -188,14 +92,9 @@ class BaseStrategy(ABC):
         2. Unregister event listeners
         3. Set status to TERMINATED
         """
-        if self.status == RunnableStatus.RUNNING:
-            self.status = RunnableStatus.SHUTTING_DOWN
-            self.logger.log(f"Strategy '{self.get_strategy_name()}' shutting down...", "INFO")
-        
         # Cleanup event listeners
         self.unregister_events()
         
-        self.status = RunnableStatus.TERMINATED
         self.logger.log(f"Strategy '{self.get_strategy_name()}' terminated", "INFO")
     
     def register_events(self):
@@ -237,12 +136,12 @@ class BaseStrategy(ABC):
             del self._event_listeners[event_name]
     
     @abstractmethod
-    async def should_execute(self, market_data: MarketData) -> bool:
+    async def should_execute(self) -> bool:
         """Determine if strategy should execute based on market conditions."""
         pass
     
     @abstractmethod
-    async def execute_strategy(self, market_data: MarketData) -> StrategyResult:
+    async def execute_strategy(self):
         """Execute the strategy and return the result."""
         pass
     
@@ -295,6 +194,3 @@ class BaseStrategy(ABC):
     def get_strategy_state(self, key: str, default_value: Any = None) -> Any:
         """Get strategy state value."""
         return self.strategy_state.get(key, default_value)
-
-
-

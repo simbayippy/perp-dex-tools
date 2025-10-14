@@ -1,8 +1,6 @@
 """
 Funding Arbitrage Strategy - Main Orchestrator
 
-⭐ STRUCTURE BASED ON Hummingbot v2_funding_rate_arb.py ⭐
-
 3-Phase Execution Loop:
 1. Monitor existing positions
 2. Check exit conditions & close
@@ -11,12 +9,11 @@ Funding Arbitrage Strategy - Main Orchestrator
 Pattern: Stateful strategy with multi-DEX support
 """
 
-from strategies.categories.stateful_strategy import StatefulStrategy
-from strategies.base_strategy import StrategyResult, StrategyAction
-from strategies.components import InMemoryPositionManager
+import asyncio
+
+from strategies.base_strategy import BaseStrategy
 from .config import FundingArbConfig
-from .models import FundingArbPosition, OpportunityData
-from .funding_analyzer import FundingRateAnalyzer
+from .models import FundingArbPosition
 
 # Direct imports from funding_rate_service (internal calls, no HTTP)
 # Make imports conditional to avoid config loading issues during import
@@ -32,9 +29,9 @@ except ImportError as e:
     database = None
     FUNDING_SERVICE_AVAILABLE = False
 
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 # Execution layer imports
@@ -44,13 +41,14 @@ from strategies.execution.patterns.atomic_multi_order import (
     AtomicExecutionResult
 )
 from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
+from .monitoring import PositionMonitor
+# Funding_arb operation helpers
+from .operations import PositionOpener, OpportunityScanner, PositionCloser
 
 
-class FundingArbitrageStrategy(StatefulStrategy):
+class FundingArbitrageStrategy(BaseStrategy):
     """
     Delta-neutral funding rate arbitrage strategy.
-    
-    ⭐ Core logic from Hummingbot v2_funding_rate_arb.py ⭐
     
     Strategy:
     ---------
@@ -59,7 +57,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
     3. Collect funding rate divergence (paid periodically)
     4. Close when divergence shrinks or better opportunity exists
     
-    Complexity: Multi-DEX, stateful, requires careful monitoring
+    Complexity: Multi-DEX, requires careful monitoring
     """
     
     def __init__(self, config, exchange_client):
@@ -91,27 +89,12 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 primary_exchange = funding_config.exchange
             exchange_clients = {primary_exchange: exchange_client}
         
-        # Pass exchange_clients dict to StatefulStrategy
-        super().__init__(funding_config, exchange_clients)
+        # Initialize BaseStrategy (note: no exchange_client for multi-DEX)
+        super().__init__(funding_config, exchange_client=None)
         self.config = funding_config  # Store the converted config
-        # self.exchange_clients is already set by StatefulStrategy.__init__
         
-        # ⭐ Exchange Client Management
-        # 
-        # IMPORTANT DISTINCTION:
-        # 1. scan_exchanges (config) - Which exchanges to consider for opportunity scanning
-        #    - These are just labels for filtering database queries
-        #    - The funding rate data comes from the database (collected by funding_rate_service)
-        #    - No trading client needed for scanning
-        #
-        # 2. exchange_clients (this dict) - Which exchanges we can actually TRADE on
-        #    - Only exchanges with fully implemented BaseExchangeClient can be here
-        #    - Currently: Only 'lighter' is fully implemented
-        #    - Others (edgex, grvt, aster, backpack) only have funding adapters
-        #
-        # The strategy will:
-        # - Scan opportunities across ALL exchanges in scan_exchanges (from database)
-        # - But only execute trades on exchanges with available trading clients
+        # Store exchange clients dict (multi-DEX support)
+        self.exchange_clients = exchange_clients
         
         available_exchanges = list(exchange_clients.keys())
         required_exchanges = funding_config.exchanges  # These are from scan_exchanges
@@ -124,15 +107,8 @@ class FundingArbitrageStrategy(StatefulStrategy):
                 self.logger.log(f"⚠️  Trading not available on: {missing_exchanges} (funding data only)")
             self.logger.log(f"✅ Will scan ALL configured exchanges but only trade on {available_exchanges}")
             
-            # Keep all exchanges in config for opportunity scanning (database queries)
-            # Don't filter them out - we want to see opportunities even if we can't trade them all yet
-            # funding_config.exchanges remains unchanged
-            
         if not available_exchanges:
             raise ValueError(f"No trading-capable exchange clients available. At least one exchange with full trading support is required.")
-        
-        # ⭐ Core components from Hummingbot pattern
-        self.analyzer = FundingRateAnalyzer()
         
         # ⭐ Direct internal services (no HTTP, shared database)
         if not FUNDING_SERVICE_AVAILABLE:
@@ -161,7 +137,7 @@ class FundingArbitrageStrategy(StatefulStrategy):
             prefer_websocket=False  # Prefer cache over WebSocket for stability
         )
         
-        # ⭐ Execution layer (atomic delta-neutral execution)
+        # ⭐ Execution Common layer (atomic delta-neutral execution)
         self.atomic_executor = AtomicMultiOrderExecutor(price_provider=self.price_provider)
         self.liquidity_analyzer = LiquidityAnalyzer(
             max_slippage_pct=Decimal("0.005"),  # 0.5% max slippage
@@ -171,26 +147,113 @@ class FundingArbitrageStrategy(StatefulStrategy):
         )
         
         # ⭐ Position and state management (database-backed)
+        # Compose what we need directly - no factory methods
         from .position_manager import FundingArbPositionManager
         from .state_manager import FundingArbStateManager
         
         self.position_manager = FundingArbPositionManager()
         self.state_manager = FundingArbStateManager()
-        
+
         # Tracking
-        self.cumulative_funding = {}  # {position_id: Decimal}
         self.failed_symbols = set()  # Track symbols that failed validation (avoid retrying same cycle)
         
-        # 🔒 Session-level position limit (Issue #4 fix)
-        # Set to True to limit strategy to 1 position per bot session
-        # Set to False to allow multiple positions based on max_positions config
-        self.one_position_per_session = True  # Keep it simple for now
         self.position_opened_this_session = False
-    
-    
+        
+        # Keep track of warnings, to prevent spam
+        self._session_limit_warning_logged = False
+        self._max_position_warning_logged = False
+
+        # Position monitoring helper
+        self.position_monitor = PositionMonitor(
+            position_manager=self.position_manager,
+            funding_rate_repo=self.funding_rate_repo,
+            exchange_clients=self.exchange_clients,
+            logger=self.logger,
+        )
+        self.position_opener = PositionOpener(self)
+        self.opportunity_scanner = OpportunityScanner(self)
+        self.position_closer = PositionCloser(self)
+
+        self._control_server_started = False
+
+ 
+    # ========================================================================
+    # Main Execution Loop.
+    # ========================================================================
+       
+    async def execute_strategy(self, market_data):
+        """
+        Execute the funding arbitrage strategy.
+        
+        This is the main entry point called by the trading bot.
+        """
+        self.failed_symbols.clear()
+
+        try:
+            # Phase 1: Monitor existing positions
+            self.logger.log("Phase 1: Monitoring positions", "INFO")
+
+            # This position_monitor.monitor() will actually call the exchange_clients to get snapshot of position
+            await self.position_monitor.monitor()
+
+            # Phase 2: Check exit conditions & close
+            closed = await self.position_closer.evaluateAndClosePositions()
+            if closed:
+                self.logger.log("Phase 2: Exited", "INFO")
+
+            # Phase 3: Scan for new opportunities
+            if await self.opportunity_scanner.has_capacity():
+                self.logger.log("Phase 3: Scanning new opportunities", "INFO")
+                opportunities = await self.opportunity_scanner.scan()
+                for opportunity in opportunities:
+                    if not await self.opportunity_scanner.has_capacity():
+                        break
+                    if not await self.opportunity_scanner.should_take(opportunity):
+                        continue
+                    new_position = await self.position_opener.open(opportunity)
+
+            
+            # sleep for check_interval_seconds defined = 60
+            await asyncio.sleep(self.config.risk_config.check_interval_seconds)
+
+        except Exception as exc:
+            self.logger.log(f"Strategy execution failed: {exc}", "ERROR")
+
+    # ========================================================================
+    # Abstract Method Implementations (Required by BaseStrategy)
+    # ========================================================================
+
     def get_strategy_name(self) -> str:
         return "Funding Rate Arbitrage"
 
+    async def _initialize_strategy(self):
+        """Strategy-specific initialization logic."""
+        # Initialize position and state managers
+        await self.position_manager.initialize()
+        await self.state_manager.initialize()
+        self.logger.log("FundingArbitrageStrategy initialized successfully")
+    
+    async def should_execute(self, market_data) -> bool:
+        """
+        Determine if strategy should execute based on market conditions.
+
+        For funding arbitrage, we always check for opportunities.
+        """
+        return True
+
+    
+    def get_required_parameters(self) -> List[str]:
+        """Get list of required strategy parameters."""
+        return [
+            "target_exposure",
+            "min_profit_rate", 
+            "exchanges"
+        ]
+    
+    # ========================================================================
+    # Helpers
+    # ========================================================================
+    
     def _convert_trading_config(self, trading_config) -> FundingArbConfig:
         """
         Convert TradingConfig from runbot.py to FundingArbConfig.
@@ -219,8 +282,11 @@ class FundingArbitrageStrategy(StatefulStrategy):
         
         # Get target exposure from strategy_params
         target_exposure = Decimal(str(strategy_params.get('target_exposure', 100.0)))
+
+        config_path = strategy_params.get("_config_path")
+
         
-        return FundingArbConfig(
+        funding_config = FundingArbConfig(
             exchange=trading_config.exchange,  # Primary exchange
             exchanges=exchanges,  # All exchanges for arbitrage
             symbols=[trading_config.ticker],
@@ -236,786 +302,12 @@ class FundingArbitrageStrategy(StatefulStrategy):
             # Risk management defaults
             risk_config=RiskManagementConfig(),
             # Ticker for logging
-            ticker=trading_config.ticker
+            ticker=trading_config.ticker,
+            config_path=config_path
             # Note: bridge_settings not implemented yet
         )
- 
-    # ========================================================================
-    # Main Execution Loop
-    # ========================================================================
-    
-    async def execute_cycle(self) -> StrategyResult:
-        """
-        Main 3-phase execution loop.
-        
-        ⭐ Pattern from Hummingbot v2_funding_rate_arb.py ⭐
-        
-        Phase 1: Monitor existing positions
-        Phase 2: Check exit conditions & close
-        Phase 3: Scan for new opportunities
-        
-        Called every minute by trading_bot.py.
-        
-        Returns:
-            StrategyResult with actions taken
-        """
-        actions_taken = []
-        
-        # Reset failed symbols at start of each cycle (allow retry on next cycle)
-        self.failed_symbols.clear()
-        
-        try:
-            # Phase 1: Monitor existing positions
-            self.logger.log("Phase 1: Monitoring positions", "INFO")
-            await self._monitor_positions()
-            
-            # Phase 2: Check exits
-            self.logger.log("Phase 2: Checking exit conditions", "INFO")
-            closed = await self._check_exit_conditions()
-            actions_taken.extend(closed)
-            
-            # Phase 3: New opportunities (if capacity available)
-            if self._has_capacity():
-                self.logger.log("Phase 3: Scanning new opportunities", "INFO")
-                opened = await self._scan_opportunities()
-                actions_taken.extend(opened)
-            else:
-                self.logger.log("Phase 3: At max capacity, skipping new opportunities", "INFO")
-            
-            return StrategyResult(
-                action=StrategyAction.REBALANCE if actions_taken else StrategyAction.WAIT,
-                message=f"Cycle complete: {len(actions_taken)} actions taken",
-                wait_time=self.config.risk_config.check_interval_seconds
-            )
-            
-        except Exception as e:
-            self.logger.log(f"Error in execute_cycle: {e}", "ERROR")
-            return StrategyResult(
-                action=StrategyAction.WAIT,
-                message=f"Error: {e}",
-                wait_time=60
-            )
-    
-    # ========================================================================
-    # Phase 1: Monitor Positions
-    # ========================================================================
-    
-    async def _monitor_positions(self):
-        """
-        Update position states with current funding rates.
-        
-        For each position:
-        1. Fetch current funding rates
-        2. Update position state
-        3. Calculate current profitability
-        """
-        positions = await self.position_manager.get_open_positions()
-        
-        if not positions:
-            self.logger.log("No open positions to monitor", "DEBUG")
-            return
-        
-        for position in positions:
-            try:
-                # ⭐ Direct repository call (no HTTP)
-                # Get current rates from funding rate repository
-                from funding_rate_service.core.mappers import symbol_mapper
-                
-                # Fetch latest rates
-                rate1_data = await self.funding_rate_repo.get_latest_specific(
-                    position.long_dex, position.symbol
-                )
-                rate2_data = await self.funding_rate_repo.get_latest_specific(
-                    position.short_dex, position.symbol
-                )
-                
-                if rate1_data and rate2_data:
-                    rate1 = Decimal(str(rate1_data['funding_rate']))
-                    rate2 = Decimal(str(rate2_data['funding_rate']))
-                    divergence = rate2 - rate1
-                    
-                    # Update position
-                    position.current_divergence = divergence
-                    position.last_check = datetime.now()
-                    await self.position_manager.update_position(position)
-                else:
-                    self.logger.log(
-                        f"Could not fetch rates for {position.symbol}",
-                        "WARNING"
-                    )
-                    continue
-                
-                # Log status
-                erosion = position.get_profit_erosion()
-                self.logger.log(
-                    f"Position {position.symbol}: "
-                    f"Entry={position.entry_divergence*100:.3f}%, "
-                    f"Current={position.current_divergence*100:.3f}%, "
-                    f"Erosion={erosion*100:.1f}%, "
-                    f"PnL=${position.get_net_pnl():.2f}",
-                    "INFO"
-                )
-                
-            except Exception as e:
-                self.logger.log(
-                    f"Error monitoring position {position.id}: {e}",
-                    "ERROR"
-                )
-    
-    # ========================================================================
-    # Phase 2: Exit Conditions
-    # ========================================================================
-    
-    async def _check_exit_conditions(self) -> List[str]:
-        """
-        ⭐ FROM v2_funding_rate_arb.py stop_actions_proposal() ⭐
-        
-        Check if any positions should close.
-        
-        Returns:
-            List of action descriptions
-        """
-        actions = []
-        positions = await self.position_manager.get_open_positions()
-        
-        for position in positions:
-            should_close, reason = self._should_close_position(position)
-            
-            if should_close:
-                await self._close_position(position, reason)
-                actions.append(f"Closed {position.symbol}: {reason}")
-        
-        return actions
-    
-    def _should_close_position(
-        self,
-        position: FundingArbPosition
-    ) -> Tuple[bool, str]:
-        """
-        Determine if position should be closed.
-        
-        Exit conditions (from Hummingbot + your risk management):
-        1. Funding rate flipped (critical - immediate exit)
-        2. Profit erosion (divergence dropped too much)
-        3. Time limit (held too long)
-        4. Better opportunity exists
-        
-        Returns:
-            (should_close, reason)
-        """
-        # 1. Funding rate flipped (CRITICAL - losing money!)
-        if position.current_divergence and position.current_divergence < 0:
-            return True, "FUNDING_FLIP"
-        
-        # 2. Profit erosion (divergence dropped significantly)
-        erosion = position.get_profit_erosion()
-        if erosion < self.config.risk_config.min_erosion_threshold:
-            return True, "PROFIT_EROSION"
-        
-        # 3. Time limit (max position age)
-        if position.get_age_hours() > self.config.risk_config.max_position_age_hours:
-            return True, "TIME_LIMIT"
-        
-        # 4. Better opportunity exists (optional)
-        if self.config.risk_config.enable_better_opportunity:
-            # Check if a significantly better opportunity exists for same symbol
-            # TODO: Implement better opportunity check
-            pass
-        
-        return False, None
-    
-    async def _close_position(self, position: FundingArbPosition, reason: str):
-        """
-        Close both sides of delta-neutral position.
-        
-        Args:
-            position: Position to close
-            reason: Reason for closing
-        """
-        try:
-            # Close long side
-            long_client = self.exchange_clients[position.long_dex]
-            await long_client.close_position(position.symbol)
-            
-            # Close short side
-            short_client = self.exchange_clients[position.short_dex]
-            await short_client.close_position(position.symbol)
-            
-            # Calculate final PnL
-            pnl = position.get_net_pnl()
-            pnl_pct = position.get_net_pnl_pct()
-            
-            # Mark as closed
-            position.status = "closed"
-            position.exit_reason = reason
-            position.closed_at = datetime.now()
-            await self.position_manager.update_position(position)
-            
-            self.logger.log(
-                f"✅ Closed {position.symbol} ({reason}): "
-                f"PnL=${pnl:.2f} ({pnl_pct*100:.2f}%), "
-                f"Age={position.get_age_hours():.1f}h",
-                "INFO"
-            )
-            
-        except Exception as e:
-            self.logger.log(
-                f"Error closing position {position.id}: {e}",
-                "ERROR"
-            )
-            raise
-    
-    # ========================================================================
-    # Phase 3: New Opportunities
-    # ========================================================================
-    
-    async def _scan_opportunities(self) -> List[str]:
-        """
-        ⭐ FROM v2_funding_rate_arb.py create_actions_proposal() ⭐
-        
-        Find and open new positions.
-        
-        Returns:
-            List of action descriptions
-        """
-        actions = []
-        
-        try:
-            # ⭐ Direct internal service call (no HTTP)
-            # Use opportunity finder to find opportunities
-            from funding_rate_service.models.filters import OpportunityFilter
-            
-            # Get list of AVAILABLE exchanges (those with valid trading clients)
-            # This filters out exchanges that were skipped due to missing credentials
-            available_exchanges = list(self.exchange_clients.keys())
-            
-            filters = OpportunityFilter(
-                min_profit_percent=self.config.min_profit,
-                max_oi_usd=self.config.max_oi_usd,
-                whitelist_dexes=available_exchanges if available_exchanges else None,
-                symbol=None,  # Don't filter by symbol - look at all opportunities
-                limit=10
-            )
-            
-            # 🔍 DEBUG: Log the filters being used
-            self.logger.log(
-                f"Filters - min_profit: {self.config.min_profit}, max_oi_usd: {self.config.max_oi_usd}, "
-                f"configured_dexes: {self.config.exchanges}, available_dexes: {available_exchanges}",
-                "DEBUG"
-            )
-            
-            opportunities = await self.opportunity_finder.find_opportunities(filters)
-            
-            self.logger.log(
-                f"Found {len(opportunities)} opportunities",
-                "INFO"
-            )
-            
-            # Take top opportunities up to limit
-            max_new = self.config.max_new_positions_per_cycle
-            for opp in opportunities[:max_new]:
-                # Skip symbols that failed in this cycle
-                if opp.symbol in self.failed_symbols:
-                    self.logger.log(
-                        f"⏭️  Skipping {opp.symbol} - already failed validation this cycle",
-                        "DEBUG"
-                    )
-                    continue
-                
-                if self._should_take_opportunity(opp):
-                    success = await self._open_position(opp)
-                    if success:
-                        actions.append(f"Opened {opp.symbol} on {opp.long_dex}/{opp.short_dex}")
-                    
-                    # Stop if we hit capacity
-                    if not self._has_capacity():
-                        break
-            
-        except Exception as e:
-            self.logger.log(f"Error scanning opportunities: {e}", "ERROR")
-        
-        return actions
-    
-    def _should_take_opportunity(self, opportunity) -> bool:
-        """
-        Apply client-side filters to opportunity.
-        
-        Args:
-            opportunity: ArbitrageOpportunity object
-            
-        Returns:
-            True if should take this opportunity
-        """
-        # ⭐ Safety check: Verify we have trading clients for both sides
-        # NOTE: This should rarely trigger since we filter at the opportunity finder level,
-        # but it's kept as a defensive safety net in case of race conditions or stale data
-        long_dex = opportunity.long_dex
-        short_dex = opportunity.short_dex
-        
-        if long_dex not in self.exchange_clients:
-            self.logger.log(
-                f"⚠️  SAFETY CHECK: Skipping {opportunity.symbol} opportunity - "
-                f"{long_dex} (long side) not in available clients (should have been filtered earlier)",
-                "WARNING"
-            )
-            return False
-        
-        if short_dex not in self.exchange_clients:
-            self.logger.log(
-                f"⚠️  SAFETY CHECK: Skipping {opportunity.symbol} opportunity - "
-                f"{short_dex} (short side) not in available clients (should have been filtered earlier)",
-                "WARNING"
-            )
-            return False
-        
-        # Check position size limits
-        # (size is based on config, not from opportunity)
-        size_usd = self.config.default_position_size_usd
-        if size_usd > self.config.max_position_size_usd:
-            return False
-        
-        # Check total exposure
-        current_exposure = self._calculate_total_exposure()
-        if current_exposure + size_usd > self.config.max_total_exposure_usd:
-            return False
-        
-        # Add more filters as needed
-        return True
-    
-    async def _ensure_contract_attributes(self, exchange_client: Any, symbol: str) -> bool:
-        """
-        Ensure exchange client has contract attributes initialized for symbol.
-        
-        For multi-symbol strategies, contract attributes (tick_size, multipliers, etc.)
-        need to be initialized per-symbol before trading.
-        
-        Args:
-            exchange_client: Exchange client instance
-            symbol: Trading symbol
-            
-        Returns:
-            True if successful and symbol is tradeable, False otherwise
-        """
-        try:
-            exchange_name = exchange_client.get_exchange_name()
-            
-            # Check if we need to initialize (config has ticker="ALL" for multi-symbol)
-            if not hasattr(exchange_client.config, 'contract_id') or exchange_client.config.ticker == "ALL":
-                self.logger.log(
-                    f"🔧 [{exchange_name.upper()}] Initializing contract attributes for {symbol}",
-                    "INFO"
-                )
-                
-                # Temporarily set ticker to specific symbol for initialization
-                original_ticker = exchange_client.config.ticker
-                exchange_client.config.ticker = symbol
-                
-                # Get contract attributes (initializes multipliers, tick_size, contract_id)
-                try:
-                    contract_id, tick_size = await exchange_client.get_contract_attributes()
-                    
-                    # Additional validation: contract_id should be meaningful
-                    if not contract_id or contract_id == "":
-                        self.logger.log(
-                            f"❌ [{exchange_name.upper()}] Symbol {symbol} initialization returned empty contract_id",
-                            "WARNING"
-                        )
-                        return False
-                    
-                    self.logger.log(
-                        f"✅ [{exchange_name.upper()}] {symbol} initialized → "
-                        f"contract_id={contract_id}, tick_size={tick_size}",
-                        "INFO"
-                    )
-                    
-                except ValueError as e:
-                    # Specific handling for "symbol not found" errors
-                    error_msg = str(e).lower()
-                    if "not found" in error_msg or "not supported" in error_msg:
-                        self.logger.log(
-                            f"⚠️  [{exchange_name.upper()}] Symbol {symbol} is NOT TRADEABLE on {exchange_name} "
-                            f"(not listed or not supported)",
-                            "WARNING"
-                        )
-                    else:
-                        self.logger.log(
-                            f"❌ [{exchange_name.upper()}] Failed to initialize {symbol}: {e}",
-                            "ERROR"
-                        )
-                    return False
-                
-                finally:
-                    # Always restore original ticker
-                    if original_ticker != symbol:
-                        exchange_client.config.ticker = original_ticker
-                
-                return True
-            
-            return True  # Already initialized
-            
-        except Exception as e:
-            self.logger.log(
-                f"❌ [{exchange_name.upper()}] Unexpected error initializing {symbol}: {e}",
-                "ERROR"
-            )
-            import traceback
-            self.logger.log(f"Traceback: {traceback.format_exc()}", "DEBUG")
-            return False
-    
-    async def _open_position(self, opportunity) -> bool:
-        """
-        Open delta-neutral position from opportunity using atomic execution.
-        
-        ⭐ Uses AtomicMultiOrderExecutor for safety ⭐
-        
-        Args:
-            opportunity: ArbitrageOpportunity object
-            
-        Returns:
-            True if position opened successfully, False otherwise
-        """
-        try:
-            symbol = opportunity.symbol
-            long_dex = opportunity.long_dex
-            short_dex = opportunity.short_dex
-            size_usd = self.config.default_position_size_usd
-            
-            # Get exchange clients
-            self.logger.log(f"Available exchange clients: {list(self.exchange_clients.keys())}", "DEBUG")
-            self.logger.log(f"Looking for long_dex: {long_dex}, short_dex: {short_dex}", "DEBUG")
-            
-            long_client = self.exchange_clients.get(long_dex)
-            short_client = self.exchange_clients.get(short_dex)
-            
-            if long_client is None:
-                self.logger.log(
-                    f"❌ No exchange client found for long_dex: {long_dex}",
-                    "ERROR"
-                )
-                self.failed_symbols.add(symbol)
-                return False
-            if short_client is None:
-                self.logger.log(
-                    f"❌ No exchange client found for short_dex: {short_dex}",
-                    "ERROR"
-                )
-                self.failed_symbols.add(symbol)
-                return False
-            
-            # ⭐ CRITICAL: Initialize contract attributes for this symbol
-            self.logger.log(
-                f"📋 [VALIDATION] Checking if {symbol} is tradeable on both {long_dex} and {short_dex}...",
-                "INFO"
-            )
-            
-            long_init_ok = await self._ensure_contract_attributes(long_client, symbol)
-            short_init_ok = await self._ensure_contract_attributes(short_client, symbol)
-            
-            if not long_init_ok:
-                self.logger.log(
-                    f"⛔ [SKIP] Cannot trade {symbol}: Not supported on {long_dex.upper()} (long side)",
-                    "WARNING"
-                )
-                self.failed_symbols.add(symbol)
-                return False
-            if not short_init_ok:
-                self.logger.log(
-                    f"⛔ [SKIP] Cannot trade {symbol}: Not supported on {short_dex.upper()} (short side)",
-                    "WARNING"
-                )
-                self.failed_symbols.add(symbol)
-                return False
-            
-            self.logger.log(
-                f"✅ [VALIDATION] {symbol} is tradeable on both exchanges",
-                "INFO"
-            )
+        return funding_config
 
-            # Separator to indicate leverage checks are starting
-            self.logger.info("=" * 55)
-            self.logger.info("🔍 CHECKING LEVERAGE LIMITS ON BOTH EXCHANGES")
-            self.logger.info("=" * 55)
-            
-            # ⭐ LEVERAGE CHECK: Reduce size if needed ⭐
-            # Import leverage validator
-            from strategies.execution.core.leverage_validator import LeverageValidator
-            
-            leverage_validator = LeverageValidator()
-            
-            # Check if both exchanges can support the requested size
-            try:
-                max_size, limiting_exchange = await leverage_validator.get_max_position_size(
-                    exchange_clients=[long_client, short_client],
-                    symbol=symbol,
-                    requested_size_usd=size_usd,
-                    check_balance=True
-                )
-            except Exception as e:
-                # Leverage validation failed - log once and track
-                self.logger.log(
-                    f"⛔ [SKIP] {symbol}: Leverage validation failed - {e}",
-                    "WARNING"
-                )
-                self.failed_symbols.add(symbol)
-                return False
-            
-            # Adjust size if needed
-            if max_size < size_usd:
-                original_size = size_usd
-                size_usd = max_size
-                
-                self.logger.log(
-                    f"⚙️  [AUTO-ADJUST] Reduced position size for {symbol}: "
-                    f"${original_size:.2f} → ${size_usd:.2f} "
-                    f"(limited by {limiting_exchange}'s leverage/balance)",
-                    "WARNING"
-                )
-                
-                # Check if reduced size is still profitable
-                if size_usd < Decimal('5'):  # Minimum $5 position
-                    self.logger.log(
-                        f"⛔ [SKIP] {symbol}: Position size too small after leverage adjustment (${size_usd:.2f})",
-                        "WARNING"
-                    )
-                    self.failed_symbols.add(symbol)
-                    return False
-            
-            self.logger.log(
-                f"🎯 [EXECUTION PLAN] {symbol} | "
-                f"Long: {long_dex.upper()} (${size_usd:.2f}) | "
-                f"Short: {short_dex.upper()} (${size_usd:.2f}) | "
-                f"Divergence: {opportunity.divergence*100:.3f}%",
-                "INFO"
-            )
-
-            # Separator to indicate leverage checks are complete
-            self.logger.info("=" * 55)
-            self.logger.info("✅ LEVERAGE CHECKS COMPLETE - PROCEEDING TO ATOMIC MULTI-ORDER PLACEMENT")
-            self.logger.info("=" * 55)
-            
-            # ⭐ ATOMIC EXECUTION: Both sides fill or neither ⭐
-            result: AtomicExecutionResult = await self.atomic_executor.execute_atomically(
-                orders=[
-                    OrderSpec(
-                        exchange_client=long_client,
-                        symbol=symbol,
-                        side="buy",
-                        size_usd=size_usd,
-                        execution_mode="limit_with_fallback",
-                        timeout_seconds=30.0
-                    ),
-                    OrderSpec(
-                        exchange_client=short_client,
-                        symbol=symbol,
-                        side="sell",
-                        size_usd=size_usd,
-                        execution_mode="limit_with_fallback",
-                        timeout_seconds=30.0
-                    )
-                ],
-                rollback_on_partial=True,  # 🚨 CRITICAL: Both must fill or rollback
-                pre_flight_check=True  # Check liquidity before placing
-            )
-            
-            # Check if atomic execution succeeded
-            if not result.all_filled:
-                self.logger.log(
-                    f"❌ {symbol}: Atomic execution failed - {result.error_message}",
-                    "ERROR"
-                )
-                
-                if result.rollback_performed:
-                    self.logger.log(
-                        f"🔄 Emergency rollback performed, cost: ${result.rollback_cost_usd:.2f}",
-                        "WARNING"
-                    )
-                
-                self.failed_symbols.add(symbol)
-                return False  # Don't create position if execution failed
-            
-            # ✅ Both sides filled successfully
-            long_fill = result.filled_orders[0]
-            short_fill = result.filled_orders[1]
-            
-            # Calculate entry fees
-            entry_fees = self.fee_calculator.calculate_total_cost(
-                long_dex, short_dex, size_usd, is_maker=True
-            )
-            
-            # Add actual slippage
-            total_cost = entry_fees + result.total_slippage_usd
-            
-            # Create position record
-            position = FundingArbPosition(
-                id=uuid4(),
-                symbol=symbol,
-                long_dex=long_dex,
-                short_dex=short_dex,
-                size_usd=size_usd,
-                entry_long_rate=opportunity.long_rate,
-                entry_short_rate=opportunity.short_rate,
-                entry_divergence=opportunity.divergence,
-                opened_at=datetime.now(),
-                total_fees_paid=total_cost
-            )
-            
-            await self.position_manager.add_position(position)
-            
-            # 🔒 Mark that we've opened a position this session (Issue #4 fix)
-            self.position_opened_this_session = True
-            
-            self.logger.log(
-                f"✅ Position opened {symbol}: "
-                f"Long @ ${long_fill['fill_price']}, "
-                f"Short @ ${short_fill['fill_price']}, "
-                f"Slippage: ${result.total_slippage_usd:.2f}, "
-                f"Fees: ${entry_fees:.2f}",
-                "INFO"
-            )
-            
-            if self.one_position_per_session:
-                self.logger.log(
-                    "📊 Session limit: Will not open more positions this session (one_position_per_session=True)",
-                    "INFO"
-                )
-            
-            return True  # Success
-            
-        except Exception as e:
-            self.logger.log(
-                f"❌ {opportunity.symbol}: Unexpected error - {e}",
-                "ERROR"
-            )
-            self.failed_symbols.add(opportunity.symbol)
-            return False
-    
-    # ========================================================================
-    # Helper Methods
-    # ========================================================================
-    
-    def _has_capacity(self) -> bool:
-        """
-        Check if can open more positions.
-        
-        Checks both:
-        1. Global position limit (max_positions config)
-        2. Session-level limit (one_position_per_session flag)
-        
-        Returns:
-            True if under max position limit AND session limit allows
-        """
-        # Check global position limit
-        open_count = len(self.position_manager._positions)
-        if open_count >= self.config.max_positions:
-            return False
-        
-        # 🔒 Check session-level limit (Issue #4 fix)
-        # If one_position_per_session is enabled and we've already opened one, stop
-        if self.one_position_per_session and self.position_opened_this_session:
-            self.logger.log(
-                "📊 Session limit reached: Already opened 1 position this session. "
-                "Set one_position_per_session=False to allow multiple positions.",
-                "INFO"
-            )
-            return False
-        
-        return True
-    
-    def _calculate_total_exposure(self) -> Decimal:
-        """
-        Calculate total exposure across all positions.
-        
-        Returns:
-            Total USD exposure
-        """
-        positions = self.position_manager._positions.values()
-        return sum(p.size_usd for p in positions if p.status == "open")
-    
-    # ========================================================================
-    # Strategy Status
-    # ========================================================================
-    
-    async def get_strategy_status(self) -> Dict[str, Any]:
-        """
-        Get current strategy status.
-        
-        Returns:
-            Dict with strategy metrics
-        """
-        positions = await self.position_manager.get_open_positions()
-        
-        total_exposure = self._calculate_total_exposure()
-        total_pnl = sum(p.get_net_pnl() for p in positions)
-        
-        return {
-            "strategy": "funding_arbitrage",
-            "status": "running" if self.status.name == "RUNNING" else "stopped",
-            "open_positions": len(positions),
-            "total_exposure_usd": float(total_exposure),
-            "total_pnl_usd": float(total_pnl),
-            "exchanges": self.config.exchanges,
-            "max_positions": self.config.max_positions,
-            "positions": [p.to_dict() for p in positions]
-        }
-    
-    # ========================================================================
-    # Abstract Method Implementations (Required by BaseStrategy)
-    # ========================================================================
-    
-    async def _initialize_strategy(self):
-        """Strategy-specific initialization logic."""
-        # Initialize position and state managers
-        await self.position_manager.initialize()
-        await self.state_manager.initialize()
-        
-        self.logger.log("FundingArbitrageStrategy initialized successfully")
-    
-    async def should_execute(self, market_data) -> bool:
-        """
-        Determine if strategy should execute based on market conditions.
-        
-        For funding arbitrage, we always check for opportunities.
-        """
-        return True
-    
-    async def execute_strategy(self, market_data):
-        """
-        Execute the funding arbitrage strategy.
-        
-        This is the main entry point called by the trading bot.
-        """
-        from strategies.base_strategy import StrategyResult, StrategyAction
-        
-        try:
-            # Run the 3-phase execution loop
-            await self._monitor_positions()
-            await self._check_exit_conditions() 
-            await self._scan_opportunities()
-            
-            return StrategyResult(
-                action=StrategyAction.WAIT,
-                message="Funding arbitrage cycle completed"
-            )
-            
-        except Exception as e:
-            self.logger.log(f"Strategy execution failed: {e}")
-            return StrategyResult(
-                action=StrategyAction.NONE,
-                message=f"Execution error: {e}"
-            )
-    
-    def get_strategy_name(self) -> str:
-        """Get the strategy name."""
-        return "funding_arbitrage"
-    
-    def get_required_parameters(self) -> List[str]:
-        """Get list of required strategy parameters."""
-        return [
-            "target_exposure",
-            "min_profit_rate", 
-            "exchanges"
-        ]
-    
     # ========================================================================
     # Cleanup
     # ========================================================================
@@ -1027,6 +319,9 @@ class FundingArbitrageStrategy(StatefulStrategy):
             await self.position_manager.close()
         if hasattr(self, 'state_manager'):
             await self.state_manager.close()
-        
+        if getattr(self, "_control_server_started", False) and self.control_server:
+            await self.control_server.stop()
+            self._control_server_started = False
+
         await super().cleanup()
     

@@ -54,6 +54,9 @@ class FundingArbPosition:
     status: str = "open"  # 'open', 'pending_close', 'closed'
     exit_reason: Optional[str] = None
     closed_at: Optional[datetime] = None
+    rebalance_pending: bool = False
+    rebalance_reason: Optional[str] = None
+    pnl_usd: Optional[Decimal] = None
     
     # Metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -304,4 +307,3 @@ class RebalanceAction:
             'executed_at': self.executed_at.isoformat() if self.executed_at else None,
             'status': self.status
         }
-

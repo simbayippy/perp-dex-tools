@@ -20,9 +20,29 @@ Example:
 
 from typing import Any, List, Optional, Dict, Tuple
 from decimal import Decimal
+from dataclasses import dataclass
 from helpers.unified_logger import get_core_logger
 
 logger = get_core_logger("leverage_validator")
+
+
+@dataclass
+class LeveragePreparationResult:
+    """
+    Result of preparing leverage constraints for a set of exchanges.
+    
+    Attributes:
+        adjusted_size_usd: Final size supported by all exchanges
+        size_limiting_exchange: Exchange that limited the size (if any)
+        normalized_leverage: Leverage applied across exchanges (if set)
+        leverage_limiting_exchange: Exchange determining the applied leverage
+        below_minimum: True if adjusted size falls below minimum allowed
+    """
+    adjusted_size_usd: Decimal
+    size_limiting_exchange: Optional[str]
+    normalized_leverage: Optional[int]
+    leverage_limiting_exchange: Optional[str]
+    below_minimum: bool = False
 
 
 class LeverageInfo:
@@ -355,7 +375,64 @@ class LeverageValidator:
         
         return min_leverage, limiting_exchange
     
+    async def prepare_leverage(
+        self,
+        exchange_clients: List[Any],
+        symbol: str,
+        requested_size_usd: Decimal,
+        *,
+        min_position_usd: Optional[Decimal] = Decimal("5"),
+        check_balance: bool = True,
+        normalize_leverage: bool = True
+    ) -> LeveragePreparationResult:
+        """
+        Convenience helper that validates supported size and (optionally) normalizes leverage.
+        
+        Args:
+            exchange_clients: Exchange clients participating in the trade
+            symbol: Trading symbol
+            requested_size_usd: Desired notional size
+            min_position_usd: Minimum acceptable size after adjustments (optional)
+            check_balance: Whether to include available balance in size calculation
+            normalize_leverage: Whether to harmonize leverage across exchanges
+        
+        Returns:
+            LeveragePreparationResult with adjusted size and leverage metadata.
+        """
+        adjusted_size, size_limiting_exchange = await self.get_max_position_size(
+            exchange_clients=exchange_clients,
+            symbol=symbol,
+            requested_size_usd=requested_size_usd,
+            check_balance=check_balance
+        )
+        
+        below_minimum = (
+            min_position_usd is not None and adjusted_size < min_position_usd
+        )
+        
+        normalized_leverage: Optional[int] = None
+        leverage_limiting_exchange: Optional[str] = None
+        
+        if not below_minimum and normalize_leverage:
+            try:
+                normalized_leverage, leverage_limiting_exchange = await self.normalize_and_set_leverage(
+                    exchange_clients=exchange_clients,
+                    symbol=symbol,
+                    requested_size_usd=adjusted_size
+                )
+            except Exception as e:
+                self.logger.warning(
+                    f"⚠️  Failed to normalize leverage for {symbol}: {e}"
+                )
+        
+        return LeveragePreparationResult(
+            adjusted_size_usd=adjusted_size,
+            size_limiting_exchange=size_limiting_exchange,
+            normalized_leverage=normalized_leverage,
+            leverage_limiting_exchange=leverage_limiting_exchange,
+            below_minimum=below_minimum
+        )
+    
     def clear_cache(self):
         """Clear leverage info cache."""
         self._leverage_cache.clear()
-

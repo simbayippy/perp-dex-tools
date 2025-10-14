@@ -13,8 +13,9 @@ Each exchange implementation typically has:
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple, Type, Union
-from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from tenacity import RetryCallState, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 import aiohttp
@@ -140,6 +141,29 @@ class OrderInfo:
     filled_size: Decimal = 0.0
     remaining_size: Decimal = 0.0
     cancel_reason: str = ''
+
+@dataclass
+class ExchangePositionSnapshot:
+    """
+    Normalized position snapshot for a single trading symbol on an exchange.
+
+    All numeric fields use Decimal for precision and are optional unless noted.
+    """
+
+    symbol: str
+    quantity: Decimal = Decimal("0")
+    side: Optional[str] = None
+    entry_price: Optional[Decimal] = None
+    mark_price: Optional[Decimal] = None
+    exposure_usd: Optional[Decimal] = None
+    unrealized_pnl: Optional[Decimal] = None
+    realized_pnl: Optional[Decimal] = None
+    funding_accrued: Optional[Decimal] = None
+    margin_reserved: Optional[Decimal] = None
+    leverage: Optional[Decimal] = None
+    liquidation_price: Optional[Decimal] = None
+    timestamp: Optional[datetime] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 # ============================================================================
@@ -611,6 +635,18 @@ class BaseExchangeClient(ABC):
             Default implementation returns empty list.
         """
         return []
+    
+    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+        """
+        Fetch a live snapshot for a specific symbol/contract.
+
+        Exchanges that support richer position data should override this method.
+        The returned instance must populate standardized fields (quantity, prices,
+        PnL, margin, etc.) so strategies can consume it without venue-specific logic.
+
+        TODO: promote to abstract once most clients implement it.
+        """
+        return None
     
     async def get_account_pnl(self) -> Optional[Decimal]:
         """

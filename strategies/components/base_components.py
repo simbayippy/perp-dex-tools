@@ -66,22 +66,26 @@ class BasePositionManager(ABC):
     - Market making: Track quote positions
     
     Pattern: Abstract interface allows easy swapping of implementations.
+    All operations persist to storage (DB, file, etc.) - no caching.
     """
     
     @abstractmethod
-    async def add_position(self, position: Position) -> None:
+    async def create(self, position: Position) -> UUID:
         """
-        Add a new position to tracking.
+        Create a new position and persist it.
         
         Args:
-            position: Position to add
+            position: Position to create
+            
+        Returns:
+            Position ID
         """
         pass
     
     @abstractmethod
-    async def get_position(self, position_id: UUID) -> Optional[Position]:
+    async def get(self, position_id: UUID) -> Optional[Position]:
         """
-        Get position by ID.
+        Get position by ID from storage.
         
         Args:
             position_id: Position UUID
@@ -94,7 +98,7 @@ class BasePositionManager(ABC):
     @abstractmethod
     async def get_open_positions(self) -> List[Position]:
         """
-        Get all open positions.
+        Get all open positions from storage.
         
         Returns:
             List of open positions
@@ -102,9 +106,9 @@ class BasePositionManager(ABC):
         pass
     
     @abstractmethod
-    async def update_position(self, position: Position) -> None:
+    async def update(self, position: Position) -> None:
         """
-        Update existing position.
+        Update existing position in storage.
         
         Args:
             position: Position with updated fields
@@ -112,16 +116,18 @@ class BasePositionManager(ABC):
         pass
     
     @abstractmethod
-    async def close_position(
+    async def close(
         self, 
         position_id: UUID, 
+        exit_reason: str,
         pnl_usd: Optional[Decimal] = None
     ) -> None:
         """
-        Mark position as closed.
+        Mark position as closed in storage.
         
         Args:
             position_id: Position to close
+            exit_reason: Reason for closure
             pnl_usd: Final PnL (optional)
         """
         pass
@@ -211,29 +217,36 @@ class InMemoryPositionManager(BasePositionManager):
     """
     Simple in-memory position manager for testing.
     
-    For production, use PostgreSQL-backed implementation.
+    For production, use database-backed implementation instead.
     """
     
     def __init__(self):
         self._positions: Dict[UUID, Position] = {}
     
-    async def add_position(self, position: Position) -> None:
+    async def create(self, position: Position) -> UUID:
+        """Create a new position."""
         self._positions[position.id] = position
+        return position.id
     
-    async def get_position(self, position_id: UUID) -> Optional[Position]:
+    async def get(self, position_id: UUID) -> Optional[Position]:
+        """Get position by ID."""
         return self._positions.get(position_id)
     
     async def get_open_positions(self) -> List[Position]:
+        """Get all open positions."""
         return [p for p in self._positions.values() if p.status == "open"]
     
-    async def update_position(self, position: Position) -> None:
+    async def update(self, position: Position) -> None:
+        """Update existing position."""
         self._positions[position.id] = position
     
-    async def close_position(
+    async def close(
         self, 
-        position_id: UUID, 
+        position_id: UUID,
+        exit_reason: str,
         pnl_usd: Optional[Decimal] = None
     ) -> None:
+        """Close a position."""
         if position_id in self._positions:
             self._positions[position_id].status = "closed"
             if pnl_usd is not None:

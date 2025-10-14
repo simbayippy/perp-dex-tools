@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 from decimal import Decimal
 from typing import List, Optional
 
-
 # ============================================================================
 # Risk Management Configuration
 # ============================================================================
@@ -148,6 +147,11 @@ class FundingArbConfig(BaseModel):
         ...,
         description="PostgreSQL connection string"
     )
+
+    config_path: Optional[str] = Field(
+        default=None,
+        description="Source config path (populated when loaded from YAML)"
+    )
     
     # General settings
     exchange: str = Field(
@@ -182,4 +186,3 @@ class FundingArbConfig(BaseModel):
     def get_risk_strategy(self) -> str:
         """Get risk management strategy name"""
         return self.risk_config.strategy
-

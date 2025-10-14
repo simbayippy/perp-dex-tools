@@ -19,7 +19,6 @@ from unittest.mock import Mock, AsyncMock, MagicMock, patch
 
 from strategies.implementations.funding_arbitrage.position_manager import FundingArbPositionManager
 from strategies.implementations.funding_arbitrage.models import FundingArbPosition
-from strategies.components.base_components import Position
 
 
 # =============================================================================
@@ -121,6 +120,30 @@ async def test_add_position_duplicate_detection(position_manager, sample_positio
     
     # Should still only have one copy
     assert len([p for p in position_manager._positions.values() if p.id == sample_position.id]) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_open_positions_returns_funding_models(position_manager, sample_position):
+    """Ensure open positions expose FundingArbPosition capabilities."""
+    await position_manager.add_position(sample_position)
+    
+    open_positions = await position_manager.get_open_positions()
+    
+    assert len(open_positions) == 1
+    assert open_positions[0] is sample_position
+    # Funding-specific helpers should be available
+    assert callable(open_positions[0].get_profit_erosion)
+
+
+@pytest.mark.asyncio
+async def test_get_position_returns_funding_model(position_manager, sample_position):
+    """Ensure get_position preserves funding-specific dataclass."""
+    await position_manager.add_position(sample_position)
+    
+    fetched = await position_manager.get_position(sample_position.id)
+    
+    assert fetched is sample_position
+    assert hasattr(fetched, "current_divergence")
 
 
 # =============================================================================
@@ -383,9 +406,7 @@ async def test_flag_for_rebalance(position_manager, sample_position):
 @pytest.mark.asyncio
 async def test_get_pending_rebalance_positions(position_manager):
     """Test getting positions pending rebalance."""
-    # Note: rebalance_pending is stored in DB, not in the FundingArbPosition model
-    # This test needs to be adjusted or the manager needs to track rebalance state
-    # For now, we'll test that the method can be called
+    # With default state (no positions flagged) the method should still return a list.
     pending = await position_manager.get_pending_rebalance_positions()
     assert isinstance(pending, list)
 
@@ -445,8 +466,6 @@ async def test_get_portfolio_summary(position_manager):
     # Check basic structure
     assert isinstance(summary, dict)
     assert 'total_positions' in summary
-    # The implementation uses get_open_positions() which returns Position objects (not FundingArbPosition)
-    # So the conversion may result in different totals
     assert summary['total_positions'] >= 0
 
 
@@ -483,4 +502,3 @@ async def test_different_positions_different_locks(position_manager):
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
-
