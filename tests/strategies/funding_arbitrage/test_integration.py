@@ -22,7 +22,6 @@ from strategies.implementations.funding_arbitrage import (
     FundingArbPosition
 )
 from strategies.execution import OrderExecutionMode, OrderResult, ExecutionResult
-from strategies.components import OrderType, TradeType
 
 
 class MockExchangeClient:

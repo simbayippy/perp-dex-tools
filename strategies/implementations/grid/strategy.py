@@ -12,7 +12,6 @@ from decimal import Decimal
 from typing import List, Dict, Any, Optional
 
 from strategies.categories.stateless_strategy import StatelessStrategy
-from strategies.components import OrderType, TradeType, PositionAction
 from .config import GridConfig
 from .models import GridState, GridOrder, GridCycleState
 

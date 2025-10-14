@@ -64,8 +64,6 @@ class FundingArbFeeCalculator:
     For taker orders: 4 x taker_fee
     For mixed: 2 x maker_fee + 2 x taker_fee
     
-    Note: For simple trading fee calculations without funding analysis,
-    use TradeFeeCalculator from strategies.components instead.
     """
     
     # Default fee structures for common DEXs

@@ -15,7 +15,6 @@ from exchange_clients.factory import ExchangeFactory
 from helpers.unified_logger import get_logger
 from helpers.lark_bot import LarkBot
 from helpers.telegram_bot import TelegramBot
-from strategies.components.account_monitor import AccountMonitor, AccountAction, AccountThresholds
 from strategies import StrategyFactory
 
 
@@ -129,9 +128,6 @@ class TradingBot:
         except ValueError as e:
             raise ValueError(f"Failed to create strategy: {e}")
         
-        # Initialize account monitor (monitors account health)
-        self.account_monitor = AccountMonitor(self.exchange_client, self.config)
-
     async def graceful_shutdown(self, reason: str = "Unknown"):
         """Perform graceful shutdown of the trading bot."""
         self.logger.info(f"Starting graceful shutdown: {reason}")
@@ -267,20 +263,8 @@ class TradingBot:
             # Initialize strategy after connection
             await self.strategy.initialize()
             
-            # Initialize account monitor after connection
-            await self.account_monitor.initialize()
-
             # Main trading loop
             while not self.shutdown_requested:
-                # Check account conditions first
-                account_action = await self.account_monitor.check_account_conditions()
-                if account_action != AccountAction.NONE:
-                    await self._handle_account_action(account_action)
-                    if account_action == AccountAction.EMERGENCY_CLOSE_ALL:
-                        # TODO: add notification (telegram or lark)
-                        await self.graceful_shutdown("Emergency account action triggered")
-                        break
-
                 # Strategy-based execution (universal interface)
                 try:
                     if await self.strategy.should_execute(None):
@@ -318,96 +302,3 @@ class TradingBot:
                     await self.exchange_client.disconnect()
             except Exception as e:
                 self.logger.error(f"Error disconnecting from exchange: {e}")
-
-    # ========================================================================
-    # ACCOUNT EMERGENCY ACTIONS
-    # ========================================================================
-
-    async def _handle_account_action(self, account_action: AccountAction):
-        """Handle account monitoring actions."""
-        if account_action == AccountAction.CLOSE_WORST_POSITIONS:
-            await self._close_worst_positions()
-        elif account_action == AccountAction.EMERGENCY_CLOSE_ALL:
-            await self._emergency_close_all_positions()
-        elif account_action == AccountAction.PAUSE_TRADING:
-            self.logger.warning("Account monitoring: Pausing trading")
-            await asyncio.sleep(30)  # Pause for 30 seconds
-
-    async def _close_worst_positions(self):
-        """Close worst performing positions."""
-        try:
-            worst_positions = await self.account_monitor.get_worst_positions()
-            if not worst_positions:
-                self.logger.info("No worst positions to close")
-                return
-            
-            self.logger.warning(f"Closing {len(worst_positions)} worst positions")
-            
-            for position in worst_positions:
-                try:
-                    # Determine order side (opposite of position)
-                    side = 'sell' if position['sign'] > 0 else 'buy'
-                    quantity = abs(position['position'])
-                    
-                    # Place market order to close position
-                    result = await self.exchange_client.place_market_order(
-                        contract_id=str(position['market_id']),
-                        quantity=quantity,
-                        side=side
-                    )
-                    
-                    if result.success:
-                        self.logger.info(
-                            f"Closed position {position['symbol']}: {quantity} @ market ({side})"
-                        )
-                    else:
-                        self.logger.error(
-                            f"Failed to close position {position['symbol']}: {result.error_message}"
-                        )
-                        
-                except Exception as e:
-                    self.logger.error(f"Error closing position {position.get('symbol', 'unknown')}: {e}")
-            
-            # Reset account counters after successful action
-            self.account_monitor.record_successful_order()
-                
-        except Exception as e:
-            self.logger.error(f"Error in _close_worst_positions: {e}")
-
-    async def _emergency_close_all_positions(self):
-        """Emergency close all positions."""
-        try:
-            all_positions = await self.account_monitor.get_all_positions()
-            if not all_positions:
-                self.logger.info("No positions to close")
-                return
-            
-            self.logger.error(f"EMERGENCY: Closing ALL {len(all_positions)} positions")
-            
-            for position in all_positions:
-                try:
-                    # Determine order side (opposite of position)
-                    side = 'sell' if position['sign'] > 0 else 'buy'
-                    quantity = abs(position['position'])
-                    
-                    # Place market order to close position
-                    result = await self.exchange_client.place_market_order(
-                        contract_id=str(position['market_id']),
-                        quantity=quantity,
-                        side=side
-                    )
-                    
-                    if result.success:
-                        self.logger.warning(
-                            f"EMERGENCY CLOSED: {position['symbol']}: {quantity} @ market ({side})"
-                        )
-                    else:
-                        self.logger.error(
-                            f"FAILED EMERGENCY CLOSE: {position['symbol']}: {result.error_message}"
-                        )
-                        
-                except Exception as e:
-                    self.logger.error(f"Error in emergency close {position.get('symbol', 'unknown')}: {e}")
-                    
-        except Exception as e:
-            self.logger.error(f"Error in _emergency_close_all_positions: {e}")
