@@ -340,8 +340,16 @@ class LighterClient(BaseExchangeClient):
             Order book dict if WebSocket is connected and has data, None otherwise
         """
         try:
-            if not self.ws_manager or not self.ws_manager.running:
+            # ✅ Check if ws_manager exists first (may not exist if connect() wasn't called)
+            if not hasattr(self, 'ws_manager') or not self.ws_manager:
                 return None
+            
+            if not self.ws_manager.running:
+                return None
+            
+            if not self.ws_manager.snapshot_loaded:
+                return None
+            
             
             if not self.ws_manager.snapshot_loaded:
                 return None
