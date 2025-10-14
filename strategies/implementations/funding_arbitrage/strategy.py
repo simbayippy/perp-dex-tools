@@ -41,7 +41,7 @@ from strategies.execution.patterns.atomic_multi_order import (
     AtomicExecutionResult
 )
 from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
-from .monitoring import PositionMonitor
+from .position_monitor import PositionMonitor
 # Funding_arb operation helpers
 from .operations import PositionOpener, OpportunityScanner, PositionCloser
 

@@ -36,7 +36,7 @@ from exchange_clients.factory import ExchangeFactory
 from strategies.implementations.funding_arbitrage.position_manager import (
     FundingArbPositionManager,
 )
-from strategies.implementations.funding_arbitrage.monitoring import (
+from strategies.implementations.funding_arbitrage.position_monitor import (
     PositionMonitor,
 )
 
