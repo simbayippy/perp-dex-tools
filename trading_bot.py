@@ -172,15 +172,15 @@ class TradingBot:
             self.loop = asyncio.get_running_loop()
             
             # Connect to exchange(s)
-            # if self.exchange_clients:
-            #     # Multi-exchange mode: connect all clients
-            #     for exchange_name, client in self.exchange_clients.items():
-            #         self.logger.info(f"Connecting to {exchange_name}...")
-            #         await client.connect()
-            #         self.logger.info(f"Connected to {exchange_name}")
-            # else:
-            #     # Single exchange mode
-            #     await self.exchange_client.connect()
+            if self.exchange_clients:
+                # Multi-exchange mode: connect all clients
+                for exchange_name, client in self.exchange_clients.items():
+                    self.logger.info(f"Connecting to {exchange_name}...")
+                    await client.connect()
+                    self.logger.info(f"Connected to {exchange_name}")
+            else:
+                # Single exchange mode
+                await self.exchange_client.connect()
 
             # Initialize strategy after connection
             await self.strategy.initialize()
