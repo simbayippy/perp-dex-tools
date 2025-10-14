@@ -14,7 +14,7 @@ Extends base position manager with funding-specific logic:
 
 from typing import Dict, List, Optional, Any
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, date
 from uuid import UUID
 import json
 from helpers.unified_logger import get_core_logger
@@ -65,6 +65,29 @@ class FundingArbPositionManager(BasePositionManager):
         super().__init__()
         self.logger = get_core_logger("funding_arb_position_manager")
         self._initialized = False
+
+    def _prepare_metadata_for_storage(self, metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Convert metadata dict into JSON-serializable string."""
+        if not metadata:
+            return None
+
+        def _sanitize(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {key: _sanitize(val) for key, val in value.items()}
+            if isinstance(value, (list, tuple, set)):
+                return [_sanitize(item) for item in value]
+            if isinstance(value, Decimal):
+                return float(value) if value.is_finite() else str(value)
+            if isinstance(value, (datetime, date)):
+                return value.isoformat()
+            if isinstance(value, UUID):
+                return str(value)
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                return value
+            return str(value)
+
+        sanitized_metadata = _sanitize(metadata)
+        return json.dumps(sanitized_metadata)
     
     def _check_database_available(self) -> bool:
         """Check if database is available for operations."""
@@ -355,7 +378,7 @@ class FundingArbPositionManager(BasePositionManager):
         short_dex_id = dex_mapper.get_id(position.short_dex)
         
         # Convert metadata dict to JSON string for PostgreSQL
-        metadata_json = json.dumps(position.metadata) if position.metadata else None
+        metadata_json = self._prepare_metadata_for_storage(position.metadata)
         
         query = """
             UPDATE strategy_positions
