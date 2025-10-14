@@ -1,10 +1,11 @@
-.PHONY: help install clean
+.PHONY: help install clean test
 
 # Default Python version
 PYTHON := python3
 VENV := venv
 VENV_BIN := $(VENV)/bin
 PIP := $(VENV_BIN)/pip
+PYTEST ?= pytest
 
 # Colors for output
 GREEN := \033[0;32m
@@ -16,6 +17,7 @@ help: ## Display this help message
 	@echo ""
 	@echo "Usage:"
 	@echo "  $(YELLOW)make install$(NC)  - Install all dependencies"
+	@echo "  $(YELLOW)make test$(NC)     - Run pytest suite in ./tests"
 	@echo "  $(YELLOW)make clean$(NC)    - Remove virtual environment"
 	@echo "  $(YELLOW)make help$(NC)     - Show this help"
 
@@ -36,3 +38,7 @@ clean: ## Remove virtual environment
 	@echo "$(YELLOW)Removing virtual environment...$(NC)"
 	@rm -rf $(VENV)
 	@echo "$(GREEN)✅ Cleanup completed$(NC)"
+
+test: ## Run all pytest suites under ./tests
+	@echo "$(YELLOW)Running pytest ($(PYTEST))...$(NC)"
+	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PYTEST) tests
