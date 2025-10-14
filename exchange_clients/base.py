@@ -21,6 +21,8 @@ from tenacity import RetryCallState, retry, retry_if_exception_type, stop_after_
 import aiohttp
 import asyncio
 
+from .events import LiquidationEvent, LiquidationEventDispatcher
+
 
 # ============================================================================
 # EXCEPTIONS & ERRORS
@@ -208,6 +210,7 @@ class BaseExchangeClient(ABC):
         """
         self.config = config
         self._validate_config()
+        self._liquidation_dispatcher = LiquidationEventDispatcher()
 
     @abstractmethod
     def _validate_config(self) -> None:
@@ -224,9 +227,46 @@ class BaseExchangeClient(ABC):
             def _validate_config(self) -> None:
                 validate_credentials('ASTER_API_KEY', os.getenv('ASTER_API_KEY'))
                 validate_credentials('ASTER_SECRET_KEY', os.getenv('ASTER_SECRET_KEY'))
-            ```
+        ```
         """
         pass
+
+    # ========================================================================
+    # EVENT STREAMS (OPTIONAL)
+    # ========================================================================
+
+    def supports_liquidation_stream(self) -> bool:
+        """
+        Return True if this client surfaces real-time liquidation events.
+
+        Subclasses should override when they wire the relevant WebSocket feeds.
+        """
+        return False
+
+    def liquidation_events_queue(
+        self,
+        queue: Optional[asyncio.Queue[LiquidationEvent]] = None,
+    ) -> asyncio.Queue[LiquidationEvent]:
+        """
+        Register for liquidation events.
+
+        Args:
+            queue: Optional pre-created asyncio.Queue. If omitted, a new queue
+                   is created and returned.
+        """
+        return self._liquidation_dispatcher.register(queue)
+
+    def unregister_liquidation_queue(self, queue: asyncio.Queue[LiquidationEvent]) -> None:
+        """Remove a previously registered liquidation queue."""
+        self._liquidation_dispatcher.unregister(queue)
+
+    async def emit_liquidation_event(self, event: LiquidationEvent) -> None:
+        """
+        Emit a liquidation event to registered listeners.
+
+        Exchanges with native liquidation feeds should call this when events arrive.
+        """
+        await self._liquidation_dispatcher.emit(event)
 
     # ========================================================================
     # CONNECTION MANAGEMENT

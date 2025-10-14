@@ -24,6 +24,7 @@ from exchange_clients.base import (
 )
 from exchange_clients.aster.common import get_aster_symbol_format
 from exchange_clients.aster.websocket_manager import AsterWebSocketManager
+from exchange_clients.events import LiquidationEvent
 from helpers.unified_logger import get_exchange_logger
 
 
@@ -132,7 +133,8 @@ class AsterClient(BaseExchangeClient):
             config=self.config,
             api_key=self.api_key,
             secret_key=self.secret_key,
-            order_update_callback=self._handle_websocket_order_update
+            order_update_callback=self._handle_websocket_order_update,
+            liquidation_callback=self._handle_liquidation_event,
         )
 
         # Set logger for WebSocket manager
@@ -158,6 +160,10 @@ class AsterClient(BaseExchangeClient):
     def get_exchange_name(self) -> str:
         """Get the exchange name."""
         return "aster"
+
+    def supports_liquidation_stream(self) -> bool:
+        """Aster user data streams emit forceOrder events for account liquidations."""
+        return True
     
     def normalize_symbol(self, symbol: str) -> str:
         """
@@ -202,6 +208,55 @@ class AsterClient(BaseExchangeClient):
                 self._order_update_handler(order_data)
         except Exception as e:
             self.logger.error(f"Error handling WebSocket order update: {e}")
+
+    async def _handle_liquidation_event(self, payload: Dict[str, Any]) -> None:
+        """Handle forceOrder liquidation events from the user data stream."""
+        order = payload.get("o", {})
+        symbol = order.get("s")
+        if not symbol:
+            return
+
+        quantity_raw = order.get("z") or order.get("q") or "0"
+        price_raw = order.get("ap") or order.get("p") or "0"
+
+        try:
+            quantity = Decimal(str(quantity_raw)).copy_abs()
+            price = Decimal(str(price_raw))
+        except (InvalidOperation, TypeError):
+            return
+
+        if quantity <= 0:
+            return
+
+        side = (order.get("S") or "sell").lower()
+        timestamp_ms = order.get("T")
+        if timestamp_ms is not None:
+            try:
+                timestamp = datetime.fromtimestamp(int(timestamp_ms) / 1000, tz=timezone.utc)
+            except (ValueError, OSError, OverflowError):
+                timestamp = datetime.now(timezone.utc)
+        else:
+            timestamp = datetime.now(timezone.utc)
+
+        internal_symbol = self._to_internal_symbol(symbol)
+
+        event = LiquidationEvent(
+            exchange=self.get_exchange_name(),
+            symbol=internal_symbol,
+            side=side,
+            quantity=quantity,
+            price=price,
+            timestamp=timestamp,
+            metadata={"raw": payload},
+        )
+
+        await self.emit_liquidation_event(event)
+
+    @staticmethod
+    def _to_internal_symbol(stream_symbol: str) -> str:
+        if stream_symbol.endswith("USDT"):
+            return stream_symbol[:-4]
+        return stream_symbol
 
     @query_retry(default_return=(0, 0))
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:

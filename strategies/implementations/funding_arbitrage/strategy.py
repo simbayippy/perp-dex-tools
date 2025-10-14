@@ -41,6 +41,7 @@ from strategies.execution.patterns.atomic_multi_order import (
     AtomicExecutionResult
 )
 from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
+from exchange_clients.events import LiquidationEvent
 from .position_monitor import PositionMonitor
 # Funding_arb operation helpers
 from .operations import PositionOpener, OpportunityScanner, PositionCloser
@@ -161,6 +162,11 @@ class FundingArbitrageStrategy(BaseStrategy):
         self._session_limit_warning_logged = False
         self._max_position_warning_logged = False
 
+        # Liquidation event consumption
+        self._liquidation_consumers_started = False
+        self._liquidation_tasks: List[asyncio.Task] = []
+        self._liquidation_queues: Dict[str, asyncio.Queue[LiquidationEvent]] = {}
+
         # Position monitoring helper
         self.position_monitor = PositionMonitor(
             position_manager=self.position_manager,
@@ -193,6 +199,8 @@ class FundingArbitrageStrategy(BaseStrategy):
         self.failed_symbols.clear()
         loop = asyncio.get_running_loop()
         self._last_opportunity_scan_ts = loop.time()
+
+        await self._ensure_liquidation_consumers_started()
 
         try:
             if not await self.opportunity_scanner.has_capacity():
@@ -358,5 +366,71 @@ class FundingArbitrageStrategy(BaseStrategy):
             await self.control_server.stop()
             self._control_server_started = False
 
+        # Stop liquidation consumers
+        for task in self._liquidation_tasks:
+            task.cancel()
+        for task in self._liquidation_tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._liquidation_tasks.clear()
+
+        for exchange, queue in list(self._liquidation_queues.items()):
+            client = self.exchange_clients.get(exchange)
+            if client:
+                try:
+                    client.unregister_liquidation_queue(queue)
+                except Exception:
+                    pass
+        self._liquidation_queues.clear()
+        self._liquidation_consumers_started = False
+
         await super().cleanup()
+
+    async def _ensure_liquidation_consumers_started(self) -> None:
+        """Start background consumers for exchange liquidation streams."""
+        if self._liquidation_consumers_started:
+            return
+
+        for name, client in self.exchange_clients.items():
+            supports = getattr(client, "supports_liquidation_stream", None)
+            try:
+                if not callable(supports) or not client.supports_liquidation_stream():
+                    continue
+            except Exception:
+                continue
+
+            try:
+                queue = client.liquidation_events_queue()
+            except Exception as exc:
+                self.logger.log(
+                    f"⚠️ Unable to subscribe to liquidation stream for {name}: {exc}",
+                    "WARNING",
+                )
+                continue
+
+            self._liquidation_queues[name] = queue
+            task = asyncio.create_task(self._consume_liquidation_events(name, queue))
+            self._liquidation_tasks.append(task)
+
+        self._liquidation_consumers_started = True
+
+    async def _consume_liquidation_events(
+        self,
+        exchange: str,
+        queue: asyncio.Queue[LiquidationEvent],
+    ) -> None:
+        """Background task to forward liquidation events to the position closer."""
+        while True:
+            try:
+                event = await queue.get()
+                await self.position_closer.handle_liquidation_event(event)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                self.logger.log(
+                    f"Error processing liquidation event from {exchange}: {exc}",
+                    "ERROR",
+                )
     

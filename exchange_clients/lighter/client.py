@@ -7,7 +7,7 @@ import asyncio
 import time
 from datetime import datetime, timezone
 import aiohttp
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Dict, Any, List, Optional, Tuple
 
 from exchange_clients.base import (
@@ -19,6 +19,7 @@ from exchange_clients.base import (
     MissingCredentialsError,
     validate_credentials,
 )
+from exchange_clients.events import LiquidationEvent
 from helpers.unified_logger import get_exchange_logger
 
 # Import official Lighter SDK for API client
@@ -190,7 +191,8 @@ class LighterClient(BaseExchangeClient):
             # Initialize WebSocket manager (using custom implementation)
             self.ws_manager = LighterWebSocketManager(
                 config=self.config,
-                order_update_callback=self._handle_websocket_order_update
+                order_update_callback=self._handle_websocket_order_update,
+                liquidation_callback=self._handle_liquidation_notifications,
             )
 
             # Set logger for WebSocket manager
@@ -223,6 +225,10 @@ class LighterClient(BaseExchangeClient):
     def get_exchange_name(self) -> str:
         """Get the exchange name."""
         return "lighter"
+
+    def supports_liquidation_stream(self) -> bool:
+        """Lighter exposes real-time liquidation notifications."""
+        return True
     
     def normalize_symbol(self, symbol: str) -> str:
         """
@@ -305,6 +311,57 @@ class LighterClient(BaseExchangeClient):
 
             if status in ['FILLED', 'CANCELED']:
                 self.logger.log_transaction(order_id, side, filled_size, price, status)
+
+    async def _handle_liquidation_notifications(self, notifications: List[Dict[str, Any]]) -> None:
+        """Handle liquidation notifications from the Lighter notification channel."""
+        for notification in notifications:
+            try:
+                if notification.get("kind") != "liquidation":
+                    continue
+
+                content = notification.get("content", {})
+                if not content:
+                    continue
+
+                quantity = Decimal(str(content.get("size") or "0")).copy_abs()
+                if quantity <= 0:
+                    continue
+
+                price_source = content.get("avg_price") or content.get("price")
+                price = Decimal(str(price_source or "0"))
+                side = "sell" if content.get("is_ask") else "buy"
+
+                raw_timestamp = content.get("timestamp")
+                if raw_timestamp is not None:
+                    try:
+                        timestamp = datetime.fromtimestamp(int(raw_timestamp), tz=timezone.utc)
+                    except (ValueError, OSError, OverflowError):
+                        timestamp = datetime.now(timezone.utc)
+                else:
+                    timestamp = datetime.now(timezone.utc)
+
+                metadata = {
+                    "notification_id": notification.get("id"),
+                    "usdc_amount": content.get("usdc_amount"),
+                    "market_index": content.get("market_index"),
+                    "acknowledged": notification.get("ack"),
+                    "raw": notification,
+                }
+
+                event = LiquidationEvent(
+                    exchange=self.get_exchange_name(),
+                    symbol=self.config.ticker,
+                    side=side,
+                    quantity=quantity,
+                    price=price,
+                    timestamp=timestamp,
+                    metadata=metadata,
+                )
+                await self.emit_liquidation_event(event)
+            except (InvalidOperation, TypeError) as exc:
+                self.logger.warning(
+                    f"Failed to parse liquidation notification: {notification} ({exc})"
+                )
 
     @query_retry(default_return=(0, 0))
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:

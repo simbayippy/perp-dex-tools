@@ -10,7 +10,7 @@ import json
 import time
 import hmac
 import hashlib
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, Awaitable
 from urllib.parse import urlencode
 import aiohttp
 import websockets
@@ -19,10 +19,18 @@ import websockets
 class AsterWebSocketManager:
     """WebSocket manager for Aster order updates and order book."""
 
-    def __init__(self, config: Dict[str, Any], api_key: str, secret_key: str, order_update_callback: Callable):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        api_key: str,
+        secret_key: str,
+        order_update_callback: Callable,
+        liquidation_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+    ):
         self.api_key = api_key
         self.secret_key = secret_key
         self.order_update_callback = order_update_callback
+        self.liquidation_callback = liquidation_callback
         self.websocket = None
         self.running = False
         self.base_url = "https://fapi.asterdex.com"
@@ -253,6 +261,9 @@ class AsterWebSocketManager:
 
             if event_type == 'ORDER_TRADE_UPDATE':
                 await self._handle_order_update(data)
+            elif event_type == 'forceOrder':
+                if self.liquidation_callback:
+                    await self.liquidation_callback(data)
             elif event_type == 'listenKeyExpired':
                 if self.logger:
                     self.logger.warning("Listen key expired, reconnecting...")
@@ -634,4 +645,3 @@ class AsterWebSocketManager:
     def set_logger(self, logger):
         """Set the logger instance."""
         self.logger = logger
-

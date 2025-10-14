@@ -18,6 +18,7 @@ from .base import (
     OrderInfo,
     query_retry
 )
+from .events import LiquidationEvent, LiquidationEventDispatcher
 
 __all__ = [
     'BaseExchangeClient',
@@ -25,7 +26,8 @@ __all__ = [
     'OrderResult',
     'OrderInfo',
     'query_retry',
+    'LiquidationEvent',
+    'LiquidationEventDispatcher',
 ]
 
 __version__ = '1.0.0'
-

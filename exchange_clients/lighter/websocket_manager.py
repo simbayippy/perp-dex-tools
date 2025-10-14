@@ -14,16 +14,22 @@ Features:
 import asyncio
 import json
 import time
-from typing import Dict, Any, List, Optional, Tuple, Callable
+from typing import Dict, Any, List, Optional, Tuple, Callable, Awaitable
 import websockets
 
 
 class LighterWebSocketManager:
     """WebSocket manager for Lighter order updates and order book."""
 
-    def __init__(self, config: Dict[str, Any], order_update_callback: Optional[Callable] = None):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        order_update_callback: Optional[Callable] = None,
+        liquidation_callback: Optional[Callable[[List[Dict[str, Any]]], Awaitable[None]]] = None,
+    ):
         self.config = config
         self.order_update_callback = order_update_callback
+        self.liquidation_callback = liquidation_callback
         self.logger = None
         self.running = False
         self.ws = None
@@ -308,6 +314,16 @@ class LighterWebSocketManager:
         except Exception as e:
             self._log(f"Error handling order update: {e}", "ERROR")
 
+    async def _dispatch_liquidations(self, notifs: List[Dict[str, Any]]) -> None:
+        """Forward liquidation notifications to the registered callback."""
+        if not self.liquidation_callback or not notifs:
+            return
+
+        try:
+            await self.liquidation_callback(notifs)
+        except Exception as exc:
+            self._log(f"Error dispatching liquidation notifications: {exc}", "ERROR")
+
     async def connect(self):
         """Connect to Lighter WebSocket using custom implementation."""
         cleanup_counter = 0
@@ -329,6 +345,7 @@ class LighterWebSocketManager:
 
                     # Subscribe to account orders updates
                     account_orders_channel = f"account_orders/{self.market_index}/{self.account_index}"
+                    notification_channel = f"notification/{self.account_index}"
 
                     # Get auth token for the subscription
                     try:
@@ -339,13 +356,30 @@ class LighterWebSocketManager:
                             if err is not None:
                                 self._log(f"Failed to create auth token for account orders subscription: {err}", "WARNING")
                             else:
-                                auth_message = {
-                                    "type": "subscribe",
-                                    "channel": account_orders_channel,
-                                    "auth": auth_token
-                                }
-                                await self.ws.send(json.dumps(auth_message))
-                                self._log("Subscribed to account orders with auth token (expires in 10 minutes)", "INFO")
+                                subscription_messages = [
+                                    {
+                                        "type": "subscribe",
+                                        "channel": account_orders_channel,
+                                        "auth": auth_token,
+                                    },
+                                ]
+                                if self.liquidation_callback:
+                                    subscription_messages.append(
+                                        {
+                                            "type": "subscribe",
+                                            "channel": notification_channel,
+                                            "auth": auth_token,
+                                        }
+                                    )
+
+                                for message in subscription_messages:
+                                    await self.ws.send(json.dumps(message))
+
+                                self._log(
+                                    "Subscribed to account orders and notifications with auth token "
+                                    "(expires in 10 minutes)",
+                                    "INFO",
+                                )
                     except Exception as e:
                         self._log(f"Error creating auth token for account orders subscription: {e}", "WARNING")
 
@@ -367,6 +401,8 @@ class LighterWebSocketManager:
 
                             # Reset timeout counter on successful message
                             timeout_count = 0
+
+                            notifications_for_dispatch: Optional[List[Dict[str, Any]]] = None
 
                             async with self.order_book_lock:
                                 if data.get("type") == "subscribed/order_book":
@@ -440,6 +476,10 @@ class LighterWebSocketManager:
                                     # Handle account orders updates
                                     orders = data.get("orders", {}).get(str(self.market_index), [])
                                     self.handle_order_update(orders)
+                                elif data.get("type") == "update/notification":
+                                    notifications_for_dispatch = data.get("notifs", [])
+                                elif data.get("type") == "subscribed/notification":
+                                    self._log("Subscribed to notification channel", "DEBUG")
                                 elif data.get("type") == "update/order_book" and not self.snapshot_loaded:
                                     # Ignore updates until we have the initial snapshot
                                     continue
@@ -461,6 +501,9 @@ class LighterWebSocketManager:
                                     self._log(f"Failed to request fresh snapshot: {e}", "ERROR")
                                     self._log("Reconnecting due to sequence gap...", "WARNING")
                                     break
+
+                            if notifications_for_dispatch:
+                                await self._dispatch_liquidations(notifications_for_dispatch)
 
                         except asyncio.TimeoutError:
                             timeout_count += 1
@@ -500,4 +543,3 @@ class LighterWebSocketManager:
             except Exception as e:
                 self._log(f"Error closing websocket: {e}", "ERROR")
         self._log("WebSocket disconnected", "INFO")
-

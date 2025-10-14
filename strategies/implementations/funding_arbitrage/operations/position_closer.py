@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from decimal import Decimal
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+
+from exchange_clients.events import LiquidationEvent
+from ..risk_management import get_risk_manager
 
 if TYPE_CHECKING:
+    from exchange_clients.base import ExchangePositionSnapshot
     from ..models import FundingArbPosition
     from ..strategy import FundingArbitrageStrategy
 
@@ -13,30 +17,89 @@ if TYPE_CHECKING:
 class PositionCloser:
     """Encapsulates exit-condition evaluation and close execution."""
 
+    _ZERO_TOLERANCE = Decimal("0")
+
     def __init__(self, strategy: "FundingArbitrageStrategy") -> None:
         self._strategy = strategy
+        self._risk_manager = self._build_risk_manager()
 
     async def evaluateAndClosePositions(self) -> List[str]:
         strategy = self._strategy
         actions: List[str] = []
         positions = await strategy.position_manager.get_open_positions()
-        
+
         for position in positions:
-            should_close, reason = self._should_close(position)
+            snapshots = await self._fetch_leg_snapshots(position)
+
+            liquidation_reason = self._detect_liquidation(position, snapshots)
+            if liquidation_reason is not None:
+                await self.close(position, liquidation_reason, live_snapshots=snapshots)
+                strategy.logger.log(
+                    f"Closed {position.symbol}: {liquidation_reason}", "WARNING"
+                )
+                actions.append(f"Closed {position.symbol}: {liquidation_reason}")
+                continue
+
+            should_close, reason = await self._should_close(position, snapshots)
             if should_close:
-                await self.close(position, reason)
+                await self.close(position, reason or "UNKNOWN", live_snapshots=snapshots)
                 strategy.logger.log(f"Closed {position.symbol}: {reason}", "INFO")
                 actions.append(f"Closed {position.symbol}: {reason}")
             else:
-                strategy.logger.log(f"Position {position.symbol} not closing: {reason}", "INFO")
+                strategy.logger.log(
+                    f"Position {position.symbol} not closing: {reason}", "DEBUG"
+                )
 
         return actions
 
-    def _should_close(self, position: "FundingArbPosition") -> Tuple[bool, Optional[str]]:
+    async def handle_liquidation_event(self, event: LiquidationEvent) -> None:
+        """
+        React to liquidation notifications by immediately unwinding impacted positions.
+        """
+        strategy = self._strategy
+        positions = await strategy.position_manager.get_open_positions()
+
+        for position in positions:
+            if not self._symbols_match(position.symbol, event.symbol):
+                continue
+
+            if event.exchange not in {position.long_dex, position.short_dex}:
+                continue
+
+            strategy.logger.log(
+                f"🚨 Liquidation event detected on {event.exchange.upper()} for {event.symbol} "
+                f"(side={event.side}, qty={event.quantity}, price={event.price}).",
+                "ERROR",
+            )
+
+            snapshots = await self._fetch_leg_snapshots(position)
+            reason = f"LIQUIDATION_{event.exchange.upper()}"
+            await self.close(position, reason, live_snapshots=snapshots)
+
+    async def _should_close(
+        self,
+        position: "FundingArbPosition",
+        snapshots: Dict[str, Optional["ExchangePositionSnapshot"]],
+    ) -> Tuple[bool, Optional[str]]:
         strategy = self._strategy
 
+        current_rates = await self._gather_current_rates(position)
+        if current_rates is not None and self._risk_manager is not None:
+            try:
+                should_exit, reason = self._risk_manager.should_exit(
+                    position, current_rates
+                )
+                if should_exit:
+                    return True, reason
+            except Exception as exc:  # pragma: no cover - defensive logging
+                strategy.logger.log(
+                    f"Risk manager evaluation failed for {position.symbol}: {exc}",
+                    "ERROR",
+                )
+
+        # Fallback heuristics if risk manager unavailable or declined
         if position.current_divergence and position.current_divergence < 0:
-            return True, "FUNDING_FLIP"
+            return True, "DIVERGENCE_FLIPPED"
 
         erosion = position.get_profit_erosion()
         if erosion < strategy.config.risk_config.min_erosion_threshold:
@@ -45,24 +108,27 @@ class PositionCloser:
         if position.get_age_hours() > strategy.config.risk_config.max_position_age_hours:
             return True, "TIME_LIMIT"
 
-        if strategy.config.risk_config.enable_better_opportunity:
-            # Placeholder for future best-opportunity detection
-            pass
-
         return False, None
 
-    async def close(self, position: "FundingArbPosition", reason: str) -> None:
+    async def close(
+        self,
+        position: "FundingArbPosition",
+        reason: str,
+        *,
+        live_snapshots: Optional[
+            Dict[str, Optional["ExchangePositionSnapshot"]]
+        ] = None,
+    ) -> None:
         strategy = self._strategy
 
         try:
-            long_client = strategy.exchange_clients[position.long_dex]
-            short_client = strategy.exchange_clients[position.short_dex]
-
-            await long_client.close_position(position.symbol)
-            await short_client.close_position(position.symbol)
-
             pnl = position.get_net_pnl()
             pnl_pct = position.get_net_pnl_pct()
+
+            await self._close_exchange_positions(
+                position,
+                live_snapshots=live_snapshots,
+            )
 
             await strategy.position_manager.close(
                 position.id,
@@ -87,3 +153,192 @@ class PositionCloser:
                 "ERROR",
             )
             raise
+
+    def _build_risk_manager(self):
+        strategy = self._strategy
+        risk_cfg = strategy.config.risk_config
+
+        try:
+            config_payload = {
+                "min_erosion_ratio": float(risk_cfg.min_erosion_threshold),
+                "severe_erosion_ratio": float(
+                    getattr(risk_cfg, "severe_erosion_ratio", Decimal("0.2"))
+                ),
+                "max_position_age_hours": risk_cfg.max_position_age_hours,
+                "flip_margin": float(getattr(risk_cfg, "flip_margin", Decimal("0"))),
+            }
+            return get_risk_manager(risk_cfg.strategy, config_payload)
+        except Exception as exc:
+            strategy.logger.log(
+                f"Failed to initialize risk manager '{risk_cfg.strategy}': {exc}",
+                "ERROR",
+            )
+            return None
+
+    async def _gather_current_rates(
+        self, position: "FundingArbPosition"
+    ) -> Optional[Dict[str, Decimal]]:
+        """
+        Fetch latest funding rates for both legs.
+        """
+        repo = getattr(self._strategy, "funding_rate_repo", None)
+        if repo is None:
+            return None
+
+        try:
+            long_rate_row = await repo.get_latest_specific(
+                position.long_dex, position.symbol
+            )
+            short_rate_row = await repo.get_latest_specific(
+                position.short_dex, position.symbol
+            )
+        except Exception as exc:
+            self._strategy.logger.log(
+                f"Failed to fetch funding rates for {position.symbol}: {exc}",
+                "ERROR",
+            )
+            return None
+
+        if not long_rate_row or not short_rate_row:
+            return None
+
+        long_rate = Decimal(str(long_rate_row.get("funding_rate") or "0"))
+        short_rate = Decimal(str(short_rate_row.get("funding_rate") or "0"))
+        divergence = short_rate - long_rate
+        position.current_divergence = divergence
+
+        return {
+            "divergence": divergence,
+            "long_rate": long_rate,
+            "short_rate": short_rate,
+            "long_oi_usd": Decimal(
+                str(long_rate_row.get("open_interest_usd"))
+            )
+            if long_rate_row.get("open_interest_usd") is not None
+            else Decimal("0"),
+            "short_oi_usd": Decimal(
+                str(short_rate_row.get("open_interest_usd"))
+            )
+            if short_rate_row.get("open_interest_usd") is not None
+            else Decimal("0"),
+        }
+
+    async def _fetch_leg_snapshots(
+        self, position: "FundingArbPosition"
+    ) -> Dict[str, Optional["ExchangePositionSnapshot"]]:
+        """Fetch up-to-date exchange snapshots for both legs."""
+        snapshots: Dict[str, Optional["ExchangePositionSnapshot"]] = {}
+
+        for dex in filter(None, [position.long_dex, position.short_dex]):
+            client = self._strategy.exchange_clients.get(dex)
+            if client is None:
+                self._strategy.logger.log(
+                    f"No exchange client for {dex} while evaluating {position.symbol}",
+                    "ERROR",
+                )
+                snapshots[dex] = None
+                continue
+
+            try:
+                snapshots[dex] = await client.get_position_snapshot(position.symbol)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                self._strategy.logger.log(
+                    f"[{dex}] Failed to fetch position snapshot for {position.symbol}: {exc}",
+                    "ERROR",
+                )
+                snapshots[dex] = None
+
+        return snapshots
+
+    def _detect_liquidation(
+        self,
+        position: "FundingArbPosition",
+        snapshots: Dict[str, Optional["ExchangePositionSnapshot"]],
+    ) -> Optional[str]:
+        """Detect if either leg has been liquidated or otherwise removed."""
+        missing_legs = [
+            dex
+            for dex, snapshot in snapshots.items()
+            if not self._has_open_position(snapshot)
+        ]
+
+        if not missing_legs:
+            return None
+
+        # Only flag liquidation if at least one leg is still open (directional exposure)
+        active_legs = [
+            dex
+            for dex, snapshot in snapshots.items()
+            if self._has_open_position(snapshot)
+        ]
+
+        if not active_legs and len(missing_legs) == len(snapshots):
+            return "ALL_LEGS_CLOSED"
+
+        leg_list = ", ".join(sorted(missing_legs))
+        self._strategy.logger.log(
+            f"⚠️ Detected missing legs {leg_list} for {position.symbol}; initiating emergency close.",
+            "WARNING",
+        )
+        return "LEG_LIQUIDATED"
+
+    @classmethod
+    def _has_open_position(cls, snapshot: Optional["ExchangePositionSnapshot"]) -> bool:
+        if snapshot is None or snapshot.quantity is None:
+            return False
+        return snapshot.quantity.copy_abs() > cls._ZERO_TOLERANCE
+
+    async def _close_exchange_positions(
+        self,
+        position: "FundingArbPosition",
+        *,
+        live_snapshots: Optional[
+            Dict[str, Optional["ExchangePositionSnapshot"]]
+        ] = None,
+    ) -> None:
+        """
+        Close legs on the exchanges, skipping those already flat.
+        """
+        for dex in filter(None, [position.long_dex, position.short_dex]):
+            client = self._strategy.exchange_clients.get(dex)
+            if client is None:
+                self._strategy.logger.log(
+                    f"Skipping close for {dex}: no exchange client available",
+                    "ERROR",
+                )
+                continue
+
+            snapshot = live_snapshots.get(dex) if live_snapshots else None
+            if snapshot is not None and not self._has_open_position(snapshot):
+                self._strategy.logger.log(
+                    f"[{dex}] No open position detected for {position.symbol}; skipping close call.",
+                    "DEBUG",
+                )
+                continue
+
+            try:
+                await client.close_position(position.symbol)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                self._strategy.logger.log(
+                    f"[{dex}] Failed to close {position.symbol}: {exc}",
+                    "ERROR",
+                )
+
+    @staticmethod
+    def _symbols_match(position_symbol: Optional[str], event_symbol: Optional[str]) -> bool:
+        pos_upper = (position_symbol or "").upper()
+        event_upper = (event_symbol or "").upper()
+
+        if not pos_upper or not event_upper:
+            return False
+
+        if pos_upper == event_upper:
+            return True
+
+        if event_upper.endswith(pos_upper):  # e.g., BTCUSDT vs BTC
+            return True
+
+        if pos_upper.endswith(event_upper):
+            return True
+
+        return False
