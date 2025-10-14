@@ -10,7 +10,7 @@ Pattern: Stateful strategy with multi-DEX support
 """
 
 from strategies.categories.stateful_strategy import StatefulStrategy
-from strategies.base_strategy import StrategyResult, StrategyAction
+from strategies.base_strategy import StrategyResult
 from .config import FundingArbConfig
 from .models import FundingArbPosition
 
@@ -210,7 +210,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
 
 
             return StrategyResult(
-                action=StrategyAction.WAIT,
                 message=f"Cycle complete ",
                 wait_time=self.config.risk_config.check_interval_seconds,
             )
@@ -218,7 +217,6 @@ class FundingArbitrageStrategy(StatefulStrategy):
         except Exception as exc:
             self.logger.log(f"Strategy execution failed: {exc}", "ERROR")
             return StrategyResult(
-                action=StrategyAction.WAIT,
                 message=f"Execution error: {exc}",
                 wait_time=60,
             )

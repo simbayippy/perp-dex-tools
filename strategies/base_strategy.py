@@ -21,15 +21,6 @@ from helpers.unified_logger import get_strategy_logger
 # Enums
 # ============================================================================
 
-class StrategyAction(Enum):
-    """Strategy action types."""
-    NONE = "none"
-    PLACE_ORDER = "place_order"
-    CLOSE_POSITION = "close_position"
-    REBALANCE = "rebalance"
-    WAIT = "wait"
-
-
 @dataclass
 class OrderParams:
     """Parameters for order placement."""
@@ -55,7 +46,6 @@ class OrderParams:
 @dataclass
 class StrategyResult:
     """Result of strategy execution."""
-    action: StrategyAction
     orders: List[OrderParams] = None
     message: str = ""
     wait_time: float = 0  # Seconds to wait before next check

@@ -323,19 +323,9 @@ class TradingBot:
 
     async def _handle_strategy_result(self, strategy_result):
         """Handle the result from strategy execution."""
-        from strategies.base_strategy import StrategyAction
         
-        if strategy_result.action == StrategyAction.WAIT:
-            if strategy_result.wait_time > 0:
-                await asyncio.sleep(strategy_result.wait_time)
-        
-        elif strategy_result.action == StrategyAction.CLOSE_POSITION:
-            # Handle position closing
-            self.logger.info("Strategy position closing requested, not implemented yet")
-        
-        elif strategy_result.action == StrategyAction.REBALANCE:
-            # Handle rebalancing
-            self.logger.info("Strategy rebalancing requested, not implemented yet")
+        if strategy_result.wait_time > 0:
+            await asyncio.sleep(strategy_result.wait_time)
         
         if strategy_result.message:
             self.logger.info(f"Strategy: {strategy_result.message}")

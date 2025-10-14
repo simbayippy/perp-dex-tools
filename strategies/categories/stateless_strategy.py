@@ -12,7 +12,7 @@ Key characteristics:
 - Helper methods for common operations
 """
 
-from strategies.base_strategy import BaseStrategy, StrategyResult, StrategyAction
+from strategies.base_strategy import BaseStrategy, StrategyResult
 from abc import abstractmethod
 import time
 
@@ -73,7 +73,6 @@ class StatelessStrategy(BaseStrategy):
                 return await self.execute_strategy(market_data)
             
             return StrategyResult(
-                action=StrategyAction.WAIT,
                 message="Conditions not met",
                 wait_time=self.config.strategy_params.get('check_interval', 60)
             )
@@ -81,7 +80,6 @@ class StatelessStrategy(BaseStrategy):
         except Exception as e:
             self.logger.log(f"Error in execute_cycle: {e}", "ERROR")
             return StrategyResult(
-                action=StrategyAction.WAIT,
                 message=f"Error: {e}",
                 wait_time=60
             )
