@@ -207,9 +207,9 @@ class FundingArbitrageStrategy(StatefulStrategy):
                         continue
                     new_position = await self.position_opener.open(opportunity)
 
-
-            return wait_time=self.config.risk_config.check_interval_seconds,
             
+            # sleep for check_interval_seconds defined = 60
+            await asyncio.sleep(self.config.risk_config.check_interval_seconds)
 
         except Exception as exc:
             self.logger.log(f"Strategy execution failed: {exc}", "ERROR")
