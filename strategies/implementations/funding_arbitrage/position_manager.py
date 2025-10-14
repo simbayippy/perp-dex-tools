@@ -394,7 +394,7 @@ class FundingArbPositionManager(BasePositionManager):
                 exit_reason = :exit_reason,
                 closed_at = :closed_at,
                 pnl_usd = :pnl_usd,
-                metadata = :metadata::jsonb
+                metadata = CAST(:metadata AS jsonb)
             WHERE id = :position_id
         """
         
