@@ -96,10 +96,13 @@ class OrderExecutor:
             print(f"Filled at ${result.fill_price}, slippage: {result.slippage_pct}%")
     """
     
+    DEFAULT_LIMIT_PRICE_OFFSET_PCT = Decimal("0.0001")  # 1 basis point
+
     def __init__(
         self,
         default_timeout: float = 30.0,
-        price_provider = None  # Optional PriceProvider for cached prices
+        price_provider = None,  # Optional PriceProvider for cached prices
+        default_limit_price_offset_pct: Decimal = DEFAULT_LIMIT_PRICE_OFFSET_PCT
     ):
         """
         Initialize order executor.
@@ -107,9 +110,11 @@ class OrderExecutor:
         Args:
             default_timeout: Default timeout for limit orders (seconds)
             price_provider: Optional PriceProvider for getting cached/fresh prices
+            default_limit_price_offset_pct: Default maker improvement for limit orders
         """
         self.default_timeout = default_timeout
         self.price_provider = price_provider
+        self.default_limit_price_offset_pct = default_limit_price_offset_pct
         self.logger = get_core_logger("order_executor")
     
     async def execute_order(
@@ -120,7 +125,7 @@ class OrderExecutor:
         size_usd: Decimal,
         mode: ExecutionMode = ExecutionMode.LIMIT_WITH_FALLBACK,
         timeout_seconds: Optional[float] = None,
-        limit_price_offset_pct: Decimal = Decimal("0.01")  # 0.01% = 1 basis point
+        limit_price_offset_pct: Optional[Decimal] = None
     ) -> ExecutionResult:
         """
         Execute order with intelligent mode selection.
@@ -132,7 +137,7 @@ class OrderExecutor:
             size_usd: Order size in USD
             mode: Execution mode
             timeout_seconds: Timeout for limit orders (uses default if None)
-            limit_price_offset_pct: Price improvement for limit orders (0.01% = better than market)
+            limit_price_offset_pct: Price improvement for limit orders (None = executor default)
         
         Returns:
             ExecutionResult with all execution details
@@ -156,6 +161,14 @@ class OrderExecutor:
         )
         
         try:
+            offset_pct = (
+                limit_price_offset_pct
+                if limit_price_offset_pct is not None
+                else self.default_limit_price_offset_pct
+            )
+            if not isinstance(offset_pct, Decimal):
+                offset_pct = Decimal(str(offset_pct))
+
             if mode == ExecutionMode.MARKET_ONLY:
                 result = await self._execute_market(
                     exchange_client, symbol, side, size_usd
@@ -163,13 +176,13 @@ class OrderExecutor:
             
             elif mode == ExecutionMode.LIMIT_ONLY:
                 result = await self._execute_limit(
-                    exchange_client, symbol, side, size_usd, timeout, limit_price_offset_pct
+                    exchange_client, symbol, side, size_usd, timeout, offset_pct
                 )
             
             elif mode == ExecutionMode.LIMIT_WITH_FALLBACK:
                 # Try limit first
                 result = await self._execute_limit(
-                    exchange_client, symbol, side, size_usd, timeout, limit_price_offset_pct
+                    exchange_client, symbol, side, size_usd, timeout, offset_pct
                 )
                 
                 if not result.filled:
@@ -187,7 +200,7 @@ class OrderExecutor:
                 # For now, default to limit_with_fallback
                 result = await self.execute_order(
                     exchange_client, symbol, side, size_usd,
-                    ExecutionMode.LIMIT_WITH_FALLBACK, timeout, limit_price_offset_pct
+                    ExecutionMode.LIMIT_WITH_FALLBACK, timeout, offset_pct
                 )
             
             else:
@@ -548,4 +561,3 @@ class OrderExecutor:
         except Exception as e:
             self.logger.error(f"Failed to fetch BBO prices: {e}")
             raise
-

@@ -139,6 +139,10 @@ class PositionOpener:
 
         log_stage(strategy.logger, "Atomic Multi-Order Execution", icon="🧨", stage_id="3")
 
+        limit_offset_pct = getattr(strategy.config, "limit_order_offset_pct", None)
+        if limit_offset_pct is not None and not isinstance(limit_offset_pct, Decimal):
+            limit_offset_pct = Decimal(str(limit_offset_pct))
+
         result: AtomicExecutionResult = await strategy.atomic_executor.execute_atomically(
             orders=[
                 OrderSpec(
@@ -148,6 +152,7 @@ class PositionOpener:
                     size_usd=adjusted_size,
                     execution_mode="limit_with_fallback",
                     timeout_seconds=30.0,
+                    limit_price_offset_pct=limit_offset_pct,
                 ),
                 OrderSpec(
                     exchange_client=short_client,
@@ -156,6 +161,7 @@ class PositionOpener:
                     size_usd=adjusted_size,
                     execution_mode="limit_with_fallback",
                     timeout_seconds=30.0,
+                    limit_price_offset_pct=limit_offset_pct,
                 ),
             ],
             rollback_on_partial=True,

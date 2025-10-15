@@ -166,6 +166,17 @@ FUNDING_ARB_SCHEMA = StrategySchema(
                      "Prevents overexposure during volatile markets",
             show_default_in_prompt=True
         ),
+
+        create_decimal_parameter(
+            key="limit_order_offset_pct",
+            prompt="Limit order price offset (decimal, negative crosses spread)?",
+            default=Decimal("0.0001"),
+            min_value=Decimal("-0.01"),
+            max_value=Decimal("0.05"),
+            required=False,
+            help_text="Improves maker pricing. Example: 0.0001 = 1bp inside; 0 = at touch; "
+                     "-0.0002 crosses by 2bp to fill faster."
+        ),
         
         ParameterSchema(
             key="check_interval_seconds",
@@ -195,7 +206,7 @@ FUNDING_ARB_SCHEMA = StrategySchema(
         "Position Sizing": ["target_exposure", "max_positions", "max_total_exposure_usd"],
         "Profitability": ["min_profit_rate", "max_oi_usd"],
         "Risk Management": ["risk_strategy", "profit_erosion_threshold", "max_position_age_hours"],
-        "Execution": ["max_new_positions_per_cycle", "check_interval_seconds", "dry_run"]
+        "Execution": ["max_new_positions_per_cycle", "limit_order_offset_pct", "check_interval_seconds", "dry_run"]
     }
 )
 
@@ -230,4 +241,3 @@ def create_default_funding_config() -> dict:
         "check_interval_seconds": 60,
         "dry_run": True
     }
-

@@ -595,7 +595,7 @@ class AtomicMultiOrderExecutor:
                 size_usd=spec.size_usd,
                 mode=execution_mode,
                 timeout_seconds=spec.timeout_seconds,
-                limit_price_offset_pct=spec.limit_price_offset_pct or Decimal("0.01")
+                limit_price_offset_pct=spec.limit_price_offset_pct
             )
             
             # Convert ExecutionResult to dict

@@ -42,9 +42,13 @@ class StubAtomicExecutor:
     def __init__(self, result: AtomicExecutionResult):
         self._result = result
         self.calls = 0
+        self.last_args = None
+        self.last_kwargs = None
 
     async def execute_atomically(self, *args, **kwargs):
         self.calls += 1
+        self.last_args = args
+        self.last_kwargs = kwargs
         return self._result
 
 
@@ -52,13 +56,18 @@ def _strategy(
     exchange_clients,
     atomic_result: AtomicExecutionResult,
     position_manager=None,
+    config_overrides=None,
 ):
+    config_kwargs = {"default_position_size_usd": Decimal("100")}
+    if config_overrides:
+        config_kwargs.update(config_overrides)
+
     return SimpleNamespace(
         exchange_clients=exchange_clients,
         atomic_executor=StubAtomicExecutor(atomic_result),
         fee_calculator=StubFeeCalculator(),
         position_manager=position_manager or StubPositionManager(),
-        config=SimpleNamespace(default_position_size_usd=Decimal("100")),
+        config=SimpleNamespace(**config_kwargs),
         logger=StubLogger(),
         failed_symbols=set(),
     )
@@ -183,6 +192,27 @@ async def test_position_opener_leverage_validation_failure(monkeypatch):
     assert position is None
     assert opportunity.symbol in strategy.failed_symbols
     assert not strategy.atomic_executor.calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("offset", [Decimal("0"), Decimal("-0.0005")])
+async def test_position_opener_passes_limit_offset(monkeypatch, offset):
+    atomic_result = _atomic_success()
+    strategy = _strategy(
+        exchange_clients={"aster": _exchange_client(), "lighter": _exchange_client()},
+        atomic_result=atomic_result,
+        config_overrides={"limit_order_offset_pct": offset},
+    )
+    opener = PositionOpener(strategy)
+
+    monkeypatch.setattr(opener, "_ensure_contract_attributes", AsyncMock(return_value=True))
+    monkeypatch.setattr(opener, "_validate_leverage", AsyncMock(return_value=Decimal("75")))
+
+    opportunity = _opportunity()
+    await opener.open(opportunity)
+
+    orders = strategy.atomic_executor.last_kwargs["orders"]
+    assert all(order.limit_price_offset_pct == offset for order in orders)
 
 
 @pytest.mark.asyncio

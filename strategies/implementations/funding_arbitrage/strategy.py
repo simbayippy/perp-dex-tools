@@ -291,6 +291,12 @@ class FundingArbitrageStrategy(BaseStrategy):
         config_path = strategy_params.get("_config_path")
 
         
+        limit_order_offset_param = strategy_params.get('limit_order_offset_pct')
+        if limit_order_offset_param is not None:
+            limit_order_offset_pct = Decimal(str(limit_order_offset_param))
+        else:
+            limit_order_offset_pct = Decimal("0.0001")
+
         funding_config = FundingArbConfig(
             exchange=trading_config.exchange,  # Primary exchange
             exchanges=exchanges,  # All exchanges for arbitrage
@@ -300,6 +306,7 @@ class FundingArbitrageStrategy(BaseStrategy):
             max_position_size_usd=target_exposure * Decimal('10'),  # Max is 10x the default
             max_total_exposure_usd=Decimal(str(strategy_params.get('max_total_exposure_usd', float(target_exposure) * 5))),
             min_profit=Decimal(str(strategy_params.get('min_profit_rate', 0.0001))),
+            limit_order_offset_pct=limit_order_offset_pct,
             max_oi_usd=Decimal(str(strategy_params.get('max_oi_usd', 10000000.0))),  # 10M default
             max_new_positions_per_cycle=strategy_params.get('max_new_positions_per_cycle', 2),
             # Required database URL from funding_rate_service settings
