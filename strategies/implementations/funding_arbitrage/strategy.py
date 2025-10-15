@@ -10,6 +10,7 @@ Pattern: Stateful strategy with multi-DEX support
 """
 
 import asyncio
+import traceback
 
 from strategies.base_strategy import BaseStrategy
 from .config import FundingArbConfig
@@ -335,7 +336,10 @@ class FundingArbitrageStrategy(BaseStrategy):
                     await self.position_monitor.monitor()
                     await self.position_closer.evaluateAndClosePositions()
                 except Exception as exc:
-                    self.logger.log(f"Monitor loop error: {exc}", "ERROR")
+                    self.logger.log(
+                        f"Monitor loop error: {exc}\n{traceback.format_exc()}",
+                        "ERROR",
+                    )
 
                 if stop_event.is_set():
                     break
