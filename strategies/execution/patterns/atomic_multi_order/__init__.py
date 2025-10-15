@@ -6,9 +6,11 @@ Re-export the public API so existing imports from
 """
 
 from .executor import AtomicMultiOrderExecutor, OrderSpec, AtomicExecutionResult
+from .contexts import OrderContext as _OrderContext
 
 __all__ = [
     "AtomicMultiOrderExecutor",
     "OrderSpec",
     "AtomicExecutionResult",
+    "_OrderContext",
 ]
