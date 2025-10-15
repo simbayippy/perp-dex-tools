@@ -127,8 +127,8 @@ def validate_config_file(file_path: Path) -> tuple[bool, Optional[str]]:
         config = loaded["config"]
         
         # Get schema
-        from strategies.implementations.funding_arbitrage.schema import get_funding_arb_schema
-        from strategies.implementations.grid.schema import get_grid_schema
+        from strategies.implementations.funding_arbitrage.config_builder import get_funding_arb_schema
+        from strategies.implementations.grid.config_builder import get_grid_schema
         
         schemas = {
             "funding_arbitrage": get_funding_arb_schema(),
@@ -251,4 +251,3 @@ if __name__ == "__main__":
     print("\nYou can use these as templates:")
     print("  python runbot.py --config configs/example_funding_arbitrage.yml")
     print("  python runbot.py --config configs/example_grid.yml")
-

@@ -6,13 +6,14 @@ for use with the interactive configuration builder.
 """
 
 from decimal import Decimal
+
 from strategies.base_schema import (
     StrategySchema,
     ParameterSchema,
     ParameterType,
     create_exchange_choice_parameter,
     create_decimal_parameter,
-    create_boolean_parameter
+    create_boolean_parameter,
 )
 from exchange_clients.factory import ExchangeFactory
 
@@ -25,9 +26,8 @@ FUNDING_ARB_SCHEMA = StrategySchema(
     name="funding_arbitrage",
     display_name="Funding Rate Arbitrage",
     description="Delta-neutral funding rate arbitrage across multiple DEXs. "
-                "Profit from funding rate differences by going long on one exchange "
-                "and short on another.",
-    
+    "Profit from funding rate differences by going long on one exchange "
+    "and short on another.",
     parameters=[
         # ====================================================================
         # Exchange Configuration
@@ -36,9 +36,8 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             key="primary_exchange",
             prompt="Which exchange should be your PRIMARY exchange?",
             required=True,
-            help_text="This exchange will handle the main connection and risk management"
+            help_text="This exchange will handle the main connection and risk management",
         ),
-        
         ParameterSchema(
             key="scan_exchanges",
             prompt="Which exchanges should we scan for opportunities?",
@@ -47,9 +46,8 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             default=["lighter", "grvt", "backpack"],  # List, not string!
             required=True,
             help_text="We'll look for funding rate divergences across these exchanges",
-            show_default_in_prompt=True
+            show_default_in_prompt=True,
         ),
-        
         # ====================================================================
         # Position Sizing
         # ====================================================================
@@ -61,9 +59,8 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             max_value=Decimal("100000"),
             required=True,
             help_text="This is the USD value of each long/short position. "
-                     "Example: $100 means $100 long + $100 short = $200 total notional"
+            "Example: $100 means $100 long + $100 short = $200 total notional",
         ),
-        
         ParameterSchema(
             key="max_positions",
             prompt="Maximum number of concurrent positions?",
@@ -73,9 +70,8 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             max_value=50,
             required=False,
             help_text="Limit the number of open funding arb positions to manage risk",
-            show_default_in_prompt=True
+            show_default_in_prompt=True,
         ),
-        
         create_decimal_parameter(
             key="max_total_exposure_usd",
             prompt="Maximum total exposure across all positions (USD)?",
@@ -83,9 +79,8 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             min_value=Decimal("1.00"),
             max_value=Decimal("1000000"),
             required=False,
-            help_text="Total notional value limit. Example: 5 positions × $200 each = $1000"
+            help_text="Total notional value limit. Example: 5 positions × $200 each = $1000",
         ),
-        
         # ====================================================================
         # Profitability Thresholds
         # ====================================================================
@@ -97,9 +92,8 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             max_value=Decimal("0.1"),
             required=True,
             help_text="Only enter positions with net profit (after fees) above this threshold. "
-                     "Lower = more opportunities but lower profit per trade"
+            "Lower = more opportunities but lower profit per trade",
         ),
-        
         create_decimal_parameter(
             key="max_oi_usd",
             prompt="Maximum open interest filter (USD)?",
@@ -108,9 +102,8 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             max_value=Decimal("999999999"),
             required=False,
             help_text="For POINT FARMING: use low values (e.g., 50000) to target small markets. "
-                     "For PURE PROFIT: use high values (e.g., 10M+) to access all markets"
+            "For PURE PROFIT: use high values (e.g., 10M+) to access all markets",
         ),
-        
         # ====================================================================
         # Risk Management
         # ====================================================================
@@ -122,12 +115,11 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             default="combined",
             required=True,
             help_text="COMBINED (recommended): All risk checks. "
-                     "PROFIT_EROSION: Close when profit drops. "
-                     "DIVERGENCE_FLIP: Close when rates flip. "
-                     "TIME_BASED: Close after fixed duration",
-            show_default_in_prompt=True
+            "PROFIT_EROSION: Close when profit drops. "
+            "DIVERGENCE_FLIP: Close when rates flip. "
+            "TIME_BASED: Close after fixed duration",
+            show_default_in_prompt=True,
         ),
-        
         create_decimal_parameter(
             key="profit_erosion_threshold",
             prompt="Profit erosion threshold (e.g., 0.5 = close when profit drops 50%)?",
@@ -136,9 +128,8 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             max_value=Decimal("0.9"),
             required=False,
             help_text="Close position when current profit drops to X% of entry profit. "
-                     "Lower = exit sooner (more conservative)"
+            "Lower = exit sooner (more conservative)",
         ),
-        
         ParameterSchema(
             key="max_position_age_hours",
             prompt="Maximum position age (hours)?",
@@ -148,9 +139,8 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             max_value=720,  # 30 days
             required=False,
             help_text="Force close positions older than this, regardless of profit",
-            show_default_in_prompt=True
+            show_default_in_prompt=True,
         ),
-        
         # ====================================================================
         # Execution Settings
         # ====================================================================
@@ -163,10 +153,9 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             max_value=10,
             required=False,
             help_text="Rate limit: open at most N positions per execution cycle (usually 60s). "
-                     "Prevents overexposure during volatile markets",
-            show_default_in_prompt=True
+            "Prevents overexposure during volatile markets",
+            show_default_in_prompt=True,
         ),
-
         create_decimal_parameter(
             key="limit_order_offset_pct",
             prompt="Limit order price offset (decimal, negative crosses spread)?",
@@ -175,9 +164,8 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             max_value=Decimal("0.05"),
             required=False,
             help_text="Improves maker pricing. Example: 0.0001 = 1bp inside; 0 = at touch; "
-                     "-0.0002 crosses by 2bp to fill faster."
+            "-0.0002 crosses by 2bp to fill faster.",
         ),
-        
         ParameterSchema(
             key="check_interval_seconds",
             prompt="How often to check positions and opportunities (seconds)?",
@@ -187,33 +175,41 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             max_value=300,
             required=False,
             help_text="Execution cycle frequency. Lower = more responsive but more API calls",
-            show_default_in_prompt=True
+            show_default_in_prompt=True,
         ),
-        
         create_boolean_parameter(
             key="dry_run",
             prompt="Run in dry-run mode (no real trades)?",
             default=True,
             required=False,
             help_text="TEST MODE: Strategy will run but won't place real orders. "
-                     "Great for testing configuration!"
+            "Great for testing configuration!",
         ),
     ],
-    
     # Category grouping for better UX
     categories={
         "Exchanges": ["primary_exchange", "scan_exchanges"],
         "Position Sizing": ["target_exposure", "max_positions", "max_total_exposure_usd"],
         "Profitability": ["min_profit_rate", "max_oi_usd"],
-        "Risk Management": ["risk_strategy", "profit_erosion_threshold", "max_position_age_hours"],
-        "Execution": ["max_new_positions_per_cycle", "limit_order_offset_pct", "check_interval_seconds", "dry_run"]
-    }
+        "Risk Management": [
+            "risk_strategy",
+            "profit_erosion_threshold",
+            "max_position_age_hours",
+        ],
+        "Execution": [
+            "max_new_positions_per_cycle",
+            "limit_order_offset_pct",
+            "check_interval_seconds",
+            "dry_run",
+        ],
+    },
 )
 
 
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
 
 def get_funding_arb_schema() -> StrategySchema:
     """Get the funding arbitrage parameter schema."""
@@ -223,7 +219,7 @@ def get_funding_arb_schema() -> StrategySchema:
 def create_default_funding_config() -> dict:
     """
     Create a default configuration for funding arbitrage.
-    
+
     Useful for quick testing or as a starting point.
     """
     return {
@@ -239,5 +235,5 @@ def create_default_funding_config() -> dict:
         "max_position_age_hours": 168,
         "max_new_positions_per_cycle": 2,
         "check_interval_seconds": 60,
-        "dry_run": True
+        "dry_run": True,
     }
