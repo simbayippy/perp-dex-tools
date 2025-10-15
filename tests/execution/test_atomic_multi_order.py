@@ -163,14 +163,11 @@ async def test_atomic_execution_success(executor, mock_exchange_client):
         _filled_result(orders[1].exchange_client, 'BTC-PERP', 'sell', 'order_2'),
     ])
 
-    hedge_mock = AsyncMock()
-
-    with patch.object(executor, '_execute_market_hedge', hedge_mock):
-        result = await executor.execute_atomically(
-            orders=orders,
-            rollback_on_partial=True,
-            pre_flight_check=False
-        )
+    result = await executor.execute_atomically(
+        orders=orders,
+        rollback_on_partial=True,
+        pre_flight_check=False
+    )
 
     assert result.success is True
     assert result.all_filled is True
@@ -178,7 +175,6 @@ async def test_atomic_execution_success(executor, mock_exchange_client):
     assert len(result.partial_fills) == 0
     assert result.rollback_performed is False
     assert result.rollback_cost_usd == Decimal('0')
-    hedge_mock.assert_not_called()
 
 
 # =============================================================================

@@ -279,6 +279,9 @@ class AtomicMultiOrderExecutor:
                     if hedge_success:
                         all_completed = True
                     else:
+                        if not rollback_on_partial:
+                            hedge_error = hedge_error or "Hedge failure"
+                            break
                         for ctx in contexts:
                             ctx.cancel_event.set()
                         remaining = [ctx.task for ctx in contexts if not ctx.completed]
