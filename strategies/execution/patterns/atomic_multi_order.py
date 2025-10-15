@@ -31,7 +31,7 @@ logger = get_core_logger("atomic_multi_order")
 
 @dataclass
 class _OrderContext:
-    spec: OrderSpec
+    spec: "OrderSpec"
     cancel_event: asyncio.Event
     task: asyncio.Task
     result: Optional[Dict] = None
