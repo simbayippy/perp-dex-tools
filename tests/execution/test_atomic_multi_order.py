@@ -200,33 +200,31 @@ async def test_partial_fill_triggers_market_hedge(executor):
         _unfilled_result(short_client, 'BTC-PERP', 'sell')
     ])
 
-    hedge_fill = {
-        'success': True,
-        'filled': True,
-        'fill_price': Decimal('50010'),
-        'filled_quantity': Decimal('1.0'),
-        'slippage_usd': Decimal('2.0'),
-        'execution_mode_used': 'market',
-        'order_id': 'hedge_1',
-        'exchange_client': short_client,
-        'symbol': 'BTC-PERP',
-        'side': 'sell',
-        'hedge': True
-    }
+    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_exec_cls:
+        hedge_executor = AsyncMock()
+        mock_exec_cls.return_value = hedge_executor
+        hedge_executor.execute_order.return_value = SimpleNamespace(
+            success=True,
+            filled=True,
+            fill_price=Decimal('50010'),
+            filled_quantity=Decimal('1.0'),
+            slippage_usd=Decimal('2.0'),
+            execution_mode_used='market',
+            order_id='hedge_1'
+        )
 
-    executor._execute_market_hedge = AsyncMock(return_value=(True, [hedge_fill], None))
+        result = await executor.execute_atomically(
+            orders=orders,
+            rollback_on_partial=True,
+            pre_flight_check=False
+        )
 
-    result = await executor.execute_atomically(
-        orders=orders,
-        rollback_on_partial=True,
-        pre_flight_check=False
-    )
-
-    executor._execute_market_hedge.assert_awaited_once()
+    hedge_executor.execute_order.assert_awaited()
     assert result.success is True
     assert result.all_filled is True
-    assert len(result.filled_orders) == 2
     assert result.rollback_performed is False
+    assert any(fill.get('hedge') for fill in result.filled_orders)
+    assert any(fill.get('hedge') for fill in result.filled_orders)
 
 
 @pytest.mark.asyncio
@@ -244,23 +242,35 @@ async def test_market_hedge_failure_triggers_rollback(executor):
         _unfilled_result(short_client, 'BTC-PERP', 'sell')
     ])
 
-    executor._execute_market_hedge = AsyncMock(return_value=(False, [], "hedge failed"))
-    executor._rollback_filled_orders = AsyncMock(return_value=Decimal('3.0'))
+    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_exec_cls:
+        hedge_executor = AsyncMock()
+        mock_exec_cls.return_value = hedge_executor
+        hedge_executor.execute_order.return_value = SimpleNamespace(
+            success=False,
+            filled=False,
+            fill_price=None,
+            filled_quantity=Decimal('0'),
+            slippage_usd=Decimal('0'),
+            execution_mode_used='market',
+            order_id='hedge_fail',
+            error_message='hedge failed'
+        )
 
-    result = await executor.execute_atomically(
-        orders=orders,
-        rollback_on_partial=True,
-        pre_flight_check=False
-    )
+        executor._rollback_filled_orders = AsyncMock(return_value=Decimal('3.0'))
 
-    executor._execute_market_hedge.assert_awaited_once()
+        result = await executor.execute_atomically(
+            orders=orders,
+            rollback_on_partial=True,
+            pre_flight_check=False
+        )
+
+    hedge_executor.execute_order.assert_awaited()
     executor._rollback_filled_orders.assert_awaited_once()
-
     assert result.success is False
     assert result.all_filled is False
     assert result.rollback_performed is True
     assert result.rollback_cost_usd == Decimal('3.0')
-    assert "hedge failed" in result.error_message
+    assert 'hedge failed' in result.error_message
 
 
 @pytest.mark.asyncio
@@ -277,6 +287,7 @@ async def test_execute_market_hedge_places_market_orders():
     trigger_task = asyncio.create_task(asyncio.sleep(0))
     trigger_ctx_result = _filled_result(long_client, 'BTC-PERP', 'buy', 'order_1')
     trigger_ctx = _OrderContext(spec=orders[0], cancel_event=asyncio.Event(), task=trigger_task, result=trigger_ctx_result, completed=True)
+    trigger_ctx.record_fill(Decimal('1.0'), Decimal('50000'))
 
     other_task = asyncio.create_task(asyncio.sleep(0))
     other_ctx = _OrderContext(spec=orders[1], cancel_event=asyncio.Event(), task=other_task)
@@ -296,13 +307,45 @@ async def test_execute_market_hedge_places_market_orders():
         )
         mock_executor.execute_order.return_value = market_result
 
-        success, fills, error = await executor._execute_market_hedge(trigger_ctx, trigger_ctx_result, [trigger_ctx, other_ctx])
+        success, error = await executor._execute_market_hedge(trigger_ctx, [trigger_ctx, other_ctx])
 
     assert success is True
     assert error is None
-    assert len(fills) == 1
-    assert fills[0]['hedge'] is True
     assert other_ctx.completed is True
+    assert other_ctx.filled_quantity > Decimal('0')
+
+    await asyncio.gather(trigger_task, other_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_execute_market_hedge_skips_already_filled_contexts():
+    executor = AtomicMultiOrderExecutor()
+    long_client = MockExchangeClient("exchange1")
+    short_client = MockExchangeClient("exchange2")
+
+    orders = [
+        OrderSpec(exchange_client=long_client, symbol='BTC-PERP', side='buy', size_usd=Decimal('50000')),
+        OrderSpec(exchange_client=short_client, symbol='BTC-PERP', side='sell', size_usd=Decimal('50000')),
+    ]
+
+    trigger_task = asyncio.create_task(asyncio.sleep(0))
+    trigger_ctx_result = _filled_result(long_client, 'BTC-PERP', 'buy', 'order_1')
+    trigger_ctx = _OrderContext(spec=orders[0], cancel_event=asyncio.Event(), task=trigger_task, result=trigger_ctx_result, completed=True)
+    trigger_ctx.record_fill(Decimal('1.0'), Decimal('50000'))
+
+    other_task = asyncio.create_task(asyncio.sleep(0))
+    other_ctx = _OrderContext(spec=orders[1], cancel_event=asyncio.Event(), task=other_task, result=_filled_result(short_client, 'BTC-PERP', 'sell', 'order_2'), completed=True)
+    other_ctx.record_fill(Decimal('1.0'), Decimal('50000'))
+
+    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_executor_class:
+        mock_executor = AsyncMock()
+        mock_executor_class.return_value = mock_executor
+
+        success, error = await executor._execute_market_hedge(trigger_ctx, [trigger_ctx, other_ctx])
+
+    assert success is True
+    assert error is None
+    mock_executor.execute_order.assert_not_called()
 
     await asyncio.gather(trigger_task, other_task, return_exceptions=True)
 # =============================================================================

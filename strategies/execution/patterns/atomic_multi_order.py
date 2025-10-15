@@ -36,6 +36,24 @@ class _OrderContext:
     task: asyncio.Task
     result: Optional[Dict] = None
     completed: bool = False
+    filled_quantity: Decimal = Decimal("0")
+    filled_usd: Decimal = Decimal("0")
+
+    @property
+    def remaining_usd(self) -> Decimal:
+        remaining = self.spec.size_usd - self.filled_usd
+        return remaining if remaining > Decimal("0") else Decimal("0")
+
+    def record_fill(self, quantity: Optional[Decimal], price: Optional[Decimal]) -> None:
+        if quantity is None or quantity <= Decimal("0"):
+            return
+        self.filled_quantity += quantity
+        if price is not None and price > Decimal("0"):
+            self.filled_usd += quantity * price
+        elif self.filled_usd == Decimal("0"):
+            self.filled_usd = self.spec.size_usd
+        if self.filled_usd > self.spec.size_usd:
+            self.filled_usd = self.spec.size_usd
 
 
 @dataclass
@@ -147,43 +165,32 @@ class AtomicMultiOrderExecutor:
         skip_preflight_leverage: bool = False,
         stage_prefix: Optional[str] = None
     ) -> AtomicExecutionResult:
-        """
-        Execute all orders atomically. If any fail and rollback_on_partial=True,
-        market-close all successful fills.
-        
-        Args:
-            orders: List of order specifications
-            rollback_on_partial: If True, rollback all on partial fill
-            pre_flight_check: If True, run pre-flight validation before placing
-            skip_preflight_leverage: If True, assume leverage has already been
-                validated/normalized by the caller (skips duplicate checks)
-        
-        Returns:
-            AtomicExecutionResult with execution details
-        
-        Flow:
-        1. Pre-flight checks (liquidity, balance) - optional
-        2. Place all orders simultaneously (asyncio.gather)
-        3. Monitor fills with timeout
-        4. If partial fill detected → rollback or accept
-        5. Return execution result
-        """
         start_time = time.time()
-        filled_orders = []
-        partial_fills = []
-        
+        execution_time_ms = lambda: int((time.time() - start_time) * 1000)
+        if not orders:
+            self.logger.info("Starting atomic execution of 0 orders (nothing to do)")
+            return AtomicExecutionResult(
+                success=True,
+                all_filled=True,
+                filled_orders=[],
+                partial_fills=[],
+                total_slippage_usd=Decimal('0'),
+                execution_time_ms=execution_time_ms(),
+                error_message=None,
+                rollback_performed=False,
+                rollback_cost_usd=Decimal('0')
+            )
+
         try:
             compose_stage = lambda *parts: self._compose_stage_id(stage_prefix, *parts)
-            
+
             self.logger.info(
                 f"Starting atomic execution of {len(orders)} orders "
                 f"(rollback_on_partial={rollback_on_partial})"
             )
-            
-            # Step 1: Pre-flight checks (optional)
+
             if pre_flight_check:
                 log_stage(self.logger, "Pre-flight Checks", icon="🔍", stage_id=compose_stage("1"))
-                
                 preflight_ok, preflight_error = await self._run_preflight_checks(
                     orders,
                     skip_leverage_check=skip_preflight_leverage,
@@ -196,19 +203,13 @@ class AtomicMultiOrderExecutor:
                         filled_orders=[],
                         partial_fills=[],
                         total_slippage_usd=Decimal('0'),
-                            execution_time_ms=int((time.time() - start_time) * 1000),
-                            error_message=f"Pre-flight check failed: {preflight_error}"
-                        )
-                
-                self.logger.info("✅ Pre-flight checks complete — proceeding to order placement")
-            
-            # Step 2: Place all orders simultaneously
-            log_stage(
-                self.logger,
-                "Order Placement",
-                icon="🚀",
-                stage_id=compose_stage("2") 
-            )
+                        execution_time_ms=execution_time_ms(),
+                        error_message=f"Pre-flight check failed: {preflight_error}",
+                        rollback_performed=False,
+                        rollback_cost_usd=Decimal('0')
+                    )
+
+            log_stage(self.logger, "Order Placement", icon="🚀", stage_id=compose_stage("2"))
             self.logger.info("🚀 Placing all orders simultaneously...")
 
             contexts: List[_OrderContext] = []
@@ -223,104 +224,135 @@ class AtomicMultiOrderExecutor:
                 task_map[task] = ctx
                 pending_tasks.add(task)
 
-            hedge_performed = False
+            trigger_ctx: Optional[_OrderContext] = None
             hedge_error: Optional[str] = None
             rollback_performed = False
             rollback_cost = Decimal('0')
 
             while pending_tasks:
                 done, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
-                newly_filled: List[tuple[_OrderContext, Dict]] = []
+                newly_filled_ctxs: List[_OrderContext] = []
 
                 for task in done:
                     ctx = task_map[task]
+                    prev_filled = ctx.filled_quantity
                     try:
                         result = task.result()
                     except Exception as exc:  # pragma: no cover - defensive
                         self.logger.error(f"Order task failed for {ctx.spec.symbol}: {exc}")
-                        result = {'success': False, 'filled': False, 'error': str(exc)}
+                        result = {
+                            'success': False,
+                            'filled': False,
+                            'error': str(exc),
+                            'order_id': None,
+                            'exchange_client': ctx.spec.exchange_client,
+                            'symbol': ctx.spec.symbol,
+                            'side': ctx.spec.side,
+                            'slippage_usd': Decimal('0'),
+                            'execution_mode_used': 'error',
+                            'filled_quantity': Decimal('0'),
+                            'fill_price': None,
+                        }
+                    self._apply_result_to_context(ctx, result)
+                    if ctx.filled_quantity > prev_filled:
+                        newly_filled_ctxs.append(ctx)
 
-                    ctx.result = result
-                    ctx.completed = True
-
-                    if result.get('filled'):
-                        filled_orders.append(result)
-                        newly_filled.append((ctx, result))
-                    else:
-                        partial_fills.append({
-                            'spec': ctx.spec,
-                            'result': result
-                        })
-
-                if len(filled_orders) == len(orders):
+                if all(ctx.completed for ctx in contexts):
                     break
 
-                if newly_filled and not hedge_performed:
-                    trigger_ctx, trigger_result = newly_filled[0]
-                    hedge_performed = True
+                if newly_filled_ctxs and trigger_ctx is None:
+                    trigger_ctx = newly_filled_ctxs[0]
+                    other_contexts = [c for c in contexts if c is not trigger_ctx]
 
-                    hedge_success, hedge_fills, hedge_error = await self._execute_market_hedge(
-                        trigger_ctx=trigger_ctx,
-                        trigger_result=trigger_result,
-                        contexts=contexts,
-                    )
+                    for ctx in other_contexts:
+                        ctx.cancel_event.set()
+
+                    pending_completion = [ctx.task for ctx in other_contexts if not ctx.completed]
+                    if pending_completion:
+                        await asyncio.gather(*pending_completion, return_exceptions=True)
+
+                    for ctx in other_contexts:
+                        await self._reconcile_context_after_cancel(ctx)
+
+                    hedge_success, hedge_error = await self._execute_market_hedge(trigger_ctx, contexts)
 
                     if hedge_success:
-                        filled_orders.extend(hedge_fills)
-                        # ensure all other tasks wind down
+                        break
+                    else:
                         for ctx in contexts:
-                            if not ctx.completed:
-                                ctx.cancel_event.set()
-                        await asyncio.gather(
-                            *(c.task for c in contexts if not c.completed),
-                            return_exceptions=True
-                        )
-                        pending_tasks = set()
+                            ctx.cancel_event.set()
+                        remaining = [ctx.task for ctx in contexts if not ctx.completed]
+                        if remaining:
+                            await asyncio.gather(*remaining, return_exceptions=True)
+                        rollback_performed = True
+                        rollback_payload = [
+                            self._context_to_filled_dict(c)
+                            for c in contexts
+                            if c.filled_quantity > Decimal('0') and c.result
+                        ]
+                        rollback_cost = await self._rollback_filled_orders(rollback_payload)
+                        for ctx in contexts:
+                            ctx.filled_quantity = Decimal('0')
+                            ctx.filled_usd = Decimal('0')
                         break
 
-                    # Hedge failed → rollback
-                    self.logger.error(f"Hedge market order failed: {hedge_error}")
-                    for ctx in contexts:
-                        if not ctx.completed:
-                            ctx.cancel_event.set()
-                    await asyncio.gather(
-                        *(c.task for c in contexts if not c.completed),
-                        return_exceptions=True
-                    )
-                    rollback_performed = True
-                    rollback_cost = await self._rollback_filled_orders([trigger_result])
-                    filled_orders = []
-                    pending_tasks = set()
-                    break
+            remaining = [ctx.task for ctx in contexts if not ctx.completed]
+            if remaining:
+                await asyncio.gather(*remaining, return_exceptions=True)
+                for ctx in contexts:
+                    await self._reconcile_context_after_cancel(ctx)
+
+            filled_orders = [ctx.result for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal('0')]
+            partial_fills = [
+                {'spec': ctx.spec, 'result': ctx.result}
+                for ctx in contexts
+                if not (ctx.result and ctx.filled_quantity > Decimal('0'))
+            ]
 
             total_slippage = sum(
-                Decimal(str(r.get('slippage_usd', 0))) for r in filled_orders
+                self._coerce_decimal(order.get('slippage_usd')) or Decimal('0')
+                for order in filled_orders
             )
+            total_long_usd = sum(ctx.filled_usd for ctx in contexts if ctx.spec.side == 'buy')
+            total_short_usd = sum(ctx.filled_usd for ctx in contexts if ctx.spec.side == 'sell')
+            imbalance = abs(total_long_usd - total_short_usd)
+            imbalance_tolerance = Decimal('0.01')
 
-            if filled_orders and len(filled_orders) == len(orders) and not hedge_error:
-                self.logger.info(
-                    f"✅ Atomic execution completed: {len(filled_orders)}/{len(orders)} filled"
+            exec_ms = execution_time_ms()
+
+            if rollback_performed:
+                return AtomicExecutionResult(
+                    success=False,
+                    all_filled=False,
+                    filled_orders=[],
+                    partial_fills=partial_fills,
+                    total_slippage_usd=Decimal('0'),
+                    execution_time_ms=exec_ms,
+                    error_message=hedge_error or "Rolled back after hedge failure",
+                    rollback_performed=True,
+                    rollback_cost_usd=rollback_cost
                 )
+
+            if filled_orders and imbalance <= imbalance_tolerance and len(filled_orders) == len(orders):
                 return AtomicExecutionResult(
                     success=True,
                     all_filled=True,
                     filled_orders=filled_orders,
-                    partial_fills=partial_fills,
+                    partial_fills=[],
                     total_slippage_usd=total_slippage,
-                    execution_time_ms=int((time.time() - start_time) * 1000),
+                    execution_time_ms=exec_ms,
+                    error_message=None,
                     rollback_performed=False,
                     rollback_cost_usd=Decimal('0')
                 )
 
-            # If we reach here, execution failed or incomplete
             error_message = hedge_error or f"Partial fill: {len(filled_orders)}/{len(orders)}"
-
-            if rollback_on_partial and filled_orders and not rollback_performed:
-                self.logger.error("Performing emergency rollback of filled orders...")
-                rollback_cost = await self._rollback_filled_orders(filled_orders)
-                filled_orders = []
-                rollback_performed = True
-                total_slippage = Decimal('0')
+            if imbalance > imbalance_tolerance:
+                self.logger.error(
+                    f"Exposure imbalance detected after hedge: longs=${total_long_usd:.5f}, shorts=${total_short_usd:.5f}"
+                )
+                imbalance_msg = f"imbalance {imbalance:.5f} USD"
+                error_message = f"{error_message}; {imbalance_msg}" if error_message else imbalance_msg
 
             return AtomicExecutionResult(
                 success=False,
@@ -328,100 +360,39 @@ class AtomicMultiOrderExecutor:
                 filled_orders=filled_orders,
                 partial_fills=partial_fills,
                 total_slippage_usd=total_slippage,
-                execution_time_ms=int((time.time() - start_time) * 1000),
+                execution_time_ms=exec_ms,
                 error_message=error_message,
-                rollback_performed=rollback_performed,
-                rollback_cost_usd=rollback_cost
+                rollback_performed=False,
+                rollback_cost_usd=Decimal('0')
             )
 
         except Exception as e:
             self.logger.error(f"Atomic execution failed: {e}", exc_info=True)
-            
-            # Try to rollback any successful fills
+
+            filled_orders = [ctx.result for ctx in locals().get('contexts', []) if ctx.result and ctx.filled_quantity > Decimal('0')]
+            partial_fills = [
+                {'spec': ctx.spec, 'result': ctx.result}
+                for ctx in locals().get('contexts', [])
+                if not (ctx.result and ctx.filled_quantity > Decimal('0'))
+            ]
+
+            rollback_cost = None
             if filled_orders and rollback_on_partial:
                 rollback_cost = await self._rollback_filled_orders(filled_orders)
-            else:
-                rollback_cost = None
-            
+                filled_orders = []
+
             return AtomicExecutionResult(
                 success=False,
                 all_filled=False,
-                filled_orders=filled_orders if not rollback_on_partial else [],
+                filled_orders=filled_orders,
                 partial_fills=partial_fills,
                 total_slippage_usd=Decimal('0'),
-                execution_time_ms=int((time.time() - start_time) * 1000),
+                execution_time_ms=execution_time_ms(),
                 error_message=str(e),
-                rollback_performed=bool(filled_orders and rollback_on_partial),
+                rollback_performed=bool(rollback_cost and rollback_on_partial),
                 rollback_cost_usd=rollback_cost
             )
 
-    async def _execute_market_hedge(
-        self,
-        trigger_ctx: _OrderContext,
-        trigger_result: Dict,
-        contexts: List[_OrderContext],
-    ) -> tuple[bool, List[Dict], Optional[str]]:
-        """Market-hedge remaining legs when only a subset of orders filled."""
-
-        from strategies.execution.core.order_executor import OrderExecutor, ExecutionMode
-
-        hedge_executor = OrderExecutor(price_provider=self.price_provider)
-        hedge_fills: List[Dict] = []
-
-        other_contexts = [ctx for ctx in contexts if ctx is not trigger_ctx]
-
-        # Signal cancellation for any in-flight limit orders
-        for ctx in other_contexts:
-            if not ctx.completed:
-                ctx.cancel_event.set()
-
-        for ctx in other_contexts:
-            # Skip if the leg already filled successfully
-            if ctx.result and ctx.result.get('filled'):
-                continue
-
-            spec = ctx.spec
-            exchange_name = spec.exchange_client.get_exchange_name().upper()
-            self.logger.info(
-                f"⚡ Hedging {spec.symbol} on {exchange_name} via market order"
-            )
-
-            market_result = await hedge_executor.execute_order(
-                exchange_client=spec.exchange_client,
-                symbol=spec.symbol,
-                side=spec.side,
-                size_usd=spec.size_usd,
-                mode=ExecutionMode.MARKET_ONLY,
-                timeout_seconds=spec.timeout_seconds
-            )
-
-            if not market_result.success or not market_result.filled:
-                error = (
-                    market_result.error_message
-                    or f"Unknown error placing hedge order on {exchange_name}"
-                )
-                return False, hedge_fills, error
-
-            hedge_fill = {
-                'success': market_result.success,
-                'filled': market_result.filled,
-                'fill_price': market_result.fill_price,
-                'filled_quantity': market_result.filled_quantity,
-                'slippage_usd': market_result.slippage_usd,
-                'execution_mode_used': market_result.execution_mode_used,
-                'order_id': market_result.order_id,
-                'exchange_client': spec.exchange_client,
-                'symbol': spec.symbol,
-                'side': spec.side,
-                'hedge': True
-            }
-
-            ctx.result = hedge_fill
-            ctx.completed = True
-            hedge_fills.append(hedge_fill)
-
-        return True, hedge_fills, None
-    
     async def _run_preflight_checks(
         self,
         orders: List[OrderSpec],
@@ -718,23 +689,145 @@ class AtomicMultiOrderExecutor:
                 cancel_event=cancel_event
             )
             
-            # Convert ExecutionResult to dict
-            return {
-                'success': result.success,
-                'filled': result.filled,
-                'fill_price': result.fill_price,
-                'filled_quantity': result.filled_quantity,
-                'slippage_usd': result.slippage_usd,
-                'execution_mode_used': result.execution_mode_used,
-                'order_id': result.order_id,
-                'exchange_client': spec.exchange_client,
-                'symbol': spec.symbol,
-                'side': spec.side
-            }
+            return self._execution_result_to_dict(spec, result)
         
         except Exception as e:
             self.logger.error(f"Single order placement failed: {e}", exc_info=True)
             raise
+
+    def _execution_result_to_dict(self, spec: OrderSpec, execution_result, hedge: bool = False) -> Dict:
+        data = {
+            'success': execution_result.success,
+            'filled': execution_result.filled,
+            'fill_price': execution_result.fill_price,
+            'filled_quantity': execution_result.filled_quantity,
+            'slippage_usd': execution_result.slippage_usd,
+            'execution_mode_used': execution_result.execution_mode_used,
+            'order_id': execution_result.order_id,
+            'exchange_client': spec.exchange_client,
+            'symbol': spec.symbol,
+            'side': spec.side,
+        }
+        if hedge:
+            data['hedge'] = True
+        return data
+
+    def _apply_result_to_context(self, ctx: _OrderContext, result: Dict) -> None:
+        ctx.result = result
+        ctx.completed = True
+        fill_qty = self._coerce_decimal(result.get('filled_quantity'))
+        fill_price = self._coerce_decimal(result.get('fill_price'))
+        ctx.record_fill(fill_qty, fill_price)
+
+    async def _reconcile_context_after_cancel(self, ctx: _OrderContext) -> None:
+        if ctx.remaining_usd <= Decimal('0'):
+            return
+        result = ctx.result or {}
+        order_id = result.get('order_id')
+        if not order_id:
+            return
+        try:
+            order_info = await ctx.spec.exchange_client.get_order_info(order_id)
+        except Exception as exc:  # pragma: no cover - defensive
+            self.logger.warning(
+                f"⚠️ Failed to reconcile fill for {ctx.spec.symbol} on cancel: {exc}"
+            )
+            return
+        if order_info is None:
+            return
+        reported_qty = self._coerce_decimal(getattr(order_info, 'filled_size', None))
+        if reported_qty is None or reported_qty <= ctx.filled_quantity:
+            return
+        price_candidates = [
+            getattr(order_info, attr, None) for attr in ('price', 'average_price', 'avg_price')
+        ]
+        reported_price = None
+        for candidate in price_candidates:
+            reported_price = self._coerce_decimal(candidate)
+            if reported_price is not None:
+                break
+        additional = reported_qty - ctx.filled_quantity
+        ctx.record_fill(additional, reported_price)
+        if ctx.result is None:
+            ctx.result = {
+                'success': True,
+                'filled': True,
+                'fill_price': reported_price,
+                'filled_quantity': reported_qty,
+                'slippage_usd': Decimal('0'),
+                'execution_mode_used': 'limit',
+                'order_id': order_id,
+                'exchange_client': ctx.spec.exchange_client,
+                'symbol': ctx.spec.symbol,
+                'side': ctx.spec.side
+            }
+        else:
+            ctx.result['filled'] = True
+            ctx.result['filled_quantity'] = reported_qty
+            if reported_price is not None:
+                ctx.result['fill_price'] = reported_price
+
+    def _context_to_filled_dict(self, ctx: _OrderContext) -> Dict:
+        if ctx.result:
+            return ctx.result
+        return {
+            'success': True,
+            'filled': True,
+            'fill_price': None,
+            'filled_quantity': ctx.filled_quantity,
+            'slippage_usd': Decimal('0'),
+            'execution_mode_used': 'hedge',
+            'order_id': None,
+            'exchange_client': ctx.spec.exchange_client,
+            'symbol': ctx.spec.symbol,
+            'side': ctx.spec.side
+        }
+
+    async def _execute_market_hedge(
+        self,
+        trigger_ctx: _OrderContext,
+        contexts: List[_OrderContext],
+    ) -> tuple[bool, Optional[str]]:
+        from strategies.execution.core.order_executor import OrderExecutor, ExecutionMode
+
+        hedge_executor = OrderExecutor(price_provider=self.price_provider)
+
+        for ctx in contexts:
+            if ctx is trigger_ctx:
+                continue
+
+            remaining_usd = ctx.remaining_usd
+            if remaining_usd <= Decimal('0'):
+                continue
+
+            spec = ctx.spec
+            exchange_name = spec.exchange_client.get_exchange_name().upper()
+            self.logger.info(
+                f"⚡ Hedging {spec.symbol} on {exchange_name} for remaining ${float(remaining_usd):.2f}"
+            )
+
+            try:
+                execution = await hedge_executor.execute_order(
+                    exchange_client=spec.exchange_client,
+                    symbol=spec.symbol,
+                    side=spec.side,
+                    size_usd=remaining_usd,
+                    mode=ExecutionMode.MARKET_ONLY,
+                    timeout_seconds=spec.timeout_seconds
+                )
+            except Exception as exc:
+                self.logger.error(f"Hedge order failed on {exchange_name}: {exc}")
+                return False, str(exc)
+
+            if not execution.success or not execution.filled:
+                error = execution.error_message or f"Market hedge failed on {exchange_name}"
+                self.logger.error(error)
+                return False, error
+
+            hedge_dict = self._execution_result_to_dict(spec, execution, hedge=True)
+            self._apply_result_to_context(ctx, hedge_dict)
+
+        return True, None
     
     async def _rollback_filled_orders(self, filled_orders: List[Dict]) -> Decimal:
         """

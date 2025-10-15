@@ -19,9 +19,9 @@ Requirements and design notes for tightening the hedge entry logic used by the f
    - Optionally support negative offsets to intentionally cross the spread when we want an aggressive limit.
 
 2. **Reactive hedging** *(in progress — initial version shipped)*
-   - As soon as the first leg reports a confirmed fill, cancel pending sibling orders via cancellation events passed down to the order executors.
-   - Immediately submit market orders on the remaining venues to complete the hedge; failures fall back to the rollback flow so exposure is flattened.
-   - Execution metadata now tags hedge fills (`hedge=True`) so downstream consumers can distinguish market hedges from maker fills.
+   - As soon as the first leg reports a confirmed fill, we cancel sibling limits and wait for their tasks to complete, reconciling actual fills via `get_order_info` to avoid double-counting.
+   - Any residual exposure is closed with immediate market orders; failures fall back to the rollback flow so exposure is flattened.
+   - Execution metadata now tags hedge fills (`hedge=True`) and we track per-leg filled USD to surface post-trade imbalances.
 
    - Negative values place the order at or beyond the touch (e.g., `-0.0002` crosses 2 bps to guarantee a near-instant fill while still being expressed as a limit order).
 
