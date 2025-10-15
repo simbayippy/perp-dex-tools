@@ -16,6 +16,11 @@ from typing import Any, Dict, List, Optional
 
 from helpers.unified_logger import get_core_logger, log_stage
 
+# Keep imports patchable for tests that monkeypatch LiquidityAnalyzer
+from strategies.execution.core.liquidity_analyzer import (
+    LiquidityAnalyzer as LiquidityAnalyzer,  # re-export for test patches
+)
+
 from .contexts import OrderContext
 from .hedge_manager import HedgeManager
 from .utils import (
@@ -370,8 +375,6 @@ class AtomicMultiOrderExecutor:
                 if symbol not in symbols_to_check:
                     symbols_to_check[symbol] = []
                 symbols_to_check[symbol].append(order_spec)
-
-            from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
 
             if not skip_leverage_check:
                 log_stage(self.logger, "Leverage Validation", icon="📐", stage_id=compose_stage("1"))
