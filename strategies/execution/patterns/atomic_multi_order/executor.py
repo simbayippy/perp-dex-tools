@@ -320,6 +320,11 @@ class AtomicMultiOrderExecutor:
                 rollback_cost_usd=rollback_cost,
             )
 
+    @staticmethod
+    def _estimate_required_margin(size_usd: Decimal) -> Decimal:
+        """Conservative margin estimate (assumes 20% initial margin)."""
+        return size_usd * Decimal("0.20")
+
     async def _place_single_order(
         self, spec: OrderSpec, cancel_event: Optional[asyncio.Event] = None
     ) -> Dict[str, Any]:
@@ -416,6 +421,56 @@ class AtomicMultiOrderExecutor:
                             f"⚠️  [LEVERAGE] Could not normalize leverage for {symbol}. "
                             f"Orders may execute with different leverage!"
                         )
+
+            log_stage(self.logger, "Margin & Balance Checks", icon="💰", stage_id=compose_stage("2"))
+            self.logger.info("Running balance checks...")
+
+            exchange_margin_required: Dict[str, Decimal] = {}
+            for order_spec in orders:
+                exchange_name = order_spec.exchange_client.get_exchange_name()
+                estimated_margin = self._estimate_required_margin(order_spec.size_usd)
+                exchange_margin_required.setdefault(exchange_name, Decimal("0"))
+                exchange_margin_required[exchange_name] += estimated_margin
+
+            for exchange_name, required_margin in exchange_margin_required.items():
+                exchange_client = next(
+                    (
+                        order.exchange_client
+                        for order in orders
+                        if order.exchange_client.get_exchange_name() == exchange_name
+                    ),
+                    None,
+                )
+                if not exchange_client:
+                    continue
+
+                try:
+                    available_balance = await exchange_client.get_account_balance()
+                except Exception as exc:  # pragma: no cover - defensive
+                    self.logger.warning(
+                        f"⚠️ Balance check failed for {exchange_name}: {exc}"
+                    )
+                    continue
+
+                if available_balance is None:
+                    self.logger.warning(
+                        f"⚠️ Cannot verify balance for {exchange_name} (required: ~${required_margin:.2f})"
+                    )
+                    continue
+
+                required_with_buffer = required_margin * Decimal("1.10")
+                if available_balance < required_with_buffer:
+                    error_msg = (
+                        f"Insufficient balance on {exchange_name}: "
+                        f"available=${available_balance:.2f}, required=${required_with_buffer:.2f} "
+                        f"(${required_margin:.2f} + 10% buffer)"
+                    )
+                    self.logger.error(f"❌ {error_msg}")
+                    return False, error_msg
+
+                self.logger.info(
+                    f"✅ {exchange_name} balance OK: ${available_balance:.2f} >= ${required_with_buffer:.2f}"
+                )
 
             log_stage(self.logger, "Order Book Liquidity", icon="🌊", stage_id=compose_stage("3"))
             self.logger.info("Running liquidity checks...")
