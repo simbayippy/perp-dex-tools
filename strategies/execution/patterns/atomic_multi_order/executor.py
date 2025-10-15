@@ -42,7 +42,7 @@ class OrderSpec:
     symbol: str
     side: str  # "buy" or "sell"
     size_usd: Decimal
-    execution_mode: str = "limit_with_fallback"
+    execution_mode: str = "limit_only"
     timeout_seconds: float = 30.0
     limit_price_offset_pct: Optional[Decimal] = None
 
