@@ -372,7 +372,9 @@ class FundingArbitrageStrategy(BaseStrategy):
 
         # Close position and state managers
         if hasattr(self, 'position_manager'):
-            await self.position_manager.close()
+            shutdown = getattr(self.position_manager, "shutdown", None)
+            if callable(shutdown):
+                await shutdown()
         if getattr(self, "_control_server_started", False) and self.control_server:
             await self.control_server.stop()
             self._control_server_started = False
