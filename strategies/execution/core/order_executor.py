@@ -125,7 +125,8 @@ class OrderExecutor:
         size_usd: Decimal,
         mode: ExecutionMode = ExecutionMode.LIMIT_WITH_FALLBACK,
         timeout_seconds: Optional[float] = None,
-        limit_price_offset_pct: Optional[Decimal] = None
+        limit_price_offset_pct: Optional[Decimal] = None,
+        cancel_event: Optional[asyncio.Event] = None
     ) -> ExecutionResult:
         """
         Execute order with intelligent mode selection.
@@ -138,6 +139,7 @@ class OrderExecutor:
             mode: Execution mode
             timeout_seconds: Timeout for limit orders (uses default if None)
             limit_price_offset_pct: Price improvement for limit orders (None = executor default)
+            cancel_event: Optional asyncio.Event to request cancellation (only respected for limit orders)
         
         Returns:
             ExecutionResult with all execution details
@@ -176,13 +178,13 @@ class OrderExecutor:
             
             elif mode == ExecutionMode.LIMIT_ONLY:
                 result = await self._execute_limit(
-                    exchange_client, symbol, side, size_usd, timeout, offset_pct
+                    exchange_client, symbol, side, size_usd, timeout, offset_pct, cancel_event
                 )
             
             elif mode == ExecutionMode.LIMIT_WITH_FALLBACK:
                 # Try limit first
                 result = await self._execute_limit(
-                    exchange_client, symbol, side, size_usd, timeout, offset_pct
+                    exchange_client, symbol, side, size_usd, timeout, offset_pct, cancel_event
                 )
                 
                 if not result.filled:
@@ -200,7 +202,7 @@ class OrderExecutor:
                 # For now, default to limit_with_fallback
                 result = await self.execute_order(
                     exchange_client, symbol, side, size_usd,
-                    ExecutionMode.LIMIT_WITH_FALLBACK, timeout, offset_pct
+                    ExecutionMode.LIMIT_WITH_FALLBACK, timeout, offset_pct, cancel_event
                 )
             
             else:
@@ -227,7 +229,8 @@ class OrderExecutor:
         side: str,
         size_usd: Decimal,
         timeout_seconds: float,
-        price_offset_pct: Decimal
+        price_offset_pct: Decimal,
+        cancel_event: Optional[asyncio.Event] = None
     ) -> ExecutionResult:
         """
         Place limit order at favorable price, wait for fill.
@@ -287,6 +290,21 @@ class OrderExecutor:
             start_wait = time.time()
             
             while time.time() - start_wait < timeout_seconds:
+                if cancel_event and cancel_event.is_set():
+                    self.logger.info(
+                        f"[{exchange_name.upper()}] Cancellation requested for limit order {order_id}"
+                    )
+                    try:
+                        await exchange_client.cancel_order(order_id)
+                    except Exception as e:
+                        self.logger.error(f"Failed to cancel order {order_id}: {e}")
+                    return ExecutionResult(
+                        success=False,
+                        filled=False,
+                        error_message="Limit order cancelled by executor",
+                        execution_mode_used="limit_cancelled",
+                        order_id=order_id
+                    )
                 # Check order status
                 order_info = await exchange_client.get_order_info(order_id)
                 

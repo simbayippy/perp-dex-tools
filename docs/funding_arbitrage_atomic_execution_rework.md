@@ -14,14 +14,14 @@ Requirements and design notes for tightening the hedge entry logic used by the f
 - Result: entry can hang for the full timeout, and when only one leg fills we stay exposed until the rollback routine completes.
 
 ## Immediate Improvement (Phase 1)
-1. **Tighten limit pricing**
+1. **Tighten limit pricing** *(completed)*
    - Allow per-order overrides of `limit_price_offset_pct` and shrink the default (now `0.0001` = 1 bp via `FundingArbConfig.limit_order_offset_pct`).
    - Optionally support negative offsets to intentionally cross the spread when we want an aggressive limit.
 
-2. **Reactive hedging**
-   - As soon as the first leg reports a confirmed fill (or partial fill above a configurable threshold), cancel pending sibling orders.
-   - Immediately send a market order on the opposite venue sized to match the filled quantity (with optional safety padding).
-   - Record the hedge step in execution metadata so monitoring/rollback logic understands the state transition.
+2. **Reactive hedging** *(in progress — initial version shipped)*
+   - As soon as the first leg reports a confirmed fill, cancel pending sibling orders via cancellation events passed down to the order executors.
+   - Immediately submit market orders on the remaining venues to complete the hedge; failures fall back to the rollback flow so exposure is flattened.
+   - Execution metadata now tags hedge fills (`hedge=True`) so downstream consumers can distinguish market hedges from maker fills.
 
    - Negative values place the order at or beyond the touch (e.g., `-0.0002` crosses 2 bps to guarantee a near-instant fill while still being expressed as a limit order).
 
