@@ -202,8 +202,30 @@ class PositionCloser:
         if not long_rate_row or not short_rate_row:
             return None
 
-        long_rate = Decimal(str(long_rate_row.get("funding_rate") or "0"))
-        short_rate = Decimal(str(short_rate_row.get("funding_rate") or "0"))
+        def _extract(row, key: str) -> Optional[Decimal]:
+            value = None
+            if isinstance(row, dict):
+                value = row.get(key)
+            elif hasattr(row, "_mapping"):
+                value = row._mapping.get(key)
+            else:
+                value = getattr(row, key, None)
+            if value is None:
+                return None
+            try:
+                return Decimal(str(value))
+            except Exception:
+                return None
+
+        long_rate = _extract(long_rate_row, "funding_rate")
+        short_rate = _extract(short_rate_row, "funding_rate")
+        if long_rate is None or short_rate is None:
+            self._strategy.logger.log(
+                f"Funding rate data missing for {position.symbol}: "
+                f"long={long_rate_row}, short={short_rate_row}",
+                "WARNING",
+            )
+            return None
         divergence = short_rate - long_rate
         position.current_divergence = divergence
 
@@ -211,16 +233,8 @@ class PositionCloser:
             "divergence": divergence,
             "long_rate": long_rate,
             "short_rate": short_rate,
-            "long_oi_usd": Decimal(
-                str(long_rate_row.get("open_interest_usd"))
-            )
-            if long_rate_row.get("open_interest_usd") is not None
-            else Decimal("0"),
-            "short_oi_usd": Decimal(
-                str(short_rate_row.get("open_interest_usd"))
-            )
-            if short_rate_row.get("open_interest_usd") is not None
-            else Decimal("0"),
+            "long_oi_usd": _extract(long_rate_row, "open_interest_usd") or Decimal("0"),
+            "short_oi_usd": _extract(short_rate_row, "open_interest_usd") or Decimal("0"),
         }
 
     async def _fetch_leg_snapshots(
