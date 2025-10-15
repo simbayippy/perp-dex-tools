@@ -257,8 +257,8 @@ class AtomicMultiOrderExecutor:
                     if ctx.filled_quantity > prev_filled:
                         newly_filled_ctxs.append(ctx)
 
-                if all(ctx.completed for ctx in contexts):
-                    break
+
+                all_completed = all(ctx.completed for ctx in contexts)
 
                 if newly_filled_ctxs and trigger_ctx is None:
                     trigger_ctx = newly_filled_ctxs[0]
@@ -277,7 +277,7 @@ class AtomicMultiOrderExecutor:
                     hedge_success, hedge_error = await self._execute_market_hedge(trigger_ctx, contexts)
 
                     if hedge_success:
-                        break
+                        all_completed = True
                     else:
                         for ctx in contexts:
                             ctx.cancel_event.set()
@@ -295,6 +295,9 @@ class AtomicMultiOrderExecutor:
                             ctx.filled_quantity = Decimal('0')
                             ctx.filled_usd = Decimal('0')
                         break
+
+                if all_completed:
+                    break
 
             remaining = [ctx.task for ctx in contexts if not ctx.completed]
             if remaining:

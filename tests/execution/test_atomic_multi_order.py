@@ -206,7 +206,7 @@ async def test_partial_fill_triggers_market_hedge(executor):
         hedge_executor.execute_order.return_value = SimpleNamespace(
             success=True,
             filled=True,
-            fill_price=Decimal('50010'),
+            fill_price=Decimal('50000'),
             filled_quantity=Decimal('1.0'),
             slippage_usd=Decimal('2.0'),
             execution_mode_used='market',
@@ -223,7 +223,6 @@ async def test_partial_fill_triggers_market_hedge(executor):
     assert result.success is True
     assert result.all_filled is True
     assert result.rollback_performed is False
-    assert any(fill.get('hedge') for fill in result.filled_orders)
     assert any(fill.get('hedge') for fill in result.filled_orders)
 
 
