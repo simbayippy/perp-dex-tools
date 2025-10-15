@@ -196,7 +196,7 @@ async def test_partial_fill_triggers_market_hedge(executor):
         _unfilled_result(short_client, 'BTC-PERP', 'sell')
     ])
 
-    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_exec_cls:
+    with patch('strategies.execution.patterns.atomic_multi_order.hedge_manager.OrderExecutor') as mock_exec_cls:
         hedge_executor = AsyncMock()
         mock_exec_cls.return_value = hedge_executor
         hedge_executor.execute_order.return_value = SimpleNamespace(
@@ -237,7 +237,7 @@ async def test_market_hedge_failure_triggers_rollback(executor):
         _unfilled_result(short_client, 'BTC-PERP', 'sell')
     ])
 
-    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_exec_cls:
+    with patch('strategies.execution.patterns.atomic_multi_order.hedge_manager.OrderExecutor') as mock_exec_cls:
         hedge_executor = AsyncMock()
         mock_exec_cls.return_value = hedge_executor
         hedge_executor.execute_order.return_value = SimpleNamespace(
