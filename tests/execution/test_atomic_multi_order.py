@@ -148,14 +148,14 @@ async def test_atomic_execution_success(executor, mock_exchange_client):
             symbol='BTC-PERP',
             side='buy',
             size_usd=Decimal('50000'),
-            execution_mode='limit_with_fallback'
+            execution_mode='limit_only'
         ),
         OrderSpec(
             exchange_client=MockExchangeClient("exchange2"),
             symbol='BTC-PERP',
             side='sell',
             size_usd=Decimal('50000'),
-            execution_mode='limit_with_fallback'
+            execution_mode='limit_only'
         )
     ]
 
