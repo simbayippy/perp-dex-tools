@@ -442,6 +442,11 @@ class PositionCloser:
             error = execution.error_message or "market close failed"
             raise RuntimeError(f"[{leg['dex']}] Emergency close failed: {error}")
 
+        # Update snapshot info for downstream logging/tests
+        leg_snapshot = leg.get("snapshot")
+        if leg_snapshot is not None:
+            leg_snapshot.quantity = Decimal("0")
+
     async def _build_order_spec(
         self,
         symbol: str,
