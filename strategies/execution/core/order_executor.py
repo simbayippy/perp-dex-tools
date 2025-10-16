@@ -122,7 +122,8 @@ class OrderExecutor:
         exchange_client: Any,
         symbol: str,
         side: str,
-        size_usd: Decimal,
+        size_usd: Optional[Decimal] = None,
+        quantity: Optional[Decimal] = None,
         mode: ExecutionMode = ExecutionMode.LIMIT_WITH_FALLBACK,
         timeout_seconds: Optional[float] = None,
         limit_price_offset_pct: Optional[Decimal] = None,
@@ -144,6 +145,9 @@ class OrderExecutor:
         Returns:
             ExecutionResult with all execution details
         """
+        if size_usd is None and quantity is None:
+            raise ValueError("OrderExecutor.execute_order requires size_usd or quantity")
+
         start_time = time.time()
         timeout = timeout_seconds or self.default_timeout
         
@@ -158,8 +162,15 @@ class OrderExecutor:
         # Choose emoji based on side
         emoji = "🟢" if side == "buy" else "🔴"
         
+        size_components = []
+        if size_usd is not None:
+            size_components.append(f"${size_usd}")
+        if quantity is not None:
+            size_components.append(f"qty={quantity}")
+        size_descriptor = " ".join(size_components)
+
         self.logger.info(
-            f"{emoji} [{exchange_name.upper()}] Executing {side} {symbol} for ${size_usd} in mode {mode.value}"
+            f"{emoji} [{exchange_name.upper()}] Executing {side} {symbol} ({size_descriptor}) in mode {mode.value}"
         )
         
         try:
@@ -173,18 +184,32 @@ class OrderExecutor:
 
             if mode == ExecutionMode.MARKET_ONLY:
                 result = await self._execute_market(
-                    exchange_client, symbol, side, size_usd
+                    exchange_client, symbol, side, size_usd, quantity
                 )
             
             elif mode == ExecutionMode.LIMIT_ONLY:
                 result = await self._execute_limit(
-                    exchange_client, symbol, side, size_usd, timeout, offset_pct, cancel_event
+                    exchange_client,
+                    symbol,
+                    side,
+                    size_usd,
+                    quantity,
+                    timeout,
+                    offset_pct,
+                    cancel_event,
                 )
             
             elif mode == ExecutionMode.LIMIT_WITH_FALLBACK:
                 # Try limit first
                 result = await self._execute_limit(
-                    exchange_client, symbol, side, size_usd, timeout, offset_pct, cancel_event
+                    exchange_client,
+                    symbol,
+                    side,
+                    size_usd,
+                    quantity,
+                    timeout,
+                    offset_pct,
+                    cancel_event,
                 )
                 
                 if not result.filled:
@@ -193,7 +218,7 @@ class OrderExecutor:
                         f"Limit order timeout for {symbol}, falling back to market"
                     )
                     result = await self._execute_market(
-                        exchange_client, symbol, side, size_usd
+                        exchange_client, symbol, side, size_usd, quantity
                     )
                     result.execution_mode_used = "market_fallback"
             
@@ -201,8 +226,15 @@ class OrderExecutor:
                 # Use liquidity analyzer to decide (will implement later)
                 # For now, default to limit_with_fallback
                 result = await self.execute_order(
-                    exchange_client, symbol, side, size_usd,
-                    ExecutionMode.LIMIT_WITH_FALLBACK, timeout, offset_pct, cancel_event
+                    exchange_client=exchange_client,
+                    symbol=symbol,
+                    side=side,
+                    size_usd=size_usd,
+                    quantity=quantity,
+                    mode=ExecutionMode.LIMIT_WITH_FALLBACK,
+                    timeout_seconds=timeout,
+                    limit_price_offset_pct=offset_pct,
+                    cancel_event=cancel_event,
                 )
             
             else:
@@ -227,7 +259,8 @@ class OrderExecutor:
         exchange_client: Any,
         symbol: str,
         side: str,
-        size_usd: Decimal,
+        size_usd: Optional[Decimal],
+        quantity: Optional[Decimal],
         timeout_seconds: float,
         price_offset_pct: Decimal,
         cancel_event: Optional[asyncio.Event] = None
@@ -255,8 +288,19 @@ class OrderExecutor:
                 # Sell at bid + offset (better than market taker)
                 limit_price = best_bid * (Decimal('1') + price_offset_pct)
             
-            # Convert USD size to quantity
-            quantity = size_usd / limit_price
+            order_quantity: Decimal
+            if quantity is not None:
+                order_quantity = Decimal(str(quantity)).copy_abs()
+            else:
+                if size_usd is None:
+                    raise ValueError("Limit execution requires size_usd or quantity")
+                order_quantity = (Decimal(str(size_usd)) / limit_price).copy_abs()
+
+            rounder = getattr(exchange_client, "round_to_step", None)
+            if callable(rounder):
+                order_quantity = rounder(order_quantity)
+            if order_quantity <= Decimal("0"):
+                raise ValueError("Order quantity rounded to zero")
             
             # Get the exchange-specific contract ID (normalized symbol)
             # Each exchange has already normalized the symbol during initialization
@@ -265,13 +309,13 @@ class OrderExecutor:
             exchange_name = exchange_client.get_exchange_name()
             self.logger.info(
                 f"[{exchange_name.upper()}] Placing limit {side} {symbol} (contract_id={contract_id}): "
-                f"{quantity} @ ${limit_price} (mid: ${mid_price}, offset: {price_offset_pct}%)"
+                f"{order_quantity} @ ${limit_price} (mid: ${mid_price}, offset: {price_offset_pct}%)"
             )
             
             # Place limit order using the normalized contract_id
             order_result = await exchange_client.place_limit_order(
                 contract_id=contract_id,
-                quantity=float(quantity),
+                quantity=float(order_quantity),
                 price=float(limit_price),
                 side=side
             )
@@ -381,7 +425,8 @@ class OrderExecutor:
         exchange_client: Any,
         symbol: str,
         side: str,
-        size_usd: Decimal
+        size_usd: Optional[Decimal],
+        quantity: Optional[Decimal]
     ) -> ExecutionResult:
         """
         Execute market order immediately.
@@ -394,8 +439,18 @@ class OrderExecutor:
             mid_price = (best_bid + best_ask) / 2
             expected_price = best_ask if side == "buy" else best_bid
             
-            # Calculate quantity
-            quantity = size_usd / expected_price
+            if quantity is not None:
+                order_quantity = Decimal(str(quantity)).copy_abs()
+            else:
+                if size_usd is None:
+                    raise ValueError("Market execution requires size_usd or quantity")
+                order_quantity = (Decimal(str(size_usd)) / expected_price).copy_abs()
+
+            rounder = getattr(exchange_client, "round_to_step", None)
+            if callable(rounder):
+                order_quantity = rounder(order_quantity)
+            if order_quantity <= Decimal("0"):
+                raise ValueError("Order quantity rounded to zero")
             
             # Get the exchange-specific contract ID (normalized symbol)
             contract_id = getattr(exchange_client.config, 'contract_id', symbol)
@@ -403,13 +458,13 @@ class OrderExecutor:
             exchange_name = exchange_client.get_exchange_name()
             self.logger.info(
                 f"[{exchange_name.upper()}] Placing market {side} {symbol} (contract_id={contract_id}): "
-                f"{quantity} @ ~${expected_price}"
+                f"{order_quantity} @ ~${expected_price}"
             )
             
             # Place market order using the normalized contract_id
             result = await exchange_client.place_market_order(
                 contract_id=contract_id,
-                quantity=float(quantity),
+                quantity=float(order_quantity),
                 side=side
             )
             
@@ -423,7 +478,7 @@ class OrderExecutor:
             
             # Get actual fill price
             fill_price = Decimal(str(result.price)) if result.price else expected_price
-            filled_qty = quantity  # Assume full fill for market orders
+            filled_qty = order_quantity  # Assume full fill for market orders
             
             # Calculate slippage
             slippage_usd = abs(fill_price - expected_price) * filled_qty

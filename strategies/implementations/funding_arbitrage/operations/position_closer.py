@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from exchange_clients.events import LiquidationEvent
 from ..risk_management import get_risk_manager
+from strategies.execution.core.order_executor import OrderExecutor, ExecutionMode
+from strategies.execution.patterns.atomic_multi_order import OrderSpec
 
 if TYPE_CHECKING:
     from exchange_clients.base import ExchangePositionSnapshot
@@ -22,6 +24,7 @@ class PositionCloser:
     def __init__(self, strategy: "FundingArbitrageStrategy") -> None:
         self._strategy = strategy
         self._risk_manager = self._build_risk_manager()
+        self._order_executor = OrderExecutor(price_provider=strategy.price_provider)
 
     async def evaluateAndClosePositions(self) -> List[str]:
         strategy = self._strategy
@@ -313,30 +316,210 @@ class PositionCloser:
         """
         Close legs on the exchanges, skipping those already flat.
         """
+        strategy = self._strategy
+        legs: List[Dict[str, Any]] = []
+        live_snapshots = live_snapshots or {}
+
         for dex in filter(None, [position.long_dex, position.short_dex]):
-            client = self._strategy.exchange_clients.get(dex)
+            client = strategy.exchange_clients.get(dex)
             if client is None:
-                self._strategy.logger.log(
+                strategy.logger.log(
                     f"Skipping close for {dex}: no exchange client available",
                     "ERROR",
                 )
                 continue
 
-            snapshot = live_snapshots.get(dex) if live_snapshots else None
-            if snapshot is not None and not self._has_open_position(snapshot):
-                self._strategy.logger.log(
+            snapshot = live_snapshots.get(dex) or live_snapshots.get(dex.lower())
+            if snapshot is None:
+                try:
+                    snapshot = await client.get_position_snapshot(position.symbol)
+                except Exception as exc:
+                    strategy.logger.log(
+                        f"[{dex}] Failed to fetch position snapshot for close: {exc}",
+                        "ERROR",
+                    )
+                    continue
+
+            if not self._has_open_position(snapshot):
+                strategy.logger.log(
                     f"[{dex}] No open position detected for {position.symbol}; skipping close call.",
                     "DEBUG",
                 )
                 continue
 
+            quantity = snapshot.quantity.copy_abs() if snapshot.quantity is not None else Decimal("0")
+            if quantity <= self._ZERO_TOLERANCE:
+                strategy.logger.log(
+                    f"[{dex}] Snapshot quantity zero for {position.symbol}; skipping.",
+                    "DEBUG",
+                )
+                continue
+
+            side = "sell" if snapshot.quantity > 0 else "buy"
+            legs.append(
+                {
+                    "dex": dex,
+                    "client": client,
+                    "snapshot": snapshot,
+                    "side": side,
+                    "quantity": quantity,
+                }
+            )
+
+        if not legs:
+            strategy.logger.log(
+                f"No exchange legs to close for {position.symbol}", "DEBUG"
+            )
+            return
+
+        if len(legs) == 1:
+            await self._force_close_leg(position.symbol, legs[0])
+            return
+
+        await self._close_legs_atomically(position, legs)
+
+    async def _close_legs_atomically(
+        self,
+        position: "FundingArbPosition",
+        legs: List[Dict[str, Any]],
+    ) -> None:
+        strategy = self._strategy
+        order_specs: List[OrderSpec] = []
+
+        for leg in legs:
             try:
-                await client.close_position(position.symbol)
-            except Exception as exc:  # pragma: no cover - defensive logging
-                self._strategy.logger.log(
-                    f"[{dex}] Failed to close {position.symbol}: {exc}",
+                spec = await self._build_order_spec(position.symbol, leg)
+            except Exception as exc:
+                strategy.logger.log(
+                    f"[{leg['dex']}] Unable to prepare close order for {position.symbol}: {exc}",
                     "ERROR",
                 )
+                raise
+            order_specs.append(spec)
+
+        result = await strategy.atomic_executor.execute_atomically(
+            orders=order_specs,
+            rollback_on_partial=True,
+            pre_flight_check=False,
+            skip_preflight_leverage=True,
+            stage_prefix="close",
+        )
+
+        if not result.all_filled:
+            error = result.error_message or "Incomplete fills during close"
+            raise RuntimeError(
+                f"Atomic close failed for {position.symbol}: {error}"
+            )
+
+    async def _force_close_leg(
+        self,
+        symbol: str,
+        leg: Dict[str, Any],
+    ) -> None:
+        strategy = self._strategy
+        price = self._extract_snapshot_price(leg["snapshot"])
+        if price is None or price <= Decimal("0"):
+            price = await self._fetch_mid_price(leg["client"], symbol)
+
+        size_usd = leg["quantity"] * price if price is not None else None
+
+        strategy.logger.log(
+            f"[{leg['dex']}] Emergency close {symbol} qty={leg['quantity']} via market order",
+            "WARNING",
+        )
+
+        execution = await self._order_executor.execute_order(
+            exchange_client=leg["client"],
+            symbol=symbol,
+            side=leg["side"],
+            size_usd=size_usd,
+            quantity=leg["quantity"],
+            mode=ExecutionMode.MARKET_ONLY,
+            timeout_seconds=10.0,
+        )
+
+        if not execution.success or not execution.filled:
+            error = execution.error_message or "market close failed"
+            raise RuntimeError(f"[{leg['dex']}] Emergency close failed: {error}")
+
+    async def _build_order_spec(
+        self,
+        symbol: str,
+        leg: Dict[str, Any],
+    ) -> OrderSpec:
+        price = self._extract_snapshot_price(leg["snapshot"])
+        if price is None or price <= Decimal("0"):
+            price = await self._fetch_mid_price(leg["client"], symbol)
+
+        if price is None or price <= Decimal("0"):
+            raise RuntimeError("Unable to determine price for close order")
+
+        quantity = leg["quantity"]
+        notional = quantity * price
+        limit_offset_pct = self._resolve_limit_offset_pct()
+
+        return OrderSpec(
+            exchange_client=leg["client"],
+            symbol=symbol,
+            side=leg["side"],
+            size_usd=notional,
+            quantity=quantity,
+            execution_mode="limit_with_fallback",
+            timeout_seconds=30.0,
+            limit_price_offset_pct=limit_offset_pct,
+        )
+
+    def _resolve_limit_offset_pct(self) -> Optional[Decimal]:
+        value = getattr(self._strategy.config, "limit_order_offset_pct", None)
+        if value is None:
+            return None
+        if isinstance(value, Decimal):
+            return value
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _extract_snapshot_price(snapshot: "ExchangePositionSnapshot") -> Optional[Decimal]:
+        for attr in ("mark_price", "entry_price"):
+            value = getattr(snapshot, attr, None)
+            if value is not None and value > 0:
+                return value
+
+        exposure = getattr(snapshot, "exposure_usd", None)
+        quantity = getattr(snapshot, "quantity", None)
+        if exposure is not None and quantity:
+            try:
+                return (exposure / quantity.copy_abs()).copy_abs()
+            except Exception:
+                return None
+        return None
+
+    async def _fetch_mid_price(
+        self,
+        client,
+        symbol: str,
+    ) -> Optional[Decimal]:
+        try:
+            best_bid, best_ask = await client.fetch_bbo_prices(symbol)
+        except Exception as exc:
+            self._strategy.logger.log(
+                f"[{client.get_exchange_name()}] Failed to fetch BBO for {symbol}: {exc}",
+                "WARNING",
+            )
+            return None
+
+        try:
+            bid = Decimal(str(best_bid))
+            ask = Decimal(str(best_ask))
+        except Exception:
+            return None
+
+        if bid <= 0 or ask <= 0:
+            return None
+
+        return (bid + ask) / 2
 
     @staticmethod
     def _symbols_match(position_symbol: Optional[str], event_symbol: Optional[str]) -> bool:

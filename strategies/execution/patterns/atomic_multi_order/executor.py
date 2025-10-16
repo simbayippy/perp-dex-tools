@@ -42,6 +42,7 @@ class OrderSpec:
     symbol: str
     side: str  # "buy" or "sell"
     size_usd: Decimal
+    quantity: Optional[Decimal] = None
     execution_mode: str = "limit_only"
     timeout_seconds: float = 30.0
     limit_price_offset_pct: Optional[Decimal] = None
@@ -352,6 +353,7 @@ class AtomicMultiOrderExecutor:
             symbol=spec.symbol,
             side=spec.side,
             size_usd=spec.size_usd,
+            quantity=spec.quantity,
             mode=execution_mode,
             timeout_seconds=spec.timeout_seconds,
             limit_price_offset_pct=spec.limit_price_offset_pct,
