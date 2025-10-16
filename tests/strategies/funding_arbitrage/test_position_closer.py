@@ -118,6 +118,7 @@ class StubPositionManager:
             if pos.id == position_id:
                 pos.status = "closed"
                 pos.exit_reason = exit_reason
+                pos.closed_at = datetime.now()
 
     async def get(self, position_id):
         for pos in self._positions:
@@ -126,7 +127,7 @@ class StubPositionManager:
         return None
 
 
-def _make_position(symbol="BTC", long_dex="aster", short_dex="lighter"):
+def _make_position(symbol="BTC", long_dex="aster", short_dex="lighter", opened_at=None):
     return FundingArbPosition(
         id=uuid4(),
         symbol=symbol,
@@ -136,7 +137,7 @@ def _make_position(symbol="BTC", long_dex="aster", short_dex="lighter"):
         entry_long_rate=Decimal("-0.01"),
         entry_short_rate=Decimal("0.03"),
         entry_divergence=Decimal("0.04"),
-        opened_at=datetime.now(),
+        opened_at=opened_at or datetime.now(),
     )
 
 
@@ -164,10 +165,11 @@ def _make_strategy(position_manager, exchange_clients, risk_config=None):
     price_provider = SimpleNamespace(
         get_bbo_prices=AsyncMock(return_value=(Decimal("100"), Decimal("100.5")))
     )
+    risk_cfg = risk_config or RiskManagementConfig()
     return SimpleNamespace(
         position_manager=position_manager,
         exchange_clients=exchange_clients,
-        config=SimpleNamespace(risk_config=risk_config or RiskManagementConfig()),
+        config=SimpleNamespace(risk_config=risk_cfg),
         logger=StubLogger(),
         funding_rate_repo=None,
         price_provider=price_provider,
@@ -290,3 +292,23 @@ def test_symbols_match_variants():
     assert matcher("BTC", "BTCUSDT")
     assert matcher("ETHUSDT", "ETH")
     assert not matcher("BTC", "ETH")
+
+def test_position_closer_respects_max_position_age():
+    old_opened_at = datetime.now() - timedelta(hours=30)
+    position = _make_position(opened_at=old_opened_at)
+    position_manager = StubPositionManager([position])
+
+    snapshot = ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("1"))
+    exchange_clients = {
+        "lighter": StubExchangeClient("lighter", {"BTC": snapshot}),
+        "aster": StubExchangeClient("aster", {"BTC": snapshot}),
+    }
+
+    risk_cfg = RiskManagementConfig(max_position_age_hours=24)
+    strategy = _make_strategy(position_manager, exchange_clients, risk_cfg)
+    closer = PositionCloser(strategy)
+    closer._risk_manager = None
+
+    asyncio.run(closer.evaluateAndClosePositions())
+
+    assert position_manager.closed_records

@@ -122,13 +122,16 @@ FUNDING_ARB_SCHEMA = StrategySchema(
         ),
         create_decimal_parameter(
             key="profit_erosion_threshold",
-            prompt="Profit erosion threshold (e.g., 0.5 = close when profit drops 50%)?",
+            prompt="Profit erosion threshold (exit when live funding edge drops to X% of entry edge)?",
             default=Decimal("0.5"),
             min_value=Decimal("0.1"),
             max_value=Decimal("0.9"),
             required=False,
-            help_text="Close position when current profit drops to X% of entry profit. "
-            "Lower = exit sooner (more conservative)",
+            help_text=(
+                "Guard the *ongoing* funding edge. Example: 0.5 exits if the current funding "
+                "spread is half of the entry spread. Lower values lock in profits sooner but "
+                "can cut trades early. Works alongside min_profit_rate (entry guard)."
+            ),
         ),
         ParameterSchema(
             key="max_position_age_hours",

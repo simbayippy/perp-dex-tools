@@ -298,6 +298,14 @@ class FundingArbitrageStrategy(BaseStrategy):
         else:
             limit_order_offset_pct = Decimal("0.0001")
 
+        # Build risk configuration using overrides (fallback to defaults)
+        risk_config = RiskManagementConfig(
+            strategy=strategy_params.get('risk_strategy', RiskManagementConfig().strategy),
+            min_erosion_threshold=Decimal(str(strategy_params.get('profit_erosion_threshold', RiskManagementConfig().min_erosion_threshold))),
+            max_position_age_hours=strategy_params.get('max_position_age_hours', RiskManagementConfig().max_position_age_hours),
+            check_interval_seconds=strategy_params.get('check_interval_seconds', RiskManagementConfig().check_interval_seconds),
+        )
+
         funding_config = FundingArbConfig(
             exchange=trading_config.exchange,  # Primary exchange
             exchanges=exchanges,  # All exchanges for arbitrage
@@ -313,7 +321,7 @@ class FundingArbitrageStrategy(BaseStrategy):
             # Required database URL from funding_rate_service settings
             database_url=settings.database_url,
             # Risk management defaults
-            risk_config=RiskManagementConfig(),
+            risk_config=risk_config,
             # Ticker for logging
             ticker=trading_config.ticker,
             config_path=config_path
