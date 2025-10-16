@@ -7,6 +7,7 @@ from typing import Dict
 from uuid import uuid4
 
 import pytest
+from unittest.mock import AsyncMock
 
 from exchange_clients.base import ExchangePositionSnapshot, OrderInfo, OrderResult
 from exchange_clients.events import LiquidationEvent
@@ -25,13 +26,17 @@ class StubLogger:
 
 
 class StubExchangeClient:
-    def __init__(self, name: str, snapshots):
+    def __init__(self, name: str = "stub", snapshots=None):
+        if snapshots is None and isinstance(name, dict):
+            snapshots = name
+            name = "stub"
         self._name = name
-        self.snapshots = snapshots
+        self.snapshots = snapshots or {}
         self.limit_orders = []
         self.market_orders = []
         self._orders: Dict[str, OrderInfo] = {}
         self._order_counter = 0
+        self.config = SimpleNamespace(contract_id=f"{name.upper()}-CONTRACT")
 
     def get_exchange_name(self):
         return self._name
@@ -78,7 +83,15 @@ class StubExchangeClient:
                 "side": side,
             }
         )
-        return OrderResult(success=True, order_id=order_id, side=side, size=Decimal(str(quantity)), price=price, status="FILLED")
+        return OrderResult(
+            success=True,
+            order_id=order_id,
+            side=side,
+            size=Decimal(str(quantity)),
+            price=price,
+            status="FILLED",
+            filled_size=Decimal(str(quantity)),
+        )
 
     async def cancel_order(self, order_id: str):
         return OrderResult(success=True, order_id=order_id)
@@ -144,13 +157,16 @@ class StubAtomicExecutor:
 
 
 def _make_strategy(position_manager, exchange_clients, risk_config=None):
+    price_provider = SimpleNamespace(
+        get_bbo_prices=AsyncMock(return_value=(Decimal("100"), Decimal("100.5")))
+    )
     return SimpleNamespace(
         position_manager=position_manager,
         exchange_clients=exchange_clients,
         config=SimpleNamespace(risk_config=risk_config or RiskManagementConfig()),
         logger=StubLogger(),
         funding_rate_repo=None,
-        price_provider=None,
+        price_provider=price_provider,
         atomic_executor=StubAtomicExecutor(),
     )
 

@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from unittest.mock import AsyncMock
 
-from exchange_clients.base import ExchangePositionSnapshot
+from exchange_clients.base import ExchangePositionSnapshot, OrderInfo, OrderResult
 from exchange_clients.events import LiquidationEvent
 from strategies.execution.patterns.atomic_multi_order import AtomicExecutionResult
 from strategies.implementations.funding_arbitrage.models import FundingArbPosition
@@ -61,9 +61,10 @@ class StubPositionManager:
 class StubExchangeClient:
     def __init__(self, name, snapshot=None):
         self.name = name
-        self.config = SimpleNamespace(contract_id="CONTRACT")
+        self.config = SimpleNamespace(contract_id=f"{name.upper()}-CONTRACT")
         self.snapshot = snapshot
         self.closed = []
+        self.market_orders = []
 
     def get_exchange_name(self):
         return self.name
@@ -74,8 +75,53 @@ class StubExchangeClient:
     async def get_position_snapshot(self, symbol):
         return self.snapshot
 
-    async def close_position(self, symbol):
-        self.closed.append(symbol)
+    async def fetch_bbo_prices(self, symbol):
+        return Decimal("100"), Decimal("101")
+
+    def round_to_step(self, quantity: Decimal) -> Decimal:
+        return quantity
+
+    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str):
+        price = Decimal("100.5")
+        self.market_orders.append({
+            "contract_id": contract_id,
+            "quantity": Decimal(str(quantity)),
+            "side": side,
+        })
+        return OrderResult(
+            success=True,
+            order_id=f"{self.name}-market",
+            side=side,
+            size=Decimal(str(quantity)),
+            price=price,
+            status="FILLED",
+            filled_size=Decimal(str(quantity)),
+        )
+
+    async def place_limit_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str):
+        return OrderResult(
+            success=True,
+            order_id=f"{self.name}-limit",
+            side=side,
+            size=Decimal(str(quantity)),
+            price=Decimal(str(price)),
+            status="FILLED",
+            filled_size=Decimal(str(quantity)),
+        )
+
+    async def cancel_order(self, order_id: str):
+        return OrderResult(success=True, order_id=order_id)
+
+    async def get_order_info(self, order_id: str):
+        return OrderInfo(
+            order_id=order_id,
+            side="buy",
+            size=Decimal("1"),
+            price=Decimal("100"),
+            status="FILLED",
+            filled_size=Decimal("1"),
+            remaining_size=Decimal("0"),
+        )
 
 
 def _atomic_success():
