@@ -52,6 +52,11 @@ class StubAtomicExecutor:
         return self._result
 
 
+class StubPriceProvider:
+    async def get_bbo_prices(self, exchange_client, symbol):
+        return Decimal("100"), Decimal("101")
+
+
 def _strategy(
     exchange_clients,
     atomic_result: AtomicExecutionResult,
@@ -70,10 +75,11 @@ def _strategy(
         config=SimpleNamespace(**config_kwargs),
         logger=StubLogger(),
         failed_symbols=set(),
+        price_provider=StubPriceProvider(),
     )
 
 
-def _filled_order(fill_price="25000", qty="1"):
+def _filled_order(fill_price="100", qty="0.9"):
     return {
         "fill_price": Decimal(fill_price),
         "filled_quantity": Decimal(qty),
@@ -94,7 +100,11 @@ def _opportunity(symbol="BTC"):
 
 
 def _exchange_client():
-    return SimpleNamespace(config=SimpleNamespace(contract_id="BTCUSDT"))
+    return SimpleNamespace(
+        config=SimpleNamespace(contract_id="BTCUSDT"),
+        get_exchange_name=lambda: "stubdex",
+        round_to_step=lambda qty: qty,
+    )
 
 
 def _atomic_success():
@@ -108,6 +118,7 @@ def _atomic_success():
         error_message=None,
         rollback_performed=False,
         rollback_cost_usd=None,
+        residual_imbalance_usd=Decimal("0"),
     )
 
 
@@ -122,6 +133,7 @@ def _atomic_failure():
         error_message="Partial fill",
         rollback_performed=True,
         rollback_cost_usd=Decimal("2"),
+        residual_imbalance_usd=Decimal("0.5"),
     )
 
 
@@ -213,6 +225,7 @@ async def test_position_opener_passes_limit_offset(monkeypatch, offset):
 
     orders = strategy.atomic_executor.last_kwargs["orders"]
     assert all(order.limit_price_offset_pct == offset for order in orders)
+    assert all(order.quantity is not None for order in orders)
 
 
 @pytest.mark.asyncio

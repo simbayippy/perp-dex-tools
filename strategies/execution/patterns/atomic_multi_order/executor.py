@@ -63,6 +63,7 @@ class AtomicExecutionResult:
     error_message: Optional[str] = None
     rollback_performed: bool = False
     rollback_cost_usd: Optional[Decimal] = None
+    residual_imbalance_usd: Decimal = Decimal("0")
 
 
 class AtomicMultiOrderExecutor:
@@ -259,9 +260,15 @@ class AtomicMultiOrderExecutor:
                     error_message=hedge_error or "Rolled back after hedge failure",
                     rollback_performed=True,
                     rollback_cost_usd=rollback_cost,
+                    residual_imbalance_usd=imbalance,
                 )
 
-            if filled_orders and imbalance <= imbalance_tolerance and len(filled_orders) == len(orders):
+            if filled_orders and len(filled_orders) == len(orders):
+                if imbalance > imbalance_tolerance:
+                    self.logger.warning(
+                        f"Exposure imbalance detected after hedge: longs=${total_long_usd:.5f}, "
+                        f"shorts=${total_short_usd:.5f}"
+                    )
                 return AtomicExecutionResult(
                     success=True,
                     all_filled=True,
@@ -272,6 +279,7 @@ class AtomicMultiOrderExecutor:
                     error_message=None,
                     rollback_performed=False,
                     rollback_cost_usd=Decimal("0"),
+                    residual_imbalance_usd=imbalance,
                 )
 
             error_message = hedge_error or f"Partial fill: {len(filled_orders)}/{len(orders)}"
@@ -293,6 +301,7 @@ class AtomicMultiOrderExecutor:
                 error_message=error_message,
                 rollback_performed=False,
                 rollback_cost_usd=Decimal("0"),
+                residual_imbalance_usd=imbalance,
             )
 
         except Exception as exc:
@@ -324,6 +333,7 @@ class AtomicMultiOrderExecutor:
                 error_message=str(exc),
                 rollback_performed=bool(rollback_cost and rollback_on_partial),
                 rollback_cost_usd=rollback_cost,
+                residual_imbalance_usd=Decimal("0"),
             )
 
     @staticmethod

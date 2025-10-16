@@ -36,13 +36,15 @@ class HedgeManager:
                 continue
 
             remaining_usd = ctx.remaining_usd
-            if remaining_usd <= Decimal("0"):
+            remaining_qty = ctx.remaining_quantity
+            if remaining_usd <= Decimal("0") and remaining_qty <= Decimal("0"):
                 continue
 
             spec = ctx.spec
             exchange_name = spec.exchange_client.get_exchange_name().upper()
             logger.info(
-                f"⚡ Hedging {spec.symbol} on {exchange_name} for remaining ${float(remaining_usd):.2f}"
+                f"⚡ Hedging {spec.symbol} on {exchange_name} for remaining "
+                f"${float(remaining_usd):.2f} (qty={remaining_qty})"
             )
 
             try:
@@ -50,7 +52,8 @@ class HedgeManager:
                     exchange_client=spec.exchange_client,
                     symbol=spec.symbol,
                     side=spec.side,
-                    size_usd=remaining_usd,
+                    size_usd=remaining_usd if remaining_usd > Decimal("0") else None,
+                    quantity=remaining_qty if remaining_qty > Decimal("0") else None,
                     mode=ExecutionMode.MARKET_ONLY,
                     timeout_seconds=spec.timeout_seconds,
                 )

@@ -29,6 +29,15 @@ class OrderContext:
         remaining = self.spec.size_usd - self.filled_usd
         return remaining if remaining > Decimal("0") else Decimal("0")
 
+    @property
+    def remaining_quantity(self) -> Decimal:
+        """Remaining base quantity yet to be executed."""
+        spec_quantity = getattr(self.spec, "quantity", None)
+        if spec_quantity is None:
+            return Decimal("0")
+        remaining = Decimal(str(spec_quantity)) - self.filled_quantity
+        return remaining if remaining > Decimal("0") else Decimal("0")
+
     def record_fill(self, quantity: Optional[Decimal], price: Optional[Decimal]) -> None:
         """Accumulate executed quantity and USD notionals."""
         if quantity is None or quantity <= Decimal("0"):

@@ -139,6 +139,7 @@ class StubAtomicExecutor:
             error_message=None,
             rollback_performed=False,
             rollback_cost_usd=Decimal("0"),
+            residual_imbalance_usd=Decimal("0"),
         )
 
 

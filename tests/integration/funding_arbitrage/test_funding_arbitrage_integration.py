@@ -95,6 +95,7 @@ def _atomic_success():
         error_message=None,
         rollback_performed=False,
         rollback_cost_usd=None,
+        residual_imbalance_usd=Decimal("0"),
     )
 
 
@@ -138,6 +139,9 @@ def _strategy(atomic_result=None, position_manager=None, exchange_clients=None, 
         logger=StubLogger(),
         failed_symbols=set(),
         funding_rate_repo=None,
+        price_provider=SimpleNamespace(
+            get_bbo_prices=AsyncMock(return_value=(Decimal("100"), Decimal("101")))
+        ),
     )
 
 
@@ -175,6 +179,7 @@ async def test_open_position_handles_atomic_failure(monkeypatch):
         error_message="Partial fill",
         rollback_performed=True,
         rollback_cost_usd=Decimal("2"),
+        residual_imbalance_usd=Decimal("0.4"),
     )
 
     position_manager = StubPositionManager()
