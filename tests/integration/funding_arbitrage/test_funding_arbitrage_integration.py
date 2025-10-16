@@ -304,6 +304,7 @@ async def test_liquidation_event_closes_surviving_leg():
 
     await closer.handle_liquidation_event(event)
 
-    assert lighter_client.closed == []  # already flat
-    assert aster_client.closed == ["BTC"]
+    assert lighter_client.market_orders == []  # already flat
+    assert len(aster_client.market_orders) == 1
+    assert aster_client.market_orders[0]["side"] == "sell"
     assert position_manager.closed

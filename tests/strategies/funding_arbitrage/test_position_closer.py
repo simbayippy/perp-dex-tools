@@ -277,8 +277,10 @@ def test_position_closer_fallback_on_divergence_flip():
 
     asyncio.run(closer.evaluateAndClosePositions())
 
-    assert exchange_clients["lighter"].closed == ["BTC"]
-    assert exchange_clients["aster"].closed == ["BTC"]
+    assert strategy.atomic_executor.last_orders is not None
+    assert len(strategy.atomic_executor.last_orders) == 2
+    clients = {order.exchange_client for order in strategy.atomic_executor.last_orders}
+    assert clients == {exchange_clients["lighter"], exchange_clients["aster"]}
     assert any(reason == "DIVERGENCE_FLIPPED" for _, reason, _ in position_manager.closed_records)
 
 
