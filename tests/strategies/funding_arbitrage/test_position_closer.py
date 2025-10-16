@@ -37,6 +37,7 @@ class StubExchangeClient:
         self._orders: Dict[str, OrderInfo] = {}
         self._order_counter = 0
         self.config = SimpleNamespace(contract_id=f"{name.upper()}-CONTRACT")
+        self.closed = []
 
     def get_exchange_name(self):
         return self._name
@@ -92,6 +93,9 @@ class StubExchangeClient:
             status="FILLED",
             filled_size=Decimal(str(quantity)),
         )
+
+    async def close_position(self, symbol: str):
+        self.closed.append(symbol)
 
     async def cancel_order(self, order_id: str):
         return OrderResult(success=True, order_id=order_id)

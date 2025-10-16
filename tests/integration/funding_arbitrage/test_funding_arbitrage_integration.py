@@ -123,6 +123,9 @@ class StubExchangeClient:
             remaining_size=Decimal("0"),
         )
 
+    async def close_position(self, symbol: str):
+        self.closed.append(symbol)
+
 
 def _atomic_success():
     fill = {
@@ -283,6 +286,9 @@ async def test_liquidation_event_closes_surviving_leg():
         logger=StubLogger(),
         config=SimpleNamespace(risk_config=RiskManagementConfig()),
         funding_rate_repo=None,
+        price_provider=SimpleNamespace(
+            get_bbo_prices=AsyncMock(return_value=(Decimal("100"), Decimal("101")))
+        ),
     )
 
     closer = PositionCloser(strategy)
