@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from unittest.mock import AsyncMock
 
-from exchange_clients.base import ExchangePositionSnapshot
+from exchange_clients.base import ExchangePositionSnapshot, OrderInfo, OrderResult
 from exchange_clients.events import LiquidationEvent
 from strategies.execution.patterns.atomic_multi_order import AtomicExecutionResult
 from strategies.implementations.funding_arbitrage.models import FundingArbPosition
@@ -61,9 +61,10 @@ class StubPositionManager:
 class StubExchangeClient:
     def __init__(self, name, snapshot=None):
         self.name = name
-        self.config = SimpleNamespace(contract_id="CONTRACT")
+        self.config = SimpleNamespace(contract_id=f"{name.upper()}-CONTRACT")
         self.snapshot = snapshot
         self.closed = []
+        self.market_orders = []
 
     def get_exchange_name(self):
         return self.name
@@ -74,7 +75,55 @@ class StubExchangeClient:
     async def get_position_snapshot(self, symbol):
         return self.snapshot
 
-    async def close_position(self, symbol):
+    async def fetch_bbo_prices(self, symbol):
+        return Decimal("100"), Decimal("101")
+
+    def round_to_step(self, quantity: Decimal) -> Decimal:
+        return quantity
+
+    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str):
+        price = Decimal("100.5")
+        self.market_orders.append({
+            "contract_id": contract_id,
+            "quantity": Decimal(str(quantity)),
+            "side": side,
+        })
+        return OrderResult(
+            success=True,
+            order_id=f"{self.name}-market",
+            side=side,
+            size=Decimal(str(quantity)),
+            price=price,
+            status="FILLED",
+            filled_size=Decimal(str(quantity)),
+        )
+
+    async def place_limit_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str):
+        return OrderResult(
+            success=True,
+            order_id=f"{self.name}-limit",
+            side=side,
+            size=Decimal(str(quantity)),
+            price=Decimal(str(price)),
+            status="FILLED",
+            filled_size=Decimal(str(quantity)),
+        )
+
+    async def cancel_order(self, order_id: str):
+        return OrderResult(success=True, order_id=order_id)
+
+    async def get_order_info(self, order_id: str):
+        return OrderInfo(
+            order_id=order_id,
+            side="buy",
+            size=Decimal("1"),
+            price=Decimal("100"),
+            status="FILLED",
+            filled_size=Decimal("1"),
+            remaining_size=Decimal("0"),
+        )
+
+    async def close_position(self, symbol: str):
         self.closed.append(symbol)
 
 
@@ -95,6 +144,7 @@ def _atomic_success():
         error_message=None,
         rollback_performed=False,
         rollback_cost_usd=None,
+        residual_imbalance_usd=Decimal("0"),
     )
 
 
@@ -138,6 +188,9 @@ def _strategy(atomic_result=None, position_manager=None, exchange_clients=None, 
         logger=StubLogger(),
         failed_symbols=set(),
         funding_rate_repo=None,
+        price_provider=SimpleNamespace(
+            get_bbo_prices=AsyncMock(return_value=(Decimal("100"), Decimal("101")))
+        ),
     )
 
 
@@ -175,6 +228,7 @@ async def test_open_position_handles_atomic_failure(monkeypatch):
         error_message="Partial fill",
         rollback_performed=True,
         rollback_cost_usd=Decimal("2"),
+        residual_imbalance_usd=Decimal("0.4"),
     )
 
     position_manager = StubPositionManager()
@@ -232,6 +286,9 @@ async def test_liquidation_event_closes_surviving_leg():
         logger=StubLogger(),
         config=SimpleNamespace(risk_config=RiskManagementConfig()),
         funding_rate_repo=None,
+        price_provider=SimpleNamespace(
+            get_bbo_prices=AsyncMock(return_value=(Decimal("100"), Decimal("101")))
+        ),
     )
 
     closer = PositionCloser(strategy)
@@ -247,6 +304,7 @@ async def test_liquidation_event_closes_surviving_leg():
 
     await closer.handle_liquidation_event(event)
 
-    assert lighter_client.closed == []  # already flat
-    assert aster_client.closed == ["BTC"]
+    assert lighter_client.market_orders == []  # already flat
+    assert len(aster_client.market_orders) == 1
+    assert aster_client.market_orders[0]["side"] == "sell"
     assert position_manager.closed

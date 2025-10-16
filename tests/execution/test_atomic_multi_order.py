@@ -13,14 +13,17 @@ Tests cover:
 import pytest
 import asyncio
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import Mock, AsyncMock, MagicMock, patch
 from typing import List, Dict
 
 from strategies.execution.patterns.atomic_multi_order import (
     AtomicMultiOrderExecutor,
     OrderSpec,
-    AtomicExecutionResult
+    AtomicExecutionResult,
+    _OrderContext,
 )
+from strategies.execution.patterns.atomic_multi_order.hedge_manager import HedgeManager
 from exchange_clients.base import OrderResult, OrderInfo
 
 
@@ -82,6 +85,36 @@ class MockExchangeClient:
         )
 
 
+def _filled_result(exchange_client, symbol, side, order_id="order_1"):
+    return {
+        'success': True,
+        'filled': True,
+        'fill_price': Decimal('50000'),
+        'filled_quantity': Decimal('1.0'),
+        'slippage_usd': Decimal('5.0'),
+        'execution_mode_used': 'limit',
+        'order_id': order_id,
+        'exchange_client': exchange_client,
+        'symbol': symbol,
+        'side': side
+    }
+
+
+def _unfilled_result(exchange_client, symbol, side):
+    return {
+        'success': False,
+        'filled': False,
+        'fill_price': None,
+        'filled_quantity': Decimal('0'),
+        'slippage_usd': Decimal('0'),
+        'execution_mode_used': None,
+        'order_id': None,
+        'exchange_client': exchange_client,
+        'symbol': symbol,
+        'side': side
+    }
+
+
 @pytest.fixture
 def mock_exchange_client():
     """Fixture for mock exchange client."""
@@ -109,195 +142,73 @@ async def test_atomic_execution_success(executor, mock_exchange_client):
     - No rollback needed
     - Result: success=True, all_filled=True
     """
-    # Mock the order executor to return successful fills
-    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_executor_class:
-        mock_executor = AsyncMock()
-        mock_executor_class.return_value = mock_executor
-        
-        # Mock successful order execution
-        mock_executor.execute_order.return_value = type('ExecutionResult', (), {
-            'success': True,
-            'filled': True,
-            'fill_price': Decimal('50000'),
-            'filled_quantity': Decimal('1.0'),
-            'slippage_usd': Decimal('5.0'),
-            'execution_mode_used': 'limit',
-            'order_id': 'test_order_1'
-        })()
-        
-        # Create order specs
-        orders = [
-            OrderSpec(
-                exchange_client=mock_exchange_client,
-                symbol='BTC-PERP',
-                side='buy',
-                size_usd=Decimal('50000'),
-                execution_mode='limit_with_fallback'
-            ),
-            OrderSpec(
-                exchange_client=mock_exchange_client,
-                symbol='BTC-PERP',
-                side='sell',
-                size_usd=Decimal('50000'),
-                execution_mode='limit_with_fallback'
-            )
-        ]
-        
-        # Execute atomically (skip pre-flight checks for this test)
-        result = await executor.execute_atomically(
-            orders=orders,
-            rollback_on_partial=True,
-            pre_flight_check=False
+    orders = [
+        OrderSpec(
+            exchange_client=mock_exchange_client,
+            symbol='BTC-PERP',
+            side='buy',
+            size_usd=Decimal('50000'),
+            execution_mode='limit_only'
+        ),
+        OrderSpec(
+            exchange_client=MockExchangeClient("exchange2"),
+            symbol='BTC-PERP',
+            side='sell',
+            size_usd=Decimal('50000'),
+            execution_mode='limit_only'
         )
-        
-        # Assertions
-        assert result.success is True
-        assert result.all_filled is True
-        assert len(result.filled_orders) == 2
-        assert len(result.partial_fills) == 0
-        assert result.rollback_performed is False
-        assert result.rollback_cost_usd is None
-        assert result.error_message is None
+    ]
 
+    executor._place_single_order = AsyncMock(side_effect=[
+        _filled_result(orders[0].exchange_client, 'BTC-PERP', 'buy', 'order_1'),
+        _filled_result(orders[1].exchange_client, 'BTC-PERP', 'sell', 'order_2'),
+    ])
 
-# =============================================================================
-# TEST: Partial Fill Detection and Rollback
-# =============================================================================
-
-@pytest.mark.asyncio
-async def test_partial_fill_triggers_rollback(executor):
-    """
-    Test that partial fills trigger rollback.
-    
-    Scenario:
-    - Place 2 orders
-    - Only 1 order fills
-    - Rollback should execute
-    - Result: success=False, rollback_performed=True
-    """
-    mock_client_1 = MockExchangeClient("exchange1", should_fill=True)
-    mock_client_2 = MockExchangeClient("exchange2", should_fill=False)
-    
-    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_executor_class:
-        mock_executor = AsyncMock()
-        mock_executor_class.return_value = mock_executor
-        
-        # First order succeeds, second fails
-        mock_executor.execute_order.side_effect = [
-            type('ExecutionResult', (), {
-                'success': True,
-                'filled': True,
-                'fill_price': Decimal('50000'),
-                'filled_quantity': Decimal('1.0'),
-                'slippage_usd': Decimal('5.0'),
-                'execution_mode_used': 'limit',
-                'order_id': 'order_1'
-            })(),
-            type('ExecutionResult', (), {
-                'success': False,
-                'filled': False,
-                'fill_price': None,
-                'filled_quantity': Decimal('0'),
-                'slippage_usd': Decimal('0'),
-                'execution_mode_used': None,
-                'order_id': None
-            })()
-        ]
-        
-        orders = [
-            OrderSpec(
-                exchange_client=mock_client_1,
-                symbol='BTC-PERP',
-                side='buy',
-                size_usd=Decimal('50000')
-            ),
-            OrderSpec(
-                exchange_client=mock_client_2,
-                symbol='BTC-PERP',
-                side='sell',
-                size_usd=Decimal('50000')
-            )
-        ]
-        
-        result = await executor.execute_atomically(
-            orders=orders,
-            rollback_on_partial=True,
-            pre_flight_check=False
-        )
-        
-        # Assertions
-        assert result.success is False
-        assert result.all_filled is False
-        assert result.rollback_performed is True
-        assert result.rollback_cost_usd is not None
-        assert result.rollback_cost_usd >= Decimal('0')
-        assert "Partial fill" in result.error_message
-        
-        # Verify rollback was called (order was closed)
-        assert len(mock_client_1.placed_orders) > 0  # Market close order placed
-
-
-@pytest.mark.asyncio
-async def test_partial_fill_rollback_uses_cached_quantity_when_exchange_reports_zero(executor):
-    """
-    Ensure rollback still closes exposure when the exchange reports 0 filled size after cancellation.
-    """
-    mock_client_1 = MockExchangeClient("exchange1", should_fill=True)
-    mock_client_2 = MockExchangeClient("exchange2", should_fill=False)
-
-    # Simulate exchange returning zero on post-cancel order info query
-    mock_client_1.get_order_info = AsyncMock(
-        return_value=OrderInfo(
-            order_id="order_1",
-            side="buy",
-            size=Decimal("1.0"),
-            price=Decimal("50000"),
-            status="CANCELED",
-            filled_size=Decimal("0"),
-            remaining_size=Decimal("0"),
-        )
+    result = await executor.execute_atomically(
+        orders=orders,
+        rollback_on_partial=True,
+        pre_flight_check=False
     )
 
-    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_executor_class:
-        mock_executor = AsyncMock()
-        mock_executor_class.return_value = mock_executor
+    assert result.success is True
+    assert result.all_filled is True
+    assert len(result.filled_orders) == 2
+    assert len(result.partial_fills) == 0
+    assert result.rollback_performed is False
+    assert result.rollback_cost_usd == Decimal('0')
 
-        # First order appears filled, second fails to fill
-        mock_executor.execute_order.side_effect = [
-            type('ExecutionResult', (), {
-                'success': True,
-                'filled': True,
-                'fill_price': Decimal('50000'),
-                'filled_quantity': Decimal('1.0'),
-                'slippage_usd': Decimal('5.0'),
-                'execution_mode_used': 'limit',
-                'order_id': 'order_1'
-            })(),
-            type('ExecutionResult', (), {
-                'success': False,
-                'filled': False,
-                'fill_price': None,
-                'filled_quantity': Decimal('0'),
-                'slippage_usd': Decimal('0'),
-                'execution_mode_used': None,
-                'order_id': None
-            })()
-        ]
 
-        orders = [
-            OrderSpec(
-                exchange_client=mock_client_1,
-                symbol='BTC-PERP',
-                side='buy',
-                size_usd=Decimal('50000')
-            ),
-            OrderSpec(
-                exchange_client=mock_client_2,
-                symbol='BTC-PERP',
-                side='sell',
-                size_usd=Decimal('50000')
-            )
-        ]
+# =============================================================================
+# TEST: Partial Fill Handling (Market Hedge & Failure)
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_partial_fill_triggers_market_hedge(executor):
+    long_client = MockExchangeClient("exchange1")
+    short_client = MockExchangeClient("exchange2")
+
+    orders = [
+        OrderSpec(exchange_client=long_client, symbol='BTC-PERP', side='buy', size_usd=Decimal('50000')),
+        OrderSpec(exchange_client=short_client, symbol='BTC-PERP', side='sell', size_usd=Decimal('50000')),
+    ]
+
+    executor._place_single_order = AsyncMock(side_effect=[
+        _filled_result(long_client, 'BTC-PERP', 'buy', 'order_1'),
+        _unfilled_result(short_client, 'BTC-PERP', 'sell')
+    ])
+
+    with patch('strategies.execution.patterns.atomic_multi_order.hedge_manager.OrderExecutor') as mock_exec_cls:
+        hedge_executor = AsyncMock()
+        mock_exec_cls.return_value = hedge_executor
+        hedge_executor.execute_order.return_value = SimpleNamespace(
+            success=True,
+            filled=True,
+            fill_price=Decimal('50000'),
+            filled_quantity=Decimal('1.0'),
+            slippage_usd=Decimal('2.0'),
+            execution_mode_used='market',
+            order_id='hedge_1'
+        )
 
         result = await executor.execute_atomically(
             orders=orders,
@@ -305,11 +216,150 @@ async def test_partial_fill_rollback_uses_cached_quantity_when_exchange_reports_
             pre_flight_check=False
         )
 
+    hedge_executor.execute_order.assert_awaited()
+    assert result.success is True
+    assert result.all_filled is True
+    assert result.rollback_performed is False
+    assert any(fill.get('hedge') for fill in result.filled_orders)
+
+
+@pytest.mark.asyncio
+async def test_market_hedge_failure_triggers_rollback(executor):
+    long_client = MockExchangeClient("exchange1")
+    short_client = MockExchangeClient("exchange2")
+
+    orders = [
+        OrderSpec(exchange_client=long_client, symbol='BTC-PERP', side='buy', size_usd=Decimal('50000')),
+        OrderSpec(exchange_client=short_client, symbol='BTC-PERP', side='sell', size_usd=Decimal('50000')),
+    ]
+
+    executor._place_single_order = AsyncMock(side_effect=[
+        _filled_result(long_client, 'BTC-PERP', 'buy', 'order_1'),
+        _unfilled_result(short_client, 'BTC-PERP', 'sell')
+    ])
+
+    with patch('strategies.execution.patterns.atomic_multi_order.hedge_manager.OrderExecutor') as mock_exec_cls:
+        hedge_executor = AsyncMock()
+        mock_exec_cls.return_value = hedge_executor
+        hedge_executor.execute_order.return_value = SimpleNamespace(
+            success=False,
+            filled=False,
+            fill_price=None,
+            filled_quantity=Decimal('0'),
+            slippage_usd=Decimal('0'),
+            execution_mode_used='market',
+            order_id='hedge_fail',
+            error_message='hedge failed'
+        )
+
+        executor._rollback_filled_orders = AsyncMock(return_value=Decimal('3.0'))
+
+        result = await executor.execute_atomically(
+            orders=orders,
+            rollback_on_partial=True,
+            pre_flight_check=False
+        )
+
+    hedge_executor.execute_order.assert_awaited()
+    executor._rollback_filled_orders.assert_awaited_once()
+    assert result.success is False
+    assert result.all_filled is False
     assert result.rollback_performed is True
-    assert len(mock_client_1.placed_orders) == 1  # Market close executed
-    assert mock_client_1.placed_orders[0]['quantity'] == pytest.approx(1.0)
+    assert result.rollback_cost_usd == Decimal('3.0')
+    assert 'hedge failed' in result.error_message
 
 
+@pytest.mark.asyncio
+async def test_execute_market_hedge_places_market_orders():
+    manager = HedgeManager()
+    executor = AtomicMultiOrderExecutor()
+    long_client = MockExchangeClient("exchange1")
+    short_client = MockExchangeClient("exchange2")
+
+    trigger_task = asyncio.create_task(asyncio.sleep(0))
+    trigger_ctx_result = _filled_result(long_client, "BTC-PERP", "buy", "order_1")
+    trigger_ctx = _OrderContext(
+        spec=OrderSpec(exchange_client=long_client, symbol="BTC-PERP", side="buy", size_usd=Decimal("50000")),
+        cancel_event=asyncio.Event(),
+        task=trigger_task,
+        result=trigger_ctx_result,
+        completed=True,
+    )
+    trigger_ctx.record_fill(Decimal("1.0"), Decimal("50000"))
+
+    other_task = asyncio.create_task(asyncio.sleep(0))
+    other_ctx = _OrderContext(
+        spec=OrderSpec(exchange_client=short_client, symbol="BTC-PERP", side="sell", size_usd=Decimal("50000")),
+        cancel_event=asyncio.Event(),
+        task=other_task,
+    )
+
+    with patch(
+        "strategies.execution.patterns.atomic_multi_order.hedge_manager.OrderExecutor"
+    ) as mock_exec_cls:
+        hedge_executor = AsyncMock()
+        mock_exec_cls.return_value = hedge_executor
+        hedge_executor.execute_order.return_value = SimpleNamespace(
+            success=True,
+            filled=True,
+            fill_price=Decimal("50010"),
+            filled_quantity=Decimal("1.0"),
+            slippage_usd=Decimal("1.5"),
+            execution_mode_used="market",
+            order_id="hedge_order",
+        )
+
+        success, error = await manager.hedge(trigger_ctx, [trigger_ctx, other_ctx], executor.logger)
+
+    assert success is True
+    assert error is None
+    assert other_ctx.completed is True
+    assert other_ctx.filled_quantity > Decimal("0")
+
+    await asyncio.gather(trigger_task, other_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_execute_market_hedge_skips_already_filled_contexts():
+    manager = HedgeManager()
+    executor = AtomicMultiOrderExecutor()
+    long_client = MockExchangeClient("exchange1")
+    short_client = MockExchangeClient("exchange2")
+
+    trigger_task = asyncio.create_task(asyncio.sleep(0))
+    trigger_ctx_result = _filled_result(long_client, "BTC-PERP", "buy", "order_1")
+    trigger_ctx = _OrderContext(
+        spec=OrderSpec(exchange_client=long_client, symbol="BTC-PERP", side="buy", size_usd=Decimal("50000")),
+        cancel_event=asyncio.Event(),
+        task=trigger_task,
+        result=trigger_ctx_result,
+        completed=True,
+    )
+    trigger_ctx.record_fill(Decimal("1.0"), Decimal("50000"))
+
+    other_task = asyncio.create_task(asyncio.sleep(0))
+    other_ctx = _OrderContext(
+        spec=OrderSpec(exchange_client=short_client, symbol="BTC-PERP", side="sell", size_usd=Decimal("50000")),
+        cancel_event=asyncio.Event(),
+        task=other_task,
+        result=_filled_result(short_client, "BTC-PERP", "sell", "order_2"),
+        completed=True,
+    )
+    other_ctx.record_fill(Decimal("1.0"), Decimal("50000"))
+
+    with patch(
+        "strategies.execution.patterns.atomic_multi_order.hedge_manager.OrderExecutor"
+    ) as mock_exec_cls:
+        hedge_executor = AsyncMock()
+        mock_exec_cls.return_value = hedge_executor
+
+        success, error = await manager.hedge(trigger_ctx, [trigger_ctx, other_ctx], executor.logger)
+
+    assert success is True
+    assert error is None
+    hedge_executor.execute_order.assert_not_called()
+
+    await asyncio.gather(trigger_task, other_task, return_exceptions=True)
 # =============================================================================
 # TEST: CRITICAL FIX #1 - Rollback Race Condition
 # =============================================================================
@@ -400,7 +450,7 @@ async def test_preflight_balance_validation_success():
     mock_client = MockExchangeClient("test_exchange")
     mock_client._balance = Decimal('10000')  # $10k balance
     
-    with patch('strategies.execution.core.liquidity_analyzer.LiquidityAnalyzer') as mock_analyzer_class:
+    with patch('strategies.execution.patterns.atomic_multi_order.executor.LiquidityAnalyzer') as mock_analyzer_class:
         mock_analyzer = Mock()
         mock_analyzer_class.return_value = mock_analyzer
         
@@ -441,7 +491,7 @@ async def test_preflight_balance_validation_failure():
     mock_client = MockExchangeClient("test_exchange")
     mock_client._balance = Decimal('1000')  # Only $1k balance
     
-    with patch('strategies.execution.core.liquidity_analyzer.LiquidityAnalyzer') as mock_analyzer_class:
+    with patch('strategies.execution.patterns.atomic_multi_order.executor.LiquidityAnalyzer') as mock_analyzer_class:
         mock_analyzer = Mock()
         mock_analyzer_class.return_value = mock_analyzer
         
@@ -486,7 +536,7 @@ async def test_preflight_multiple_exchanges_balance_check():
     mock_client_2 = MockExchangeClient("exchange2")
     mock_client_2._balance = Decimal('500')  # Insufficient!
     
-    with patch('strategies.execution.core.liquidity_analyzer.LiquidityAnalyzer') as mock_analyzer_class:
+    with patch('strategies.execution.patterns.atomic_multi_order.executor.LiquidityAnalyzer') as mock_analyzer_class:
         mock_analyzer = Mock()
         mock_analyzer_class.return_value = mock_analyzer
         mock_report = Mock()

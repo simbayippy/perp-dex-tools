@@ -28,8 +28,8 @@ except ImportError:
     sys.exit(1)
 
 from strategies.base_schema import StrategySchema, ParameterSchema, ParameterType
-from strategies.implementations.funding_arbitrage.schema import get_funding_arb_schema
-from strategies.implementations.grid.schema import get_grid_schema
+from strategies.implementations.funding_arbitrage.config_builder import get_funding_arb_schema
+from strategies.implementations.grid.config_builder import get_grid_schema
 
 
 # ============================================================================
@@ -162,10 +162,10 @@ class InteractiveConfigBuilder:
         
         # Get default config
         if strategy_name == "funding_arbitrage":
-            from strategies.implementations.funding_arbitrage.schema import create_default_funding_config
+            from strategies.implementations.funding_arbitrage.config_builder import create_default_funding_config
             config = create_default_funding_config()
         elif strategy_name == "grid":
-            from strategies.implementations.grid.schema import create_default_grid_config
+            from strategies.implementations.grid.config_builder import create_default_grid_config
             config = create_default_grid_config()
         else:
             print("Unknown strategy")
@@ -494,4 +494,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

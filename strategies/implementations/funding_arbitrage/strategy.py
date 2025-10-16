@@ -10,6 +10,7 @@ Pattern: Stateful strategy with multi-DEX support
 """
 
 import asyncio
+import traceback
 
 from strategies.base_strategy import BaseStrategy
 from .config import FundingArbConfig
@@ -291,6 +292,20 @@ class FundingArbitrageStrategy(BaseStrategy):
         config_path = strategy_params.get("_config_path")
 
         
+        limit_order_offset_param = strategy_params.get('limit_order_offset_pct')
+        if limit_order_offset_param is not None:
+            limit_order_offset_pct = Decimal(str(limit_order_offset_param))
+        else:
+            limit_order_offset_pct = Decimal("0.0001")
+
+        # Build risk configuration using overrides (fallback to defaults)
+        risk_config = RiskManagementConfig(
+            strategy=strategy_params.get('risk_strategy', RiskManagementConfig().strategy),
+            min_erosion_threshold=Decimal(str(strategy_params.get('profit_erosion_threshold', RiskManagementConfig().min_erosion_threshold))),
+            max_position_age_hours=strategy_params.get('max_position_age_hours', RiskManagementConfig().max_position_age_hours),
+            check_interval_seconds=strategy_params.get('check_interval_seconds', RiskManagementConfig().check_interval_seconds),
+        )
+
         funding_config = FundingArbConfig(
             exchange=trading_config.exchange,  # Primary exchange
             exchanges=exchanges,  # All exchanges for arbitrage
@@ -300,12 +315,13 @@ class FundingArbitrageStrategy(BaseStrategy):
             max_position_size_usd=target_exposure * Decimal('10'),  # Max is 10x the default
             max_total_exposure_usd=Decimal(str(strategy_params.get('max_total_exposure_usd', float(target_exposure) * 5))),
             min_profit=Decimal(str(strategy_params.get('min_profit_rate', 0.0001))),
+            limit_order_offset_pct=limit_order_offset_pct,
             max_oi_usd=Decimal(str(strategy_params.get('max_oi_usd', 10000000.0))),  # 10M default
             max_new_positions_per_cycle=strategy_params.get('max_new_positions_per_cycle', 2),
             # Required database URL from funding_rate_service settings
             database_url=settings.database_url,
             # Risk management defaults
-            risk_config=RiskManagementConfig(),
+            risk_config=risk_config,
             # Ticker for logging
             ticker=trading_config.ticker,
             config_path=config_path
@@ -328,7 +344,10 @@ class FundingArbitrageStrategy(BaseStrategy):
                     await self.position_monitor.monitor()
                     await self.position_closer.evaluateAndClosePositions()
                 except Exception as exc:
-                    self.logger.log(f"Monitor loop error: {exc}", "ERROR")
+                    self.logger.log(
+                        f"Monitor loop error: {exc}\n{traceback.format_exc()}",
+                        "ERROR",
+                    )
 
                 if stop_event.is_set():
                     break
@@ -361,7 +380,9 @@ class FundingArbitrageStrategy(BaseStrategy):
 
         # Close position and state managers
         if hasattr(self, 'position_manager'):
-            await self.position_manager.close()
+            shutdown = getattr(self.position_manager, "shutdown", None)
+            if callable(shutdown):
+                await shutdown()
         if getattr(self, "_control_server_started", False) and self.control_server:
             await self.control_server.stop()
             self._control_server_started = False

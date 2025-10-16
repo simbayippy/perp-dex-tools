@@ -936,7 +936,7 @@ class FundingArbPositionManager(BasePositionManager):
             'positions_pending_rebalance': len(pending_rebalance)
         }
     
-    async def close(self):
+    async def shutdown(self):
         """Close database connection and cleanup resources."""
         if DATABASE_AVAILABLE and database.is_connected:
             await database.disconnect()

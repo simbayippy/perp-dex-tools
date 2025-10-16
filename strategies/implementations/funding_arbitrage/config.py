@@ -124,6 +124,11 @@ class FundingArbConfig(BaseModel):
         default=Decimal("0.001"),
         description="Min profit threshold (0.001 = 0.1% APY)"
     )
+
+    limit_order_offset_pct: Decimal = Field(
+        default=Decimal("0.0001"),
+        description="Limit order price improvement (decimal pct, negative values cross the spread)"
+    )
     
     profitability_horizon_hours: int = Field(
         default=24,
