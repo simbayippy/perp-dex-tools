@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
@@ -382,6 +383,9 @@ class PositionOpener:
             )
             return None
 
+        await self._prepare_websocket_feeds(long_client, symbol)
+        await self._prepare_websocket_feeds(short_client, symbol)
+
         try:
             long_bid, long_ask = await price_provider.get_bbo_prices(long_client, symbol)
             short_bid, short_ask = await price_provider.get_bbo_prices(short_client, symbol)
@@ -514,6 +518,74 @@ class PositionOpener:
             return exposure.copy_abs()
         except (InvalidOperation, TypeError):
             return Decimal("0")
+
+    async def _prepare_websocket_feeds(self, exchange_client: Any, symbol: str) -> None:
+        """Ensure exchange WebSocket streams are aligned with the symbol we intend to trade."""
+        ws_manager = getattr(exchange_client, "ws_manager", None)
+        if not ws_manager:
+            return
+
+        strategy = self._strategy
+
+        try:
+            if hasattr(ws_manager, "switch_market"):
+                market_id = getattr(getattr(exchange_client, "config", None), "contract_id", None)
+                if market_id is not None:
+                    try:
+                        await ws_manager.switch_market(int(market_id))
+                    except Exception as exc:
+                        strategy.logger.log(
+                            f"⚠️ [{exchange_client.get_exchange_name().upper()}] "
+                            f"Failed to switch WebSocket market: {exc}",
+                            "DEBUG",
+                        )
+
+            if hasattr(ws_manager, "start_order_book_stream"):
+                stream_symbol = symbol
+                if hasattr(exchange_client, "normalize_symbol"):
+                    try:
+                        stream_symbol = exchange_client.normalize_symbol(symbol)
+                    except Exception:
+                        pass
+                try:
+                    await ws_manager.start_order_book_stream(stream_symbol)
+                except TypeError:
+                    ws_manager.start_order_book_stream(stream_symbol)
+                except Exception as exc:
+                    strategy.logger.log(
+                        f"⚠️ [{exchange_client.get_exchange_name().upper()}] "
+                        f"Failed to start order book stream: {exc}",
+                        "DEBUG",
+                    )
+
+            await self._await_ws_snapshot(ws_manager)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            strategy.logger.log(
+                f"⚠️ [{exchange_client.get_exchange_name().upper()}] WebSocket prep error: {exc}",
+                "DEBUG",
+            )
+
+    async def _await_ws_snapshot(self, ws_manager: Any, timeout: float = 1.0) -> None:
+        """Wait briefly for websocket feeds to populate best bid/ask data."""
+        if not getattr(ws_manager, "running", False):
+            return
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+
+        while loop.time() < deadline:
+            snapshot_ready = False
+
+            if hasattr(ws_manager, "snapshot_loaded"):
+                snapshot_ready = bool(ws_manager.snapshot_loaded)
+
+            if hasattr(ws_manager, "best_bid"):
+                snapshot_ready = snapshot_ready or ws_manager.best_bid is not None
+
+            if snapshot_ready:
+                return
+
+            await asyncio.sleep(0.05)
 
     def _build_new_position(
         self,
@@ -778,4 +850,3 @@ class PositionOpener:
                 "ERROR",
             )
             return False
-
