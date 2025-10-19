@@ -81,12 +81,7 @@ class TaskScheduler:
         
         # Start scheduler
         self.scheduler.start()
-        
-        logger.info("✅ Background task scheduler started successfully")
-        logger.info("📋 Scheduled jobs:")
-        logger.info("  • Funding rate collection: Every 60 seconds")
-        logger.info("  • Opportunity analysis: Every 60 seconds")
-        logger.info("  • Database cleanup: Daily at 2:00 AM UTC")
+
     
     async def _add_jobs(self) -> None:
         """Add all background jobs to the scheduler"""

@@ -52,6 +52,12 @@ def _configure_external_loggers() -> None:
         logger_obj.setLevel(http_level)
         if http_level >= logging.WARNING:
             logger_obj.propagate = False
+    
+    root_logger = logging.getLogger()
+    root_logger.setLevel(http_level)
+    if root_logger.handlers:
+        for handler in root_logger.handlers:
+            handler.setLevel(http_level)
 
 
 _configure_loguru()
