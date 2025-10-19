@@ -383,8 +383,8 @@ class BackpackWebSocketManager:
         if self.symbol and payload.get("s") and payload["s"] != self.symbol:
             return
 
-        first_update = payload.get("U")
-        final_update = payload.get("u")
+        first_update = self._to_int(payload.get("U"))
+        final_update = self._to_int(payload.get("u"))
 
         if self._last_update_id is not None and first_update is not None:
             if final_update is not None and final_update <= self._last_update_id:
@@ -461,7 +461,8 @@ class BackpackWebSocketManager:
             if size > 0:
                 self._order_levels["asks"][price] = size
 
-        self._last_update_id = snapshot.get("lastUpdateId") or snapshot.get("u")
+        last_update_raw = snapshot.get("lastUpdateId") or snapshot.get("u")
+        self._last_update_id = self._to_int(last_update_raw)
         self._rebuild_order_book()
         self.order_book_ready = True
         self._depth_ready_event.set()
@@ -492,6 +493,15 @@ class BackpackWebSocketManager:
         else:
             prefix = f"depth.{self.depth_stream_interval}"
         return f"{prefix}.{self.symbol}"
+
+    @staticmethod
+    def _to_int(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            return int(str(value))
+        except (TypeError, ValueError):
+            return None
 
     # ------------------------------------------------------------------ #
     # Utilities

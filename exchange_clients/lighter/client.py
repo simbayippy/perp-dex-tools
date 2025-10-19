@@ -570,7 +570,11 @@ class LighterClient(BaseExchangeClient):
 
         # Create order using official SDK
         create_order, tx_hash, error = await self.lighter_client.create_order(**order_params)
-        
+        self.logger.debug(
+            f"[LIGHTER] create_order response: payload={order_params}, tx_hash={tx_hash}, "
+            f"error={error}, raw={create_order}"
+        )
+
         if error is not None:
             self.logger.error(
                 f"❌ [LIGHTER] Order submission failed: {error}"

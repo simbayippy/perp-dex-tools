@@ -313,6 +313,16 @@ class BackpackClient(BaseExchangeClient):
         """Place a post-only limit order on Backpack."""
         backpack_side = "Bid" if side.lower() == "buy" else "Ask"
         rounded_price = self.round_to_tick(price)
+        payload_preview = {
+            "symbol": contract_id,
+            "side": backpack_side,
+            "orderType": OrderTypeEnum.LIMIT,
+            "quantity": str(quantity),
+            "price": str(rounded_price),
+            "post_only": True,
+            "time_in_force": TimeInForceEnum.GTC,
+        }
+        self.logger.debug(f"[BACKPACK] Executing limit order payload: {payload_preview}")
 
         try:
             result = self.account_client.execute_order(
@@ -327,6 +337,11 @@ class BackpackClient(BaseExchangeClient):
         except Exception as exc:
             self.logger.error(f"[BACKPACK] Failed to place limit order: {exc}")
             return OrderResult(success=False, error_message=str(exc))
+
+        self.logger.debug(f"[BACKPACK] Limit order response: {result}")
+        if isinstance(result, dict) and result.get("code"):
+            self.logger.error(f"[BACKPACK] Limit order rejected: {result}")
+            return OrderResult(success=False, error_message=result.get("message", "Order rejected"))
 
         if not result or "id" not in result:
             return OrderResult(success=False, error_message="Limit order response missing order id")
@@ -364,6 +379,13 @@ class BackpackClient(BaseExchangeClient):
     ) -> OrderResult:
         """Place a market order for immediate execution."""
         backpack_side = "Bid" if side.lower() == "buy" else "Ask"
+        payload_preview = {
+            "symbol": contract_id,
+            "side": backpack_side,
+            "orderType": OrderTypeEnum.MARKET,
+            "quantity": str(quantity),
+        }
+        self.logger.debug(f"[BACKPACK] Executing market order payload: {payload_preview}")
 
         try:
             result = self.account_client.execute_order(
@@ -375,6 +397,11 @@ class BackpackClient(BaseExchangeClient):
         except Exception as exc:
             self.logger.error(f"[BACKPACK] Failed to place market order: {exc}")
             return OrderResult(success=False, error_message=str(exc))
+
+        self.logger.debug(f"[BACKPACK] Market order response: {result}")
+        if isinstance(result, dict) and result.get("code"):
+            self.logger.error(f"[BACKPACK] Market order rejected: {result}")
+            return OrderResult(success=False, error_message=result.get("message", "Order rejected"))
 
         if not result or "id" not in result:
             return OrderResult(success=False, error_message="Market order response missing order id")
