@@ -53,7 +53,8 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
         super().__init__(
             dex_name="edgex",
             api_base_url=api_base_url,
-            timeout=timeout
+            timeout=timeout,
+            funding_interval_hours=8  # EdgeX uses 8-hour funding intervals
         )
         
         self.max_concurrent_requests = max_concurrent_requests

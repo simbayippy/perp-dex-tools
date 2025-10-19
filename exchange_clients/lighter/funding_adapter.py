@@ -37,13 +37,13 @@ class LighterFundingAdapter(BaseFundingAdapter):
     """
     
     def __init__(
-        self, 
+        self,
         api_base_url: str = "https://mainnet.zklighter.elliot.ai",
         timeout: int = 10
     ):
         """
         Initialize Lighter adapter
-        
+
         Args:
             api_base_url: Lighter API base URL (mainnet or testnet)
             timeout: Request timeout in seconds
@@ -52,11 +52,12 @@ class LighterFundingAdapter(BaseFundingAdapter):
             raise ImportError(
                 "Lighter SDK is required. Install with: pip install lighter-python"
             )
-        
+
         super().__init__(
             dex_name="lighter",
             api_base_url=api_base_url,
-            timeout=timeout
+            timeout=timeout,
+            funding_interval_hours=1  # Lighter uses 1-hour funding intervals
         )
         
         # Initialize Lighter API client
@@ -114,15 +115,19 @@ class LighterFundingAdapter(BaseFundingAdapter):
                 try:
                     # Normalize symbol (e.g., "BTC-PERP" -> "BTC")
                     normalized_symbol = self.normalize_symbol(rate.symbol)
-                    
-                    # Convert rate to Decimal
-                    funding_rate = Decimal(str(rate.rate))
-                    
-                    rates_dict[normalized_symbol] = funding_rate
-                
+
+                    # Convert rate to Decimal (this is 1-hour rate from Lighter)
+                    funding_rate_1h = Decimal(str(rate.rate))
+
+                    # CRITICAL: Normalize 1-hour rate to 8-hour standard
+                    # Lighter returns 1-hour rates, but we need 8-hour rates for comparison
+                    funding_rate_8h = self.normalize_funding_rate_to_8h(funding_rate_1h)
+
+                    rates_dict[normalized_symbol] = funding_rate_8h
+
                 except Exception as e:
                     continue
-            
+
             return rates_dict
         
         except Exception as e:

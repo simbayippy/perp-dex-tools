@@ -55,41 +55,138 @@ class AsterFundingAdapter(BaseFundingAdapter):
         super().__init__(
             dex_name="aster",
             api_base_url=api_base_url,
-            timeout=timeout
+            timeout=timeout,
+            funding_interval_hours=8  # Aster uses 8-hour funding intervals
         )
         
         # Initialize Aster public client (read-only, no credentials needed)
         self.aster_client = AsterClient(base_url=api_base_url, timeout=timeout)
-        
+
+        # Cache for symbol-specific funding intervals
+        self._symbol_intervals: Optional[Dict[str, int]] = None
+
         logger.info(f"Aster adapter initialized")
     
+    async def fetch_funding_interval_configs(self) -> Dict[str, int]:
+        """
+        Fetch symbol-specific funding interval configurations from Aster
+
+        Aster provides per-symbol funding intervals via /fapi/v1/fundingInfo endpoint.
+        Different symbols can have different intervals (e.g., INJUSDT=8h, ZORAUSDT=4h).
+
+        Returns:
+            Dictionary mapping normalized symbols to funding intervals in hours
+            Example: {"BTC": 8, "ZORA": 4, "INJ": 8}
+        """
+        try:
+            logger.debug(f"{self.dex_name}: Fetching funding interval configs...")
+
+            # Fetch funding info which includes interval configs
+            # Note: This endpoint might be called 'funding_info' or similar in the SDK
+            # Based on API docs: GET /fapi/v1/fundingInfo
+            funding_info = self.aster_client.funding_info()
+
+            if not funding_info:
+                logger.warning(f"{self.dex_name}: No funding info returned, using defaults")
+                return {}
+
+            intervals_dict = {}
+
+            # Handle both single dict and list of dicts response
+            if isinstance(funding_info, dict):
+                funding_info_list = [funding_info]
+            elif isinstance(funding_info, list):
+                funding_info_list = funding_info
+            else:
+                logger.warning(f"{self.dex_name}: Unexpected funding info format: {type(funding_info)}")
+                return {}
+
+            for info in funding_info_list:
+                try:
+                    symbol = info.get('symbol', '')
+
+                    # Only process perpetual markets (ending with USDT)
+                    if not symbol.endswith('USDT'):
+                        continue
+
+                    # Get funding interval - field is 'fundingIntervalHours' per API docs
+                    interval_hours = info.get('fundingIntervalHours')
+
+                    if interval_hours is None:
+                        continue
+
+                    # Normalize symbol
+                    normalized_symbol = self.normalize_symbol(symbol)
+
+                    # Convert to int
+                    intervals_dict[normalized_symbol] = int(interval_hours)
+
+                    # Log non-standard intervals
+                    if int(interval_hours) != 8:
+                        logger.info(
+                            f"{self.dex_name}: Non-standard interval detected: "
+                            f"{symbol} ({normalized_symbol}) = {interval_hours}h"
+                        )
+
+                except Exception as e:
+                    logger.error(
+                        f"{self.dex_name}: Error parsing funding info for {info.get('symbol', 'unknown')}: {e}"
+                    )
+                    continue
+
+            logger.info(
+                f"{self.dex_name}: Fetched funding intervals for {len(intervals_dict)} symbols "
+                f"({sum(1 for i in intervals_dict.values() if i != 8)} non-standard)"
+            )
+
+            return intervals_dict
+
+        except AttributeError:
+            # SDK doesn't have funding_info method
+            logger.warning(
+                f"{self.dex_name}: funding_info() method not available in SDK, using defaults"
+            )
+            return {}
+        except Exception as e:
+            logger.warning(
+                f"{self.dex_name}: Failed to fetch funding interval configs: {e}. Using defaults."
+            )
+            return {}
+
     async def fetch_funding_rates(self) -> Dict[str, Decimal]:
         """
         Fetch all funding rates from Aster
-        
+
         Aster provides funding rates through their mark_price endpoint (/fapi/v1/premiumIndex)
         which includes current funding rate information for each perpetual market.
-        
+
+        NOTE: Aster symbols have different funding intervals (e.g., INJUSDT=8h, ZORAUSDT=4h).
+        We fetch these intervals and normalize all rates to 8-hour standard.
+
         Returns:
-            Dictionary mapping normalized symbols to funding rates
+            Dictionary mapping normalized symbols to funding rates (normalized to 8h)
             Example: {"BTC": Decimal("0.0001"), "ETH": Decimal("0.00008")}
-            
+
         Raises:
             Exception: If fetching fails after retries
         """
         try:
             logger.debug(f"{self.dex_name}: Fetching funding rates...")
-            
+
+            # Fetch symbol-specific funding intervals (cached)
+            if self._symbol_intervals is None:
+                self._symbol_intervals = await self.fetch_funding_interval_configs()
+
             # Fetch mark prices for all symbols which includes funding rates
             mark_prices_data = self.aster_client.mark_price()
-            
+
             if not mark_prices_data:
                 logger.warning(f"{self.dex_name}: No mark prices data returned")
                 return {}
-            
+
             # Extract funding rates
             rates_dict = {}
-            
+
             # Handle both single dict and list of dicts response
             if isinstance(mark_prices_data, dict):
                 mark_prices_list = [mark_prices_data]
@@ -98,20 +195,20 @@ class AsterFundingAdapter(BaseFundingAdapter):
             else:
                 logger.warning(f"{self.dex_name}: Unexpected mark prices data format: {type(mark_prices_data)}")
                 return {}
-            
+
             for market_data in mark_prices_list:
                 try:
                     symbol = market_data.get('symbol', '')
-                    
+
                     # Only process perpetual markets (ending with USDT)
                     if not symbol.endswith('USDT'):
                         continue
-                    
+
                     # Get funding rate - try multiple possible field names
-                    funding_rate = (market_data.get('lastFundingRate') or 
-                                  market_data.get('fundingRate') or 
+                    funding_rate = (market_data.get('lastFundingRate') or
+                                  market_data.get('fundingRate') or
                                   market_data.get('funding_rate'))
-                    
+
                     if funding_rate is None:
                         # Debug: log available fields for first few symbols only
                         if len(rates_dict) < 2:
@@ -120,37 +217,62 @@ class AsterFundingAdapter(BaseFundingAdapter):
                                 f"{self.dex_name}: No funding rate for {symbol}. Available fields: {available_fields}"
                             )
                         continue
-                    
+
                     # Normalize symbol (e.g., "BTCUSDT" -> "BTC")
                     normalized_symbol = self.normalize_symbol(symbol)
-                    
-                    # Convert to Decimal
-                    funding_rate_decimal = Decimal(str(funding_rate))
-                    
-                    rates_dict[normalized_symbol] = funding_rate_decimal
-                    
-                    # Log details for first few symbols only to avoid spam
-                    if len(rates_dict) <= 3:
+
+                    # Convert to Decimal (this is the native rate for this symbol's interval)
+                    funding_rate_native = Decimal(str(funding_rate))
+
+                    # Get symbol-specific interval (or use exchange default)
+                    symbol_interval = self._symbol_intervals.get(normalized_symbol, self.funding_interval_hours)
+
+                    # CRITICAL: Normalize to 8-hour standard
+                    # If symbol has 4h interval, multiply by 2 to get 8h equivalent
+                    # If symbol has 8h interval, no change
+                    funding_rate_8h = self._normalize_rate(funding_rate_native, symbol_interval)
+
+                    rates_dict[normalized_symbol] = funding_rate_8h
+
+                    # Log details for first few symbols or non-standard intervals
+                    if len(rates_dict) <= 3 or symbol_interval != 8:
                         logger.debug(
-                            f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
-                            f"{funding_rate_decimal}"
+                            f"{self.dex_name}: {symbol} -> {normalized_symbol} ({symbol_interval}h): "
+                            f"{funding_rate_native} → {funding_rate_8h} (normalized to 8h)"
                         )
-                
+
                 except Exception as e:
                     logger.error(
                         f"{self.dex_name}: Error parsing rate for {market_data.get('symbol', 'unknown')}: {e}"
                     )
                     continue
-            
+
             logger.info(
-                f"{self.dex_name}: Successfully fetched {len(rates_dict)} funding rates"
+                f"{self.dex_name}: Successfully fetched {len(rates_dict)} funding rates (normalized to 8h)"
             )
-            
+
             return rates_dict
-        
+
         except Exception as e:
             logger.error(f"{self.dex_name}: Failed to fetch funding rates: {e}")
             raise
+
+    def _normalize_rate(self, rate: Decimal, interval_hours: int) -> Decimal:
+        """
+        Normalize funding rate from native interval to 8-hour standard
+
+        Args:
+            rate: Native funding rate (per symbol's interval)
+            interval_hours: Symbol's funding interval in hours
+
+        Returns:
+            Rate normalized to 8-hour interval
+        """
+        if interval_hours == 8:
+            return rate
+        else:
+            multiplier = Decimal('8') / Decimal(str(interval_hours))
+            return rate * multiplier
     
     async def fetch_market_data(self) -> Dict[str, Dict[str, Decimal]]:
         """
@@ -324,6 +446,16 @@ class AsterFundingAdapter(BaseFundingAdapter):
         # Aster uses "{SYMBOL}USDT" format (no separators)
         return f"{normalized_symbol.upper()}USDT"
     
+    def get_symbol_intervals(self) -> Dict[str, int]:
+        """
+        Get cached symbol-specific funding intervals
+
+        Returns:
+            Dictionary mapping normalized symbols to intervals in hours
+            Returns empty dict if intervals haven't been fetched yet
+        """
+        return self._symbol_intervals or {}
+
     async def close(self) -> None:
         """Close the API client"""
         # Aster SDK doesn't require explicit cleanup

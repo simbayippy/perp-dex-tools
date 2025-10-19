@@ -23,6 +23,7 @@ INITIAL_DEXES = [
         'websocket_url': 'wss://mainnet.zklighter.elliot.ai/stream',
         'maker_fee': 0.0000,  # Zero fees
         'taker_fee': 0.0000,
+        'funding_interval_hours': 1,  # 1-hour funding intervals
     },
     {
         'name': 'edgex',
@@ -31,6 +32,7 @@ INITIAL_DEXES = [
         'websocket_url': 'wss://quote.edgex.exchange',
         'maker_fee': 0.00015,  # 0.015%
         'taker_fee': 0.00038,  # 0.038%
+        'funding_interval_hours': 8,  # 8-hour funding intervals
     },
     {
         'name': 'paradex',
@@ -39,6 +41,7 @@ INITIAL_DEXES = [
         'websocket_url': 'wss://ws.prod.paradex.trade',
         'maker_fee': 0.00003,  # 0.003%
         'taker_fee': 0.0002,   # 0.02%
+        'funding_interval_hours': 8,  # 8-hour funding intervals
     },
     {
         'name': 'grvt',
@@ -47,6 +50,7 @@ INITIAL_DEXES = [
         'websocket_url': 'wss://trade.prod.grvt.io',
         'maker_fee': -0.0001,  # -0.01% (rebate!)
         'taker_fee': 0.00055,  # 0.055%
+        'funding_interval_hours': 8,  # 8-hour funding intervals
     },
     {
         'name': 'hyperliquid',
@@ -55,6 +59,7 @@ INITIAL_DEXES = [
         'websocket_url': 'wss://api.hyperliquid.xyz',
         'maker_fee': 0.00015,  # 0.015%
         'taker_fee': 0.00045,  # 0.045%
+        'funding_interval_hours': 1,  # 8-hour funding intervals
     },
     {
         'name': 'backpack',
@@ -63,6 +68,7 @@ INITIAL_DEXES = [
         'websocket_url': 'wss://ws.backpack.exchange',
         'maker_fee': 0.0002,   # 0.02%
         'taker_fee': 0.0005,   # 0.05%
+        'funding_interval_hours': 1,  # 8-hour funding intervals
     },
     {
         'name': 'aster',
@@ -71,6 +77,7 @@ INITIAL_DEXES = [
         'websocket_url': 'wss://fstream.asterdex.com',
         'maker_fee': 0.00005,   # 0.005%
         'taker_fee': 0.0004,   # 0.04%
+        'funding_interval_hours': 8,  # 8-hour funding intervals
     },
 ]
 
@@ -99,11 +106,13 @@ async def seed_dexes():
             await db.execute("""
                 INSERT INTO dexes (
                     name, display_name, api_base_url, websocket_url,
-                    maker_fee_percent, taker_fee_percent, supports_websocket
+                    maker_fee_percent, taker_fee_percent, supports_websocket,
+                    funding_interval_hours
                 )
                 VALUES (
                     :name, :display_name, :api_base_url, :websocket_url,
-                    :maker_fee, :taker_fee, :supports_websocket
+                    :maker_fee, :taker_fee, :supports_websocket,
+                    :funding_interval_hours
                 )
             """, {
                 'name': dex['name'],
@@ -113,6 +122,7 @@ async def seed_dexes():
                 'maker_fee': dex['maker_fee'],
                 'taker_fee': dex['taker_fee'],
                 'supports_websocket': True,  # All these DEXs support WebSocket
+                'funding_interval_hours': dex['funding_interval_hours'],
             })
             
             logger.success(f"✓ Added DEX: {dex['display_name']}")

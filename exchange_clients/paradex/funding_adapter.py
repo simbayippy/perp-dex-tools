@@ -25,7 +25,8 @@ class ParadexFundingAdapter(BaseFundingAdapter):
         super().__init__(
             dex_name="paradex",
             api_base_url=api_base_url,
-            timeout=timeout
+            timeout=timeout,
+            funding_interval_hours=8  # Paradex uses 8-hour funding intervals
         )
     
     async def fetch_funding_rates(self) -> Dict[str, Decimal]:

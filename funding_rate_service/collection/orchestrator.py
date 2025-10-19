@@ -253,12 +253,32 @@ class CollectionOrchestrator:
                     )
                     continue
             
+            # Store symbol-specific funding intervals (if exchange provides them)
+            try:
+                symbol_intervals = adapter.get_symbol_intervals()
+                if symbol_intervals:
+                    await self._store_symbol_intervals(
+                        dex_id,
+                        symbol_intervals,
+                        adapter
+                    )
+                    non_standard = sum(1 for i in symbol_intervals.values() if i != 8)
+                    logger.info(
+                        f"{dex_name}: Updated funding intervals for {len(symbol_intervals)} symbols "
+                        f"({non_standard} non-standard)"
+                    )
+            except Exception as e:
+                # Symbol interval failure shouldn't fail the whole collection
+                logger.warning(
+                    f"{dex_name}: Failed to store symbol intervals (non-critical): {e}"
+                )
+
             # Collect market data (volume, OI) if enabled
             if include_market_data:
                 try:
                     logger.debug(f"{dex_name}: Fetching market data (volume, OI)...")
                     market_data = await adapter.fetch_market_data()
-                    
+
                     if market_data:
                         await self._store_market_data(
                             dex_id,
@@ -273,7 +293,7 @@ class CollectionOrchestrator:
                     logger.warning(
                         f"{dex_name}: Failed to fetch/store market data (non-critical): {e}"
                     )
-            
+
             # Update DEX last fetch status
             await self.dex_repo.update_last_fetch(dex_id, success=True)
             
@@ -316,6 +336,59 @@ class CollectionOrchestrator:
             
             raise
     
+    async def _store_symbol_intervals(
+        self,
+        dex_id: int,
+        symbol_intervals: Dict[str, int],
+        adapter: BaseFundingAdapter
+    ) -> None:
+        """
+        Store symbol-specific funding intervals in dex_symbols table
+
+        Args:
+            dex_id: DEX ID
+            symbol_intervals: Dictionary mapping symbols to intervals in hours
+            adapter: Adapter instance (for symbol normalization)
+        """
+        for normalized_symbol, interval_hours in symbol_intervals.items():
+            try:
+                # Get symbol ID (should exist from funding rate collection)
+                symbol_id = symbol_mapper.get_id(normalized_symbol)
+                if symbol_id is None:
+                    # Symbol doesn't exist yet, create it
+                    symbol_id = await self.symbol_repo.get_or_create(normalized_symbol)
+                    symbol_mapper.add(symbol_id, normalized_symbol)
+
+                # Update dex_symbols with funding interval
+                query = """
+                    UPDATE dex_symbols
+                    SET
+                        funding_interval_hours = :interval_hours,
+                        updated_at = NOW()
+                    WHERE dex_id = :dex_id AND symbol_id = :symbol_id
+                """
+
+                await self.db.execute(
+                    query,
+                    values={
+                        "dex_id": dex_id,
+                        "symbol_id": symbol_id,
+                        "interval_hours": interval_hours
+                    }
+                )
+
+                # Log non-standard intervals
+                if interval_hours != 8:
+                    logger.debug(
+                        f"Updated funding interval for {normalized_symbol}: {interval_hours}h"
+                    )
+
+            except Exception as e:
+                logger.error(
+                    f"Error storing funding interval for {normalized_symbol}: {e}"
+                )
+                continue
+
     async def _store_market_data(
         self,
         dex_id: int,
@@ -324,7 +397,7 @@ class CollectionOrchestrator:
     ) -> None:
         """
         Store market data (volume, OI) in dex_symbols table
-        
+
         Args:
             dex_id: DEX ID
             market_data: Dictionary mapping symbols to market data
@@ -338,20 +411,20 @@ class CollectionOrchestrator:
                     # Symbol doesn't exist yet, create it
                     symbol_id = await self.symbol_repo.get_or_create(normalized_symbol)
                     symbol_mapper.add(symbol_id, normalized_symbol)
-                
+
                 # Update dex_symbols with market data
                 volume_24h = data.get('volume_24h')
                 open_interest = data.get('open_interest')
-                
+
                 query = """
                     UPDATE dex_symbols
-                    SET 
+                    SET
                         volume_24h = :volume_24h,
                         open_interest_usd = :open_interest,
                         updated_at = NOW()
                     WHERE dex_id = :dex_id AND symbol_id = :symbol_id
                 """
-                
+
                 await self.db.execute(
                     query,
                     values={
@@ -361,12 +434,12 @@ class CollectionOrchestrator:
                         "open_interest": open_interest
                     }
                 )
-                
+
                 logger.debug(
                     f"Updated market data for {normalized_symbol}: "
                     f"Volume=${volume_24h}, OI=${open_interest}"
                 )
-                
+
             except Exception as e:
                 logger.error(
                     f"Error storing market data for {normalized_symbol}: {e}"

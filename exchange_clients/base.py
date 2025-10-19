@@ -870,18 +870,22 @@ class BaseFundingAdapter(ABC):
         ```
     """
     
-    def __init__(self, dex_name: str, api_base_url: str, timeout: int = 10):
+    def __init__(self, dex_name: str, api_base_url: str, timeout: int = 10, funding_interval_hours: int = 8):
         """
         Initialize base funding adapter.
-        
+
         Args:
             dex_name: Name of the DEX (e.g., "lighter", "edgex", "aster")
             api_base_url: Base URL for the DEX API
             timeout: Request timeout in seconds
+            funding_interval_hours: Funding payment interval in hours (default: 8)
+                                   - Lighter: 1 hour
+                                   - Most others: 8 hours
         """
         self.dex_name = dex_name
         self.api_base_url = api_base_url
         self.timeout = timeout
+        self.funding_interval_hours = funding_interval_hours
         self._session: Optional[aiohttp.ClientSession] = None
     
     # ========================================================================
@@ -940,22 +944,75 @@ class BaseFundingAdapter(ABC):
         pass
     
     # ========================================================================
+    # FUNDING RATE NORMALIZATION
+    # ========================================================================
+
+    def normalize_funding_rate_to_8h(self, rate: Decimal) -> Decimal:
+        """
+        Normalize funding rate to 8-hour interval standard.
+
+        Different exchanges have different funding intervals:
+        - Lighter: 1 hour  → multiply by 8 to get 8-hour rate
+        - Most others: 8 hours → return as-is
+
+        This normalization is CRITICAL for:
+        1. Accurate opportunity comparison across exchanges
+        2. Correct APY calculations
+        3. Fair profitability analysis
+
+        Args:
+            rate: Raw funding rate from the exchange (per their interval)
+
+        Returns:
+            Normalized rate (per 8 hours)
+
+        Example:
+            # Lighter returns 0.01% per 1 hour
+            rate = Decimal("0.0001")
+            normalized = normalize_funding_rate_to_8h(rate)
+            # Returns: 0.0008 (0.08% per 8 hours)
+        """
+        if self.funding_interval_hours == 8:
+            # Already 8-hour rate, return as-is
+            return rate
+        else:
+            # Convert from native interval to 8-hour interval
+            # Formula: rate_8h = rate_native * (8 / native_interval)
+            multiplier = Decimal('8') / Decimal(str(self.funding_interval_hours))
+            return rate * multiplier
+
+    def get_symbol_intervals(self) -> Dict[str, int]:
+        """
+        Get symbol-specific funding intervals (if exchange supports it).
+
+        Most exchanges have a single funding interval for all symbols (e.g., Lighter=1h, GRVT=8h).
+        However, some exchanges like Aster have different intervals per symbol (e.g., INJUSDT=8h, ZORAUSDT=4h).
+
+        Exchanges with per-symbol intervals should override this method.
+
+        Returns:
+            Dictionary mapping normalized symbols to intervals in hours
+            Empty dict if exchange uses uniform interval for all symbols
+        """
+        return {}
+
+    # ========================================================================
     # SYMBOL NORMALIZATION
     # ========================================================================
-    
+
     @abstractmethod
     def normalize_symbol(self, dex_symbol: str) -> str:
         """
         Normalize DEX-specific symbol format to standard format.
-        
+
         Standard format: Base asset only, uppercase (e.g., "BTC", "ETH", "ZORA")
-        
+
         Args:
             dex_symbol: DEX-specific format
-            
+
         Returns:
             Normalized symbol
-            
+
         Examples:
             - "BTC-PERP" -> "BTC"
             - "PERP_BTC_USDC" -> "BTC"
@@ -963,18 +1020,18 @@ class BaseFundingAdapter(ABC):
             - "1000PEPEUSDT" -> "PEPE" (handle multipliers)
         """
         pass
-    
+
     @abstractmethod
     def get_dex_symbol_format(self, normalized_symbol: str) -> str:
         """
         Convert normalized symbol back to DEX-specific format.
-        
+
         Args:
             normalized_symbol: Normalized symbol (e.g., "BTC")
-            
+
         Returns:
             DEX-specific format
-            
+
         Examples:
             - "BTC" -> "BTC-PERP"
             - "BTC" -> "PERP_BTC_USDC"

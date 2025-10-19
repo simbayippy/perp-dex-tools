@@ -110,7 +110,10 @@ class FundingArbFeeCalculator:
         ),
     }
     
-    # Funding rate payment frequency (most DEXs use 8 hours)
+    # Standard funding rate interval for calculations
+    # NOTE: All funding rates from adapters are normalized to 8-hour intervals
+    # - Lighter (1h native) → normalized to 8h by adapter
+    # - Others (8h native) → already 8h
     FUNDING_INTERVAL_HOURS = Decimal('8')
     HOURS_PER_YEAR = Decimal('8760')  # 365 * 24
     

@@ -76,7 +76,8 @@ class GrvtFundingAdapter(BaseFundingAdapter):
         super().__init__(
             dex_name="grvt",
             api_base_url=api_base_url,
-            timeout=timeout
+            timeout=timeout,
+            funding_interval_hours=8  # GRVT uses 8-hour funding intervals
         )
         
         self.environment = environment

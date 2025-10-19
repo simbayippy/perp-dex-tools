@@ -44,7 +44,8 @@ class BackpackFundingAdapter(BaseFundingAdapter):
         super().__init__(
             dex_name="backpack",
             api_base_url=api_base_url,
-            timeout=timeout
+            timeout=timeout,
+            funding_interval_hours=8  # Backpack uses 8-hour funding intervals
         )
         
         # HTTP session for API calls
