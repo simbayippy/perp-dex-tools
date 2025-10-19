@@ -65,9 +65,10 @@ class BackpackClient(BaseExchangeClient):
 
     async def connect(self) -> None:
         """Connect to Backpack WebSocket for order updates."""
-        symbol = getattr(self.config, "contract_id", None)
-
-        ws_symbol = self._ensure_exchange_symbol(symbol or getattr(self.config, "contract_id", None))
+        raw_symbol = getattr(self.config, "contract_id", None)
+        ws_symbol: Optional[str] = None
+        if raw_symbol and raw_symbol.upper() not in {"MULTI_SYMBOL", "MULTI"}:
+            ws_symbol = self._ensure_exchange_symbol(raw_symbol)
 
         if not self.ws_manager:
             self.ws_manager = BackpackWebSocketManager(
@@ -82,10 +83,14 @@ class BackpackClient(BaseExchangeClient):
             self.ws_manager.update_symbol(ws_symbol)
 
         await self.ws_manager.connect()
-        ready = await self.ws_manager.wait_until_ready(timeout=5.0)
-        if not ready and self.logger:
-            self.logger.warning("[BACKPACK] Timed out waiting for account stream readiness")
-        await self.ws_manager.wait_for_order_book(timeout=5.0)
+        if ws_symbol:
+            ready = await self.ws_manager.wait_until_ready(timeout=5.0)
+            if not ready and self.logger:
+                self.logger.warning("[BACKPACK] Timed out waiting for account stream readiness")
+            await self.ws_manager.wait_for_order_book(timeout=5.0)
+        else:
+            if self.logger:
+                self.logger.debug("[BACKPACK] No contract symbol provided; WebSocket subscriptions deferred")
 
     async def disconnect(self) -> None:
         """Disconnect from Backpack WebSocket and cleanup."""
@@ -117,13 +122,21 @@ class BackpackClient(BaseExchangeClient):
             return None
 
         normalized = identifier.upper()
+        symbol: Optional[str] = None
+
         mapped = self._market_symbol_map.get(normalized)
         if mapped:
-            return mapped
-        if "_" in normalized:
+            symbol = mapped
+        elif "_" in normalized:
             # Already in exchange format (e.g., BTC_USDC_PERP)
-            return normalized
-        return get_backpack_symbol_format(normalized)
+            symbol = normalized
+        elif normalized not in {"MULTI_SYMBOL", "MULTI"}:
+            symbol = get_backpack_symbol_format(normalized)
+
+        if symbol and self.ws_manager and self.ws_manager.symbol != symbol:
+            self.ws_manager.update_symbol(symbol)
+
+        return symbol or identifier
 
     def _fetch_depth_snapshot(self, symbol: str) -> Dict[str, Any]:
         """Blocking depth snapshot fetch used by the WebSocket manager."""
@@ -508,7 +521,7 @@ class BackpackClient(BaseExchangeClient):
         except Exception as exc:
             self.logger.warning(f"[BACKPACK] Failed to fetch balances: {exc}")
             return None
-        print(balances, "BALANCESSS")
+
         balance = self._extract_available_balance(balances)
         if balance is None:
             self.logger.warning("[BACKPACK] Unable to determine available USDC balance")
@@ -594,7 +607,7 @@ class BackpackClient(BaseExchangeClient):
                     break
             else:
                 if all(isinstance(v, dict) for v in payload.values()):
-                    entries = list(payload.values())
+                    entries = [dict(symbol=k, **v) for k, v in payload.items()]
         elif isinstance(payload, list):
             entries = payload
 
@@ -613,7 +626,8 @@ class BackpackClient(BaseExchangeClient):
                 or entry.get("token")
             )
 
-            if asset is None or str(asset).upper() not in {"USDC", "USD"}:
+            asset_code = str(asset).upper()
+            if asset_code not in {"USDC", "USD", "USDT"}:
                 continue
 
             available_value: Optional[Decimal] = None
