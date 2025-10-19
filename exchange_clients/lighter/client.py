@@ -258,7 +258,10 @@ class LighterClient(BaseExchangeClient):
         """Handle order updates from WebSocket."""
         for order_data in order_data_list:
             market_index = order_data.get('market_index')
-            if market_index is None:
+            client_order_index = order_data.get('client_order_index')
+            server_order_index = order_data.get('order_index')
+
+            if market_index is None or client_order_index is None:
                 continue
 
             if str(market_index) != str(self.config.contract_id):
@@ -268,7 +271,8 @@ class LighterClient(BaseExchangeClient):
             # Let strategy determine order type - exchange client just reports the order
             order_type = "ORDER"
 
-            order_id = str(order_data['order_index'])
+            order_id = str(client_order_index)
+            linked_order_index = str(server_order_index) if server_order_index is not None else "?"
             status = str(order_data.get('status', '')).upper()
             filled_size = Decimal(str(order_data.get('filled_base_amount', '0')))
             size = Decimal(str(order_data.get('initial_base_amount', '0')))
@@ -293,12 +297,12 @@ class LighterClient(BaseExchangeClient):
 
             if status == 'OPEN':
                 self.logger.info(
-                    f"[{order_type}] [{order_id}] {status} "
+                    f"[{order_type}] [{order_id}] ({linked_order_index}) {status} "
                     f"{size} @ {price}"
                 )
             else:
                 self.logger.info(
-                    f"[{order_type}] [{order_id}] {status} "
+                    f"[{order_type}] [{order_id}] ({linked_order_index}) {status} "
                     f"{filled_size} @ {price}"
                 )
 
@@ -725,7 +729,7 @@ class LighterClient(BaseExchangeClient):
             if orders_response and orders_response.orders:
                 order_id_int = int(order_id_str)
                 for order in orders_response.orders:
-                    if int(order.order_index) == order_id_int:
+                    if int(order.client_order_index) == order_id_int or int(order.order_index) == order_id_int:
                         # Found the order!
                         size = Decimal(str(order.size_base))
                         filled = Decimal(str(order.matched_base))
