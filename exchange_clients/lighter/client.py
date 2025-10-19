@@ -551,47 +551,6 @@ class LighterClient(BaseExchangeClient):
             # Return empty order book on error
             return {'bids': [], 'asks': []}
 
-    async def _submit_order_with_retry(self, order_params: Dict[str, Any]) -> OrderResult:
-        """Submit an order with Lighter using official SDK."""
-        # Ensure client is initialized
-        if self.lighter_client is None:
-            # This is a sync method, so we need to handle this differently
-            # For now, raise an error if client is not initialized
-            raise ValueError("Lighter client not initialized. Call connect() first.")
-
-        self.logger.info(
-            f"📤 [LIGHTER] Submitting order: "
-            f"market={order_params.get('market_index')}, "
-            f"client_id={order_params.get('client_order_index')}, "
-            f"side={'ASK' if order_params.get('is_ask') else 'BID'}, "
-            f"price={order_params.get('price')}, "
-            f"amount={order_params.get('base_amount')}"
-        )
-
-        # Create order using official SDK
-        create_order, tx_hash, error = await self.lighter_client.create_order(**order_params)
-        self.logger.info(
-            f"[LIGHTER] create_order response: payload={order_params}, tx_hash={tx_hash}, "
-            f"error={error}, raw={create_order}"
-        )
-
-        if error is not None:
-            self.logger.error(
-                f"❌ [LIGHTER] Order submission failed: {error}"
-            )
-            return OrderResult(
-                success=False, order_id=str(order_params['client_order_index']),
-                error_message=f"Order creation error: {error}")
-        
-        # Log successful submission with tx hash
-        self.logger.info(
-            f"✅ [LIGHTER] Order submitted successfully! "
-            f"client_id={order_params['client_order_index']}, "
-            f"tx_hash={tx_hash}"
-        )
-        
-        return OrderResult(success=True, order_id=str(order_params['client_order_index']))
-
     async def place_limit_order(self, contract_id: str, quantity: Decimal, price: Decimal,
                                 side: str) -> OrderResult:
         """Place a post only order with Lighter using official SDK."""
@@ -611,6 +570,9 @@ class LighterClient(BaseExchangeClient):
         client_order_index = int(time.time() * 1000) % 1000000  # Simple unique ID
         self.current_order_client_id = client_order_index
 
+        expiry_seconds = getattr(self.config, "order_expiry_seconds", 3600)
+        order_expiry_ms = int((time.time() + expiry_seconds) * 1000)
+
         # Create order parameters
         order_params = {
             'market_index': self.config.contract_id,
@@ -619,13 +581,54 @@ class LighterClient(BaseExchangeClient):
             'price': int(price * self.price_multiplier),
             'is_ask': is_ask,
             'order_type': self.lighter_client.ORDER_TYPE_LIMIT,
-            'time_in_force': self.lighter_client.ORDER_TIME_IN_FORCE_GOOD_TILL_TIME,
+            'time_in_force': self.lighter_client.ORDER_TIME_IN_FORCE_POST_ONLY,
             'reduce_only': False,
             'trigger_price': 0,
+            'order_expiry': order_expiry_ms,
         }
 
-        order_result = await self._submit_order_with_retry(order_params)
-        return order_result
+        self.logger.info(
+            "📤 [LIGHTER] Submitting order: market=%s client_id=%s side=%s price=%s amount=%s",
+            order_params.get('market_index'),
+            order_params.get('client_order_index'),
+            'ASK' if order_params.get('is_ask') else 'BID',
+            order_params.get('price'),
+            order_params.get('base_amount'),
+        )
+
+        create_order, tx_hash, error = await self.lighter_client.create_order(**order_params)
+
+        if hasattr(create_order, "to_dict"):
+            try:
+                raw_payload = create_order.to_dict()
+            except Exception:  # pragma: no cover - defensive
+                raw_payload = repr(create_order)
+        else:
+            raw_payload = getattr(create_order, "__dict__", repr(create_order))
+
+        self.logger.info(
+            "[LIGHTER] create_order response payload=%s tx_hash=%s error=%s raw=%s",
+            order_params,
+            tx_hash,
+            error,
+            raw_payload,
+        )
+
+        if error is not None:
+            self.logger.error("❌ [LIGHTER] Order submission failed: %s", error)
+            return OrderResult(
+                success=False,
+                order_id=str(client_order_index),
+                error_message=f"Order creation error: {error}",
+            )
+
+        self.logger.info(
+            "✅ [LIGHTER] Order submitted successfully! client_id=%s tx_hash=%s",
+            client_order_index,
+            tx_hash,
+        )
+
+        return OrderResult(success=True, order_id=str(client_order_index))
 
     async def get_order_price(self, side: str = '') -> Decimal:
         """Get the price of an order with Lighter using official SDK."""

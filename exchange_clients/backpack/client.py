@@ -5,7 +5,7 @@ Backpack exchange client implementation.
 import os
 import asyncio
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from bpx.public import Public
@@ -148,6 +148,26 @@ class BackpackClient(BaseExchangeClient):
         Convert normalized symbol (e.g., 'BTC') to Backpack format.
         """
         return self._ensure_exchange_symbol(symbol) or symbol
+
+    def _quantize_quantity(self, quantity: Decimal) -> Decimal:
+        step_size = getattr(self.config, "step_size", None)
+        if not step_size or step_size <= 0:
+            return quantity
+        try:
+            return quantity.quantize(step_size, rounding=ROUND_DOWN)
+        except (InvalidOperation, ValueError):
+            decimals = max(0, -step_size.normalize().as_tuple().exponent)
+            return Decimal(f"{quantity:.{decimals}f}")
+
+    def _format_decimal(self, value: Decimal, step: Optional[Decimal] = None) -> str:
+        if step and step > 0:
+            try:
+                return str(value.quantize(step))
+            except (InvalidOperation, ValueError):
+                pass
+            decimals = max(0, -step.normalize().as_tuple().exponent)
+            return f"{value:.{decimals}f}"
+        return format(value, "f")
 
     # --------------------------------------------------------------------- #
     # WebSocket callbacks
@@ -313,11 +333,21 @@ class BackpackClient(BaseExchangeClient):
         """Place a post-only limit order on Backpack."""
         backpack_side = "Bid" if side.lower() == "buy" else "Ask"
         rounded_price = self.round_to_tick(price)
+        quantized_quantity = self._quantize_quantity(quantity)
+        min_quantity = getattr(self.config, "min_quantity", None)
+        if min_quantity and quantized_quantity < min_quantity:
+            message = (
+                f"Quantity {quantized_quantity} below minimum {min_quantity} for {contract_id}"
+            )
+            self.logger.error(f"[BACKPACK] {message}")
+            return OrderResult(success=False, error_message=message)
+
+        quantity_str = self._format_decimal(quantized_quantity, getattr(self.config, "step_size", None))
         payload_preview = {
             "symbol": contract_id,
             "side": backpack_side,
             "orderType": OrderTypeEnum.LIMIT,
-            "quantity": str(quantity),
+            "quantity": quantity_str,
             "price": str(rounded_price),
             "post_only": True,
             "time_in_force": TimeInForceEnum.GTC,
@@ -329,7 +359,7 @@ class BackpackClient(BaseExchangeClient):
                 symbol=contract_id,
                 side=backpack_side,
                 order_type=OrderTypeEnum.LIMIT,
-                quantity=str(quantity),
+                quantity=quantity_str,
                 price=str(rounded_price),
                 post_only=True,
                 time_in_force=TimeInForceEnum.GTC,
@@ -366,7 +396,7 @@ class BackpackClient(BaseExchangeClient):
             success=True,
             order_id=order_id,
             side=side.lower(),
-            size=quantity,
+            size=quantized_quantity,
             price=rounded_price,
             status="OPEN",
         )
@@ -379,11 +409,20 @@ class BackpackClient(BaseExchangeClient):
     ) -> OrderResult:
         """Place a market order for immediate execution."""
         backpack_side = "Bid" if side.lower() == "buy" else "Ask"
+        quantized_quantity = self._quantize_quantity(quantity)
+        min_quantity = getattr(self.config, "min_quantity", None)
+        if min_quantity and quantized_quantity < min_quantity:
+            message = (
+                f"Quantity {quantized_quantity} below minimum {min_quantity} for {contract_id}"
+            )
+            self.logger.error(f"[BACKPACK] {message}")
+            return OrderResult(success=False, error_message=message)
+        quantity_str = self._format_decimal(quantized_quantity, getattr(self.config, "step_size", None))
         payload_preview = {
             "symbol": contract_id,
             "side": backpack_side,
             "orderType": OrderTypeEnum.MARKET,
-            "quantity": str(quantity),
+            "quantity": quantity_str,
         }
         self.logger.debug(f"[BACKPACK] Executing market order payload: {payload_preview}")
 
@@ -392,7 +431,7 @@ class BackpackClient(BaseExchangeClient):
                 symbol=contract_id,
                 side=backpack_side,
                 order_type=OrderTypeEnum.MARKET,
-                quantity=str(quantity),
+                quantity=quantity_str,
             )
         except Exception as exc:
             self.logger.error(f"[BACKPACK] Failed to place market order: {exc}")
@@ -419,7 +458,7 @@ class BackpackClient(BaseExchangeClient):
             success=success,
             order_id=str(result.get("id")),
             side=side.lower(),
-            size=executed_qty or quantity,
+            size=executed_qty or quantized_quantity,
             price=avg_price,
             status=status,
             filled_size=executed_qty,
@@ -596,8 +635,11 @@ class BackpackClient(BaseExchangeClient):
                 quantity_filter = (market.get("filters", {}) or {}).get("quantity", {}) or {}
                 price_filter = (market.get("filters", {}) or {}).get("price", {}) or {}
                 min_quantity = self._to_decimal(quantity_filter.get("minQuantity"), Decimal("0"))
+                step_size = self._to_decimal(quantity_filter.get("stepSize"), Decimal("0.0001"))
                 tick_size = self._to_decimal(price_filter.get("tickSize"), Decimal("0.0001"))
                 self._market_symbol_map[market.get("baseSymbol", "").upper()] = target_symbol
+                setattr(self.config, "min_quantity", min_quantity or Decimal("0"))
+                setattr(self.config, "step_size", step_size or Decimal("0.0001"))
                 break
 
         if not target_symbol:
@@ -605,6 +647,10 @@ class BackpackClient(BaseExchangeClient):
 
         self.config.contract_id = target_symbol
         self.config.tick_size = tick_size or Decimal("0.0001")
+        if not getattr(self.config, "step_size", None):
+            setattr(self.config, "step_size", Decimal("0.0001"))
+        if not getattr(self.config, "min_quantity", None):
+            setattr(self.config, "min_quantity", Decimal("0"))
 
         if getattr(self.config, "quantity", Decimal("0")) < (min_quantity or Decimal("0")):
             raise ValueError(
