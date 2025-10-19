@@ -206,7 +206,7 @@ class CollectionOrchestrator:
             new_symbols_count = 0
             stored_rates = 0
             
-            for normalized_symbol, funding_rate in rates.items():
+            for normalized_symbol, rate_sample in rates.items():
                 try:
                     # Get or create symbol
                     symbol_id = await self.symbol_repo.get_or_create(
@@ -240,7 +240,8 @@ class CollectionOrchestrator:
                     await self.funding_rate_repo.insert(
                         dex_id=dex_id,
                         symbol_id=symbol_id,
-                        funding_rate=funding_rate,
+                        funding_rate=rate_sample.normalized_rate,
+                        next_funding_time=rate_sample.next_funding_time,
                         collection_latency_ms=latency_ms
                     )
                     
@@ -248,7 +249,8 @@ class CollectionOrchestrator:
                     await self.funding_rate_repo.upsert_latest(
                         dex_id=dex_id,
                         symbol_id=symbol_id,
-                        funding_rate=funding_rate
+                        funding_rate=rate_sample.normalized_rate,
+                        next_funding_time=rate_sample.next_funding_time
                     )
                     
                     stored_rates += 1

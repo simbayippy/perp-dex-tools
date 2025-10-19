@@ -47,24 +47,28 @@ async def main():
             return
         
         # Display results
-        print("-"*60)
-        print(f"{'Symbol':<10} {'Funding Rate':<15} {'Annualized APY':<15}")
-        print("-"*60)
+        print("-"*78)
+        print(f"{'Symbol':<10} {'Funding Rate (8h)':<22} {'Interval (h)':<14} {'Annualized APY':<15}")
+        print("-"*78)
         
         # Sort by symbol
-        for symbol, rate in sorted(rates.items())[:15]:  # Show first 15
-            # Calculate annualized APY (assuming 8h funding periods)
-            annualized_apy = float(rate) * 365 * 3 * 100
+        for symbol, sample in sorted(rates.items())[:15]:  # Show first 15
+            rate_value = sample.normalized_rate
+            annualized_apy = float(rate_value) * 365 * 3 * 100
+            interval_hours = float(sample.interval_hours)
             
-            print(f"{symbol:<10} {float(rate):>14.8f} {annualized_apy:>14.2f}%")
+            print(
+                f"{symbol:<10} {float(rate_value):>21.8f} "
+                f"{interval_hours:>13.2f} {annualized_apy:>14.2f}%"
+            )
         
         if len(rates) > 15:
             print(f"... and {len(rates) - 15} more symbols")
         
-        print("-"*60)
+        print("-"*78)
         
         # Show statistics
-        rates_list = [float(r) for r in rates.values()]
+        rates_list = [float(sample.normalized_rate) for sample in rates.values()]
         avg_rate = sum(rates_list) / len(rates_list)
         max_rate = max(rates_list)
         min_rate = min(rates_list)
@@ -120,4 +124,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

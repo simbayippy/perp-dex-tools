@@ -5,12 +5,13 @@ Fetches funding rates and market data from Backpack using direct API calls.
 This adapter is read-only and focused solely on data collection.
 """
 
+from datetime import datetime, timezone
 from typing import Dict, Optional
 from decimal import Decimal
 import aiohttp
 import asyncio
 
-from exchange_clients.base import BaseFundingAdapter
+from exchange_clients.base import BaseFundingAdapter, FundingRateSample
 from funding_rate_service.utils.logger import logger
 
 
@@ -75,7 +76,23 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             logger.error(f"{self.dex_name}: Request failed for {endpoint}: {e}")
             raise
     
-    async def fetch_funding_rates(self) -> Dict[str, Decimal]:
+    @staticmethod
+    def _parse_timestamp(value: Optional[object]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            return None
+        if numeric > 10**16:
+            return datetime.fromtimestamp(numeric / 1_000_000_000, tz=timezone.utc)
+        if numeric > 10**12:
+            return datetime.fromtimestamp(numeric / 1000, tz=timezone.utc)
+        return datetime.fromtimestamp(numeric, tz=timezone.utc)
+
+    async def fetch_funding_rates(self) -> Dict[str, FundingRateSample]:
         """
         Fetch all funding rates from Backpack
         
@@ -83,8 +100,7 @@ class BackpackFundingAdapter(BaseFundingAdapter):
         This is much faster than calling individual endpoints per symbol.
         
         Returns:
-            Dictionary mapping normalized symbols to funding rates
-            Example: {"BTC": Decimal("0.0001"), "ETH": Decimal("0.00008")}
+            Dictionary mapping normalized symbols to FundingRateSample entries
             
         Raises:
             Exception: If fetching fails after retries
@@ -104,7 +120,7 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                 # logger.warning(f"{self.dex_name}: Expected list, got {type(mark_prices_data)}")
                 return {}
             
-            rates_dict = {}
+            rates_dict: Dict[str, FundingRateSample] = {}
             
             # Extract funding rates from mark prices data
             for mark_data in mark_prices_data:
@@ -130,18 +146,20 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                     # Normalize symbol (e.g., "BTC_USDC_PERP" -> "BTC")
                     normalized_symbol = self.normalize_symbol(symbol)
                     
-                    # Convert to Decimal
-                    funding_rate_decimal = Decimal(str(funding_rate))
+                    raw_rate = Decimal(str(funding_rate))
+                    interval_hours = Decimal('1')
+                    normalized_rate = raw_rate * (self.CANONICAL_INTERVAL_HOURS / interval_hours)
+                    next_funding_time = self._parse_timestamp(mark_data.get('nextFundingTime'))
                     
-                    rates_dict[normalized_symbol] = funding_rate_decimal
+                    rates_dict[normalized_symbol] = FundingRateSample(
+                        normalized_rate=normalized_rate,
+                        raw_rate=raw_rate,
+                        interval_hours=interval_hours,
+                        next_funding_time=next_funding_time,
+                        metadata={'symbol': symbol}
+                    )
                     
-                    # Log details for first few symbols only to avoid spam
-                    if len(rates_dict) <= 3:
-                        # logger.debug(
-                        #     f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
-                        #     f"{funding_rate_decimal}"
-                        # )
-                        pass
+                    # Log details for first few symbols only to avoid spam (disabled)
                 
                 except Exception as e:
                     logger.error(

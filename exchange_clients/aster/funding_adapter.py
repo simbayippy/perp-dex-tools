@@ -5,11 +5,12 @@ Fetches funding rates and market data from Aster using the official aster-connec
 This adapter is read-only and focused solely on data collection.
 """
 
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Dict, Optional
-from decimal import Decimal
 import re
 
-from exchange_clients.base import BaseFundingAdapter
+from exchange_clients.base import BaseFundingAdapter, FundingRateSample
 from funding_rate_service.utils.logger import logger, clamp_external_logger_levels
 
 # Import Aster SDK
@@ -62,9 +63,64 @@ class AsterFundingAdapter(BaseFundingAdapter):
         self.aster_client = AsterClient(base_url=api_base_url, timeout=timeout)
         clamp_external_logger_levels()
         
-        # logger.info(f"Aster adapter initialized")
+        self._funding_interval_cache: Dict[str, Decimal] = {}
+        self._funding_interval_last_refresh: Optional[datetime] = None
+        self._funding_interval_ttl = timedelta(minutes=10)
     
-    async def fetch_funding_rates(self) -> Dict[str, Decimal]:
+    async def _refresh_funding_intervals(self) -> None:
+        """Refresh cached funding interval hours per symbol."""
+        now = datetime.now(timezone.utc)
+        if (
+            self._funding_interval_cache
+            and self._funding_interval_last_refresh
+            and now - self._funding_interval_last_refresh < self._funding_interval_ttl
+        ):
+            return
+        
+        try:
+            response = await self._make_request("/fapi/v1/fundingInfo")
+        except Exception as exc:
+            logger.warning(f"{self.dex_name}: Failed to refresh funding intervals: {exc}")
+            self._funding_interval_last_refresh = now
+            return
+        
+        updated_cache: Dict[str, Decimal] = {}
+        data_iter = response if isinstance(response, list) else response or []
+        for entry in data_iter:
+            symbol = entry.get("symbol")
+            interval_value = entry.get("fundingIntervalHours")
+            if not symbol or interval_value is None:
+                continue
+            try:
+                interval_decimal = Decimal(str(interval_value))
+            except (InvalidOperation, TypeError, ValueError):
+                continue
+            if interval_decimal > 0:
+                updated_cache[symbol] = interval_decimal
+        
+        if updated_cache:
+            self._funding_interval_cache = updated_cache
+        self._funding_interval_last_refresh = now
+    
+    @staticmethod
+    def _parse_next_funding_time(value: Optional[object]) -> Optional[datetime]:
+        """Convert API timestamps (ms/ns) to aware UTC datetime."""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            return None
+        
+        if numeric > 10**16:
+            return datetime.fromtimestamp(numeric / 1_000_000_000, tz=timezone.utc)
+        if numeric > 10**12:
+            return datetime.fromtimestamp(numeric / 1000, tz=timezone.utc)
+        return datetime.fromtimestamp(numeric, tz=timezone.utc)
+    
+    async def fetch_funding_rates(self) -> Dict[str, FundingRateSample]:
         """
         Fetch all funding rates from Aster
         
@@ -72,14 +128,15 @@ class AsterFundingAdapter(BaseFundingAdapter):
         which includes current funding rate information for each perpetual market.
         
         Returns:
-            Dictionary mapping normalized symbols to funding rates
-            Example: {"BTC": Decimal("0.0001"), "ETH": Decimal("0.00008")}
+            Dictionary mapping normalized symbols to FundingRateSample entries
             
         Raises:
             Exception: If fetching fails after retries
         """
         try:
             # logger.debug(f"{self.dex_name}: Fetching funding rates...")
+            
+            await self._refresh_funding_intervals()
             
             # Fetch mark prices for all symbols which includes funding rates
             mark_prices_data = self.aster_client.mark_price()
@@ -89,7 +146,7 @@ class AsterFundingAdapter(BaseFundingAdapter):
                 return {}
             
             # Extract funding rates
-            rates_dict = {}
+            rates_dict: Dict[str, FundingRateSample] = {}
             
             # Handle both single dict and list of dicts response
             if isinstance(mark_prices_data, dict):
@@ -122,19 +179,33 @@ class AsterFundingAdapter(BaseFundingAdapter):
                         #     )
                         continue
                     
-                    # Normalize symbol (e.g., "BTCUSDT" -> "BTC")
                     normalized_symbol = self.normalize_symbol(symbol)
+                    raw_rate = Decimal(str(funding_rate))
+                    interval_hours = self._funding_interval_cache.get(
+                        symbol,
+                        self.CANONICAL_INTERVAL_HOURS,
+                    )
+                    if interval_hours <= 0:
+                        interval_hours = self.CANONICAL_INTERVAL_HOURS
+                    normalized_rate = raw_rate * (self.CANONICAL_INTERVAL_HOURS / interval_hours)
                     
-                    # Convert to Decimal
-                    funding_rate_decimal = Decimal(str(funding_rate))
+                    next_funding_time = self._parse_next_funding_time(
+                        market_data.get('nextFundingTime')
+                    )
                     
-                    rates_dict[normalized_symbol] = funding_rate_decimal
+                    rates_dict[normalized_symbol] = FundingRateSample(
+                        normalized_rate=normalized_rate,
+                        raw_rate=raw_rate,
+                        interval_hours=interval_hours,
+                        next_funding_time=next_funding_time,
+                        metadata={'symbol': symbol},
+                    )
                     
                     # # Log details for first few symbols only to avoid spam
                     # if len(rates_dict) <= 3:
                     #     logger.debug(
                     #         f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
-                    #         f"{funding_rate_decimal}"
+                    #         f"{normalized_rate} (interval={interval_hours}h)"
                     #     )
                 
                 except Exception as e:

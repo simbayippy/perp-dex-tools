@@ -14,6 +14,7 @@ Modules:
 from .base import (
     BaseExchangeClient,
     BaseFundingAdapter,
+    FundingRateSample,
     OrderResult,
     OrderInfo,
     query_retry
@@ -23,6 +24,7 @@ from .events import LiquidationEvent, LiquidationEventDispatcher
 __all__ = [
     'BaseExchangeClient',
     'BaseFundingAdapter',
+    'FundingRateSample',
     'OrderResult',
     'OrderInfo',
     'query_retry',

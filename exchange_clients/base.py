@@ -168,6 +168,20 @@ class ExchangePositionSnapshot:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class FundingRateSample:
+    """
+    Standardized funding rate payload returned by funding adapters.
+    """
+    
+    normalized_rate: Decimal
+    raw_rate: Decimal
+    interval_hours: Decimal
+    next_funding_time: Optional[datetime] = None
+    source_timestamp: Optional[datetime] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
 # ============================================================================
 # TRADING EXECUTION INTERFACE
 # ============================================================================
@@ -862,13 +876,21 @@ class BaseFundingAdapter(ABC):
             def __init__(self, api_base_url: str = "https://fapi.asterdex.com", timeout: int = 10):
                 super().__init__(dex_name="aster", api_base_url=api_base_url, timeout=timeout)
                 
-            async def fetch_funding_rates(self) -> Dict[str, Decimal]:
+            async def fetch_funding_rates(self) -> Dict[str, FundingRateSample]:
                 # Fetch from exchange API
                 result = await self._make_request("/api/v1/fundingRate")
                 # Parse and normalize
-                return {"BTC": Decimal(result["BTC"]["rate"]), ...}
+                return {
+                    \"BTC\": FundingRateSample(
+                        normalized_rate=Decimal(result[\"BTC\"][\"rate\"]),
+                        raw_rate=Decimal(result[\"BTC\"][\"rate\"]),
+                        interval_hours=self.CANONICAL_INTERVAL_HOURS,
+                    )
+                }
         ```
     """
+    
+    CANONICAL_INTERVAL_HOURS: Decimal = Decimal("8")
     
     def __init__(self, dex_name: str, api_base_url: str, timeout: int = 10):
         """
@@ -889,18 +911,20 @@ class BaseFundingAdapter(ABC):
     # ========================================================================
     
     @abstractmethod
-    async def fetch_funding_rates(self) -> Dict[str, Decimal]:
+    async def fetch_funding_rates(self) -> Dict[str, FundingRateSample]:
         """
         Fetch all funding rates from this DEX.
         
         Returns:
-            Dictionary mapping normalized symbols to funding rates
+            Dictionary mapping normalized symbols to `FundingRateSample` entries.
             
         Example:
             {
-                "BTC": Decimal("0.0001"),    # 0.01% per 8 hours
-                "ETH": Decimal("0.00008"),   # 0.008% per 8 hours
-                "SOL": Decimal("-0.00005")   # -0.005% per 8 hours (negative rate)
+                "BTC": FundingRateSample(
+                    normalized_rate=Decimal("0.0001"),  # 0.01% per 8h
+                    raw_rate=Decimal("0.0001"),
+                    interval_hours=Decimal("8")
+                )
             }
             
         Raises:
@@ -1066,7 +1090,7 @@ class BaseFundingAdapter(ABC):
     # METRICS & MONITORING
     # ========================================================================
     
-    async def fetch_with_metrics(self) -> tuple[Dict[str, Decimal], int]:
+    async def fetch_with_metrics(self) -> tuple[Dict[str, FundingRateSample], int]:
         """
         Fetch funding rates with collection latency metrics.
         

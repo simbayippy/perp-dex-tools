@@ -11,11 +11,12 @@ Key endpoints:
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Dict, Optional
 from decimal import Decimal
 import re
 
-from exchange_clients.base import BaseFundingAdapter
+from exchange_clients.base import BaseFundingAdapter, FundingRateSample
 
 # Initialize logger for this module
 logger = logging.getLogger(__name__)
@@ -69,7 +70,7 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
         #     f"batch_delay={delay_between_batches}s)"
         # )
     
-    async def fetch_funding_rates(self) -> Dict[str, Decimal]:
+    async def fetch_funding_rates(self) -> Dict[str, FundingRateSample]:
         """
         Fetch all funding rates from EdgeX
         
@@ -82,7 +83,7 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
         3. Extract funding rates and cache full ticker data
         
         Returns:
-            Dict mapping normalized symbols to funding rates
+            Dict mapping normalized symbols to FundingRateSample entries
         """
         try:
             # logger.debug(f"{self.dex_name}: Fetching contract metadata...")
@@ -133,7 +134,7 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
             results = await self._fetch_tickers_in_batches(perpetual_contracts)
             
             # Step 3: Extract funding rates and cache full ticker data
-            rates_dict = {}
+            rates_dict: Dict[str, FundingRateSample] = {}
             successful = 0
             failed = 0
             
@@ -142,8 +143,8 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
                     failed += 1
                     # logger.debug(f"{self.dex_name}: Ticker fetch failed: {result}")
                 elif result is not None:
-                    symbol, rate, ticker_data = result
-                    rates_dict[symbol] = rate
+                    symbol, sample, ticker_data = result
+                    rates_dict[symbol] = sample
                     self._ticker_cache[symbol] = ticker_data  # Cache for market data reuse
                     successful += 1
                 else:
@@ -206,12 +207,28 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
         
         return all_results
     
+    @staticmethod
+    def _parse_timestamp(value: Optional[object]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            return None
+        if numeric > 10**16:
+            return datetime.fromtimestamp(numeric / 1_000_000_000, tz=timezone.utc)
+        if numeric > 10**12:
+            return datetime.fromtimestamp(numeric / 1000, tz=timezone.utc)
+        return datetime.fromtimestamp(numeric, tz=timezone.utc)
+
     async def _fetch_single_ticker(
-        self, 
-        contract_id: str, 
+        self,
+        contract_id: str,
         contract_name: str,
         semaphore: asyncio.Semaphore
-    ) -> Optional[tuple[str, Decimal, dict]]:
+    ) -> Optional[tuple[str, FundingRateSample, dict]]:
         """
         Fetch ticker (funding rate + market data) for a single contract
         
@@ -221,7 +238,7 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
             semaphore: Concurrency limiter
             
         Returns:
-            Tuple of (normalized_symbol, funding_rate, ticker_data) or None if failed
+            Tuple of (normalized_symbol, FundingRateSample, ticker_data) or None if failed
         """
         async with semaphore:
             try:
@@ -256,18 +273,20 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
                     # )
                     return None
                 
-                funding_rate = Decimal(str(funding_rate_str))
-                
-                # Normalize symbol (BTCUSDT -> BTC)
+                raw_rate = Decimal(str(funding_rate_str))
                 normalized_symbol = self.normalize_symbol(contract_name)
+                next_funding_time = self._parse_timestamp(
+                    ticker.get('nextFundingTime') or ticker.get('nextFundingTimeMs')
+                )
+                sample = FundingRateSample(
+                    normalized_rate=raw_rate,
+                    raw_rate=raw_rate,
+                    interval_hours=self.CANONICAL_INTERVAL_HOURS,
+                    next_funding_time=next_funding_time,
+                    metadata={'contract_id': contract_id},
+                )
                 
-                # logger.debug(
-                #     f"{self.dex_name}: {contract_name} -> {normalized_symbol}: "
-                #     f"funding_rate={funding_rate}, volume=${ticker.get('value', 'N/A')}, "
-                #     f"OI={ticker.get('openInterest', 'N/A')}"
-                # )
-                
-                return (normalized_symbol, funding_rate, ticker)
+                return (normalized_symbol, sample, ticker)
             
             except Exception as e:
                 # logger.debug(
@@ -499,4 +518,3 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
         """Close the adapter and cleanup resources"""
         # logger.debug(f"{self.dex_name}: Adapter closed")
         await super().close()
-

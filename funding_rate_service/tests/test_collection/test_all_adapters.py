@@ -55,17 +55,22 @@ async def test_adapter(adapter_class, name):
             return False, 0
         
         # Display sample results
-        print(f"{'-'*70}")
-        print(f"{'Symbol':<10} {'Funding Rate':<18} {'Annualized APY':<15}")
-        print(f"{'-'*70}")
+        print(f"{'-'*94}")
+        print(f"{'Symbol':<10} {'Funding Rate (8h)':<22} {'Interval (h)':<14} {'Annualized APY':<15}")
+        print(f"{'-'*94}")
         
-        for symbol, rate in list(sorted(rates.items()))[:10]:
-            annualized_apy = float(rate) * 365 * 3 * 100
-            print(f"{symbol:<10} {float(rate):>17.10f} {annualized_apy:>14.2f}%")
-        
+        for symbol, sample in list(sorted(rates.items()))[:10]:
+            rate_value = sample.normalized_rate
+            interval_hours = float(sample.interval_hours)
+            annualized_apy = float(rate_value) * 365 * 3 * 100
+            print(
+                f"{symbol:<10} {float(rate_value):>21.10f} "
+                f"{interval_hours:>13.2f} {annualized_apy:>14.2f}%"
+            )
+
         if len(rates) > 10:
             print(f"... and {len(rates) - 10} more symbols")
-        print(f"{'-'*70}")
+        print(f"{'-'*94}")
         
         # Test symbol normalization
         print(f"\n🔄 Symbol Normalization Test:")
@@ -183,4 +188,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
