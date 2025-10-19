@@ -232,14 +232,6 @@ class PositionMonitor:
         if not legs_metadata:
             return
 
-        total_unrealized = position.metadata.get("exchange_unrealized_pnl")
-        total_funding = position.metadata.get("exchange_funding")
-
-        totals_fragment = (
-            f"Totals | uPnL ${self._format_decimal(total_unrealized, precision=2)} | "
-            f"Funding ${self._format_decimal(total_funding, precision=2)}"
-        )
-
         headers = [
             ("Exchange", 12),
             ("Side", 6),
@@ -278,7 +270,6 @@ class PositionMonitor:
 
         message_lines = [
             f"Position {position.symbol} snapshot",
-            totals_fragment,
             self._compose_yield_summary(position),
             separator,
             header_line,
@@ -336,13 +327,12 @@ class PositionMonitor:
             risk_cfg = getattr(self._strategy_config, "risk_config", None)
             if risk_cfg:
                 threshold = getattr(risk_cfg, "min_erosion_threshold", None)
-            min_profit = getattr(self._strategy_config, "min_profit", None)
 
         threshold_display = self._format_percent(threshold) if threshold is not None else "n/a"
-        min_profit_display = self._format_rate(min_profit) if min_profit is not None else "n/a"
 
         return (
-            f"Yield | entry {entry_rate_display} | current {current_rate_display} "
-            f"| erosion {erosion_display} (limit {threshold_display}) "
-            f"| min profit {min_profit_display}"
+            "Yield (annualised) | "
+            f"entry {entry_rate_display} | "
+            f"current {current_rate_display} | "
+            f"erosion {erosion_display} (limit {threshold_display})"
         )

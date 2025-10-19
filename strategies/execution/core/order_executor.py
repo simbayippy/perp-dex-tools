@@ -89,7 +89,7 @@ class OrderExecutor:
             side="buy",
             size_usd=Decimal("1000"),
             mode=ExecutionMode.LIMIT_WITH_FALLBACK,
-                    timeout_seconds=60.0
+                    timeout_seconds=40.0
         )
         
         if result.filled:
@@ -100,7 +100,7 @@ class OrderExecutor:
 
     def __init__(
         self,
-        default_timeout: float = 60.0,
+        default_timeout: float = 40.0,
         price_provider = None,  # Optional PriceProvider for cached prices
         default_limit_price_offset_pct: Decimal = DEFAULT_LIMIT_PRICE_OFFSET_PCT
     ):
