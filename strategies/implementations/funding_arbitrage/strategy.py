@@ -174,6 +174,7 @@ class FundingArbitrageStrategy(BaseStrategy):
             funding_rate_repo=self.funding_rate_repo,
             exchange_clients=self.exchange_clients,
             logger=self.logger,
+            strategy_config=self.config,
         )
         self.position_opener = PositionOpener(self)
         self.opportunity_scanner = OpportunityScanner(self)

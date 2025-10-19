@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from exchange_clients.base import BaseExchangeClient, ExchangePositionSnapshot
+from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import ExchangePositionSnapshot
 
 from .models import FundingArbPosition
 from .position_manager import FundingArbPositionManager
@@ -28,11 +29,13 @@ class PositionMonitor:
         funding_rate_repo: Any,
         exchange_clients: Dict[str, BaseExchangeClient],
         logger: Any,
+        strategy_config: Any = None,
     ) -> None:
         self._position_manager = position_manager
         self._funding_rate_repo = funding_rate_repo
         self._exchange_clients = exchange_clients
         self._logger = logger
+        self._strategy_config = strategy_config
 
     async def monitor(self) -> None:
         """Refresh open positions with latest funding rates and exchange data."""
@@ -229,14 +232,6 @@ class PositionMonitor:
         if not legs_metadata:
             return
 
-        total_unrealized = position.metadata.get("exchange_unrealized_pnl")
-        total_funding = position.metadata.get("exchange_funding")
-
-        totals_fragment = (
-            f"Totals | uPnL ${self._format_decimal(total_unrealized, precision=2)} | "
-            f"Funding ${self._format_decimal(total_funding, precision=2)}"
-        )
-
         headers = [
             ("Exchange", 12),
             ("Side", 6),
@@ -275,7 +270,7 @@ class PositionMonitor:
 
         message_lines = [
             f"Position {position.symbol} snapshot",
-            totals_fragment,
+            self._compose_yield_summary(position),
             separator,
             header_line,
             separator,
@@ -307,3 +302,37 @@ class PositionMonitor:
             return f"{annualized.quantize(quant):.{precision}f}%"
         except Exception:
             return str(rate)
+
+    @staticmethod
+    def _format_percent(value: Optional[Decimal], precision: int = 2) -> str:
+        if value is None:
+            return "n/a"
+        try:
+            dec = Decimal(str(value)) if not isinstance(value, Decimal) else value
+            quant = Decimal("1." + "0" * precision)
+            return f"{(dec * Decimal('100')).quantize(quant):.{precision}f}%"
+        except Exception:
+            return str(value)
+
+    def _compose_yield_summary(self, position: FundingArbPosition) -> str:
+        entry_rate_display = self._format_rate(position.entry_divergence)
+        current_rate_display = self._format_rate(position.current_divergence)
+
+        erosion_ratio = position.get_profit_erosion()
+        erosion_display = self._format_percent(erosion_ratio)
+
+        threshold = None
+        min_profit = None
+        if getattr(self, "_strategy_config", None):
+            risk_cfg = getattr(self._strategy_config, "risk_config", None)
+            if risk_cfg:
+                threshold = getattr(risk_cfg, "min_erosion_threshold", None)
+
+        threshold_display = self._format_percent(threshold) if threshold is not None else "n/a"
+
+        return (
+            "Yield (annualised) | "
+            f"entry {entry_rate_display} | "
+            f"current {current_rate_display} | "
+            f"erosion {erosion_display} (limit {threshold_display})"
+        )

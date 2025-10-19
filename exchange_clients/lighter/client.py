@@ -10,8 +10,8 @@ import aiohttp
 from decimal import Decimal, InvalidOperation
 from typing import Dict, Any, List, Optional, Tuple
 
-from exchange_clients.base import (
-    BaseExchangeClient,
+from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import (
     OrderResult,
     OrderInfo,
     ExchangePositionSnapshot,
@@ -68,6 +68,8 @@ class LighterClient(BaseExchangeClient):
         self.orders_cache = {}
         self.current_order_client_id = None
         self.current_order = None
+        self._min_order_notional: Dict[str, Decimal] = {}
+        self._latest_orders: Dict[str, OrderInfo] = {}
 
     def _validate_config(self) -> None:
         """Validate Lighter configuration."""
@@ -252,26 +254,34 @@ class LighterClient(BaseExchangeClient):
         # Clean up any trailing separators
         return symbol_upper.strip('-_/')
 
-    def setup_order_update_handler(self, handler) -> None:
-        """Setup order update handler for WebSocket."""
-        self._order_update_handler = handler
-
     def _handle_websocket_order_update(self, order_data_list: List[Dict[str, Any]]):
         """Handle order updates from WebSocket."""
         for order_data in order_data_list:
-            if order_data['market_index'] != self.config.contract_id:
+            market_index = order_data.get('market_index')
+            client_order_index = order_data.get('client_order_index')
+            server_order_index = order_data.get('order_index')
+
+            if market_index is None or client_order_index is None:
+                continue
+
+            if str(market_index) != str(self.config.contract_id):
+                self.logger.info(
+                    f"[LIGHTER] Ignoring order update for market {market_index} "
+                    f"(expected {self.config.contract_id})"
+                )
                 continue
 
             side = 'sell' if order_data['is_ask'] else 'buy'
             # Let strategy determine order type - exchange client just reports the order
             order_type = "ORDER"
 
-            order_id = order_data['order_index']
-            status = order_data['status'].upper()
-            filled_size = Decimal(order_data['filled_base_amount'])
-            size = Decimal(order_data['initial_base_amount'])
-            price = Decimal(order_data['price'])
-            remaining_size = Decimal(order_data['remaining_base_amount'])
+            order_id = str(client_order_index)
+            linked_order_index = str(server_order_index) if server_order_index is not None else "?"
+            status = str(order_data.get('status', '')).upper()
+            filled_size = Decimal(str(order_data.get('filled_base_amount', '0')))
+            size = Decimal(str(order_data.get('initial_base_amount', '0')))
+            price = Decimal(str(order_data.get('price', '0')))
+            remaining_size = Decimal(str(order_data.get('remaining_base_amount', '0')))
 
             if order_id in self.orders_cache.keys():
                 if (self.orders_cache[order_id]['status'] == 'OPEN' and
@@ -290,13 +300,17 @@ class LighterClient(BaseExchangeClient):
                 status = 'PARTIALLY_FILLED'
 
             if status == 'OPEN':
-                self.logger.info(f"[{order_type}] [{order_id}] {status} "
-                                f"{size} @ {price}")
+                self.logger.info(
+                    f"[LIGHTER] [{order_type}] [{order_id}] ({linked_order_index}) {status} "
+                    f"{size} @ {price}"
+                )
             else:
-                self.logger.info(f"[{order_type}] [{order_id}] {status} "
-                                f"{filled_size} @ {price}")
+                self.logger.info(
+                    f"[LIGHTER] [{order_type}] [{order_id}] ({linked_order_index}) {status} "
+                    f"{filled_size} @ {price}"
+                )
 
-            if order_data['client_order_index'] == self.current_order_client_id or order_type == 'OPEN':
+            if order_data.get('client_order_index') == self.current_order_client_id or order_type == 'OPEN':
                 current_order = OrderInfo(
                     order_id=order_id,
                     side=side,
@@ -308,9 +322,15 @@ class LighterClient(BaseExchangeClient):
                     cancel_reason=''
                 )
                 self.current_order = current_order
+                self._latest_orders[order_id] = current_order
+                if server_order_index is not None:
+                    self._latest_orders[str(server_order_index)] = current_order
 
             if status in ['FILLED', 'CANCELED']:
                 self.logger.log_transaction(order_id, side, filled_size, price, status)
+                self._latest_orders[order_id] = current_order
+                if server_order_index is not None:
+                    self._latest_orders[str(server_order_index)] = current_order
 
     async def _handle_liquidation_notifications(self, notifications: List[Dict[str, Any]]) -> None:
         """Handle liquidation notifications from the Lighter notification channel."""
@@ -389,7 +409,7 @@ class LighterClient(BaseExchangeClient):
             self.logger.error(f"❌ [LIGHTER] Failed to get BBO prices: {e}")
             raise ValueError(f"Unable to fetch BBO prices for {contract_id}: {e}")
 
-    def get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
+    def _get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
         """
         Get order book from WebSocket if available (zero latency).
         
@@ -458,7 +478,7 @@ class LighterClient(BaseExchangeClient):
         """
         try:
             # 🔴 Priority 1: Try WebSocket (real-time, zero latency)
-            ws_book = self.get_order_book_from_websocket()
+            ws_book = self._get_order_book_from_websocket()
             if ws_book:
                 # Limit to requested levels
                 return {
@@ -555,43 +575,6 @@ class LighterClient(BaseExchangeClient):
             # Return empty order book on error
             return {'bids': [], 'asks': []}
 
-    async def _submit_order_with_retry(self, order_params: Dict[str, Any]) -> OrderResult:
-        """Submit an order with Lighter using official SDK."""
-        # Ensure client is initialized
-        if self.lighter_client is None:
-            # This is a sync method, so we need to handle this differently
-            # For now, raise an error if client is not initialized
-            raise ValueError("Lighter client not initialized. Call connect() first.")
-
-        self.logger.info(
-            f"📤 [LIGHTER] Submitting order: "
-            f"market={order_params.get('market_index')}, "
-            f"client_id={order_params.get('client_order_index')}, "
-            f"side={'ASK' if order_params.get('is_ask') else 'BID'}, "
-            f"price={order_params.get('price')}, "
-            f"amount={order_params.get('base_amount')}"
-        )
-
-        # Create order using official SDK
-        create_order, tx_hash, error = await self.lighter_client.create_order(**order_params)
-        
-        if error is not None:
-            self.logger.error(
-                f"❌ [LIGHTER] Order submission failed: {error}"
-            )
-            return OrderResult(
-                success=False, order_id=str(order_params['client_order_index']),
-                error_message=f"Order creation error: {error}")
-        
-        # Log successful submission with tx hash
-        self.logger.info(
-            f"✅ [LIGHTER] Order submitted successfully! "
-            f"client_id={order_params['client_order_index']}, "
-            f"tx_hash={tx_hash}"
-        )
-        
-        return OrderResult(success=True, order_id=str(order_params['client_order_index']))
-
     async def place_limit_order(self, contract_id: str, quantity: Decimal, price: Decimal,
                                 side: str) -> OrderResult:
         """Place a post only order with Lighter using official SDK."""
@@ -611,6 +594,9 @@ class LighterClient(BaseExchangeClient):
         client_order_index = int(time.time() * 1000) % 1000000  # Simple unique ID
         self.current_order_client_id = client_order_index
 
+        expiry_seconds = getattr(self.config, "order_expiry_seconds", 3600)
+        order_expiry_ms = int((time.time() + expiry_seconds) * 1000)
+
         # Create order parameters
         order_params = {
             'market_index': self.config.contract_id,
@@ -619,40 +605,39 @@ class LighterClient(BaseExchangeClient):
             'price': int(price * self.price_multiplier),
             'is_ask': is_ask,
             'order_type': self.lighter_client.ORDER_TYPE_LIMIT,
-            'time_in_force': self.lighter_client.ORDER_TIME_IN_FORCE_GOOD_TILL_TIME,
+            'time_in_force': self.lighter_client.ORDER_TIME_IN_FORCE_POST_ONLY,
             'reduce_only': False,
             'trigger_price': 0,
+            'order_expiry': order_expiry_ms,
         }
 
-        order_result = await self._submit_order_with_retry(order_params)
-        return order_result
+        self.logger.info(
+            f"📤 [LIGHTER] Submitting order: market={order_params.get('market_index')} "
+            f"client_id={order_params.get('client_order_index')} "
+            f"side={'ASK' if order_params.get('is_ask') else 'BID'} "
+            f"price={order_params.get('price')} amount={order_params.get('base_amount')}"
+        )
 
+        create_order, tx_hash, error = await self.lighter_client.create_order(**order_params)
 
-    async def _get_active_close_orders(self, contract_id: str) -> int:
-        """Get active orders count for a contract using official SDK."""
-        active_orders = await self.get_active_orders(contract_id)
-        return len(active_orders)
-
-    async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
-        """Place a close order with Lighter using official SDK."""
-        self.current_order = None
-        self.current_order_client_id = None
-        order_result = await self.place_limit_order(contract_id, quantity, price, side)
-
-        # wait for 5 seconds to ensure order is placed
-        await asyncio.sleep(5)
-        if order_result.success:
-            return OrderResult(
-                success=True,
-                order_id=order_result.order_id,
-                side=side,
-                size=quantity,
-                price=price,
-                status='OPEN'
-            )
+        if hasattr(create_order, "to_dict"):
+            try:
+                raw_payload = create_order.to_dict()
+            except Exception:  # pragma: no cover - defensive
+                raw_payload = repr(create_order)
         else:
-            raise Exception(f"[CLOSE] Error placing order: {order_result.error_message}")
-    
+            raw_payload = getattr(create_order, "__dict__", repr(create_order))
+
+        if error is not None:
+            self.logger.error(f"❌ [LIGHTER] Order submission failed: {error}")
+            return OrderResult(
+                success=False,
+                order_id=str(client_order_index),
+                error_message=f"Order creation error: {error}",
+            )
+
+        return OrderResult(success=True, order_id=str(client_order_index))
+
     async def get_order_price(self, side: str = '') -> Decimal:
         """Get the price of an order with Lighter using official SDK."""
         # Get current market prices
@@ -695,6 +680,13 @@ class LighterClient(BaseExchangeClient):
         Note: Lighter uses order_index (int) as order_id, and we need market_id to query orders.
         """
         try:
+            order_id_str = str(order_id)
+
+            # First check latest updates captured from WebSocket
+            cached = self._latest_orders.get(order_id_str)
+            if cached is not None:
+                return cached
+
             if not self.order_api:
                 self.logger.error("Order API not initialized")
                 return None
@@ -743,31 +735,60 @@ class LighterClient(BaseExchangeClient):
             
             # Look for the specific order by order_index
             if orders_response and orders_response.orders:
-                order_id_int = int(order_id)
+                order_id_int = int(order_id_str)
                 for order in orders_response.orders:
-                    if order.order_index == order_id_int:
-                        # Found the order!
-                        size = Decimal(str(order.size_base))
-                        filled = Decimal(str(order.matched_base))
-                        remaining = size - filled
-                        
-                        # Determine status
-                        if filled >= size:
-                            status = "FILLED"
-                        elif filled > 0:
-                            status = "PARTIALLY_FILLED"
-                        else:
-                            status = "OPEN"
-                        
-                        return OrderInfo(
+                    try:
+                        client_idx = int(getattr(order, "client_order_index", -1))
+                    except Exception:
+                        client_idx = -1
+                    try:
+                        server_idx = int(getattr(order, "order_index", -1))
+                    except Exception:
+                        server_idx = -1
+
+                    if client_idx == order_id_int or server_idx == order_id_int:
+                        size = Decimal(str(getattr(order, "initial_base_amount", "0")))
+                        remaining = Decimal(str(getattr(order, "remaining_base_amount", "0")))
+                        filled_base = Decimal(str(getattr(order, "filled_base_amount", "0")))
+
+                        # Some payloads only provide remaining; fall back to size - remaining
+                        if filled_base <= Decimal("0") and size >= remaining:
+                            filled_base = size - remaining
+
+                        if filled_base < Decimal("0"):
+                            filled_base = Decimal("0")
+                        if remaining < Decimal("0"):
+                            remaining = Decimal("0")
+
+                        status_raw = str(getattr(order, "status", "")).upper()
+                        if status_raw not in {"FILLED", "PARTIALLY_FILLED", "OPEN", "CANCELED"}:
+                            if filled_base >= size and size > 0:
+                                status_raw = "FILLED"
+                            elif filled_base > 0:
+                                status_raw = "PARTIALLY_FILLED"
+                            elif remaining >= size:
+                                status_raw = "OPEN"
+
+                        if status_raw == "FILLED":
+                            remaining = Decimal("0")
+                            filled_base = size if size > 0 else filled_base
+                        elif status_raw == "OPEN" and filled_base > 0:
+                            status_raw = "PARTIALLY_FILLED"
+
+                        side = "sell" if getattr(order, "is_ask", False) else "buy"
+                        price = Decimal(str(getattr(order, "price", "0")))
+
+                        info = OrderInfo(
                             order_id=order_id,
-                            side="buy" if order.is_bid else "sell",
+                            side=side,
                             size=size,
-                            price=Decimal(str(order.price)),
-                            status=status,
-                            filled_size=filled,
-                            remaining_size=remaining
+                            price=price,
+                            status=status_raw,
+                            filled_size=filled_base,
+                            remaining_size=remaining,
                         )
+                        self._latest_orders[order_id_str] = info
+                        return info
             
             # Order not found in active orders - might be filled
             return None
@@ -911,7 +932,28 @@ class LighterClient(BaseExchangeClient):
             self.logger.error("Failed to get tick size")
             raise ValueError("Failed to get tick size")
 
+        try:
+            min_quote_amount = Decimal(str(order_book_details.min_quote_amount))
+        except Exception as exc:
+            min_quote_amount = None
+            self.logger.debug(f"[LIGHTER] Unable to parse min_quote_amount for {ticker}: {exc}")
+
+        if min_quote_amount is not None:
+            normalized_symbol = self.normalize_symbol(market_info.symbol)
+            self._min_order_notional[normalized_symbol] = min_quote_amount
+            setattr(self.config, "min_order_notional", min_quote_amount)
+            self.logger.debug(
+                f"[LIGHTER] Minimum order notional for {normalized_symbol}: ${min_quote_amount}"
+            )
+
         return self.config.contract_id, self.config.tick_size
+
+    def get_min_order_notional(self, symbol: str) -> Optional[Decimal]:
+        """
+        Return the minimum quote notional required for orders on the given symbol.
+        """
+        normalized = self.normalize_symbol(symbol)
+        return self._min_order_notional.get(normalized)
 
     # Account monitoring methods (Lighter-specific implementations)
     async def get_account_balance(self) -> Optional[Decimal]:
@@ -928,7 +970,7 @@ class LighterClient(BaseExchangeClient):
             self.logger.error(f"Error getting account balance: {e}")
             return None
 
-    async def get_detailed_positions(self) -> List[Dict[str, Any]]:
+    async def _get_detailed_positions(self) -> List[Dict[str, Any]]:
         """Get detailed position info using Lighter SDK."""
         try:
             if not self.account_api:
@@ -961,7 +1003,7 @@ class LighterClient(BaseExchangeClient):
         Retrieve detailed metrics for a specific symbol.
         """
         try:
-            positions = await self.get_detailed_positions()
+            positions = await self._get_detailed_positions()
         except Exception as exc:
             self.logger.warning(f"[LIGHTER] Failed to fetch positions for snapshot: {exc}")
             return None
@@ -972,8 +1014,18 @@ class LighterClient(BaseExchangeClient):
             pos_symbol = (pos.get("symbol") or "").upper()
             if pos_symbol != normalized_symbol:
                 continue
+ 
+            raw_quantity = pos.get("position") or Decimal("0")
+            try:
+                quantity = Decimal(raw_quantity)
+            except Exception:
+                quantity = Decimal(str(raw_quantity))
 
-            quantity: Decimal = pos.get("position") or Decimal("0")
+            sign_indicator = pos.get("sign")
+            if isinstance(sign_indicator, int) and sign_indicator != 0:
+                quantity = quantity.copy_abs() * (Decimal(1) if sign_indicator > 0 else Decimal(-1))
+
+            quantity = Decimal(quantity)
             entry_price: Optional[Decimal] = pos.get("avg_entry_price")
             exposure: Optional[Decimal] = pos.get("position_value")
             if exposure is not None:
@@ -988,9 +1040,17 @@ class LighterClient(BaseExchangeClient):
             margin_reserved: Optional[Decimal] = pos.get("allocated_margin")
             liquidation_price: Optional[Decimal] = pos.get("liquidation_price")
 
-            side = "long" if quantity > 0 else "short" if quantity < 0 else pos.get("sign")
-            if isinstance(side, int):
-                side = "long" if side > 0 else "short" if side < 0 else None
+            side = None
+            if isinstance(sign_indicator, int):
+                if sign_indicator > 0:
+                    side = "long"
+                elif sign_indicator < 0:
+                    side = "short"
+            if side is None:
+                if quantity > 0:
+                    side = "long"
+                elif quantity < 0:
+                    side = "short"
 
             metadata: Dict[str, Any] = {
                 "market_id": pos.get("market_id"),
@@ -1019,7 +1079,7 @@ class LighterClient(BaseExchangeClient):
     async def get_account_pnl(self) -> Optional[Decimal]:
         """Get account P&L using Lighter SDK."""
         try:
-            positions = await self.get_detailed_positions()
+            positions = await self._get_detailed_positions()
             total_pnl = Decimal('0')
             for pos in positions:
                 total_pnl += pos['unrealized_pnl']

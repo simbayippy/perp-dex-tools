@@ -1,145 +1,511 @@
 """
 Backpack WebSocket Manager
 
-Handles WebSocket connections for Backpack exchange order updates.
-Uses ED25519 signature authentication for secure connections.
+Maintains both private (account) and public (market data) websocket streams.
 """
 
+from __future__ import annotations
+
 import asyncio
+import base64
 import json
 import time
-import base64
-from typing import Dict, Any, Callable
+from decimal import Decimal, InvalidOperation
+from typing import Any, Awaitable, Callable, Dict, List, Optional
+
 from cryptography.hazmat.primitives.asymmetric import ed25519
 import websockets
 
+from exchange_clients.base_models import MissingCredentialsError
+
 
 class BackpackWebSocketManager:
-    """WebSocket manager for Backpack order updates."""
+    """WebSocket manager for Backpack order, position, and depth streams."""
 
-    def __init__(self, public_key: str, secret_key: str, symbol: str, order_update_callback: Callable):
+    _MAX_BACKOFF_SECONDS = 30.0
+
+    def __init__(
+        self,
+        public_key: str,
+        secret_key: str,
+        symbol: Optional[str],
+        order_update_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+        depth_fetcher: Optional[Callable[[str], Dict[str, Any]]] = None,
+        depth_stream_interval: str = "realtime",
+    ):
         self.public_key = public_key
         self.secret_key = secret_key
         self.symbol = symbol
         self.order_update_callback = order_update_callback
-        self.websocket = None
-        self.running = False
-        self.ws_url = "wss://ws.backpack.exchange"
+        self.depth_fetcher = depth_fetcher
+        self.depth_stream_interval = depth_stream_interval
+
         self.logger = None
-
-        # Initialize ED25519 private key from base64 decoded secret
-        self.private_key = ed25519.Ed25519PrivateKey.from_private_bytes(
-            base64.b64decode(secret_key)
-        )
-
-    def _generate_signature(self, instruction: str, timestamp: int, window: int = 5000) -> str:
-        """Generate ED25519 signature for WebSocket authentication."""
-        # Create the message string in the same format as BPX package
-        message = f"instruction={instruction}&timestamp={timestamp}&window={window}"
-
-        # Sign the message using ED25519 private key
-        signature_bytes = self.private_key.sign(message.encode())
-
-        # Return base64 encoded signature
-        return base64.b64encode(signature_bytes).decode()
-
-    async def connect(self):
-        """Connect to Backpack WebSocket."""
-        while True:
-            try:
-                if self.logger:
-                    self.logger.info("Connecting to Backpack WebSocket")
-                self.websocket = await websockets.connect(self.ws_url)
-                self.running = True
-
-                # Subscribe to order updates for the specific symbol
-                timestamp = int(time.time() * 1000)
-                signature = self._generate_signature("subscribe", timestamp)
-
-                subscribe_message = {
-                    "method": "SUBSCRIBE",
-                    "params": [f"account.orderUpdate.{self.symbol}"],
-                    "signature": [
-                        self.public_key,
-                        signature,
-                        str(timestamp),
-                        "5000"
-                    ]
-                }
-
-                await self.websocket.send(json.dumps(subscribe_message))
-                if self.logger:
-                    self.logger.info(f"Subscribed to order updates for {self.symbol}")
-
-                # Start listening for messages
-                await self._listen()
-
-            except Exception as e:
-                if self.logger:
-                    self.logger.error(f"WebSocket connection error: {e}")
-
-    async def _listen(self):
-        """Listen for WebSocket messages."""
-        try:
-            async for message in self.websocket:
-                if not self.running:
-                    break
-
-                try:
-                    data = json.loads(message)
-                    await self._handle_message(data)
-                except json.JSONDecodeError as e:
-                    if self.logger:
-                        self.logger.error(f"Failed to parse WebSocket message: {e}")
-                except Exception as e:
-                    if self.logger:
-                        self.logger.error(f"Error handling WebSocket message: {e}")
-
-        except websockets.exceptions.ConnectionClosed:
-            if self.logger:
-                self.logger.warning("WebSocket connection closed")
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"WebSocket listen error: {e}")
-
-    async def _handle_message(self, data: Dict[str, Any]):
-        """Handle incoming WebSocket messages."""
-        try:
-            stream = data.get('stream', '')
-            payload = data.get('data', {})
-
-            if 'orderUpdate' in stream:
-                await self._handle_order_update(payload)
-            else:
-                if self.logger:
-                    self.logger.debug(f"Unknown WebSocket message: {data}")
-
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error handling WebSocket message: {e}")
-
-    async def _handle_order_update(self, order_data: Dict[str, Any]):
-        """Handle order update messages."""
-        try:
-            # Call the order update callback if it exists
-            if hasattr(self, 'order_update_callback') and self.order_update_callback:
-                await self.order_update_callback(order_data)
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error handling order update: {e}")
-
-    async def disconnect(self):
-        """Disconnect from WebSocket."""
+        self.ws_url = "wss://ws.backpack.exchange"
         self.running = False
-        if self.websocket:
-            await self.websocket.close()
-            if self.logger:
-                self.logger.info("WebSocket disconnected")
 
-    def set_logger(self, logger):
-        """Set the logger instance."""
+        self._account_ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._depth_ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._account_task: Optional[asyncio.Task] = None
+        self._depth_task: Optional[asyncio.Task] = None
+
+        self._ready_event = asyncio.Event()
+        self._account_ready_event = asyncio.Event()
+        self._depth_ready_event = asyncio.Event()
+
+        self.best_bid: Optional[Decimal] = None
+        self.best_ask: Optional[Decimal] = None
+        self.order_book: Dict[str, List[Dict[str, Decimal]]] = {"bids": [], "asks": []}
+        self.order_book_ready: bool = False
+
+        # Maintain internal order book representation keyed by price
+        self._order_levels: Dict[str, Dict[Decimal, Decimal]] = {
+            "bids": {},
+            "asks": {},
+        }
+        self._last_update_id: Optional[int] = None
+        self._depth_reload_lock = asyncio.Lock()
+
+        try:
+            secret_bytes = base64.b64decode(secret_key)
+            self.private_key = ed25519.Ed25519PrivateKey.from_private_bytes(secret_bytes)
+        except Exception as exc:  # pragma: no cover - defensive
+            raise MissingCredentialsError(f"Invalid Backpack secret key: {exc}") from exc
+
+    # ------------------------------------------------------------------ #
+    # Public interface
+    # ------------------------------------------------------------------ #
+
+    def set_logger(self, logger) -> None:
+        """Attach shared logger instance."""
         self.logger = logger
 
-    def set_order_filled_event(self, event):
-        """Set the order filled event for synchronization."""
-        self.order_filled_event = event
+    async def wait_until_ready(self, timeout: float = 5.0) -> bool:
+        """Wait until the account stream is ready."""
+        try:
+            await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    async def wait_for_order_book(self, timeout: float = 5.0) -> bool:
+        """Wait until the depth stream has produced an order book snapshot."""
+        try:
+            await asyncio.wait_for(self._depth_ready_event.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    async def connect(self) -> None:
+        """Start background tasks to maintain account and market-data streams."""
+        if self.running:
+            return
+
+        self.running = True
+        self._ready_event.clear()
+        self._account_ready_event.clear()
+        self._depth_ready_event.clear()
+
+        self._account_task = asyncio.create_task(self._run_account_stream(), name="backpack-account-ws")
+        if self.depth_fetcher:
+            self._depth_task = asyncio.create_task(self._run_depth_stream(), name="backpack-depth-ws")
+        else:
+            # No depth stream - mark as ready so callers don't hang.
+            self._depth_ready_event.set()
+
+        # Allow tasks to spin up
+        await asyncio.sleep(0)
+
+    async def disconnect(self) -> None:
+        """Stop websocket tasks and close sockets."""
+        if not self.running:
+            return
+
+        self.running = False
+
+        tasks = [self._account_task, self._depth_task]
+        for task in tasks:
+            if task:
+                task.cancel()
+
+        for task in tasks:
+            if task:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        await self._close_account_ws()
+        await self._close_depth_ws()
+
+        self._account_task = None
+        self._depth_task = None
+
+        self._ready_event.clear()
+        self._account_ready_event.clear()
+        self._depth_ready_event.clear()
+        self.order_book_ready = False
+
+    def update_symbol(self, symbol: Optional[str]) -> None:
+        """
+        Update symbol subscription.
+
+        To fully switch symbols, call `disconnect()`, update the symbol, and
+        then call `connect()`.
+        """
+        if symbol == self.symbol:
+            return
+        self.symbol = symbol
+        self.order_book_ready = False
+        self._depth_ready_event.clear()
+
+    def get_order_book(self, levels: Optional[int] = None) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
+        """
+        Retrieve a snapshot of the maintained order book.
+
+        Args:
+            levels: Optional number of levels to return per side.
+
+        Returns:
+            Order book dict or None if not ready.
+        """
+        if not self.order_book_ready:
+            return None
+
+        bids = self.order_book["bids"]
+        asks = self.order_book["asks"]
+        if levels is not None:
+            bids = bids[:levels]
+            asks = asks[:levels]
+
+        return {
+            "bids": [{"price": level["price"], "size": level["size"]} for level in bids],
+            "asks": [{"price": level["price"], "size": level["size"]} for level in asks],
+        }
+
+    # ------------------------------------------------------------------ #
+    # Account (private) stream management
+    # ------------------------------------------------------------------ #
+
+    async def _run_account_stream(self) -> None:
+        backoff_seconds = 1.0
+        while self.running:
+            if not self.symbol:
+                await asyncio.sleep(0.5)
+                continue
+            try:
+                await self._connect_account_ws()
+                self._account_ready_event.set()
+                self._ready_event.set()
+                backoff_seconds = 1.0
+                await self._listen_account_ws()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:  # pragma: no cover - defensive
+                if self.logger:
+                    self.logger.error(f"[BACKPACK] Account WS error: {exc}")
+                await asyncio.sleep(min(backoff_seconds, self._MAX_BACKOFF_SECONDS))
+                backoff_seconds = min(backoff_seconds * 2, self._MAX_BACKOFF_SECONDS)
+            finally:
+                await self._close_account_ws()
+
+        self._account_ready_event.clear()
+
+    async def _connect_account_ws(self) -> None:
+        if self.logger:
+            self.logger.info(f"[BACKPACK] Connecting account stream for {self.symbol}")
+
+        self._account_ws = await websockets.connect(self.ws_url)
+        await self._subscribe_account_stream()
+
+    async def _subscribe_account_stream(self) -> None:
+        if not self._account_ws or not self.symbol:
+            return
+
+        timestamp = int(time.time() * 1000)
+        signature = self._generate_signature("subscribe", timestamp)
+
+        message = {
+            "method": "SUBSCRIBE",
+            "params": [f"account.orderUpdate.{self.symbol}"],
+            "signature": [
+                self.public_key,
+                signature,
+                str(timestamp),
+                "5000",
+            ],
+        }
+
+        await self._account_ws.send(json.dumps(message))
+        if self.logger:
+            self.logger.info(f"[BACKPACK] Subscribed to account.orderUpdate.{self.symbol}")
+
+    async def _listen_account_ws(self) -> None:
+        assert self._account_ws is not None
+        try:
+            async for message in self._account_ws:
+                if not self.running:
+                    break
+                await self._handle_account_message(message)
+        except websockets.exceptions.ConnectionClosed:
+            if self.logger:
+                self.logger.warning("[BACKPACK] Account stream closed")
+
+    async def _handle_account_message(self, message: str) -> None:
+        try:
+            data = json.loads(message)
+        except json.JSONDecodeError as exc:
+            if self.logger:
+                self.logger.error(f"[BACKPACK] Failed to decode account message: {exc}")
+            return
+
+        stream = data.get("stream", "")
+        payload = data.get("data", {})
+
+        if "orderUpdate" in stream:
+            await self._handle_order_update(payload)
+        elif self.logger:
+            self.logger.debug(f"[BACKPACK] Ignoring account stream message: {data}")
+
+    async def _handle_order_update(self, payload: Dict[str, Any]) -> None:
+        if not self.order_update_callback:
+            return
+        try:
+            await self.order_update_callback(payload)
+        except Exception as exc:  # pragma: no cover - callback safety
+            if self.logger:
+                self.logger.error(f"[BACKPACK] Order update callback failed: {exc}")
+
+    async def _close_account_ws(self) -> None:
+        if self._account_ws:
+            try:
+                await self._account_ws.close()
+            except Exception:
+                pass
+            finally:
+                self._account_ws = None
+
+    # ------------------------------------------------------------------ #
+    # Depth (public) stream management
+    # ------------------------------------------------------------------ #
+
+    async def _run_depth_stream(self) -> None:
+        backoff_seconds = 1.0
+        while self.running:
+            if not self.symbol:
+                await asyncio.sleep(0.5)
+                continue
+            try:
+                loaded = await self._load_initial_depth()
+                if not loaded:
+                    await asyncio.sleep(min(backoff_seconds, self._MAX_BACKOFF_SECONDS))
+                    backoff_seconds = min(backoff_seconds * 2, self._MAX_BACKOFF_SECONDS)
+                    continue
+
+                await self._connect_depth_ws()
+                backoff_seconds = 1.0
+                await self._listen_depth_ws()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:  # pragma: no cover - defensive
+                if self.logger:
+                    self.logger.error(f"[BACKPACK] Depth WS error: {exc}")
+                await asyncio.sleep(min(backoff_seconds, self._MAX_BACKOFF_SECONDS))
+                backoff_seconds = min(backoff_seconds * 2, self._MAX_BACKOFF_SECONDS)
+            finally:
+                await self._close_depth_ws()
+
+        self._depth_ready_event.clear()
+        self.order_book_ready = False
+
+    async def _connect_depth_ws(self) -> None:
+        if self.logger:
+            self.logger.info(f"[BACKPACK] Connecting depth stream for {self.symbol}")
+
+        self._depth_ws = await websockets.connect(self.ws_url)
+        await self._subscribe_depth_stream()
+
+    async def _subscribe_depth_stream(self) -> None:
+        if not self._depth_ws or not self.symbol:
+            return
+
+        streams = [self._depth_stream_name(), f"bookTicker.{self.symbol}"]
+        message = {
+            "method": "SUBSCRIBE",
+            "params": streams,
+        }
+
+        await self._depth_ws.send(json.dumps(message))
+        if self.logger:
+            self.logger.info(f"[BACKPACK] Subscribed to streams: {streams}")
+
+    async def _listen_depth_ws(self) -> None:
+        assert self._depth_ws is not None
+        try:
+            async for message in self._depth_ws:
+                if not self.running:
+                    break
+                self._handle_depth_message(message)
+        except websockets.exceptions.ConnectionClosed:
+            if self.logger:
+                self.logger.warning("[BACKPACK] Depth stream closed")
+
+    def _handle_depth_message(self, message: str) -> None:
+        try:
+            data = json.loads(message)
+        except json.JSONDecodeError as exc:
+            if self.logger:
+                self.logger.error(f"[BACKPACK] Failed to decode depth message: {exc}")
+            return
+
+        stream = data.get("stream", "")
+        payload = data.get("data", {})
+
+        if stream.startswith("depth"):
+            self._apply_depth_update(payload)
+        elif stream.startswith("bookTicker"):
+            self._apply_book_ticker(payload)
+        elif self.logger:
+            self.logger.debug(f"[BACKPACK] Ignoring depth stream message: {data}")
+
+    def _apply_book_ticker(self, payload: Dict[str, Any]) -> None:
+        try:
+            bid = Decimal(str(payload.get("b")))
+            ask = Decimal(str(payload.get("a")))
+            self.best_bid = bid
+            self.best_ask = ask
+        except (InvalidOperation, TypeError):
+            return
+
+    def _apply_depth_update(self, payload: Dict[str, Any]) -> None:
+        if not payload or payload.get("e") != "depth":
+            return
+        if self.symbol and payload.get("s") and payload["s"] != self.symbol:
+            return
+
+        first_update = self._to_int(payload.get("U"))
+        final_update = self._to_int(payload.get("u"))
+
+        if self._last_update_id is not None and first_update is not None:
+            if final_update is not None and final_update <= self._last_update_id:
+                return
+            if first_update > self._last_update_id + 1:
+                asyncio.create_task(self._reload_depth_snapshot())
+                return
+
+        self._apply_depth_side("bids", payload.get("b", []))
+        self._apply_depth_side("asks", payload.get("a", []))
+
+        if final_update is not None:
+            self._last_update_id = final_update
+
+        self._rebuild_order_book()
+        self.order_book_ready = True
+        self._depth_ready_event.set()
+
+    def _apply_depth_side(self, side: str, updates: List[List[str]]) -> None:
+        if side not in self._order_levels:
+            return
+        levels = self._order_levels[side]
+        for price_str, size_str in updates:
+            try:
+                price = Decimal(str(price_str))
+                size = Decimal(str(size_str))
+            except (InvalidOperation, TypeError):
+                continue
+
+            if size <= 0:
+                levels.pop(price, None)
+            else:
+                levels[price] = size
+
+    async def _reload_depth_snapshot(self) -> None:
+        async with self._depth_reload_lock:
+            self.order_book_ready = False
+            await self._load_initial_depth()
+
+    async def _load_initial_depth(self) -> bool:
+        if not self.depth_fetcher or not self.symbol:
+            return False
+
+        try:
+            snapshot = await asyncio.to_thread(self.depth_fetcher, self.symbol)
+        except Exception as exc:
+            if self.logger:
+                self.logger.error(f"[BACKPACK] Failed to fetch depth snapshot: {exc}")
+            return False
+
+        bids = snapshot.get("bids") or []
+        asks = snapshot.get("asks") or []
+
+        self._order_levels["bids"].clear()
+        self._order_levels["asks"].clear()
+
+        for price_str, size_str in bids:
+            try:
+                price = Decimal(str(price_str))
+                size = Decimal(str(size_str))
+            except (InvalidOperation, TypeError):
+                continue
+            if size > 0:
+                self._order_levels["bids"][price] = size
+
+        for price_str, size_str in asks:
+            try:
+                price = Decimal(str(price_str))
+                size = Decimal(str(size_str))
+            except (InvalidOperation, TypeError):
+                continue
+            if size > 0:
+                self._order_levels["asks"][price] = size
+
+        last_update_raw = snapshot.get("lastUpdateId") or snapshot.get("u")
+        self._last_update_id = self._to_int(last_update_raw)
+        self._rebuild_order_book()
+        self.order_book_ready = True
+        self._depth_ready_event.set()
+        return True
+
+    def _rebuild_order_book(self) -> None:
+        bids_sorted = sorted(self._order_levels["bids"].items(), key=lambda kv: kv[0], reverse=True)
+        asks_sorted = sorted(self._order_levels["asks"].items(), key=lambda kv: kv[0])
+
+        self.order_book["bids"] = [{"price": price, "size": size} for price, size in bids_sorted]
+        self.order_book["asks"] = [{"price": price, "size": size} for price, size in asks_sorted]
+
+        self.best_bid = bids_sorted[0][0] if bids_sorted else None
+        self.best_ask = asks_sorted[0][0] if asks_sorted else None
+
+    async def _close_depth_ws(self) -> None:
+        if self._depth_ws:
+            try:
+                await self._depth_ws.close()
+            except Exception:
+                pass
+            finally:
+                self._depth_ws = None
+
+    def _depth_stream_name(self) -> str:
+        if self.depth_stream_interval == "realtime" or not self.depth_stream_interval:
+            prefix = "depth"
+        else:
+            prefix = f"depth.{self.depth_stream_interval}"
+        return f"{prefix}.{self.symbol}"
+
+    @staticmethod
+    def _to_int(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            return int(str(value))
+        except (TypeError, ValueError):
+            return None
+
+    # ------------------------------------------------------------------ #
+    # Utilities
+    # ------------------------------------------------------------------ #
+
+    def _generate_signature(self, instruction: str, timestamp: int, window: int = 5000) -> str:
+        message = f"instruction={instruction}&timestamp={timestamp}&window={window}"
+        signature_bytes = self.private_key.sign(message.encode())
+        return base64.b64encode(signature_bytes).decode()

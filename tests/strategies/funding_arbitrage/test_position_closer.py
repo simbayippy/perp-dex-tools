@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 from unittest.mock import AsyncMock
 
-from exchange_clients.base import ExchangePositionSnapshot, OrderInfo, OrderResult
+from exchange_clients.base_models import ExchangePositionSnapshot, OrderInfo, OrderResult
 from exchange_clients.events import LiquidationEvent
 from strategies.implementations.funding_arbitrage.config import RiskManagementConfig
 from strategies.implementations.funding_arbitrage.models import FundingArbPosition

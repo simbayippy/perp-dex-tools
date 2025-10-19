@@ -7,7 +7,8 @@ This is a placeholder for future Paradex funding rate collection implementation.
 from typing import Dict
 from decimal import Decimal
 
-from exchange_clients.base import BaseFundingAdapter, FundingRateSample
+from exchange_clients.base_funding_adapter import BaseFundingAdapter
+from exchange_clients.base_models import FundingRateSample
 
 
 class ParadexFundingAdapter(BaseFundingAdapter):

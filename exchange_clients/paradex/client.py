@@ -9,7 +9,8 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, Any, List, Optional, Tuple
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo
+from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import OrderResult, OrderInfo
 from helpers.unified_logger import get_exchange_logger
 
 
@@ -165,62 +166,6 @@ class ParadexClient(BaseExchangeClient):
         """Get the exchange name."""
         return "paradex"
 
-    def setup_order_update_handler(self, handler) -> None:
-        """Setup order update handler for WebSocket."""
-        self._order_update_handler = handler
-
-        async def order_update_handler(ws_channel, message):
-            """Handle order updates from WebSocket."""
-            from paradex_py.api.ws_client import ParadexWebsocketChannel
-
-            params = message.get("params", {})
-            data = params.get("data", {})
-
-            if ws_channel == ParadexWebsocketChannel.ORDERS:
-                # Extract order data
-                order_id = data.get("id")
-                status = data.get("status")
-                side = data.get("side", "").lower()
-                remaining_size = data.get("remaining_size")
-                size = data.get("size")
-                price = data.get("price")
-                contract_id = data.get("market")
-                filled_size = str(Decimal(size) - Decimal(remaining_size))
-                if contract_id != self.config.contract_id:
-                    return
-
-                if order_id and status:
-                    # Let strategy determine order type
-                    order_type = "ORDER"
-
-                    # Map Paradex status to our status
-                    status_map = {
-                        'NEW': 'OPEN',
-                        'OPEN': 'OPEN',
-                        'CLOSED': 'CANCELED' if data.get("cancel_reason") else 'FILLED'
-                    }
-                    mapped_status = status_map.get(status, status)
-
-                    # Handle partially filled orders
-                    if status == 'OPEN' and Decimal(filled_size) > 0:
-                        mapped_status = "PARTIALLY_FILLED"
-
-                    if mapped_status in ['OPEN', 'PARTIALLY_FILLED', 'FILLED', 'CANCELED']:
-                        if self._order_update_handler:
-                            self._order_update_handler({
-                                'order_id': order_id,
-                                'side': side,
-                                'order_type': order_type,
-                                'status': mapped_status,
-                                'size': size,
-                                'price': price,
-                                'contract_id': contract_id,
-                                'filled_size': filled_size
-                            })
-
-        # Store the handler for later use
-        self._ws_order_update_handler = order_update_handler
-
     async def _setup_websocket_subscription(self) -> None:
         """Setup WebSocket subscription for order updates."""
         if not hasattr(self, '_ws_order_update_handler'):
@@ -354,75 +299,6 @@ class ParadexClient(BaseExchangeClient):
             raise Exception('Paradex Server Error: Order not processed after 10 seconds')
         else:
             return order_info
-
-
-    async def _get_active_close_orders(self, contract_id: str) -> int:
-        """Get active orders count for a contract."""
-        active_orders = await self.get_active_orders(contract_id)
-        return len(active_orders)
-
-    async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
-        """Place a close order with Paradex using official SDK."""
-        # Get current market prices
-        attempt = 0
-        active_close_orders = await self._get_active_close_orders(contract_id)
-        while True:
-            attempt += 1
-            if attempt % 5 == 0:
-                self.logger.info(f"[CLOSE] Attempt {attempt} to place order")
-                current_close_orders = await self._get_active_close_orders(contract_id)
-
-                if current_close_orders - active_close_orders > 1:
-                    self.logger.log(f"[CLOSE] ERROR: Active close orders abnormal: {active_close_orders}, {current_close_orders}", "ERROR")
-                    raise Exception(f"[CLOSE] ERROR: Active close orders abnormal: {active_close_orders}, {current_close_orders}")
-                else:
-                    active_close_orders = current_close_orders
-            # Get current market prices
-            best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
-
-            # Convert side string to OrderSide enum
-            from paradex_py.common.order import OrderSide
-            order_side = OrderSide.Buy if side.lower() == 'buy' else OrderSide.Sell
-
-            # Adjust order price based on market conditions and side
-            if side.lower() == 'sell':
-                # For sell orders, ensure price is above best bid to be a maker order
-                if price <= best_bid:
-                    adjusted_price = best_bid + self.config.tick_size
-                else:
-                    adjusted_price = price
-            elif side.lower() == 'buy':
-                # For buy orders, ensure price is below best ask to be a maker order
-                if price >= best_ask:
-                    adjusted_price = best_ask - self.config.tick_size
-                else:
-                    adjusted_price = price
-
-            adjusted_price = self.round_to_tick(adjusted_price)
-            order_result = await self.place_post_only_order(contract_id, quantity, adjusted_price, order_side)
-            order_status = order_result.status
-            order_id = order_result.order_id
-
-            if order_status == 'CLOSED':
-                remaining_size = order_result.remaining_size
-                cancel_reason = order_result.cancel_reason
-                if remaining_size == 0:
-                    break
-                elif cancel_reason == 'POST_ONLY_WOULD_CROSS':
-                    continue
-                else:
-                    raise Exception(f"[CLOSE] [{order_id}] Error placing order: {cancel_reason}")
-            else:
-                break
-
-        return OrderResult(
-            success=True,
-            order_id=order_id,
-            side=side,
-            size=quantity,
-            price=adjusted_price,
-            status=order_status
-        )
 
     async def cancel_order(self, order_id: str) -> OrderResult:
         """Cancel an order with Paradex using official SDK."""

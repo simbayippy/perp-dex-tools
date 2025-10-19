@@ -11,7 +11,15 @@ from pysdk.grvt_ccxt import GrvtCcxt
 from pysdk.grvt_ccxt_ws import GrvtCcxtWS
 from pysdk.grvt_ccxt_env import GrvtEnv, GrvtWSEndpointType
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
+from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import (
+    OrderResult,
+    OrderInfo,
+    query_retry,
+    MissingCredentialsError,
+    ExchangePositionSnapshot,
+    validate_credentials,
+)
 from helpers.unified_logger import get_exchange_logger
 
 
@@ -124,93 +132,6 @@ class GrvtClient(BaseExchangeClient):
     def get_exchange_name(self) -> str:
         """Get the exchange name."""
         return "grvt"
-
-    def setup_order_update_handler(self, handler) -> None:
-        """Setup order update handler for WebSocket."""
-        self._order_update_handler = handler
-
-        async def order_update_callback(message: Dict[str, Any]):
-            """Handle order updates from WebSocket - match working test implementation."""
-            # Log raw message for debugging
-            self.logger.debug(f"Received WebSocket message: {message}")
-            self.logger.debug("**************************************************")
-            try:
-                # Parse the message structure - match the working test implementation exactly
-                if 'feed' in message:
-                    data = message.get('feed', {})
-                    leg = data.get('legs', [])[0] if data.get('legs') else None
-
-                    if isinstance(data, dict) and leg:
-                        contract_id = leg.get('instrument', '')
-                        if contract_id != self.config.contract_id:
-                            return
-
-                        order_state = data.get('state', {})
-                        # Extract order data using the exact structure from test
-                        order_id = data.get('order_id', '')
-                        status = order_state.get('status', '')
-                        side = 'buy' if leg.get('is_buying_asset') else 'sell'
-                        size = leg.get('size', '0')
-                        price = leg.get('limit_price', '0')
-                        filled_size = order_state.get('traded_size')[0] if order_state.get('traded_size') else '0'
-
-                        if order_id and status:
-                            # Let strategy determine order type
-                            order_type = "ORDER"
-
-                            # Map GRVT status to our status
-                            status_map = {
-                                'OPEN': 'OPEN',
-                                'FILLED': 'FILLED',
-                                'CANCELLED': 'CANCELED',
-                                'REJECTED': 'CANCELED'
-                            }
-                            mapped_status = status_map.get(status, status)
-
-                            # Handle partially filled orders
-                            if status == 'OPEN' and Decimal(filled_size) > 0:
-                                mapped_status = "PARTIALLY_FILLED"
-
-                            if mapped_status in ['OPEN', 'PARTIALLY_FILLED', 'FILLED', 'CANCELED']:
-                                if self._order_update_handler:
-                                    self._order_update_handler({
-                                        'order_id': order_id,
-                                        'side': side,
-                                        'order_type': order_type,
-                                        'status': mapped_status,
-                                        'size': size,
-                                        'price': price,
-                                        'contract_id': contract_id,
-                                        'filled_size': filled_size
-                                    })
-                            else:
-                                self.logger.debug(f"Ignoring order update with status: {mapped_status}")
-                        else:
-                            self.logger.debug(f"Order update missing order_id or status: {data}")
-                    else:
-                        self.logger.debug(f"Order update data is not dict or missing legs: {data}")
-                else:
-                    # Handle other message types (position, fill, etc.)
-                    method = message.get('method', 'unknown')
-                    self.logger.debug(f"Received non-order message: {method}")
-
-            except Exception as e:
-                self.logger.error(f"Error handling order update: {e}")
-                self.logger.error(f"Message that caused error: {message}")
-
-        # Store callback for use after connect
-        self._order_update_callback = order_update_callback
-
-        # Subscribe immediately if WebSocket is already initialized; otherwise defer to connect()
-        if self._ws_client:
-            try:
-                asyncio.create_task(self._subscribe_to_orders(self._order_update_callback))
-                self.logger.info(f"Successfully initiated subscription to order updates for {self.config.contract_id}")
-            except Exception as e:
-                self.logger.error(f"Error subscribing to order updates: {e}")
-                raise
-        else:
-            self.logger.info("WebSocket not ready yet; will subscribe after connect()")
 
     async def _subscribe_to_orders(self, callback):
         """Subscribe to order updates asynchronously."""
@@ -418,61 +339,6 @@ class GrvtClient(BaseExchangeClient):
             self.logger.error(f"Error placing market order: {e}")
             return OrderResult(success=False, error_message=str(e))
 
-    async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
-        """Place a close order with GRVT."""
-        # Get current market prices
-        attempt = 0
-        active_close_orders = await self._get_active_close_orders(contract_id)
-        while True:
-            attempt += 1
-            if attempt % 5 == 0:
-                self.logger.info(f"[CLOSE] Attempt {attempt} to place order")
-                current_close_orders = await self._get_active_close_orders(contract_id)
-
-                if current_close_orders - active_close_orders > 1:
-                    self.logger.log(f"[CLOSE] ERROR: Active close orders abnormal: "
-                                    f"{active_close_orders}, {current_close_orders}", "ERROR")
-                    raise Exception(f"[CLOSE] ERROR: Active close orders abnormal: "
-                                    f"{active_close_orders}, {current_close_orders}")
-                else:
-                    active_close_orders = current_close_orders
-
-            # Adjust price to ensure maker order
-            best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
-
-            if side == 'sell' and price <= best_bid:
-                adjusted_price = best_bid + self.config.tick_size
-            elif side == 'buy' and price >= best_ask:
-                adjusted_price = best_ask - self.config.tick_size
-            else:
-                adjusted_price = price
-
-            adjusted_price = self.round_to_tick(adjusted_price)
-            try:
-                order_info = await self.place_limit_order(contract_id, quantity, adjusted_price, side)
-            except Exception as e:
-                self.logger.error(f"[CLOSE] Error placing order: {e}")
-                continue
-
-            order_status = order_info.status
-            order_id = order_info.order_id
-
-            if order_status == 'REJECTED':
-                continue
-            if order_status in ['OPEN', 'FILLED']:
-                return OrderResult(
-                    success=True,
-                    order_id=order_id,
-                    side=side,
-                    size=quantity,
-                    price=adjusted_price,
-                    status=order_status
-                )
-            elif order_status == 'PENDING':
-                raise Exception("[CLOSE] Order not processed after 10 seconds")
-            else:
-                raise Exception(f"[CLOSE] Unexpected order status: {order_status}")
-
     async def cancel_order(self, order_id: str) -> OrderResult:
         """Cancel an order with GRVT."""
         try:
@@ -520,11 +386,6 @@ class GrvtClient(BaseExchangeClient):
             remaining_size=(Decimal(state.get('book_size', ['0'])[0])
                             if isinstance(state.get('book_size'), list) else Decimal(0))
         )
-
-    async def _get_active_close_orders(self, contract_id: str) -> int:
-        """Get active orders count for a contract."""
-        active_orders = await self.get_active_orders(contract_id)
-        return len(active_orders)
 
     @query_retry(reraise=True)
     async def get_active_orders(self, contract_id: str) -> List[OrderInfo]:
@@ -583,6 +444,13 @@ class GrvtClient(BaseExchangeClient):
         self.logger.log("[GRVT] get_account_balance not yet implemented", "DEBUG")
         return None
     
+    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+        """
+        Get position snapshot for a symbol using official SDK.
+        """
+        # TODO
+        return None
+
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
         """
         Get leverage information for GRVT.
@@ -629,4 +497,3 @@ class GrvtClient(BaseExchangeClient):
                 return self.config.contract_id, self.config.tick_size
 
         raise ValueError(f"Contract not found for ticker: {ticker}")
-

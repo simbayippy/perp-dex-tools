@@ -11,7 +11,7 @@ from strategies.execution.core.order_executor import OrderExecutor, ExecutionMod
 from strategies.execution.patterns.atomic_multi_order import OrderSpec
 
 if TYPE_CHECKING:
-    from exchange_clients.base import ExchangePositionSnapshot
+    from exchange_clients.base_models import ExchangePositionSnapshot
     from ..models import FundingArbPosition
     from ..strategy import FundingArbitrageStrategy
 
@@ -470,7 +470,7 @@ class PositionCloser:
             size_usd=notional,
             quantity=quantity,
             execution_mode="limit_with_fallback",
-            timeout_seconds=30.0,
+            timeout_seconds=60.0,
             limit_price_offset_pct=limit_offset_pct,
         )
 

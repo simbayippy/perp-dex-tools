@@ -10,7 +10,15 @@ from decimal import Decimal
 from typing import Dict, Any, List, Optional, Tuple
 from edgex_sdk import Client, OrderSide, WebSocketManager, CancelOrderParams, GetOrderBookDepthParams, GetActiveOrderParams
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
+from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import (
+    OrderResult,
+    OrderInfo,
+    query_retry,
+    ExchangePositionSnapshot,
+    MissingCredentialsError,
+    validate_credentials,
+)
 from helpers.unified_logger import get_exchange_logger
 
 
@@ -156,77 +164,6 @@ class EdgeXClient(BaseExchangeClient):
     def get_exchange_name(self) -> str:
         """Get the exchange name."""
         return "edgex"
-
-    # ---------------------------
-    # WS Handlers
-    # ---------------------------
-
-    def setup_order_update_handler(self, handler) -> None:
-        """Setup order update handler for WebSocket."""
-        self._order_update_handler = handler
-
-        def order_update_handler(message):
-            """Handle order updates from WebSocket."""
-            try:
-                # Parse the message structure
-                if isinstance(message, str):
-                    message = json.loads(message)
-
-                # Check if this is a trade-event with ORDER_UPDATE
-                content = message.get("content", {})
-                event = content.get("event", "")
-                if event == "ORDER_UPDATE":
-                    # Extract order data from the nested structure
-                    data = content.get('data', {})
-                    orders = data.get('order', [])
-
-                    if orders and len(orders) > 0:
-                        order = orders[0]  # Get the first order
-                        if order.get('contractId') != self.config.contract_id:
-                            return
-
-                        order_id = order.get('id')
-                        status = order.get('status')
-                        side = order.get('side', '').lower()
-                        filled_size = order.get('cumMatchSize')
-
-                        # Let strategy determine order type
-                        order_type = "ORDER"
-
-                        # edgex returns TWO filled events for the same order; take the first one
-                        if status == "FILLED" and len(data.get('collateral', [])):
-                            return
-
-                        # ignore canceled close orders
-                        if status == "CANCELED" and order_type == "CLOSE":
-                            return
-
-                        # edgex returns partially filled events as "OPEN" orders
-                        if status == "OPEN" and Decimal(filled_size) > 0:
-                            status = "PARTIALLY_FILLED"
-
-                        if status in ['OPEN', 'PARTIALLY_FILLED', 'FILLED', 'CANCELED']:
-                            if self._order_update_handler:
-                                self._order_update_handler({
-                                    'order_id': order_id,
-                                    'side': side,
-                                    'order_type': order_type,
-                                    'status': status,
-                                    'size': order.get('size'),
-                                    'price': order.get('price'),
-                                    'contract_id': order.get('contractId'),
-                                    'filled_size': filled_size
-                                })
-
-            except Exception as e:
-                self.logger.error(f"Error handling order update: {e}")
-                self.logger.error(f"Traceback: {traceback.format_exc()}")
-
-        try:
-            private_client = self.ws_manager.get_private_client()
-            private_client.on_message("trade-event", order_update_handler)
-        except Exception as e:
-            self.logger.error(f"Could not add trade-event handler: {e}")
 
     # ---------------------------
     # REST-ish helpers
@@ -455,94 +392,6 @@ class EdgeXClient(BaseExchangeClient):
             self.logger.error(f"Error placing market order: {e}")
             return OrderResult(success=False, error_message=str(e))
 
-    async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
-        """Place a close order with EdgeX using official SDK with retry logic for POST_ONLY rejections."""
-        max_retries = 15
-        retry_count = 0
-
-        while retry_count < max_retries:
-            try:
-                best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
-
-                if best_bid <= 0 or best_ask <= 0:
-                    return OrderResult(success=False, error_message='Invalid bid/ask prices')
-
-                # Convert side string to OrderSide enum
-                order_side = OrderSide.BUY if side.lower() == 'buy' else OrderSide.SELL
-
-                # Adjust order price based on market conditions and side
-                adjusted_price = price
-
-                if side.lower() == 'sell':
-                    # For sell orders, ensure price is above best bid to be a maker order
-                    if price <= best_bid:
-                        adjusted_price = best_bid + self.config.tick_size
-                elif side.lower() == 'buy':
-                    # For buy orders, ensure price is below best ask to be a maker order
-                    if price >= best_ask:
-                        adjusted_price = best_ask - self.config.tick_size
-
-                adjusted_price = self.round_to_tick(adjusted_price)
-                # Place the order using official SDK (post-only to avoid taker fees)
-                order_result = await self.client.create_limit_order(
-                    contract_id=contract_id,
-                    size=str(quantity),
-                    price=str(adjusted_price),
-                    side=order_side,
-                    post_only=True
-                )
-
-                if not order_result or 'data' not in order_result:
-                    return OrderResult(success=False, error_message='Failed to place order')
-
-                # Extract order ID from response
-                order_id = order_result['data'].get('orderId')
-                if not order_id:
-                    return OrderResult(success=False, error_message='No order ID in response')
-
-                # Check order status after a short delay to see if it was rejected
-                await asyncio.sleep(0.01)
-                order_info = await self.get_order_info(order_id)
-
-                if order_info:
-                    if order_info.status == 'CANCELED':
-                        if retry_count < max_retries - 1:
-                            retry_count += 1
-                            continue
-                        else:
-                            return OrderResult(success=False, error_message=f'Close order rejected after {max_retries} attempts')
-                    elif order_info.status in ['OPEN', 'PARTIALLY_FILLED', 'FILLED']:
-                        # Order successfully placed
-                        return OrderResult(
-                            success=True,
-                            order_id=order_id,
-                            side=side,
-                            size=quantity,
-                            price=adjusted_price,
-                            status=order_info.status
-                        )
-                    else:
-                        return OrderResult(success=False, error_message=f'Unexpected close order status: {order_info.status}')
-                else:
-                    # Assume order is successful if we can't get info
-                    return OrderResult(
-                        success=True,
-                        order_id=order_id,
-                        side=side,
-                        size=quantity,
-                        price=adjusted_price
-                    )
-
-            except Exception as e:
-                if retry_count < max_retries - 1:
-                    retry_count += 1
-                    await asyncio.sleep(0.1)  # Wait before retry
-                    continue
-                else:
-                    return OrderResult(success=False, error_message=str(e))
-
-        return OrderResult(success=False, error_message='Max retries exceeded for close order')
-
     async def cancel_order(self, order_id: str) -> OrderResult:
         """Cancel an order with EdgeX using official SDK."""
         try:
@@ -651,6 +500,14 @@ class EdgeXClient(BaseExchangeClient):
             None (not yet implemented)
         """
         self.logger.log("[EDGEX] get_account_balance not yet implemented", "DEBUG")
+        return None
+
+
+    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+        """
+        Get position snapshot for a symbol using official SDK.
+        """
+        # TODO
         return None
     
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:

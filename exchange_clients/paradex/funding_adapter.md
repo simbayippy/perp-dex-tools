@@ -10,7 +10,7 @@ from decimal import Decimal
 import re
 import asyncio
 
-from exchange_clients.base import BaseFundingAdapter
+from exchange_clients.base_funding_adapter import BaseFundingAdapter
 from utils.logger import logger
 
 # Import Paradex SDK
@@ -310,4 +310,3 @@ class ParadexFundingAdapter(BaseFundingAdapter):
         # Paradex SDK doesn't require explicit cleanup
         logger.debug(f"{self.dex_name}: Adapter closed")
         await super().close()
-

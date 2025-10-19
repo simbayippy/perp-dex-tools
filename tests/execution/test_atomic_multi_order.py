@@ -24,7 +24,7 @@ from strategies.execution.patterns.atomic_multi_order import (
     _OrderContext,
 )
 from strategies.execution.patterns.atomic_multi_order.hedge_manager import HedgeManager
-from exchange_clients.base import OrderResult, OrderInfo
+from exchange_clients.base_models import OrderResult, OrderInfo
 
 
 class MockExchangeClient:

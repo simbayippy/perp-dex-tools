@@ -13,8 +13,8 @@ from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import urlencode
 import aiohttp
 
-from exchange_clients.base import (
-    BaseExchangeClient,
+from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import (
     OrderResult,
     OrderInfo,
     ExchangePositionSnapshot,
@@ -197,10 +197,6 @@ class AsterClient(BaseExchangeClient):
         # Round down to nearest step size
         return (quantity / step_size).quantize(Decimal('1'), rounding=ROUND_DOWN) * step_size
 
-    def setup_order_update_handler(self, handler) -> None:
-        """Setup order update handler for WebSocket."""
-        self._order_update_handler = handler
-
     async def _handle_websocket_order_update(self, order_data: Dict[str, Any]):
         """Handle order updates from WebSocket."""
         try:
@@ -270,7 +266,7 @@ class AsterClient(BaseExchangeClient):
 
         return best_bid, best_ask
 
-    def get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
+    def _get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
         """
         Get order book from WebSocket if available.
         
@@ -322,7 +318,7 @@ class AsterClient(BaseExchangeClient):
             Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
         """
         # 🔴 Priority 1: Try WebSocket depth stream (100ms snapshots, zero latency)
-        ws_book = self.get_order_book_from_websocket()
+        ws_book = self._get_order_book_from_websocket()
         if ws_book:
             return {
                 'bids': ws_book['bids'][:levels],
@@ -479,82 +475,6 @@ class AsterClient(BaseExchangeClient):
                 success=False, 
                 error_message=f'Unknown order status: {order_status}'
             )
-
-
-    async def _get_active_close_orders(self, contract_id: str) -> int:
-        """Get active orders count for a contract."""
-        active_orders = await self.get_active_orders(contract_id)
-        return len(active_orders)
-
-    async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
-        """Place a close order with Aster."""
-        attempt = 0
-        active_close_orders = await self._get_active_close_orders(contract_id)
-        while True:
-            attempt += 1
-            if attempt % 5 == 0:
-                self.logger.info(f"[CLOSE] Attempt {attempt} to place order")
-                current_close_orders = await self._get_active_close_orders(contract_id)
-
-                if current_close_orders - active_close_orders > 1:
-                    self.logger.error(f"[CLOSE] ERROR: Active close orders abnormal: "
-                                    f"{active_close_orders}, {current_close_orders}")
-                    raise Exception(f"[CLOSE] ERROR: Active close orders abnormal: "
-                                    f"{active_close_orders}, {current_close_orders}")
-                else:
-                    active_close_orders = current_close_orders
-            # Get current market prices to adjust order price if needed
-            best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
-
-            if best_bid <= 0 or best_ask <= 0:
-                return OrderResult(success=False, error_message='No bid/ask data available')
-
-            # Adjust order price based on market conditions and side
-            adjusted_price = price
-            if side.lower() == 'sell':
-                order_side = 'SELL'
-                # For sell orders, ensure price is above best bid to be a maker order
-                if price <= best_bid:
-                    adjusted_price = best_bid + self.config.tick_size
-            elif side.lower() == 'buy':
-                order_side = 'BUY'
-                # For buy orders, ensure price is below best ask to be a maker order
-                if price >= best_ask:
-                    adjusted_price = best_ask - self.config.tick_size
-
-            adjusted_price = self.round_to_tick(adjusted_price)
-
-            # Place the order
-            order_data = {
-                'symbol': contract_id,
-                'side': order_side,
-                'type': 'LIMIT',
-                'quantity': str(quantity),
-                'price': str(adjusted_price),
-                'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
-            }
-
-            result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
-            order_status = result.get('status', '')
-            order_id = result.get('orderId', '')
-
-            start_time = time.time()
-            while order_status == 'NEW' and time.time() - start_time < 2:
-                await asyncio.sleep(0.1)
-                order_info = await self.get_order_info(order_id)
-                if order_info is not None:
-                    order_status = order_info.status
-
-            if order_status in ['NEW', 'PARTIALLY_FILLED']:
-                return OrderResult(success=True, order_id=order_id, side=order_side.lower(),
-                                   size=quantity, price=adjusted_price, status='OPEN')
-            elif order_status == 'FILLED':
-                return OrderResult(success=True, order_id=order_id, side=order_side.lower(),
-                                   size=quantity, price=adjusted_price, status='FILLED')
-            elif order_status == 'EXPIRED':
-                continue
-            else:
-                return OrderResult(success=False, error_message='Unknown order status: ' + order_status)
 
     async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
         """
