@@ -504,11 +504,11 @@ class BackpackClient(BaseExchangeClient):
         Returns the available USDC balance if present, otherwise None.
         """
         try:
-            balances = await asyncio.to_thread(self.account_client.get_balances())
+            balances = await asyncio.to_thread(self.account_client.get_balances)
         except Exception as exc:
             self.logger.warning(f"[BACKPACK] Failed to fetch balances: {exc}")
             return None
-
+        print(balances, "BALANCESSS")
         balance = self._extract_available_balance(balances)
         if balance is None:
             self.logger.warning("[BACKPACK] Unable to determine available USDC balance")
