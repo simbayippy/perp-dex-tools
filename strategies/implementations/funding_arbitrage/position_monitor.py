@@ -56,23 +56,23 @@ class PositionMonitor:
                         position.short_dex, position.symbol
                     )
 
-        if rate1_data and rate2_data:
-            rate1 = Decimal(str(rate1_data["funding_rate"]))
-            rate2 = Decimal(str(rate2_data["funding_rate"]))
-            position.current_divergence = rate2 - rate1
-            position.last_check = datetime.now()
-        else:
-            rate1 = rate2 = None
-            if rate1_data or rate2_data:
-                self._logger.log(
-                    f"Partial rate data for {position.symbol}: long={bool(rate1_data)} short={bool(rate2_data)}",
-                    "WARNING",
-                )
+                if rate1_data and rate2_data:
+                    rate1 = Decimal(str(rate1_data["funding_rate"]))
+                    rate2 = Decimal(str(rate2_data["funding_rate"]))
+                    position.current_divergence = rate2 - rate1
+                    position.last_check = datetime.now()
+                else:
+                    rate1 = rate2 = None
+                    if rate1_data or rate2_data:
+                        self._logger.log(
+                            f"Partial rate data for {position.symbol}: long={bool(rate1_data)} short={bool(rate2_data)}",
+                            "WARNING",
+                        )
 
-        self._refresh_position_leg_metrics(position, exchange_snapshots, rate1, rate2)
-        await self._position_manager.update(position)
+                self._refresh_position_leg_metrics(position, exchange_snapshots, rate1, rate2)
+                await self._position_manager.update(position)
 
-        self._log_exchange_metrics(position)
+                self._log_exchange_metrics(position)
             except Exception as exc:  # pragma: no cover - defensive logging
                 self._logger.log(
                     f"Error monitoring position {position.id}: {exc}",
@@ -213,11 +213,12 @@ class PositionMonitor:
             position.metadata["legs"] = legs_metadata
             position.metadata["exchange_unrealized_pnl"] = total_unrealized
             position.metadata["exchange_funding"] = total_funding
-            rate_map = position.metadata.setdefault("rate_map", {})
-            if long_rate is not None:
-                rate_map[position.long_dex] = long_rate
-            if short_rate is not None:
-                rate_map[position.short_dex] = short_rate
+
+        rate_map = position.metadata.setdefault("rate_map", {})
+        if long_rate is not None:
+            rate_map[position.long_dex] = long_rate
+        if short_rate is not None:
+            rate_map[position.short_dex] = short_rate
 
     def _log_exchange_metrics(self, position: FundingArbPosition) -> None:
         """
