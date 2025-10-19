@@ -319,10 +319,14 @@ class LighterClient(BaseExchangeClient):
                 )
                 self.current_order = current_order
                 self._latest_orders[order_id] = current_order
+                if server_order_index is not None:
+                    self._latest_orders[str(server_order_index)] = current_order
 
             if status in ['FILLED', 'CANCELED']:
                 self.logger.log_transaction(order_id, side, filled_size, price, status)
                 self._latest_orders[order_id] = current_order
+                if server_order_index is not None:
+                    self._latest_orders[str(server_order_index)] = current_order
 
     async def _handle_liquidation_notifications(self, notifications: List[Dict[str, Any]]) -> None:
         """Handle liquidation notifications from the Lighter notification channel."""
@@ -729,28 +733,55 @@ class LighterClient(BaseExchangeClient):
             if orders_response and orders_response.orders:
                 order_id_int = int(order_id_str)
                 for order in orders_response.orders:
-                    if int(order.client_order_index) == order_id_int or int(order.order_index) == order_id_int:
-                        # Found the order!
-                        size = Decimal(str(order.size_base))
-                        filled = Decimal(str(order.matched_base))
-                        remaining = size - filled
-                        
-                        # Determine status
-                        if filled >= size:
-                            status = "FILLED"
-                        elif filled > 0:
-                            status = "PARTIALLY_FILLED"
-                        else:
-                            status = "OPEN"
-                        
+                    try:
+                        client_idx = int(getattr(order, "client_order_index", -1))
+                    except Exception:
+                        client_idx = -1
+                    try:
+                        server_idx = int(getattr(order, "order_index", -1))
+                    except Exception:
+                        server_idx = -1
+
+                    if client_idx == order_id_int or server_idx == order_id_int:
+                        size = Decimal(str(getattr(order, "initial_base_amount", "0")))
+                        remaining = Decimal(str(getattr(order, "remaining_base_amount", "0")))
+                        filled_base = Decimal(str(getattr(order, "filled_base_amount", "0")))
+
+                        # Some payloads only provide remaining; fall back to size - remaining
+                        if filled_base <= Decimal("0") and size >= remaining:
+                            filled_base = size - remaining
+
+                        if filled_base < Decimal("0"):
+                            filled_base = Decimal("0")
+                        if remaining < Decimal("0"):
+                            remaining = Decimal("0")
+
+                        status_raw = str(getattr(order, "status", "")).upper()
+                        if status_raw not in {"FILLED", "PARTIALLY_FILLED", "OPEN", "CANCELED"}:
+                            if filled_base >= size and size > 0:
+                                status_raw = "FILLED"
+                            elif filled_base > 0:
+                                status_raw = "PARTIALLY_FILLED"
+                            elif remaining >= size:
+                                status_raw = "OPEN"
+
+                        if status_raw == "FILLED":
+                            remaining = Decimal("0")
+                            filled_base = size if size > 0 else filled_base
+                        elif status_raw == "OPEN" and filled_base > 0:
+                            status_raw = "PARTIALLY_FILLED"
+
+                        side = "sell" if getattr(order, "is_ask", False) else "buy"
+                        price = Decimal(str(getattr(order, "price", "0")))
+
                         info = OrderInfo(
                             order_id=order_id,
-                            side="buy" if order.is_bid else "sell",
+                            side=side,
                             size=size,
-                            price=Decimal(str(order.price)),
-                            status=status,
-                            filled_size=filled,
-                            remaining_size=remaining
+                            price=price,
+                            status=status_raw,
+                            filled_size=filled_base,
+                            remaining_size=remaining,
                         )
                         self._latest_orders[order_id_str] = info
                         return info
