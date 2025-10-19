@@ -245,7 +245,7 @@ class PositionMonitor:
             ("Mark", 12),
             ("uPnL", 12),
             ("Funding", 12),
-            ("8h Rate", 12),
+            ("Funding APY", 12),
         ]
         header_line = " ".join(f"{title:<{width}}" for title, width in headers)
         separator = "-" * len(header_line)
