@@ -7,6 +7,7 @@ from databases import Database
 from datetime import datetime
 
 from funding_rate_service.utils.logger import logger
+from funding_rate_service.config import settings
 
 
 class SymbolRepository:
@@ -63,7 +64,11 @@ class SymbolRepository:
             {"symbol": symbol.upper(), "category": category}
         )
         
-        logger.info(f"New symbol discovered: {symbol} (ID: {new_id})")
+        log_message = f"New symbol discovered: {symbol} (ID: {new_id})"
+        if settings.collection_verbose_logging:
+            logger.info(log_message)
+        else:
+            logger.debug(log_message)
         return new_id
     
     async def get_dex_symbols(self, dex_id: int) -> List[Dict[str, Any]]:
@@ -192,4 +197,3 @@ class SymbolRepository:
             """
             
             await self.db.execute(query, params)
-

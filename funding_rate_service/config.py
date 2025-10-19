@@ -2,7 +2,7 @@
 Configuration management for Funding Rate Service
 """
 
-from typing import List, Optional
+from typing import List
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     collection_interval_seconds: int = 60
     max_concurrent_collections: int = 10
     collection_timeout_seconds: int = 30
+    collection_verbose_logging: bool = False
     
     # Cache settings
     cache_ttl_seconds: int = 60
@@ -75,3 +76,4 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
+
