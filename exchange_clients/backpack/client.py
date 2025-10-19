@@ -44,6 +44,7 @@ class BackpackClient(BaseExchangeClient):
         self.ws_manager: Optional[BackpackWebSocketManager] = None
         self._order_update_handler: Optional[Callable[[Dict[str, Any]], None]] = None
         self._market_symbol_map: Dict[str, str] = {}
+        self._latest_orders: Dict[str, OrderInfo] = {}
 
         try:
             self.public_client = Public()
@@ -184,16 +185,16 @@ class BackpackClient(BaseExchangeClient):
 
     async def _handle_websocket_order_update(self, order_data: Dict[str, Any]) -> None:
         """Normalize and forward order update events to the registered handler."""
-        if not self._order_update_handler:
-            return
-
         try:
             symbol = order_data.get("s") or order_data.get("symbol")
             if symbol and getattr(self.config, "contract_id", None):
-                # Skip updates for other symbols when a specific contract is configured
                 expected_symbol = getattr(self.config, "contract_id")
                 if expected_symbol and symbol != expected_symbol:
                     return
+
+            order_id = str(order_data.get("i") or order_data.get("orderId") or "")
+            if not order_id:
+                return
 
             side_raw = (order_data.get("S") or order_data.get("side") or "").upper()
             if side_raw == "BID":
@@ -203,32 +204,59 @@ class BackpackClient(BaseExchangeClient):
             else:
                 side = side_raw.lower() or None
 
+            quantity = self._to_decimal(order_data.get("q"), Decimal("0"))
+            filled = self._to_decimal(order_data.get("z"), Decimal("0"))
+            price = self._to_decimal(order_data.get("p"), Decimal("0"))
+            remaining = None
+            if quantity is not None and filled is not None:
+                remaining = quantity - filled
+
             event = (order_data.get("e") or order_data.get("event") or "").lower()
             status = None
-            if event == "orderfill" and (
-                self._to_decimal(order_data.get("q")) == self._to_decimal(order_data.get("z"))
-            ):
-                status = "FILLED"
-            elif event == "orderfill":
-                status = "PARTIALLY_FILLED"
+            if event == "orderfill":
+                if quantity is not None and quantity > 0 and filled >= quantity:
+                    status = "FILLED"
+                elif filled and filled > 0:
+                    status = "PARTIALLY_FILLED"
+                else:
+                    status = "OPEN"
             elif event in {"orderaccepted", "new"}:
                 status = "OPEN"
-            elif event in {"ordercancelled", "orderexpired", "canceled"}:
+            elif event in {"ordercancelled", "ordercanceled", "orderexpired", "canceled"}:
                 status = "CANCELED"
+            else:
+                status = order_data.get("X") or order_data.get("status")
+            status = (status or "").upper()
 
-            payload = {
-                "order_id": str(order_data.get("i") or order_data.get("orderId") or ""),
-                "side": side,
-                "order_type": order_data.get("o") or order_data.get("type") or "UNKNOWN",
-                "status": status or order_data.get("X") or order_data.get("status"),
-                "size": self._to_decimal(order_data.get("q")),
-                "price": self._to_decimal(order_data.get("p")),
-                "contract_id": symbol,
-                "filled_size": self._to_decimal(order_data.get("z")),
-                "raw_event": order_data,
-            }
+            info = OrderInfo(
+                order_id=order_id,
+                side=side or "",
+                size=quantity or Decimal("0"),
+                price=price or Decimal("0"),
+                status=status,
+                filled_size=filled or Decimal("0"),
+                remaining_size=remaining or Decimal("0"),
+            )
+            self._latest_orders[order_id] = info
 
-            self._order_update_handler(payload)
+            if status == "FILLED":
+                self.logger.info(
+                    f"[ORDER] [{order_id}] FILLED {filled or quantity} @ {price or 'n/a'}"
+                )
+
+            if self._order_update_handler:
+                payload = {
+                    "order_id": order_id,
+                    "side": side,
+                    "order_type": order_data.get("o") or order_data.get("type") or "UNKNOWN",
+                    "status": status,
+                    "size": quantity,
+                    "price": price,
+                    "contract_id": symbol,
+                    "filled_size": filled,
+                    "raw_event": order_data,
+                }
+                self._order_update_handler(payload)
         except Exception as exc:
             self.logger.error(f"Error handling Backpack order update: {exc}")
 
@@ -492,11 +520,17 @@ class BackpackClient(BaseExchangeClient):
     @query_retry()
     async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
         """Fetch detailed order information."""
+        order_id_str = str(order_id)
+        cached = self._latest_orders.get(order_id_str)
+        if cached:
+            status_upper = (cached.status or "").upper()
+            if status_upper in {"FILLED", "CANCELED"}:
+                return cached
         try:
             order = self.account_client.get_open_order(symbol=self.config.contract_id, order_id=order_id)
         except Exception as exc:
             self.logger.error(f"[BACKPACK] Failed to fetch order info: {exc}")
-            return None
+            return cached
 
         if not order:
             return None
@@ -517,7 +551,7 @@ class BackpackClient(BaseExchangeClient):
         if size is not None and filled is not None:
             remaining = size - filled
 
-        return OrderInfo(
+        info = OrderInfo(
             order_id=str(order.get("id", order_id)),
             side=side or "",
             size=size or Decimal("0"),
@@ -526,6 +560,8 @@ class BackpackClient(BaseExchangeClient):
             filled_size=filled or Decimal("0"),
             remaining_size=remaining or Decimal("0"),
         )
+        self._latest_orders[order_id_str] = info
+        return info
 
     @query_retry(default_return=[])
     async def get_active_orders(self, contract_id: str) -> List[OrderInfo]:
@@ -562,6 +598,9 @@ class BackpackClient(BaseExchangeClient):
                     remaining_size=remaining or Decimal("0"),
                 )
             )
+            order_id = str(order.get("id", ""))
+            if order_id:
+                self._latest_orders[order_id] = orders[-1]
 
         return orders
 

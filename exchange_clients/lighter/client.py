@@ -310,6 +310,7 @@ class LighterClient(BaseExchangeClient):
                     f"{filled_size} @ {price}"
                 )
 
+            current_order = None
             if order_data.get('client_order_index') == self.current_order_client_id or order_type == 'OPEN':
                 current_order = OrderInfo(
                     order_id=order_id,
@@ -328,6 +329,19 @@ class LighterClient(BaseExchangeClient):
 
             if status in ['FILLED', 'CANCELED']:
                 self.logger.log_transaction(order_id, side, filled_size, price, status)
+                if current_order is None:
+                    current_order = self._latest_orders.get(order_id)
+                    if current_order is None:
+                        current_order = OrderInfo(
+                            order_id=order_id,
+                            side=side,
+                            size=size,
+                            price=price,
+                            status=status,
+                            filled_size=filled_size,
+                            remaining_size=remaining_size,
+                            cancel_reason='unknown'
+                        )
                 self._latest_orders[order_id] = current_order
                 if server_order_index is not None:
                     self._latest_orders[str(server_order_index)] = current_order
