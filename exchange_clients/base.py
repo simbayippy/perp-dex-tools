@@ -495,41 +495,6 @@ class BaseExchangeClient(ABC):
         """
         pass
 
-    async def place_close_order(
-        self, 
-        contract_id: str,   
-        quantity: Decimal, 
-        price: Decimal, 
-        side: str,
-        max_retries: int = 50,
-        enable_price_adjustment: bool = True
-    ) -> OrderResult:
-        """
-        Place an order to close a position with automatic retry and price adjustment.
-        
-        This method should be implemented with intelligent close logic:
-        - Retries on order rejection (e.g., post-only orders that would take)
-        - Dynamically adjusts price based on market conditions
-        - Ensures maker-only orders to avoid fees (if exchange supports it)
-        - Continues retrying until position is closed
-        
-        Default implementation uses simple limit order. Override for exchange-specific
-        retry logic (see Aster implementation for reference).
-        
-        Args:
-            contract_id: Contract/symbol identifier
-            quantity: Position size to close
-            price: Target price
-            side: 'buy' or 'sell' (opposite of the position side)
-            max_retries: Maximum retry attempts (default: 50)
-            enable_price_adjustment: Whether to adjust price based on BBO (default: True)
-            
-        Returns:
-            OrderResult with order details
-        """
-        # Default implementation: Single attempt with limit order
-        return await self.place_limit_order(contract_id, quantity, price, side)
-
     @abstractmethod
     async def cancel_order(self, order_id: str) -> OrderResult:
         """

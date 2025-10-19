@@ -418,61 +418,6 @@ class GrvtClient(BaseExchangeClient):
             self.logger.error(f"Error placing market order: {e}")
             return OrderResult(success=False, error_message=str(e))
 
-    async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
-        """Place a close order with GRVT."""
-        # Get current market prices
-        attempt = 0
-        active_close_orders = await self._get_active_close_orders(contract_id)
-        while True:
-            attempt += 1
-            if attempt % 5 == 0:
-                self.logger.info(f"[CLOSE] Attempt {attempt} to place order")
-                current_close_orders = await self._get_active_close_orders(contract_id)
-
-                if current_close_orders - active_close_orders > 1:
-                    self.logger.log(f"[CLOSE] ERROR: Active close orders abnormal: "
-                                    f"{active_close_orders}, {current_close_orders}", "ERROR")
-                    raise Exception(f"[CLOSE] ERROR: Active close orders abnormal: "
-                                    f"{active_close_orders}, {current_close_orders}")
-                else:
-                    active_close_orders = current_close_orders
-
-            # Adjust price to ensure maker order
-            best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
-
-            if side == 'sell' and price <= best_bid:
-                adjusted_price = best_bid + self.config.tick_size
-            elif side == 'buy' and price >= best_ask:
-                adjusted_price = best_ask - self.config.tick_size
-            else:
-                adjusted_price = price
-
-            adjusted_price = self.round_to_tick(adjusted_price)
-            try:
-                order_info = await self.place_limit_order(contract_id, quantity, adjusted_price, side)
-            except Exception as e:
-                self.logger.error(f"[CLOSE] Error placing order: {e}")
-                continue
-
-            order_status = order_info.status
-            order_id = order_info.order_id
-
-            if order_status == 'REJECTED':
-                continue
-            if order_status in ['OPEN', 'FILLED']:
-                return OrderResult(
-                    success=True,
-                    order_id=order_id,
-                    side=side,
-                    size=quantity,
-                    price=adjusted_price,
-                    status=order_status
-                )
-            elif order_status == 'PENDING':
-                raise Exception("[CLOSE] Order not processed after 10 seconds")
-            else:
-                raise Exception(f"[CLOSE] Unexpected order status: {order_status}")
-
     async def cancel_order(self, order_id: str) -> OrderResult:
         """Cancel an order with GRVT."""
         try:
@@ -520,11 +465,6 @@ class GrvtClient(BaseExchangeClient):
             remaining_size=(Decimal(state.get('book_size', ['0'])[0])
                             if isinstance(state.get('book_size'), list) else Decimal(0))
         )
-
-    async def _get_active_close_orders(self, contract_id: str) -> int:
-        """Get active orders count for a contract."""
-        active_orders = await self.get_active_orders(contract_id)
-        return len(active_orders)
 
     @query_retry(reraise=True)
     async def get_active_orders(self, contract_id: str) -> List[OrderInfo]:

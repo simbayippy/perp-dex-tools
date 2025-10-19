@@ -359,68 +359,6 @@ class BackpackClient(BaseExchangeClient):
             error_message=None if success else f"Market order status: {status}",
         )
 
-    async def place_close_order(
-        self,
-        contract_id: str,
-        quantity: Decimal,
-        price: Decimal,
-        side: str,
-        max_retries: int = 15,
-    ) -> OrderResult:
-        """Retry-friendly close order helper using post-only limit orders."""
-        retries = 0
-        side_lower = side.lower()
-
-        while retries < max_retries:
-            retries += 1
-            best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
-            if best_bid <= 0 or best_ask <= 0:
-                return OrderResult(success=False, error_message="No bid/ask data available")
-
-            adjusted_price = price
-            tick = getattr(self.config, "tick_size", Decimal("0.0001"))
-
-            if side_lower == "sell":
-                if price <= best_bid:
-                    adjusted_price = best_bid + tick
-                backpack_side = "Ask"
-            else:
-                if price >= best_ask:
-                    adjusted_price = best_ask - tick
-                backpack_side = "Bid"
-
-            adjusted_price = self.round_to_tick(adjusted_price)
-
-            try:
-                result = self.account_client.execute_order(
-                    symbol=contract_id,
-                    side=backpack_side,
-                    order_type=OrderTypeEnum.LIMIT,
-                    quantity=str(quantity),
-                    price=str(adjusted_price),
-                    post_only=True,
-                    time_in_force=TimeInForceEnum.GTC,
-                )
-            except Exception as exc:
-                self.logger.error(f"[BACKPACK] Close order attempt failed: {exc}")
-                await asyncio.sleep(0.25)
-                continue
-
-            if not result or "id" not in result:
-                await asyncio.sleep(0.25)
-                continue
-
-            return OrderResult(
-                success=True,
-                order_id=str(result["id"]),
-                side=side_lower,
-                size=quantity,
-                price=adjusted_price,
-                status="NEW",
-            )
-
-        return OrderResult(success=False, error_message="Max retries exceeded for close order")
-
     async def cancel_order(self, order_id: str) -> OrderResult:
         """Cancel an existing order."""
         try:

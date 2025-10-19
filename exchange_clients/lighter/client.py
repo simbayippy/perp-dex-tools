@@ -627,32 +627,6 @@ class LighterClient(BaseExchangeClient):
         order_result = await self._submit_order_with_retry(order_params)
         return order_result
 
-
-    async def _get_active_close_orders(self, contract_id: str) -> int:
-        """Get active orders count for a contract using official SDK."""
-        active_orders = await self.get_active_orders(contract_id)
-        return len(active_orders)
-
-    async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
-        """Place a close order with Lighter using official SDK."""
-        self.current_order = None
-        self.current_order_client_id = None
-        order_result = await self.place_limit_order(contract_id, quantity, price, side)
-
-        # wait for 5 seconds to ensure order is placed
-        await asyncio.sleep(5)
-        if order_result.success:
-            return OrderResult(
-                success=True,
-                order_id=order_result.order_id,
-                side=side,
-                size=quantity,
-                price=price,
-                status='OPEN'
-            )
-        else:
-            raise Exception(f"[CLOSE] Error placing order: {order_result.error_message}")
-    
     async def get_order_price(self, side: str = '') -> Decimal:
         """Get the price of an order with Lighter using official SDK."""
         # Get current market prices
