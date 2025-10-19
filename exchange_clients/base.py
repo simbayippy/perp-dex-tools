@@ -526,30 +526,6 @@ class BaseExchangeClient(ABC):
             
         Returns:
             OrderResult with order details
-            
-        Example Override (close order with retry):
-            ```python
-            async def place_close_order(self, contract_id, quantity, price, side, **kwargs):
-                attempt = 0
-                while attempt < kwargs.get('max_retries', 50):
-                    attempt += 1
-                    
-                    # Get current market to adjust price
-                    if kwargs.get('enable_price_adjustment', True):
-                        bid, ask = await self.fetch_bbo_prices(contract_id)
-                        if side == 'sell' and price <= bid:
-                            price = bid + tick_size
-                        elif side == 'buy' and price >= ask:
-                            price = ask - tick_size
-                    
-                    result = await self.place_limit_order(contract_id, quantity, price, side)
-                    
-                    if result.status in ['OPEN', 'FILLED']:
-                        return result
-                    # Retry if EXPIRED/REJECTED
-                
-                return OrderResult(success=False, error_message='Max retries exceeded')
-            ```
         """
         # Default implementation: Single attempt with limit order
         return await self.place_limit_order(contract_id, quantity, price, side)
@@ -731,7 +707,6 @@ class BaseExchangeClient(ABC):
     # ========================================================================
     # RISK MANAGEMENT & LEVERAGE
     # ========================================================================
-
     
     @abstractmethod
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:

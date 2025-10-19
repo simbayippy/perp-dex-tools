@@ -4,14 +4,27 @@ Backpack exchange client implementation.
 
 import os
 import asyncio
-import time
-from decimal import Decimal
-from typing import Dict, Any, List, Optional, Tuple
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
 from bpx.public import Public
 from bpx.account import Account
 from bpx.constants.enums import OrderTypeEnum, TimeInForceEnum
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
+from exchange_clients.base import (
+    BaseExchangeClient,
+    ExchangePositionSnapshot,
+    MissingCredentialsError,
+    OrderInfo,
+    OrderResult,
+    query_retry,
+    validate_credentials,
+)
+from exchange_clients.backpack.common import (
+    get_backpack_symbol_format,
+    normalize_symbol as normalize_backpack_symbol,
+)
 from exchange_clients.backpack.websocket_manager import BackpackWebSocketManager
 from helpers.unified_logger import get_exchange_logger
 
@@ -23,551 +36,676 @@ class BackpackClient(BaseExchangeClient):
         """Initialize Backpack client."""
         super().__init__(config)
 
-        # Backpack credentials from environment (validation happens in _validate_config)
-        self.public_key = os.getenv('BACKPACK_PUBLIC_KEY')
-        self.secret_key = os.getenv('BACKPACK_SECRET_KEY')
+        self.logger = get_exchange_logger("backpack", getattr(self.config, "ticker", "UNKNOWN"))
 
-        # Initialize Backpack clients using official SDK
-        # Wrap in try-catch to convert SDK credential errors to MissingCredentialsError
+        self.public_key = os.getenv("BACKPACK_PUBLIC_KEY")
+        self.secret_key = os.getenv("BACKPACK_SECRET_KEY")
+
+        self.ws_manager: Optional[BackpackWebSocketManager] = None
+        self._ws_task: Optional[asyncio.Task] = None
+        self._order_update_handler: Optional[Callable[[Dict[str, Any]], None]] = None
+
         try:
             self.public_client = Public()
-            self.account_client = Account(
-                public_key=self.public_key,
-                secret_key=self.secret_key
-            )
-        except Exception as e:
-            # If SDK fails to initialize due to invalid credentials, raise as credential error
-            if 'base64' in str(e).lower() or 'invalid' in str(e).lower():
-                raise MissingCredentialsError(f"Invalid Backpack credentials format: {e}")
+            self.account_client = Account(public_key=self.public_key, secret_key=self.secret_key)
+        except Exception as exc:
+            message = str(exc).lower()
+            if "base64" in message or "invalid" in message:
+                raise MissingCredentialsError(f"Invalid Backpack credentials format: {exc}") from exc
             raise
 
-        self._order_update_handler = None
+    # --------------------------------------------------------------------- #
+    # Configuration & connection management
+    # --------------------------------------------------------------------- #
 
     def _validate_config(self) -> None:
         """Validate Backpack configuration."""
-        # Use base validation helper (reduces code duplication)
-        validate_credentials('BACKPACK_PUBLIC_KEY', os.getenv('BACKPACK_PUBLIC_KEY'))
-        validate_credentials('BACKPACK_SECRET_KEY', os.getenv('BACKPACK_SECRET_KEY'))
+        validate_credentials("BACKPACK_PUBLIC_KEY", os.getenv("BACKPACK_PUBLIC_KEY"))
+        validate_credentials("BACKPACK_SECRET_KEY", os.getenv("BACKPACK_SECRET_KEY"))
 
     async def connect(self) -> None:
-        """Connect to Backpack WebSocket."""
-        # Initialize WebSocket manager
-        self.ws_manager = BackpackWebSocketManager(
-            public_key=self.public_key,
-            secret_key=self.secret_key,
-            symbol=self.config.contract_id,  # Use contract_id as symbol for Backpack
-            order_update_callback=self._handle_websocket_order_update
-        )
-        # Pass config to WebSocket manager for order type determination
-        self.ws_manager.config = self.config
+        """Connect to Backpack WebSocket for order updates."""
+        symbol = getattr(self.config, "contract_id", None)
 
-        # Initialize logger using the same format as helpers
-        self.logger = get_exchange_logger("backpack", self.config.ticker)
-        self.ws_manager.set_logger(self.logger)
+        if not self.ws_manager:
+            self.ws_manager = BackpackWebSocketManager(
+                public_key=self.public_key,
+                secret_key=self.secret_key,
+                symbol=symbol,
+                order_update_callback=self._handle_websocket_order_update,
+            )
+            self.ws_manager.set_logger(self.logger)
+        else:
+            self.ws_manager.update_symbol(symbol)
 
-        try:
-            # Start WebSocket connection in background task
-            asyncio.create_task(self.ws_manager.connect())
-            # Wait a moment for connection to establish
-            await asyncio.sleep(2)
-        except Exception as e:
-            self.logger.error(f"Error connecting to Backpack WebSocket: {e}")
-            raise
+        if self._ws_task and not self._ws_task.done():
+            return
+
+        self._ws_task = asyncio.create_task(self.ws_manager.connect())
+
+        # Give the WS manager a brief moment to connect (best-effort).
+        await self.ws_manager.wait_until_ready(timeout=2.0)
 
     async def disconnect(self) -> None:
-        """Disconnect from Backpack."""
-        try:
-            if hasattr(self, 'ws_manager') and self.ws_manager:
-                await self.ws_manager.disconnect()
-        except Exception as e:
-            self.logger.error(f"Error during Backpack disconnect: {e}")
+        """Disconnect from Backpack WebSocket and cleanup."""
+        if self.ws_manager:
+            await self.ws_manager.disconnect()
+
+        if self._ws_task:
+            self._ws_task.cancel()
+            try:
+                await self._ws_task
+            except asyncio.CancelledError:
+                pass
+            self._ws_task = None
 
     def get_exchange_name(self) -> str:
-        """Get the exchange name."""
+        """Return exchange identifier."""
         return "backpack"
 
-    def setup_order_update_handler(self, handler) -> None:
-        """Setup order update handler for WebSocket."""
+    def setup_order_update_handler(self, handler: Callable[[Dict[str, Any]], None]) -> None:
+        """Register strategy-level order update handler."""
         self._order_update_handler = handler
 
-    async def _handle_websocket_order_update(self, order_data: Dict[str, Any]):
-        """Handle order updates from WebSocket."""
+    # --------------------------------------------------------------------- #
+    # Utility helpers
+    # --------------------------------------------------------------------- #
+
+    @staticmethod
+    def _to_decimal(value: Any, default: Optional[Decimal] = None) -> Optional[Decimal]:
+        """Convert various numeric inputs to Decimal safely."""
+        if value in (None, "", "null"):
+            return default
+
         try:
-            event_type = order_data.get('e', '')
-            order_id = order_data.get('i', '')
-            symbol = order_data.get('s', '')
-            side = order_data.get('S', '')
-            quantity = order_data.get('q', '0')
-            price = order_data.get('p', '0')
-            fill_quantity = order_data.get('z', '0')
+            return Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return default
 
-            # Only process orders for our symbol
-            if symbol != self.config.contract_id:
-                return
+    def normalize_symbol(self, symbol: str) -> str:
+        """
+        Convert normalized symbol (e.g., 'BTC') to Backpack format.
+        """
+        return get_backpack_symbol_format(symbol)
 
-            # Determine order side
-            if side.upper() == 'BID':
-                order_side = 'buy'
-            elif side.upper() == 'ASK':
-                order_side = 'sell'
+    # --------------------------------------------------------------------- #
+    # WebSocket callbacks
+    # --------------------------------------------------------------------- #
+
+    async def _handle_websocket_order_update(self, order_data: Dict[str, Any]) -> None:
+        """Normalize and forward order update events to the registered handler."""
+        if not self._order_update_handler:
+            return
+
+        try:
+            symbol = order_data.get("s") or order_data.get("symbol")
+            if symbol and getattr(self.config, "contract_id", None):
+                # Skip updates for other symbols when a specific contract is configured
+                expected_symbol = getattr(self.config, "contract_id")
+                if expected_symbol and symbol != expected_symbol:
+                    return
+
+            side_raw = (order_data.get("S") or order_data.get("side") or "").upper()
+            if side_raw == "BID":
+                side = "buy"
+            elif side_raw == "ASK":
+                side = "sell"
             else:
-                self.logger.error(f"Unexpected order side: {side}")
-                sys.exit(1)
+                side = side_raw.lower() or None
 
-            # Let strategy determine order type
-            order_type = "ORDER"
+            event = (order_data.get("e") or order_data.get("event") or "").lower()
+            status = None
+            if event == "orderfill" and (
+                self._to_decimal(order_data.get("q")) == self._to_decimal(order_data.get("z"))
+            ):
+                status = "FILLED"
+            elif event == "orderfill":
+                status = "PARTIALLY_FILLED"
+            elif event in {"orderaccepted", "new"}:
+                status = "OPEN"
+            elif event in {"ordercancelled", "orderexpired", "canceled"}:
+                status = "CANCELED"
 
-            if event_type == 'orderFill' and quantity == fill_quantity:
-                if self._order_update_handler:
-                    self._order_update_handler({
-                        'order_id': order_id,
-                        'side': order_side,
-                        'order_type': order_type,
-                        'status': 'FILLED',
-                        'size': quantity,
-                        'price': price,
-                        'contract_id': symbol,
-                        'filled_size': fill_quantity
-                    })
+            payload = {
+                "order_id": str(order_data.get("i") or order_data.get("orderId") or ""),
+                "side": side,
+                "order_type": order_data.get("o") or order_data.get("type") or "UNKNOWN",
+                "status": status or order_data.get("X") or order_data.get("status"),
+                "size": self._to_decimal(order_data.get("q")),
+                "price": self._to_decimal(order_data.get("p")),
+                "contract_id": symbol,
+                "filled_size": self._to_decimal(order_data.get("z")),
+                "raw_event": order_data,
+            }
 
-            elif event_type in ['orderFill', 'orderAccepted', 'orderCancelled', 'orderExpired']:
-                if event_type == 'orderFill':
-                    status = 'PARTIALLY_FILLED'
-                elif event_type == 'orderAccepted':
-                    status = 'OPEN'
-                elif event_type in ['orderCancelled', 'orderExpired']:
-                    status = 'CANCELED'
+            self._order_update_handler(payload)
+        except Exception as exc:
+            self.logger.error(f"Error handling Backpack order update: {exc}")
 
-                if self._order_update_handler:
-                    self._order_update_handler({
-                        'order_id': order_id,
-                        'side': order_side,
-                        'order_type': order_type,
-                        'status': status,
-                        'size': quantity,
-                        'price': price,
-                        'contract_id': symbol,
-                        'filled_size': fill_quantity
-                    })
+    # --------------------------------------------------------------------- #
+    # Market data
+    # --------------------------------------------------------------------- #
 
-        except Exception as e:
-            self.logger.error(f"Error handling WebSocket order update: {e}")
-
-    async def get_order_price(self, direction: str) -> Decimal:
-        """Get the price of an order with Backpack using official SDK."""
-        best_bid, best_ask = await self.fetch_bbo_prices(self.config.contract_id)
-        if best_bid <= 0 or best_ask <= 0:
-            self.logger.error("Invalid bid/ask prices")
-            raise ValueError("Invalid bid/ask prices")
-
-        if direction == 'buy':
-            # For buy orders, place slightly below best ask to ensure execution
-            order_price = best_ask - self.config.tick_size
-        else:
-            # For sell orders, place slightly above best bid to ensure execution
-            order_price = best_bid + self.config.tick_size
-        return self.round_to_tick(order_price)
-
-    @query_retry(default_return=(0, 0))
+    @query_retry(default_return=(Decimal("0"), Decimal("0")))
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
-        # Get order book depth from Backpack
-        order_book = self.public_client.get_depth(contract_id)
+        """Fetch best bid/offer from Backpack public depth."""
+        try:
+            order_book = self.public_client.get_depth(contract_id)
+        except Exception as exc:
+            self.logger.error(f"[BACKPACK] Failed to fetch depth for {contract_id}: {exc}")
+            raise
 
-        # Extract bids and asks directly from Backpack response
-        bids = order_book.get('bids', [])
-        asks = order_book.get('asks', [])
+        bids = order_book.get("bids", []) if isinstance(order_book, dict) else []
+        asks = order_book.get("asks", []) if isinstance(order_book, dict) else []
 
-        # Sort bids and asks
-        bids = sorted(bids, key=lambda x: Decimal(x[0]), reverse=True)  # (highest price first)
-        asks = sorted(asks, key=lambda x: Decimal(x[0]))                # (lowest price first)
+        try:
+            best_bid = max((self._to_decimal(level[0], Decimal("0")) for level in bids), default=Decimal("0"))
+        except Exception:
+            best_bid = Decimal("0")
 
-        # Best bid is the highest price someone is willing to buy at
-        best_bid = Decimal(bids[0][0]) if bids and len(bids) > 0 else 0
-        # Best ask is the lowest price someone is willing to sell at
-        best_ask = Decimal(asks[0][0]) if asks and len(asks) > 0 else 0
+        try:
+            best_ask = min((self._to_decimal(level[0], Decimal("0")) for level in asks if level), default=Decimal("0"))
+        except Exception:
+            best_ask = Decimal("0")
 
         return best_bid, best_ask
 
+    def get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
+        """Backpack WebSocket currently does not maintain a local order book."""
+        return None
+
     async def get_order_book_depth(
-        self, 
-        contract_id: str, 
-        levels: int = 10
+        self,
+        contract_id: str,
+        levels: int = 10,
     ) -> Dict[str, List[Dict[str, Decimal]]]:
-        """
-        Get order book depth from Backpack.
-        
-        Args:
-            contract_id: Contract/symbol identifier
-            levels: Number of price levels to fetch (default: 10)
-            
-        Returns:
-            Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
-        """
+        """Fetch order book depth via REST fallback."""
         try:
-            # Get order book from Backpack public API
             order_book = self.public_client.get_depth(contract_id)
+        except Exception as exc:
+            self.logger.error(f"[BACKPACK] Failed to fetch order book depth: {exc}")
+            return {"bids": [], "asks": []}
 
-            # Extract bids and asks
-            # Backpack format: [["price", "quantity"], ...]
-            bids_raw = order_book.get('bids', [])
-            asks_raw = order_book.get('asks', [])
+        if not isinstance(order_book, dict):
+            return {"bids": [], "asks": []}
 
-            # Sort and limit to requested levels
-            sorted_bids = sorted(bids_raw, key=lambda x: Decimal(x[0]), reverse=True)[:levels]
-            sorted_asks = sorted(asks_raw, key=lambda x: Decimal(x[0]))[:levels]
+        bids_raw = order_book.get("bids", []) or []
+        asks_raw = order_book.get("asks", []) or []
 
-            # Convert to standardized format
-            bids = [{'price': Decimal(bid[0]), 'size': Decimal(bid[1])} 
-                   for bid in sorted_bids]
-            asks = [{'price': Decimal(ask[0]), 'size': Decimal(ask[1])} 
-                   for ask in sorted_asks]
+        bids_sorted = sorted(bids_raw, key=lambda x: self._to_decimal(x[0], Decimal("0")), reverse=True)[:levels]
+        asks_sorted = sorted(asks_raw, key=lambda x: self._to_decimal(x[0], Decimal("0")))[:levels]
 
-            return {
-                'bids': bids,
-                'asks': asks
-            }
+        bids = [
+            {"price": self._to_decimal(price, Decimal("0")), "size": self._to_decimal(size, Decimal("0"))}
+            for price, size in bids_sorted
+        ]
+        asks = [
+            {"price": self._to_decimal(price, Decimal("0")), "size": self._to_decimal(size, Decimal("0"))}
+            for price, size in asks_sorted
+        ]
 
-        except Exception as e:
-            self.logger.error(f"Error fetching order book depth: {e}")
-            # Return empty order book on error
-            return {'bids': [], 'asks': []}
+        return {"bids": bids, "asks": asks}
+
+    # --------------------------------------------------------------------- #
+    # Order placement & management
+    # --------------------------------------------------------------------- #
+
+    async def get_order_price(self, direction: str) -> Decimal:
+        """Determine a maker-friendly order price."""
+        best_bid, best_ask = await self.fetch_bbo_prices(self.config.contract_id)
+        if best_bid <= 0 or best_ask <= 0:
+            raise ValueError("Invalid bid/ask prices")
+
+        if direction.lower() == "buy":
+            price = best_ask - getattr(self.config, "tick_size", Decimal("0.01"))
+        else:
+            price = best_bid + getattr(self.config, "tick_size", Decimal("0.01"))
+
+        return self.round_to_tick(price)
 
     async def place_limit_order(
         self,
         contract_id: str,
         quantity: Decimal,
         price: Decimal,
-        side: str
+        side: str,
     ) -> OrderResult:
-        """
-        Place a limit order at a specific price on Backpack.
-        
-        Args:
-            contract_id: Contract identifier
-            quantity: Order quantity
-            price: Limit price
-            side: 'buy' or 'sell'
-            
-        Returns:
-            OrderResult with order details
-        """
+        """Place a post-only limit order on Backpack."""
+        backpack_side = "Bid" if side.lower() == "buy" else "Ask"
+        rounded_price = self.round_to_tick(price)
+
         try:
-            # Convert side to Backpack format
-            backpack_side = 'Bid' if side.lower() == 'buy' else 'Ask'
-            
-            # Place limit order with post_only for maker fees
-            order_result = self.account_client.execute_order(
+            result = self.account_client.execute_order(
                 symbol=contract_id,
                 side=backpack_side,
                 order_type=OrderTypeEnum.LIMIT,
                 quantity=str(quantity),
-                price=str(self.round_to_tick(price)),
+                price=str(rounded_price),
                 post_only=True,
-                time_in_force=TimeInForceEnum.GTC
+                time_in_force=TimeInForceEnum.GTC,
             )
-            
-            if not order_result:
-                return OrderResult(success=False, error_message='Failed to place limit order')
-            
-            # Check if order was rejected
-            if 'code' in order_result:
-                message = order_result.get('message', 'Unknown error')
-                return OrderResult(success=False, error_message=f'Limit order rejected: {message}')
-            
-            # Extract order ID
-            order_id = order_result.get('id')
-            if not order_id:
-                return OrderResult(success=False, error_message='No order ID in response')
-            
-            # Check order status
-            await asyncio.sleep(0.01)
-            order_info = await self.get_order_info(order_id)
-            
-            if order_info and order_info.status in ['Open', 'PartiallyFilled', 'Filled']:
-                return OrderResult(
-                    success=True,
-                    order_id=order_id,
-                    side=side,
-                    size=quantity,
-                    price=price,
-                    status=order_info.status
-                )
-            elif order_info and order_info.status == 'Cancelled':
-                return OrderResult(success=False, error_message='Limit order was rejected (post-only constraint)')
-            else:
-                # Assume success if we can't verify
-                return OrderResult(
-                    success=True,
-                    order_id=order_id,
-                    side=side,
-                    size=quantity,
-                    price=price,
-                    status='Open'
-                )
-                
-        except Exception as e:
-            self.logger.error(f"Error placing limit order: {e}")
+        except Exception as exc:
+            self.logger.error(f"[BACKPACK] Failed to place limit order: {exc}")
+            return OrderResult(success=False, error_message=str(exc))
+
+        if not result or "id" not in result:
+            return OrderResult(success=False, error_message="Limit order response missing order id")
+
+        order_id = str(result["id"])
+
+        await asyncio.sleep(0.05)
+        info = await self.get_order_info(order_id)
+
+        if info:
             return OrderResult(
-                success=False,
-                error_message=f"Failed to place limit order: {str(e)}"
+                success=info.status not in {"Rejected", "Cancelled"},
+                order_id=info.order_id,
+                side=info.side,
+                size=info.size,
+                price=info.price,
+                status=info.status,
+                filled_size=info.filled_size,
             )
 
+        return OrderResult(
+            success=True,
+            order_id=order_id,
+            side=side.lower(),
+            size=quantity,
+            price=rounded_price,
+            status="OPEN",
+        )
 
-    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
-        """
-        Place a market order on Backpack (true market order for immediate execution).
-        """
+    async def place_market_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        side: str,
+    ) -> OrderResult:
+        """Place a market order for immediate execution."""
+        backpack_side = "Bid" if side.lower() == "buy" else "Ask"
+
         try:
-            # Convert side to Backpack format
-            if side.lower() == 'buy':
-                backpack_side = 'Bid'
-            elif side.lower() == 'sell':
-                backpack_side = 'Ask'
-            else:
-                raise ValueError(f"Invalid side: {side}")
-
             result = self.account_client.execute_order(
                 symbol=contract_id,
                 side=backpack_side,
                 order_type=OrderTypeEnum.MARKET,
-                quantity=str(quantity)
+                quantity=str(quantity),
             )
+        except Exception as exc:
+            self.logger.error(f"[BACKPACK] Failed to place market order: {exc}")
+            return OrderResult(success=False, error_message=str(exc))
 
-            if not result:
-                return OrderResult(success=False, error_message='Failed to place market order')
+        if not result or "id" not in result:
+            return OrderResult(success=False, error_message="Market order response missing order id")
 
-            order_id = result.get('id')
-            order_status = result.get('status', '').upper()
+        status = (result.get("status") or "").upper()
+        executed_qty = self._to_decimal(result.get("executedQuantity"), Decimal("0"))
+        executed_quote_qty = self._to_decimal(result.get("executedQuoteQuantity"), Decimal("0"))
+        avg_price = Decimal("0")
+        if executed_qty and executed_qty > 0:
+            avg_price = (executed_quote_qty or Decimal("0")) / executed_qty
 
-            if order_status == 'FILLED':
-                # Calculate average fill price
-                price = Decimal(result.get('executedQuoteQuantity', '0')) / Decimal(result.get('executedQuantity', '1'))
-                return OrderResult(
-                    success=True,
-                    order_id=order_id,
-                    side=side.lower(),
-                    size=quantity,
-                    price=price,
-                    status='FILLED'
-                )
-            else:
-                return OrderResult(
-                    success=False, 
-                    error_message=f'Market order failed with status: {order_status}'
-                )
-                
-        except Exception as e:
-            self.logger.error(f"Error placing market order: {e}")
-            return OrderResult(success=False, error_message=str(e))
+        success = status == "FILLED"
 
-    async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
-        """Place a close order with Backpack using official SDK with retry logic for POST_ONLY rejections."""
-        max_retries = 15
-        retry_count = 0
+        return OrderResult(
+            success=success,
+            order_id=str(result.get("id")),
+            side=side.lower(),
+            size=executed_qty or quantity,
+            price=avg_price,
+            status=status,
+            filled_size=executed_qty,
+            error_message=None if success else f"Market order status: {status}",
+        )
 
-        while retry_count < max_retries:
-            retry_count += 1
-            # Get current market prices to adjust order price if needed
+    async def place_close_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        price: Decimal,
+        side: str,
+        max_retries: int = 15,
+    ) -> OrderResult:
+        """Retry-friendly close order helper using post-only limit orders."""
+        retries = 0
+        side_lower = side.lower()
+
+        while retries < max_retries:
+            retries += 1
             best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
-
             if best_bid <= 0 or best_ask <= 0:
-                return OrderResult(success=False, error_message='No bid/ask data available')
+                return OrderResult(success=False, error_message="No bid/ask data available")
 
-            # Adjust order price based on market conditions and side
             adjusted_price = price
-            if side.lower() == 'sell':
-                order_side = 'Ask'
-                # For sell orders, ensure price is above best bid to be a maker order
+            tick = getattr(self.config, "tick_size", Decimal("0.0001"))
+
+            if side_lower == "sell":
                 if price <= best_bid:
-                    adjusted_price = best_bid + self.config.tick_size
-            elif side.lower() == 'buy':
-                order_side = 'Bid'
-                # For buy orders, ensure price is below best ask to be a maker order
+                    adjusted_price = best_bid + tick
+                backpack_side = "Ask"
+            else:
                 if price >= best_ask:
-                    adjusted_price = best_ask - self.config.tick_size
+                    adjusted_price = best_ask - tick
+                backpack_side = "Bid"
 
             adjusted_price = self.round_to_tick(adjusted_price)
-            # Place the order using Backpack SDK (post-only to avoid taker fees)
-            order_result = self.account_client.execute_order(
-                symbol=contract_id,
-                side=order_side,
-                order_type=OrderTypeEnum.LIMIT,
-                quantity=str(quantity),
-                price=str(adjusted_price),
-                post_only=True,
-                time_in_force=TimeInForceEnum.GTC
-            )
 
-            if not order_result:
-                return OrderResult(success=False, error_message='Failed to place order')
-
-            if 'code' in order_result:
-                message = order_result.get('message', 'Unknown error')
-                self.logger.error(f"[CLOSE] Error placing order: {message}")
+            try:
+                result = self.account_client.execute_order(
+                    symbol=contract_id,
+                    side=backpack_side,
+                    order_type=OrderTypeEnum.LIMIT,
+                    quantity=str(quantity),
+                    price=str(adjusted_price),
+                    post_only=True,
+                    time_in_force=TimeInForceEnum.GTC,
+                )
+            except Exception as exc:
+                self.logger.error(f"[BACKPACK] Close order attempt failed: {exc}")
+                await asyncio.sleep(0.25)
                 continue
 
-            # Extract order ID from response
-            order_id = order_result.get('id')
-            if not order_id:
-                self.logger.error(f"[CLOSE] No order ID in response: {order_result}")
-                return OrderResult(success=False, error_message='No order ID in response')
+            if not result or "id" not in result:
+                await asyncio.sleep(0.25)
+                continue
 
-            # Order successfully placed
             return OrderResult(
                 success=True,
-                order_id=order_id,
-                side=side.lower(),
+                order_id=str(result["id"]),
+                side=side_lower,
                 size=quantity,
                 price=adjusted_price,
-                status='New'
+                status="NEW",
             )
 
-        return OrderResult(success=False, error_message='Max retries exceeded for close order')
+        return OrderResult(success=False, error_message="Max retries exceeded for close order")
 
     async def cancel_order(self, order_id: str) -> OrderResult:
-        """Cancel an order with Backpack using official SDK."""
+        """Cancel an existing order."""
         try:
-            # Cancel the order using Backpack SDK
-            cancel_result = self.account_client.cancel_order(
-                symbol=self.config.contract_id,
-                order_id=order_id
-            )
+            result = self.account_client.cancel_order(symbol=self.config.contract_id, order_id=order_id)
+        except Exception as exc:
+            return OrderResult(success=False, error_message=str(exc))
 
-            if not cancel_result:
-                return OrderResult(success=False, error_message='Failed to cancel order')
-            if 'code' in cancel_result:
-                self.logger.error(
-                    f"[CLOSE] Failed to cancel order {order_id}: {cancel_result.get('message', 'Unknown error')}")
-                filled_size = self.config.quantity
-            else:
-                filled_size = Decimal(cancel_result.get('executedQuantity', 0))
-            return OrderResult(success=True, filled_size=filled_size)
+        if not result:
+            return OrderResult(success=False, error_message="Cancel order returned empty response")
 
-        except Exception as e:
-            return OrderResult(success=False, error_message=str(e))
+        filled_size = self._to_decimal(result.get("executedQuantity"), Decimal("0"))
+        status = result.get("status") or "CANCELLED"
+
+        return OrderResult(success=True, order_id=str(order_id), status=status, filled_size=filled_size)
 
     @query_retry()
     async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
-        """Get order information from Backpack using official SDK."""
-        # Get order information using Backpack SDK
-        order_result = self.account_client.get_open_order(
-            symbol=self.config.contract_id,
-            order_id=order_id
-        )
-
-        if not order_result:
+        """Fetch detailed order information."""
+        try:
+            order = self.account_client.get_open_order(symbol=self.config.contract_id, order_id=order_id)
+        except Exception as exc:
+            self.logger.error(f"[BACKPACK] Failed to fetch order info: {exc}")
             return None
 
-        # Return the order data as OrderInfo
+        if not order:
+            return None
+
+        side_raw = (order.get("side") or "").lower()
+        if side_raw == "bid":
+            side = "buy"
+        elif side_raw == "ask":
+            side = "sell"
+        else:
+            side = side_raw or None
+
+        size = self._to_decimal(order.get("quantity"), Decimal("0"))
+        price = self._to_decimal(order.get("price"), Decimal("0"))
+        filled = self._to_decimal(order.get("executedQuantity"), Decimal("0"))
+
+        remaining = None
+        if size is not None and filled is not None:
+            remaining = size - filled
+
         return OrderInfo(
-            order_id=order_result.get('id', ''),
-            side=order_result.get('side', '').lower(),
-            size=Decimal(order_result.get('quantity', 0)),
-            price=Decimal(order_result.get('price', 0)),
-            status=order_result.get('status', ''),
-            filled_size=Decimal(order_result.get('executedQuantity', 0)),
-            remaining_size=Decimal(order_result.get('quantity', 0)) - Decimal(order_result.get('executedQuantity', 0))
+            order_id=str(order.get("id", order_id)),
+            side=side or "",
+            size=size or Decimal("0"),
+            price=price or Decimal("0"),
+            status=order.get("status", ""),
+            filled_size=filled or Decimal("0"),
+            remaining_size=remaining or Decimal("0"),
         )
 
     @query_retry(default_return=[])
     async def get_active_orders(self, contract_id: str) -> List[OrderInfo]:
-        """Get active orders for a contract using official SDK."""
-        # Get active orders using Backpack SDK
-        active_orders = self.account_client.get_open_orders(symbol=contract_id)
-
-        if not active_orders:
+        """Return currently active orders."""
+        try:
+            response = self.account_client.get_open_orders(symbol=contract_id)
+        except Exception as exc:
+            self.logger.error(f"[BACKPACK] Failed to fetch open orders: {exc}")
             return []
 
-        # Return the orders list as OrderInfo objects
-        order_list = active_orders if isinstance(active_orders, list) else active_orders.get('orders', [])
-        orders = []
+        if not response:
+            return []
 
-        for order in order_list:
-            if isinstance(order, dict):
-                if order.get('side', '') == 'Bid':
-                    side = 'buy'
-                elif order.get('side', '') == 'Ask':
-                    side = 'sell'
-                orders.append(OrderInfo(
-                    order_id=order.get('id', ''),
-                    side=side,
-                    size=Decimal(order.get('quantity', 0)),
-                    price=Decimal(order.get('price', 0)),
-                    status=order.get('status', ''),
-                    filled_size=Decimal(order.get('executedQuantity', 0)),
-                    remaining_size=Decimal(order.get('quantity', 0)) - Decimal(order.get('executedQuantity', 0))
-                ))
+        orders_raw = response if isinstance(response, list) else response.get("orders", [])
+        orders: List[OrderInfo] = []
+        for order in orders_raw:
+            side_raw = (order.get("side") or "").lower()
+            side = "buy" if side_raw == "bid" else "sell" if side_raw == "ask" else side_raw
+            size = self._to_decimal(order.get("quantity"), Decimal("0"))
+            price = self._to_decimal(order.get("price"), Decimal("0"))
+            filled = self._to_decimal(order.get("executedQuantity"), Decimal("0"))
+            remaining = None
+            if size is not None and filled is not None:
+                remaining = size - filled
+
+            orders.append(
+                OrderInfo(
+                    order_id=str(order.get("id", "")),
+                    side=side or "",
+                    size=size or Decimal("0"),
+                    price=price or Decimal("0"),
+                    status=order.get("status", ""),
+                    filled_size=filled or Decimal("0"),
+                    remaining_size=remaining or Decimal("0"),
+                )
+            )
 
         return orders
 
-    @query_retry(default_return=0)
+    @query_retry(default_return=Decimal("0"))
     async def get_account_positions(self) -> Decimal:
-        """Get account positions using official SDK."""
-        positions_data = self.account_client.get_open_positions()
-        position_amt = 0
-        for position in positions_data:
-            if position.get('symbol', '') == self.config.contract_id:
-                position_amt = abs(Decimal(position.get('netQuantity', 0)))
-                break
-        return position_amt
-    
+        """Return absolute position size for configured contract."""
+        try:
+            positions = self.account_client.get_open_positions()
+        except Exception as exc:
+            self.logger.error(f"[BACKPACK] Failed to fetch open positions: {exc}")
+            return Decimal("0")
+
+        contract_id = getattr(self.config, "contract_id", None)
+        if not positions or not contract_id:
+            return Decimal("0")
+
+        for position in positions:
+            if (position.get("symbol") or "").upper() == contract_id.upper():
+                quantity = self._to_decimal(position.get("netQuantity"), Decimal("0"))
+                return quantity.copy_abs() if isinstance(quantity, Decimal) else Decimal("0")
+
+        return Decimal("0")
+
     async def get_account_balance(self) -> Optional[Decimal]:
         """
-        Get available account balance from Backpack.
-        
-        TODO: Implement when Backpack trading is in production.
-        Need to query Backpack API for available balance.
-        
-        Returns:
-            None (not yet implemented)
+        Fetch available account balance.
+
+        Backpack SDK support is pending; return None for now.
         """
-        self.logger.debug("[BACKPACK] get_account_balance not yet implemented")
+        self.logger.debug("[BACKPACK] get_account_balance not implemented")
         return None
-    
+
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
         """
-        Get leverage information for Backpack.
-        
-        TODO: Implement actual API query when Backpack trading is in production.
-        Currently returns conservative defaults.
+        Fetch leverage limits for symbol.
+
+        Backpack has not published leverage APIs yet; return conservative defaults.
         """
-        self.logger.debug(
-            f"[BACKPACK] get_leverage_info not yet implemented, using defaults for {symbol}"
-        )
+        self.logger.debug(f"[BACKPACK] Using placeholder leverage info for {symbol}")
         return {
-            'max_leverage': Decimal('10'),
-            'max_notional': None,
-            'margin_requirement': Decimal('0.10'),  # 10% margin = 10x leverage
-            'brackets': None,
-            'error': None  # Using default values (not queried from API)
+            "max_leverage": Decimal("10"),
+            "max_notional": None,
+            "margin_requirement": Decimal("0.10"),
+            "brackets": None,
+            "error": None,
         }
 
     async def get_contract_attributes(self) -> Tuple[str, Decimal]:
-        """Get contract ID for a ticker."""
-        ticker = self.config.ticker
-        if len(ticker) == 0:
-            self.logger.error("Ticker is empty")
+        """Populate contract_id and tick_size for current ticker."""
+        ticker = getattr(self.config, "ticker", "")
+        if not ticker:
             raise ValueError("Ticker is empty")
 
-        markets = self.public_client.get_markets()
-        for market in markets:
-            if (market.get('marketType', '') == 'PERP' and market.get('baseSymbol', '') == ticker and
-                    market.get('quoteSymbol', '') == 'USDC'):
-                self.config.contract_id = market.get('symbol', '')
-                min_quantity = Decimal(market.get('filters', {}).get('quantity', {}).get('minQuantity', 0))
-                self.config.tick_size = Decimal(market.get('filters', {}).get('price', {}).get('tickSize', 0))
+        min_quantity = Decimal("0")
+        tick_size = Decimal("0")
+
+        try:
+            markets = self.public_client.get_markets()
+        except Exception as exc:
+            self.logger.error(f"[BACKPACK] Failed to fetch markets: {exc}")
+            raise
+
+        target_symbol = ""
+
+        for market in markets or []:
+            if (
+                market.get("marketType") == "PERP"
+                and market.get("baseSymbol") == ticker
+                and market.get("quoteSymbol") == "USDC"
+            ):
+                target_symbol = market.get("symbol", "")
+                quantity_filter = (market.get("filters", {}) or {}).get("quantity", {}) or {}
+                price_filter = (market.get("filters", {}) or {}).get("price", {}) or {}
+                min_quantity = self._to_decimal(quantity_filter.get("minQuantity"), Decimal("0"))
+                tick_size = self._to_decimal(price_filter.get("tickSize"), Decimal("0.0001"))
                 break
 
-        if self.config.contract_id == '':
-            self.logger.error("Failed to get contract ID for ticker")
-            raise ValueError("Failed to get contract ID for ticker")
+        if not target_symbol:
+            raise ValueError(f"Failed to find Backpack contract for ticker {ticker}")
 
-        if self.config.quantity < min_quantity:
-            self.logger.error(f"Order quantity is less than min quantity: {self.config.quantity} < {min_quantity}")
-            raise ValueError(f"Order quantity is less than min quantity: {self.config.quantity} < {min_quantity}")
+        self.config.contract_id = target_symbol
+        self.config.tick_size = tick_size or Decimal("0.0001")
 
-        if self.config.tick_size == 0:
-            self.logger.error("Failed to get tick size for ticker")
-            raise ValueError("Failed to get tick size for ticker")
+        if getattr(self.config, "quantity", Decimal("0")) < (min_quantity or Decimal("0")):
+            raise ValueError(
+                f"Order quantity {self.config.quantity} below Backpack minimum {min_quantity}"
+            )
 
         return self.config.contract_id, self.config.tick_size
+
+    # --------------------------------------------------------------------- #
+    # Position inspection
+    # --------------------------------------------------------------------- #
+
+    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+        """
+        Return a normalized position snapshot for a given symbol.
+        """
+        normalized_symbol = symbol.upper()
+        target_symbol = self.normalize_symbol(normalized_symbol)
+
+        try:
+            positions = self.account_client.get_open_positions()
+        except Exception as exc:
+            self.logger.warning(f"[BACKPACK] Failed to fetch positions for snapshot: {exc}")
+            return None
+
+        if not positions:
+            return None
+
+        for position in positions:
+            raw_symbol = (position.get("symbol") or "").upper()
+            if raw_symbol != target_symbol:
+                # As a fallback, normalize Backpack symbol (handles legacy formats)
+                if normalize_backpack_symbol(raw_symbol) != normalized_symbol:
+                    continue
+
+            quantity = self._to_decimal(
+                position.get("netQuantity")
+                or position.get("quantity")
+                or position.get("position")
+                or position.get("contracts"),
+                Decimal("0"),
+            )
+
+            entry_price = self._to_decimal(
+                position.get("averageEntryPrice")
+                or position.get("avgEntryPrice")
+                or position.get("entryPrice"),
+            )
+
+            mark_price = self._to_decimal(
+                position.get("markPrice")
+                or position.get("marketPrice")
+                or position.get("indexPrice")
+                or position.get("oraclePrice"),
+            )
+
+            notional = self._to_decimal(
+                position.get("notional")
+                or position.get("positionValue")
+                or position.get("grossPositionValue"),
+            )
+
+            exposure = notional.copy_abs() if isinstance(notional, Decimal) else None
+            if exposure is None and mark_price is not None and quantity:
+                exposure = mark_price * quantity.copy_abs()
+
+            unrealized = self._to_decimal(
+                position.get("unrealizedPnl")
+                or position.get("unrealizedPnlUsd")
+                or position.get("unrealizedPnL")
+                or position.get("pnl"),
+            )
+
+            realized = self._to_decimal(position.get("realizedPnl") or position.get("realizedPnlUsd"))
+            funding_accrued = self._to_decimal(
+                position.get("fundingFees") or position.get("fundingAccrued")
+            )
+            margin_reserved = self._to_decimal(
+                position.get("initialMargin")
+                or position.get("marginUsed")
+                or position.get("allocatedMargin")
+            )
+            leverage = self._to_decimal(position.get("leverage"))
+            liquidation_price = self._to_decimal(position.get("liquidationPrice"))
+
+            side = None
+            if isinstance(quantity, Decimal):
+                if quantity > 0:
+                    side = "long"
+                elif quantity < 0:
+                    side = "short"
+
+            metadata: Dict[str, Any] = {
+                "backpack_symbol": raw_symbol,
+                "position_id": position.get("id") or position.get("positionId"),
+                "updated_at": position.get("updatedAt"),
+            }
+            if notional is not None:
+                metadata["notional"] = notional
+
+            return ExchangePositionSnapshot(
+                symbol=normalized_symbol,
+                quantity=quantity or Decimal("0"),
+                side=side,
+                entry_price=entry_price,
+                mark_price=mark_price,
+                exposure_usd=exposure,
+                unrealized_pnl=unrealized,
+                realized_pnl=realized,
+                funding_accrued=funding_accrued,
+                margin_reserved=margin_reserved,
+                leverage=leverage,
+                liquidation_price=liquidation_price,
+                timestamp=datetime.now(timezone.utc),
+                metadata={k: v for k, v in metadata.items() if v is not None},
+            )
+
+        return None
