@@ -15,6 +15,7 @@ from exchange_clients.base_models import (
     OrderResult,
     OrderInfo,
     query_retry,
+    ExchangePositionSnapshot,
     MissingCredentialsError,
     validate_credentials,
 )
