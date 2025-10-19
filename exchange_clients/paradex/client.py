@@ -165,62 +165,6 @@ class ParadexClient(BaseExchangeClient):
         """Get the exchange name."""
         return "paradex"
 
-    def setup_order_update_handler(self, handler) -> None:
-        """Setup order update handler for WebSocket."""
-        self._order_update_handler = handler
-
-        async def order_update_handler(ws_channel, message):
-            """Handle order updates from WebSocket."""
-            from paradex_py.api.ws_client import ParadexWebsocketChannel
-
-            params = message.get("params", {})
-            data = params.get("data", {})
-
-            if ws_channel == ParadexWebsocketChannel.ORDERS:
-                # Extract order data
-                order_id = data.get("id")
-                status = data.get("status")
-                side = data.get("side", "").lower()
-                remaining_size = data.get("remaining_size")
-                size = data.get("size")
-                price = data.get("price")
-                contract_id = data.get("market")
-                filled_size = str(Decimal(size) - Decimal(remaining_size))
-                if contract_id != self.config.contract_id:
-                    return
-
-                if order_id and status:
-                    # Let strategy determine order type
-                    order_type = "ORDER"
-
-                    # Map Paradex status to our status
-                    status_map = {
-                        'NEW': 'OPEN',
-                        'OPEN': 'OPEN',
-                        'CLOSED': 'CANCELED' if data.get("cancel_reason") else 'FILLED'
-                    }
-                    mapped_status = status_map.get(status, status)
-
-                    # Handle partially filled orders
-                    if status == 'OPEN' and Decimal(filled_size) > 0:
-                        mapped_status = "PARTIALLY_FILLED"
-
-                    if mapped_status in ['OPEN', 'PARTIALLY_FILLED', 'FILLED', 'CANCELED']:
-                        if self._order_update_handler:
-                            self._order_update_handler({
-                                'order_id': order_id,
-                                'side': side,
-                                'order_type': order_type,
-                                'status': mapped_status,
-                                'size': size,
-                                'price': price,
-                                'contract_id': contract_id,
-                                'filled_size': filled_size
-                            })
-
-        # Store the handler for later use
-        self._ws_order_update_handler = order_update_handler
-
     async def _setup_websocket_subscription(self) -> None:
         """Setup WebSocket subscription for order updates."""
         if not hasattr(self, '_ws_order_update_handler'):

@@ -246,7 +246,7 @@ class BaseExchangeClient(ABC):
         pass
 
     # ========================================================================
-    # EVENT STREAMS (OPTIONAL)
+    # LIQUIDATION EVENT STREAMS (OPTIONAL)
     # ========================================================================
 
     def supports_liquidation_stream(self) -> bool:
@@ -343,41 +343,6 @@ class BaseExchangeClient(ABC):
             >>> print(f"Spread: {ask - bid}")
         """
         pass
-
-    def get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
-        """
-        Get order book from WebSocket if available (zero latency).
-        
-        ⚡ Performance Optimization: If the exchange WebSocket maintains a full order book,
-        this method can return it instantly from memory instead of making a REST API call.
-        
-        Returns:
-            Order book dict if WebSocket is connected and has data, None otherwise
-            
-        Example Return Value:
-            {
-                'bids': [
-                    {'price': Decimal('50000'), 'size': Decimal('1.5')},
-                    {'price': Decimal('49999'), 'size': Decimal('2.0')},
-                    ...
-                ],
-                'asks': [...]
-            }
-            
-        Implementation Notes:
-            - Return None if WebSocket doesn't maintain full order book (only BBO)
-            - Return None if WebSocket is not connected or data not ready
-            - Only return data if WebSocket has received and validated order book snapshot
-            
-        Exchange-Specific Behavior:
-            - Lighter: Returns full order book (WebSocket maintains complete depth)
-            - Aster: Returns None (WebSocket only maintains BBO, not full depth)
-            - Default: Returns None (override if exchange supports it)
-            
-        Default Implementation:
-            Returns None. Override in exchange client if WebSocket maintains order book.
-        """
-        return None
 
     @abstractmethod
     async def get_order_book_depth(
@@ -550,17 +515,6 @@ class BaseExchangeClient(ABC):
         """
         pass
 
-    @abstractmethod
-    def setup_order_update_handler(self, handler) -> None:
-        """
-        Setup callback handler for WebSocket order updates.
-        
-        Args:
-            handler: Callback function to receive order updates
-                     Signature: handler(order_data: Dict[str, Any]) -> None
-        """
-        pass
-
     # ========================================================================
     # POSITION & ACCOUNT MANAGEMENT
     # ========================================================================
@@ -611,26 +565,8 @@ class BaseExchangeClient(ABC):
             ```
         """
         pass
-    
-    async def get_detailed_positions(self) -> List[Dict[str, Any]]:
-        """
-        Get detailed position information for all active positions.
-        
-        Returns:
-            List of position dictionaries with details like:
-            - symbol: str
-            - size: Decimal
-            - entry_price: Decimal
-            - mark_price: Decimal
-            - unrealized_pnl: Decimal
-            - liquidation_price: Decimal (if available)
-            
-        Note:
-            Override this method if exchange supports detailed position queries.
-            Default implementation returns empty list.
-        """
-        return []
-    
+
+    @abstractmethod 
     async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
         """
         Fetch a live snapshot for a specific symbol/contract.
@@ -762,7 +698,8 @@ class BaseExchangeClient(ABC):
         price = Decimal(price)
         tick = self.config.tick_size
         return price.quantize(tick, rounding=ROUND_HALF_UP)
-    
+
+    @abstractmethod 
     def normalize_symbol(self, symbol: str) -> str:
         """
         [INTERNAL] Convert a normalized symbol to this exchange's expected format.

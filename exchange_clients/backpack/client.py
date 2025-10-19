@@ -103,10 +103,6 @@ class BackpackClient(BaseExchangeClient):
         """Return exchange identifier."""
         return "backpack"
 
-    def setup_order_update_handler(self, handler: Callable[[Dict[str, Any]], None]) -> None:
-        """Register strategy-level order update handler."""
-        self._order_update_handler = handler
-
     # --------------------------------------------------------------------- #
     # Utility helpers
     # --------------------------------------------------------------------- #
@@ -210,8 +206,9 @@ class BackpackClient(BaseExchangeClient):
 
         return best_bid, best_ask
 
-    def get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
+    def _get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
         """Backpack WebSocket currently does not maintain a local order book."""
+        # TODO
         return None
 
     async def get_order_book_depth(

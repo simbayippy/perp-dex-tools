@@ -197,10 +197,6 @@ class AsterClient(BaseExchangeClient):
         # Round down to nearest step size
         return (quantity / step_size).quantize(Decimal('1'), rounding=ROUND_DOWN) * step_size
 
-    def setup_order_update_handler(self, handler) -> None:
-        """Setup order update handler for WebSocket."""
-        self._order_update_handler = handler
-
     async def _handle_websocket_order_update(self, order_data: Dict[str, Any]):
         """Handle order updates from WebSocket."""
         try:
@@ -270,7 +266,7 @@ class AsterClient(BaseExchangeClient):
 
         return best_bid, best_ask
 
-    def get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
+    def _get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
         """
         Get order book from WebSocket if available.
         
@@ -322,7 +318,7 @@ class AsterClient(BaseExchangeClient):
             Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
         """
         # 🔴 Priority 1: Try WebSocket depth stream (100ms snapshots, zero latency)
-        ws_book = self.get_order_book_from_websocket()
+        ws_book = self._get_order_book_from_websocket()
         if ws_book:
             return {
                 'bids': ws_book['bids'][:levels],

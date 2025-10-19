@@ -252,10 +252,6 @@ class LighterClient(BaseExchangeClient):
         # Clean up any trailing separators
         return symbol_upper.strip('-_/')
 
-    def setup_order_update_handler(self, handler) -> None:
-        """Setup order update handler for WebSocket."""
-        self._order_update_handler = handler
-
     def _handle_websocket_order_update(self, order_data_list: List[Dict[str, Any]]):
         """Handle order updates from WebSocket."""
         for order_data in order_data_list:
@@ -389,7 +385,7 @@ class LighterClient(BaseExchangeClient):
             self.logger.error(f"❌ [LIGHTER] Failed to get BBO prices: {e}")
             raise ValueError(f"Unable to fetch BBO prices for {contract_id}: {e}")
 
-    def get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
+    def _get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
         """
         Get order book from WebSocket if available (zero latency).
         
@@ -458,7 +454,7 @@ class LighterClient(BaseExchangeClient):
         """
         try:
             # 🔴 Priority 1: Try WebSocket (real-time, zero latency)
-            ws_book = self.get_order_book_from_websocket()
+            ws_book = self._get_order_book_from_websocket()
             if ws_book:
                 # Limit to requested levels
                 return {
@@ -902,7 +898,7 @@ class LighterClient(BaseExchangeClient):
             self.logger.error(f"Error getting account balance: {e}")
             return None
 
-    async def get_detailed_positions(self) -> List[Dict[str, Any]]:
+    async def _get_detailed_positions(self) -> List[Dict[str, Any]]:
         """Get detailed position info using Lighter SDK."""
         try:
             if not self.account_api:
@@ -935,7 +931,7 @@ class LighterClient(BaseExchangeClient):
         Retrieve detailed metrics for a specific symbol.
         """
         try:
-            positions = await self.get_detailed_positions()
+            positions = await self._get_detailed_positions()
         except Exception as exc:
             self.logger.warning(f"[LIGHTER] Failed to fetch positions for snapshot: {exc}")
             return None
@@ -993,7 +989,7 @@ class LighterClient(BaseExchangeClient):
     async def get_account_pnl(self) -> Optional[Decimal]:
         """Get account P&L using Lighter SDK."""
         try:
-            positions = await self.get_detailed_positions()
+            positions = await self._get_detailed_positions()
             total_pnl = Decimal('0')
             for pos in positions:
                 total_pnl += pos['unrealized_pnl']
