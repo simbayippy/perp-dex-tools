@@ -13,7 +13,7 @@ from datetime import datetime
 
 from databases import Database
 
-from exchange_clients.base import BaseFundingAdapter
+from exchange_clients.base_funding_adapter import BaseFundingAdapter
 from funding_rate_service.database.repositories import (
     DEXRepository,
     SymbolRepository,

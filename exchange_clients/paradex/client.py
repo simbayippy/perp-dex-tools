@@ -9,7 +9,8 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, Any, List, Optional, Tuple
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo
+from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import OrderResult, OrderInfo
 from helpers.unified_logger import get_exchange_logger
 
 

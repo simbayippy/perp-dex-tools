@@ -11,7 +11,8 @@ from decimal import Decimal
 import aiohttp
 import asyncio
 
-from exchange_clients.base import BaseFundingAdapter, FundingRateSample
+from exchange_clients.base_funding_adapter import BaseFundingAdapter
+from exchange_clients.base_models import FundingRateSample
 from funding_rate_service.utils.logger import logger
 
 

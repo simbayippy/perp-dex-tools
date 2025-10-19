@@ -11,7 +11,14 @@ from pysdk.grvt_ccxt import GrvtCcxt
 from pysdk.grvt_ccxt_ws import GrvtCcxtWS
 from pysdk.grvt_ccxt_env import GrvtEnv, GrvtWSEndpointType
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
+from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import (
+    OrderResult,
+    OrderInfo,
+    query_retry,
+    MissingCredentialsError,
+    validate_credentials,
+)
 from helpers.unified_logger import get_exchange_logger
 
 
@@ -482,4 +489,3 @@ class GrvtClient(BaseExchangeClient):
                 return self.config.contract_id, self.config.tick_size
 
         raise ValueError(f"Contract not found for ticker: {ticker}")
-

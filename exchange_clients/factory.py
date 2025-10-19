@@ -3,7 +3,8 @@ Exchange factory for creating exchange clients dynamically.
 """
 
 from typing import Dict, Any, Type
-from exchange_clients.base import BaseExchangeClient, MissingCredentialsError
+from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import MissingCredentialsError
 
 
 class ExchangeFactory:

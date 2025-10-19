@@ -10,7 +10,14 @@ from decimal import Decimal
 from typing import Dict, Any, List, Optional, Tuple
 from edgex_sdk import Client, OrderSide, WebSocketManager, CancelOrderParams, GetOrderBookDepthParams, GetActiveOrderParams
 
-from exchange_clients.base import BaseExchangeClient, OrderResult, OrderInfo, query_retry, MissingCredentialsError, validate_credentials
+from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import (
+    OrderResult,
+    OrderInfo,
+    query_retry,
+    MissingCredentialsError,
+    validate_credentials,
+)
 from helpers.unified_logger import get_exchange_logger
 
 

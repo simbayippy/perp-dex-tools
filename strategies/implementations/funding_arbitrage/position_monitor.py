@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from exchange_clients.base import BaseExchangeClient, ExchangePositionSnapshot
+from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import ExchangePositionSnapshot
 
 from .models import FundingArbPosition
 from .position_manager import FundingArbPositionManager

@@ -16,7 +16,8 @@ from typing import Dict, Optional
 from decimal import Decimal
 import re
 
-from exchange_clients.base import BaseFundingAdapter, FundingRateSample
+from exchange_clients.base_funding_adapter import BaseFundingAdapter
+from exchange_clients.base_models import FundingRateSample
 
 # Initialize logger for this module
 logger = logging.getLogger(__name__)

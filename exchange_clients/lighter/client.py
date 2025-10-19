@@ -10,8 +10,8 @@ import aiohttp
 from decimal import Decimal, InvalidOperation
 from typing import Dict, Any, List, Optional, Tuple
 
-from exchange_clients.base import (
-    BaseExchangeClient,
+from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import (
     OrderResult,
     OrderInfo,
     ExchangePositionSnapshot,

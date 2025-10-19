@@ -12,8 +12,8 @@ from bpx.public import Public
 from bpx.account import Account
 from bpx.constants.enums import OrderTypeEnum, TimeInForceEnum
 
-from exchange_clients.base import (
-    BaseExchangeClient,
+from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import (
     ExchangePositionSnapshot,
     MissingCredentialsError,
     OrderInfo,

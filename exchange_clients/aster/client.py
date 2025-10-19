@@ -13,8 +13,8 @@ from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import urlencode
 import aiohttp
 
-from exchange_clients.base import (
-    BaseExchangeClient,
+from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import (
     OrderResult,
     OrderInfo,
     ExchangePositionSnapshot,

@@ -14,7 +14,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from cryptography.hazmat.primitives.asymmetric import ed25519
 import websockets
 
-from exchange_clients.base import MissingCredentialsError
+from exchange_clients.base_models import MissingCredentialsError
 
 
 class BackpackWebSocketManager:

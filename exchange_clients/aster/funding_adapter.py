@@ -10,7 +10,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Dict, Optional
 import re
 
-from exchange_clients.base import BaseFundingAdapter, FundingRateSample
+from exchange_clients.base_funding_adapter import BaseFundingAdapter
+from exchange_clients.base_models import FundingRateSample
 from funding_rate_service.utils.logger import logger, clamp_external_logger_levels
 
 # Import Aster SDK

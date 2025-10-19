@@ -11,7 +11,7 @@ from strategies.execution.core.order_executor import OrderExecutor, ExecutionMod
 from strategies.execution.patterns.atomic_multi_order import OrderSpec
 
 if TYPE_CHECKING:
-    from exchange_clients.base import ExchangePositionSnapshot
+    from exchange_clients.base_models import ExchangePositionSnapshot
     from ..models import FundingArbPosition
     from ..strategy import FundingArbitrageStrategy
 
