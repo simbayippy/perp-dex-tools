@@ -65,3 +65,8 @@ _configure_external_loggers()
 
 # Export logger
 logger = _logger
+
+
+def clamp_external_logger_levels() -> None:
+    """Reapply external logger configuration when third-party SDKs tweak logging."""
+    _configure_external_loggers()

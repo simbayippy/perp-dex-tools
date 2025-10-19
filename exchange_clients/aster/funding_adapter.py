@@ -10,7 +10,7 @@ from decimal import Decimal
 import re
 
 from exchange_clients.base import BaseFundingAdapter
-from funding_rate_service.utils.logger import logger
+from funding_rate_service.utils.logger import logger, clamp_external_logger_levels
 
 # Import Aster SDK
 try:
@@ -60,6 +60,7 @@ class AsterFundingAdapter(BaseFundingAdapter):
         
         # Initialize Aster public client (read-only, no credentials needed)
         self.aster_client = AsterClient(base_url=api_base_url, timeout=timeout)
+        clamp_external_logger_levels()
         
         # logger.info(f"Aster adapter initialized")
     
@@ -329,4 +330,3 @@ class AsterFundingAdapter(BaseFundingAdapter):
         # Aster SDK doesn't require explicit cleanup
         # logger.debug(f"{self.dex_name}: Adapter closed")
         await super().close()
-
