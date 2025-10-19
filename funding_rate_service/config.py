@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     service_host: str = "0.0.0.0"
     log_level: str = "INFO"
     environment: str = "development"
+    database_log_level: str = "WARNING"
     
     # DEX APIs (REST endpoints)
     lighter_api_url: str = "https://mainnet.zklighter.elliot.ai"
@@ -76,4 +77,3 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
-

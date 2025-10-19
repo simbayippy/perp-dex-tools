@@ -53,6 +53,8 @@ EDGEX_BASE_URL=https://pro.edgex.exchange
 EDGEX_WS_URL=wss://quote.edgex.exchange
 
 # Funding Rate Service Controls
+# Set the minimum log level for async database queries (DEBUG, INFO, WARNING, ERROR)
+DATABASE_LOG_LEVEL=WARNING
 # Comma-separated DEX names to disable during collection (e.g. "edgex,paradex")
 COLLECTION_DISABLED_DEXES=edgex
 # Set to "true" for verbose per-symbol collection logs
