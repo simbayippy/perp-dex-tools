@@ -5,31 +5,36 @@ This library provides unified interfaces for both trading execution and funding 
 across multiple perpetual DEXs.
 
 Modules:
-    - base: Base interfaces (BaseExchangeClient, BaseFundingAdapter)
-    - lighter: Lighter DEX implementation
-    - grvt: GRVT DEX implementation
-    - edgex: EdgeX DEX implementation
+    - base_client: Trading execution interface (BaseExchangeClient)
+    - base_funding_adapter: Funding data interface (BaseFundingAdapter)
+    - base_models: Shared dataclasses/utilities
 """
 
-from .base import (
-    BaseExchangeClient,
-    BaseFundingAdapter,
+from .base_client import BaseExchangeClient
+from .base_funding_adapter import BaseFundingAdapter
+from .base_models import (
+    ExchangePositionSnapshot,
     FundingRateSample,
-    OrderResult,
+    MissingCredentialsError,
     OrderInfo,
-    query_retry
+    OrderResult,
+    query_retry,
+    validate_credentials,
 )
 from .events import LiquidationEvent, LiquidationEventDispatcher
 
 __all__ = [
-    'BaseExchangeClient',
-    'BaseFundingAdapter',
-    'FundingRateSample',
-    'OrderResult',
-    'OrderInfo',
-    'query_retry',
-    'LiquidationEvent',
-    'LiquidationEventDispatcher',
+    "BaseExchangeClient",
+    "BaseFundingAdapter",
+    "ExchangePositionSnapshot",
+    "FundingRateSample",
+    "MissingCredentialsError",
+    "OrderInfo",
+    "OrderResult",
+    "query_retry",
+    "validate_credentials",
+    "LiquidationEvent",
+    "LiquidationEventDispatcher",
 ]
 
-__version__ = '1.0.0'
+__version__ = "1.0.0"
