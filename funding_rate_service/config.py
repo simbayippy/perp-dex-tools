@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     environment: str = "development"
     database_log_level: str = "WARNING"
+    http_log_level: str = "WARNING"
     
     # DEX APIs (REST endpoints)
     lighter_api_url: str = "https://mainnet.zklighter.elliot.ai"

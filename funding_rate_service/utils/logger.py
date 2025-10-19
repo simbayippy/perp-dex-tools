@@ -45,6 +45,13 @@ def _configure_external_loggers() -> None:
     databases_logger.setLevel(db_level)
     if db_level >= logging.WARNING:
         databases_logger.propagate = False
+    
+    http_level = getattr(logging, settings.http_log_level.upper(), logging.WARNING)
+    for name in ("urllib3", "urllib3.connectionpool", "pysdk.grvt_ccxt_base"):
+        logger_obj = logging.getLogger(name)
+        logger_obj.setLevel(http_level)
+        if http_level >= logging.WARNING:
+            logger_obj.propagate = False
 
 
 _configure_loguru()
