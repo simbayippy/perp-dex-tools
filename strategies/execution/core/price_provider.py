@@ -184,13 +184,42 @@ class PriceProvider:
                     f"(age: {cached.age_seconds():.2f}s, source: {cached.source})"
                 )
                 return cached.best_bid, cached.best_ask
-        
-        # Strategy 2: Fetch fresh data from REST API
+
+        # Strategy 2: Try WebSocket snapshot (if client supports it)
+        ws_snapshot = None
+        get_ws_book = getattr(exchange_client, "_get_order_book_from_websocket", None)
+        if callable(get_ws_book):
+            try:
+                ws_snapshot = get_ws_book()
+            except Exception as exc:
+                self.logger.debug(
+                    f"⚠️ [PRICE] WebSocket snapshot unavailable for "
+                    f"{exchange_name}:{symbol}: {exc}"
+                )
+            else:
+                if ws_snapshot and ws_snapshot.get("bids") and ws_snapshot.get("asks"):
+                    best_bid = ws_snapshot["bids"][0]["price"]
+                    best_ask = ws_snapshot["asks"][0]["price"]
+                    price_data = PriceData(
+                        best_bid=best_bid,
+                        best_ask=best_ask,
+                        mid_price=(best_bid + best_ask) / 2,
+                        timestamp=datetime.now(),
+                        source="websocket",
+                    )
+                    self.cache.set(cache_key, price_data)
+                    self.logger.info(
+                        f"📡 [PRICE] Using WebSocket BBO for {exchange_name}:{symbol} "
+                        f"(bid={best_bid}, ask={best_ask})"
+                    )
+                    return best_bid, best_ask
+
+        # Strategy 3: Fetch fresh data from REST API
         try:
             self.logger.info(
                 f"🔄 [PRICE] Fetching fresh BBO for {exchange_name}:{symbol} via REST API"
             )
-            
+
             order_book = await exchange_client.get_order_book_depth(symbol)
             
             if not order_book['bids'] or not order_book['asks']:
@@ -272,4 +301,3 @@ class PriceProvider:
         cache_key = self._make_cache_key(exchange_name, symbol)
         self.cache.invalidate(cache_key)
         self.logger.debug(f"🗑️  [PRICE] Invalidated cache for {exchange_name}:{symbol}")
-

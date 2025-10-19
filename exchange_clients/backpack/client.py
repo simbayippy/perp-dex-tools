@@ -223,11 +223,16 @@ class BackpackClient(BaseExchangeClient):
 
         return best_bid, best_ask
 
-    def get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
+    def _get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
         """Return the latest order book maintained by the WebSocket manager."""
         if not self.ws_manager:
             return None
-        return self.ws_manager.get_order_book()
+        book = self.ws_manager.get_order_book()
+        if book and self.logger:
+            self.logger.debug(
+                f"[BACKPACK] Using WebSocket depth ({len(book['bids'])} bids, {len(book['asks'])} asks)"
+            )
+        return book
 
     async def get_order_book_depth(
         self,
@@ -496,10 +501,18 @@ class BackpackClient(BaseExchangeClient):
         """
         Fetch available account balance.
 
-        Backpack SDK support is pending; return None for now.
+        Returns the available USDC balance if present, otherwise None.
         """
-        self.logger.debug("[BACKPACK] get_account_balance not implemented")
-        return None
+        try:
+            balances = await asyncio.to_thread(self.account_client.get_balances)
+        except Exception as exc:
+            self.logger.warning(f"[BACKPACK] Failed to fetch balances: {exc}")
+            return None
+
+        balance = self._extract_available_balance(balances)
+        if balance is None:
+            self.logger.warning("[BACKPACK] Unable to determine available USDC balance")
+        return balance
 
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
         """
@@ -559,6 +572,73 @@ class BackpackClient(BaseExchangeClient):
             )
 
         return self.config.contract_id, self.config.tick_size
+
+    # --------------------------------------------------------------------- #
+    # Balance helpers
+    # --------------------------------------------------------------------- #
+
+    def _extract_available_balance(self, payload: Any) -> Optional[Decimal]:
+        """
+        Attempt to extract the available USDC balance from Backpack's capital response.
+        """
+        if payload is None:
+            return None
+
+        entries: List[Dict[str, Any]] = []
+
+        if isinstance(payload, dict):
+            for key in ("balances", "capital", "data", "items"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    entries = value
+                    break
+            else:
+                if all(isinstance(v, dict) for v in payload.values()):
+                    entries = list(payload.values())
+        elif isinstance(payload, list):
+            entries = payload
+
+        if not entries:
+            return None
+
+        total_available = Decimal("0")
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+
+            asset = (
+                entry.get("symbol")
+                or entry.get("asset")
+                or entry.get("currency")
+                or entry.get("token")
+            )
+
+            if asset is None or str(asset).upper() not in {"USDC", "USD"}:
+                continue
+
+            available_value: Optional[Decimal] = None
+            for key in ("available", "availableBalance", "free", "freeBalance", "balanceAvailable"):
+                if key not in entry or entry[key] is None:
+                    continue
+                try:
+                    available_value = Decimal(str(entry[key]))
+                except (InvalidOperation, TypeError):
+                    available_value = None
+                else:
+                    break
+
+            if available_value is None:
+                fallback = entry.get("total") or entry.get("quantity")
+                if fallback is not None:
+                    try:
+                        available_value = Decimal(str(fallback))
+                    except (InvalidOperation, TypeError):
+                        available_value = None
+
+            if available_value is not None:
+                total_available += available_value
+
+        return total_available if total_available > 0 else None
 
     # --------------------------------------------------------------------- #
     # Position inspection
