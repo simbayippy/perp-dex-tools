@@ -502,7 +502,7 @@ class EdgeXClient(BaseExchangeClient):
         return None
 
 
-   async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
         """
         Get position snapshot for a symbol using official SDK.
         """
