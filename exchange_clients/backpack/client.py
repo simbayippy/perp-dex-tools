@@ -149,19 +149,28 @@ class BackpackClient(BaseExchangeClient):
         """
         return self._ensure_exchange_symbol(symbol) or symbol
 
-    def _quantize_quantity(self, quantity: Decimal) -> Decimal:
+    def _quantize_quantity(self, quantity: Any) -> Decimal:
+        if not isinstance(quantity, Decimal):
+            quantity = Decimal(str(quantity))
+
         step_size = getattr(self.config, "step_size", None)
         if not step_size or step_size <= 0:
             return quantity
         try:
+            if not isinstance(step_size, Decimal):
+                step_size = Decimal(str(step_size))
             return quantity.quantize(step_size, rounding=ROUND_DOWN)
         except (InvalidOperation, ValueError):
-            decimals = max(0, -step_size.normalize().as_tuple().exponent)
+            decimals = max(0, -Decimal(str(step_size)).normalize().as_tuple().exponent)
             return Decimal(f"{quantity:.{decimals}f}")
 
-    def _format_decimal(self, value: Decimal, step: Optional[Decimal] = None) -> str:
+    def _format_decimal(self, value: Any, step: Optional[Decimal] = None) -> str:
+        if not isinstance(value, Decimal):
+            value = Decimal(str(value))
         if step and step > 0:
             try:
+                if not isinstance(step, Decimal):
+                    step = Decimal(str(step))
                 return str(value.quantize(step))
             except (InvalidOperation, ValueError):
                 pass

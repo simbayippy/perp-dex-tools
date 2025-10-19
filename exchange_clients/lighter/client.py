@@ -588,12 +588,10 @@ class LighterClient(BaseExchangeClient):
         }
 
         self.logger.info(
-            "📤 [LIGHTER] Submitting order: market=%s client_id=%s side=%s price=%s amount=%s",
-            order_params.get('market_index'),
-            order_params.get('client_order_index'),
-            'ASK' if order_params.get('is_ask') else 'BID',
-            order_params.get('price'),
-            order_params.get('base_amount'),
+            f"📤 [LIGHTER] Submitting order: market={order_params.get('market_index')} "
+            f"client_id={order_params.get('client_order_index')} "
+            f"side={'ASK' if order_params.get('is_ask') else 'BID'} "
+            f"price={order_params.get('price')} amount={order_params.get('base_amount')}"
         )
 
         create_order, tx_hash, error = await self.lighter_client.create_order(**order_params)
@@ -607,15 +605,12 @@ class LighterClient(BaseExchangeClient):
             raw_payload = getattr(create_order, "__dict__", repr(create_order))
 
         self.logger.info(
-            "[LIGHTER] create_order response payload=%s tx_hash=%s error=%s raw=%s",
-            order_params,
-            tx_hash,
-            error,
-            raw_payload,
+            f"[LIGHTER] create_order response payload={order_params} "
+            f"tx_hash={tx_hash} error={error} raw={raw_payload}"
         )
 
         if error is not None:
-            self.logger.error("❌ [LIGHTER] Order submission failed: %s", error)
+            self.logger.error(f"❌ [LIGHTER] Order submission failed: {error}")
             return OrderResult(
                 success=False,
                 order_id=str(client_order_index),
@@ -623,9 +618,7 @@ class LighterClient(BaseExchangeClient):
             )
 
         self.logger.info(
-            "✅ [LIGHTER] Order submitted successfully! client_id=%s tx_hash=%s",
-            client_order_index,
-            tx_hash,
+            f"✅ [LIGHTER] Order submitted successfully! client_id={client_order_index} tx_hash={tx_hash}"
         )
 
         return OrderResult(success=True, order_id=str(client_order_index))
