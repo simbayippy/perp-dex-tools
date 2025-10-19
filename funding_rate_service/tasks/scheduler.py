@@ -7,7 +7,7 @@ Designed for 24/7 VPS operation with robust error handling and monitoring.
 
 import asyncio
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import atexit
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -104,7 +104,7 @@ class TaskScheduler:
         # Offset by 30 seconds to avoid collision with collection
         self.scheduler.add_job(
             func=self._run_opportunity_job,
-            trigger=IntervalTrigger(minutes=5, start_date=datetime.utcnow().replace(second=30)),
+            trigger=IntervalTrigger(seconds=120, start_date=datetime.utcnow() + timedelta(seconds=30)),
             id='opportunity_job',
             name='Opportunity Analysis',
             replace_existing=True
