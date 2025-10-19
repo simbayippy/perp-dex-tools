@@ -58,6 +58,6 @@ DATABASE_LOG_LEVEL=WARNING
 # Set the minimum log level for HTTP clients (e.g. urllib3, grvt SDK)
 HTTP_LOG_LEVEL=WARNING
 # Comma-separated DEX names to disable during collection (e.g. "edgex,paradex")
-COLLECTION_DISABLED_DEXES=edgex
+COLLECTION_DISABLED_DEXES=edgex,paradex
 # Set to "true" for verbose per-symbol collection logs
 COLLECTION_VERBOSE_LOGGING=false
