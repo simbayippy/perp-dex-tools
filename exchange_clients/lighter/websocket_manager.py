@@ -186,7 +186,7 @@ class LighterWebSocketManager:
                 self._log(f"Already subscribed to market {new_market_id}", "DEBUG")
                 return True
             
-            self._log(f"🔄 Switching order book from market {self.market_index} to {new_market_id}", "INFO")
+            self._log(f"[LIGHTER] 🔄 Switching order book from market {self.market_index} to {new_market_id}", "INFO")
             
             # Unsubscribe from current market
             unsubscribe_msg = json.dumps({
@@ -209,7 +209,7 @@ class LighterWebSocketManager:
             })
             await self.ws.send(subscribe_msg)
             
-            self._log(f"✅ Switched order book from market {old_market_id} to {new_market_id}", "INFO")
+            self._log(f"[LIGHTER] ✅ Switched order book from market {old_market_id} to {new_market_id}", "INFO")
             
             # Wait for initial snapshot
             await asyncio.sleep(0.5)
@@ -415,13 +415,12 @@ class LighterWebSocketManager:
                                     if order_book and "offset" in order_book:
                                         # Set the initial offset from the snapshot
                                         self.order_book_offset = order_book["offset"]
-                                        self._log(f"Initial order book offset set to: {self.order_book_offset}", "INFO")
 
                                     self.update_order_book("bids", order_book.get("bids", []))
                                     self.update_order_book("asks", order_book.get("asks", []))
                                     self.snapshot_loaded = True
 
-                                    self._log(f"Lighter order book snapshot loaded with "
+                                    self._log(f"[LIGHTER] Order book snapshot loaded with "
                                               f"{len(self.order_book['bids'])} bids and "
                                               f"{len(self.order_book['asks'])} asks", "INFO")
 

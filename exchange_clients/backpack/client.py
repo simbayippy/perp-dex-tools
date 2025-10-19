@@ -43,6 +43,7 @@ class BackpackClient(BaseExchangeClient):
 
         self.ws_manager: Optional[BackpackWebSocketManager] = None
         self._order_update_handler: Optional[Callable[[Dict[str, Any]], None]] = None
+        self._market_symbol_map: Dict[str, str] = {}
 
         try:
             self.public_client = Public()
@@ -66,17 +67,19 @@ class BackpackClient(BaseExchangeClient):
         """Connect to Backpack WebSocket for order updates."""
         symbol = getattr(self.config, "contract_id", None)
 
+        ws_symbol = self._ensure_exchange_symbol(symbol or getattr(self.config, "contract_id", None))
+
         if not self.ws_manager:
             self.ws_manager = BackpackWebSocketManager(
                 public_key=self.public_key,
                 secret_key=self.secret_key,
-                symbol=symbol,
+                symbol=ws_symbol,
                 order_update_callback=self._handle_websocket_order_update,
                 depth_fetcher=self._fetch_depth_snapshot,
             )
             self.ws_manager.set_logger(self.logger)
         else:
-            self.ws_manager.update_symbol(symbol)
+            self.ws_manager.update_symbol(ws_symbol)
 
         await self.ws_manager.connect()
         ready = await self.ws_manager.wait_until_ready(timeout=5.0)
@@ -108,15 +111,30 @@ class BackpackClient(BaseExchangeClient):
         except (InvalidOperation, TypeError, ValueError):
             return default
 
+    def _ensure_exchange_symbol(self, identifier: Optional[str]) -> Optional[str]:
+        """Normalize symbol/contract inputs to Backpack's expected wire format."""
+        if not identifier:
+            return None
+
+        normalized = identifier.upper()
+        mapped = self._market_symbol_map.get(normalized)
+        if mapped:
+            return mapped
+        if "_" in normalized:
+            # Already in exchange format (e.g., BTC_USDC_PERP)
+            return normalized
+        return get_backpack_symbol_format(normalized)
+
     def _fetch_depth_snapshot(self, symbol: str) -> Dict[str, Any]:
         """Blocking depth snapshot fetch used by the WebSocket manager."""
-        return self.public_client.get_depth(symbol)
+        exchange_symbol = self._ensure_exchange_symbol(symbol)
+        return self.public_client.get_depth(exchange_symbol)
 
     def normalize_symbol(self, symbol: str) -> str:
         """
         Convert normalized symbol (e.g., 'BTC') to Backpack format.
         """
-        return get_backpack_symbol_format(symbol)
+        return self._ensure_exchange_symbol(symbol) or symbol
 
     # --------------------------------------------------------------------- #
     # WebSocket callbacks
@@ -184,7 +202,8 @@ class BackpackClient(BaseExchangeClient):
 
         # Fall back to REST depth snapshot
         try:
-            order_book = self.public_client.get_depth(contract_id)
+            symbol = self._ensure_exchange_symbol(contract_id)
+            order_book = self.public_client.get_depth(symbol)
         except Exception as exc:
             self.logger.error(f"[BACKPACK] Failed to fetch depth for {contract_id}: {exc}")
             raise
@@ -223,7 +242,8 @@ class BackpackClient(BaseExchangeClient):
 
         # REST fallback
         try:
-            order_book = self.public_client.get_depth(contract_id)
+            symbol = self._ensure_exchange_symbol(contract_id)
+            order_book = self.public_client.get_depth(symbol)
         except Exception as exc:
             self.logger.error(f"[BACKPACK] Failed to fetch order book depth: {exc}")
             return {"bids": [], "asks": []}
@@ -524,6 +544,7 @@ class BackpackClient(BaseExchangeClient):
                 price_filter = (market.get("filters", {}) or {}).get("price", {}) or {}
                 min_quantity = self._to_decimal(quantity_filter.get("minQuantity"), Decimal("0"))
                 tick_size = self._to_decimal(price_filter.get("tickSize"), Decimal("0.0001"))
+                self._market_symbol_map[market.get("baseSymbol", "").upper()] = target_symbol
                 break
 
         if not target_symbol:
