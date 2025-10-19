@@ -356,6 +356,7 @@ class PositionCloser:
                 continue
 
             side = "sell" if snapshot.quantity > 0 else "buy"
+            metadata = getattr(snapshot, "metadata", {}) or {}
             legs.append(
                 {
                     "dex": dex,
@@ -363,6 +364,7 @@ class PositionCloser:
                     "snapshot": snapshot,
                     "side": side,
                     "quantity": quantity,
+                    "contract_id": metadata.get("market_id"),
                 }
             )
 
@@ -417,6 +419,7 @@ class PositionCloser:
         leg: Dict[str, Any],
     ) -> None:
         strategy = self._strategy
+        self._prepare_contract_context(leg["client"], leg.get("contract_id"), symbol)
         price = self._extract_snapshot_price(leg["snapshot"])
         if price is None or price <= Decimal("0"):
             price = await self._fetch_mid_price(leg["client"], symbol)
@@ -452,6 +455,7 @@ class PositionCloser:
         symbol: str,
         leg: Dict[str, Any],
     ) -> OrderSpec:
+        self._prepare_contract_context(leg["client"], leg.get("contract_id"), symbol)
         price = self._extract_snapshot_price(leg["snapshot"])
         if price is None or price <= Decimal("0"):
             price = await self._fetch_mid_price(leg["client"], symbol)
@@ -525,6 +529,26 @@ class PositionCloser:
             return None
 
         return (bid + ask) / 2
+
+    @staticmethod
+    def _prepare_contract_context(client, contract_id: Optional[Any], symbol: str) -> None:
+        """
+        Ensure the exchange client is pointed at the correct contract before sending orders.
+
+        Some DEX connectors (e.g., Lighter) rely on config.contract_id/ ticker to resolve
+        market IDs when submitting standalone close orders.
+        """
+        try:
+            if contract_id:
+                setattr(client.config, "contract_id", contract_id)
+        except Exception:
+            pass
+
+        try:
+            if symbol:
+                setattr(client.config, "ticker", symbol)
+        except Exception:
+            pass
 
     @staticmethod
     def _symbols_match(position_symbol: Optional[str], event_symbol: Optional[str]) -> bool:
