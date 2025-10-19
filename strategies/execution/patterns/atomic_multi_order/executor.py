@@ -187,9 +187,38 @@ class AtomicMultiOrderExecutor:
                     for ctx in other_contexts:
                         ctx.cancel_event.set()
 
-                    pending_completion = [ctx.task for ctx in other_contexts if not ctx.completed]
+                    pending_contexts = [ctx for ctx in other_contexts if not ctx.completed]
+                    pending_completion = [ctx.task for ctx in pending_contexts]
                     if pending_completion:
-                        await asyncio.gather(*pending_completion, return_exceptions=True)
+                        gathered_results = await asyncio.gather(
+                            *pending_completion, return_exceptions=True
+                        )
+                        for ctx_result, ctx in zip(gathered_results, pending_contexts):
+                            previous_fill_ctx = ctx.filled_quantity
+                            if isinstance(ctx_result, Exception):  # pragma: no cover
+                                self.logger.error(
+                                    f"Order task failed for {ctx.spec.symbol}: {ctx_result}"
+                                )
+                                result_dict = {
+                                    "success": False,
+                                    "filled": False,
+                                    "error": str(ctx_result),
+                                    "order_id": None,
+                                    "exchange_client": ctx.spec.exchange_client,
+                                    "symbol": ctx.spec.symbol,
+                                    "side": ctx.spec.side,
+                                    "slippage_usd": Decimal("0"),
+                                    "execution_mode_used": "error",
+                                    "filled_quantity": Decimal("0"),
+                                    "fill_price": None,
+                                }
+                            else:
+                                result_dict = ctx_result
+                            apply_result_to_context(ctx, result_dict)
+                            if ctx.filled_quantity > previous_fill_ctx:
+                                newly_filled.append(ctx)
+
+                        pending_tasks = {task for task in pending_tasks if not task.done()}
 
                     for ctx in other_contexts:
                         await reconcile_context_after_cancel(ctx, self.logger)
