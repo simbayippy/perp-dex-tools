@@ -5,12 +5,13 @@ Fetches funding rates from GRVT using the GRVT CCXT SDK.
 This is a read-only adapter (no trading) focused solely on data collection.
 """
 
+from datetime import datetime, timezone
 from typing import Dict, Optional
 from decimal import Decimal
 import re
 import asyncio
 
-from exchange_clients.base import BaseFundingAdapter
+from exchange_clients.base import BaseFundingAdapter, FundingRateSample
 
 # Import GRVT SDK
 try:
@@ -20,7 +21,7 @@ try:
 except ImportError:
     GRVT_SDK_AVAILABLE = False
     import logging
-    logging.warning("GRVT SDK not available. Install with: pip install grvt-pysdk")
+    # logging.warning("GRVT SDK not available. Install with: pip install grvt-pysdk")
 
 
 class GrvtFundingAdapter(BaseFundingAdapter):
@@ -89,7 +90,7 @@ class GrvtFundingAdapter(BaseFundingAdapter):
             parameters={}  # No auth needed for public endpoints
         )
     
-    async def fetch_funding_rates(self) -> Dict[str, Decimal]:
+    async def fetch_funding_rates(self) -> Dict[str, FundingRateSample]:
         """
         Fetch all funding rates from GRVT (with parallel fetching)
         
@@ -97,7 +98,7 @@ class GrvtFundingAdapter(BaseFundingAdapter):
         We fetch all perpetual markets then query tickers in PARALLEL for speed.
         
         Returns:
-            Dictionary mapping normalized symbols to funding rates
+            Dictionary mapping normalized symbols to FundingRateSample entries
             Example: {"BTC": Decimal("0.0001"), "ETH": Decimal("0.00008")}
             
         Raises:
@@ -136,25 +137,44 @@ class GrvtFundingAdapter(BaseFundingAdapter):
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
             # Collect successful results
-            rates_dict = {}
+            rates_dict: Dict[str, FundingRateSample] = {}
             for result in results:
                 if isinstance(result, Exception):
                     continue
                 elif result is not None:
-                    symbol, rate = result
-                    rates_dict[symbol] = rate
+                    symbol, sample = result
+                    rates_dict[symbol] = sample
             
             return rates_dict
         
         except Exception as e:
             raise
     
+    @staticmethod
+    def _parse_timestamp(value: Optional[object]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).replace(tzinfo=None)
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            return None
+        if numeric > 10**16:
+            dt = datetime.fromtimestamp(numeric / 1_000_000_000, tz=timezone.utc)
+        elif numeric > 10**12:
+            dt = datetime.fromtimestamp(numeric / 1000, tz=timezone.utc)
+        else:
+            dt = datetime.fromtimestamp(numeric, tz=timezone.utc)
+        return dt.replace(tzinfo=None)
+
     async def _fetch_single_ticker(
-        self, 
-        instrument: str, 
+        self,
+        instrument: str,
         base: str,
         semaphore: asyncio.Semaphore
-    ) -> Optional[tuple[str, Decimal]]:
+    ) -> Optional[tuple[str, FundingRateSample]]:
         """
         Fetch funding rate for a single instrument (with concurrency limit)
         
@@ -164,7 +184,7 @@ class GrvtFundingAdapter(BaseFundingAdapter):
             semaphore: Asyncio semaphore to limit concurrent requests
             
         Returns:
-            Tuple of (normalized_symbol, funding_rate) or None if failed
+            Tuple of (normalized_symbol, FundingRateSample) or None if failed
         """
         async with semaphore:
             try:
@@ -185,13 +205,20 @@ class GrvtFundingAdapter(BaseFundingAdapter):
                 if funding_rate_8h is None:
                     return None
                 
-                # Convert from percentage string to decimal rate
-                funding_rate = Decimal(str(funding_rate_8h)) / Decimal('100')
-                
-                # Normalize symbol
+                raw_rate = Decimal(str(funding_rate_8h)) / Decimal('100')
                 normalized_symbol = self.normalize_symbol(base)
+                next_funding_time = self._parse_timestamp(
+                    ticker.get('next_funding_time') or ticker.get('nextFundingTime')
+                )
+                sample = FundingRateSample(
+                    normalized_rate=raw_rate,
+                    raw_rate=raw_rate,
+                    interval_hours=self.CANONICAL_INTERVAL_HOURS,
+                    next_funding_time=next_funding_time,
+                    metadata={'instrument': instrument},
+                )
                 
-                return (normalized_symbol, funding_rate)
+                return (normalized_symbol, sample)
             
             except Exception as e:
                 return None
@@ -344,4 +371,3 @@ class GrvtFundingAdapter(BaseFundingAdapter):
     async def close(self) -> None:
         """Close the API client"""
         await super().close()
-

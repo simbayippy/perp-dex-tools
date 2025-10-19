@@ -7,7 +7,7 @@ adapters, repositories, and mappers.
 """
 
 import asyncio
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from decimal import Decimal
 from datetime import datetime
 
@@ -21,6 +21,7 @@ from funding_rate_service.database.repositories import (
 )
 from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
 from funding_rate_service.models.system import CollectionStatus
+from funding_rate_service.config import settings
 from funding_rate_service.utils.logger import logger
 
 
@@ -55,6 +56,7 @@ class CollectionOrchestrator:
         """
         self.db = db
         self.adapters = adapters or []
+        self.verbose_logging = settings.collection_verbose_logging
         
         # Initialize repositories
         self.dex_repo = DEXRepository(db)
@@ -204,7 +206,7 @@ class CollectionOrchestrator:
             new_symbols_count = 0
             stored_rates = 0
             
-            for normalized_symbol, funding_rate in rates.items():
+            for normalized_symbol, rate_sample in rates.items():
                 try:
                     # Get or create symbol
                     symbol_id = await self.symbol_repo.get_or_create(
@@ -215,10 +217,14 @@ class CollectionOrchestrator:
                     if symbol_mapper.get_id(normalized_symbol) is None:
                         symbol_mapper.add(symbol_id, normalized_symbol)
                         new_symbols_count += 1
-                        logger.info(
+                        symbol_log = (
                             f"📍 New symbol discovered: {normalized_symbol} "
                             f"(ID: {symbol_id}) on {dex_name}"
                         )
+                        if self.verbose_logging:
+                            logger.info(symbol_log)
+                        else:
+                            logger.debug(symbol_log)
                     
                     # Get or create dex_symbol mapping
                     dex_symbol_format = adapter.get_dex_symbol_format(
@@ -234,7 +240,8 @@ class CollectionOrchestrator:
                     await self.funding_rate_repo.insert(
                         dex_id=dex_id,
                         symbol_id=symbol_id,
-                        funding_rate=funding_rate,
+                        funding_rate=rate_sample.normalized_rate,
+                        next_funding_time=rate_sample.next_funding_time,
                         collection_latency_ms=latency_ms
                     )
                     
@@ -242,7 +249,8 @@ class CollectionOrchestrator:
                     await self.funding_rate_repo.upsert_latest(
                         dex_id=dex_id,
                         symbol_id=symbol_id,
-                        funding_rate=funding_rate
+                        funding_rate=rate_sample.normalized_rate,
+                        next_funding_time=rate_sample.next_funding_time
                     )
                     
                     stored_rates += 1
@@ -265,9 +273,13 @@ class CollectionOrchestrator:
                             market_data,
                             adapter
                         )
-                        logger.info(
+                        market_log = (
                             f"{dex_name}: Updated market data for {len(market_data)} symbols"
                         )
+                        if self.verbose_logging:
+                            logger.info(market_log)
+                        else:
+                            logger.debug(market_log)
                 except Exception as e:
                     # Market data failure shouldn't fail the whole collection
                     logger.warning(
@@ -362,10 +374,11 @@ class CollectionOrchestrator:
                     }
                 )
                 
-                logger.debug(
-                    f"Updated market data for {normalized_symbol}: "
-                    f"Volume=${volume_24h}, OI=${open_interest}"
-                )
+                if self.verbose_logging:
+                    logger.debug(
+                        f"Updated market data for {normalized_symbol}: "
+                        f"Volume=${volume_24h}, OI=${open_interest}"
+                    )
                 
             except Exception as e:
                 logger.error(
@@ -476,4 +489,3 @@ class CollectionOrchestrator:
                 await adapter.close()
             except Exception as e:
                 logger.error(f"Error closing adapter {adapter.dex_name}: {e}")
-

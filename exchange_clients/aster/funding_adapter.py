@@ -5,12 +5,13 @@ Fetches funding rates and market data from Aster using the official aster-connec
 This adapter is read-only and focused solely on data collection.
 """
 
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Dict, Optional
-from decimal import Decimal
 import re
 
-from exchange_clients.base import BaseFundingAdapter
-from funding_rate_service.utils.logger import logger
+from exchange_clients.base import BaseFundingAdapter, FundingRateSample
+from funding_rate_service.utils.logger import logger, clamp_external_logger_levels
 
 # Import Aster SDK
 try:
@@ -60,10 +61,69 @@ class AsterFundingAdapter(BaseFundingAdapter):
         
         # Initialize Aster public client (read-only, no credentials needed)
         self.aster_client = AsterClient(base_url=api_base_url, timeout=timeout)
+        clamp_external_logger_levels()
         
-        logger.info(f"Aster adapter initialized")
+        self._funding_interval_cache: Dict[str, Decimal] = {}
+        self._funding_interval_last_refresh: Optional[datetime] = None
+        self._funding_interval_ttl = timedelta(minutes=10)
     
-    async def fetch_funding_rates(self) -> Dict[str, Decimal]:
+    async def _refresh_funding_intervals(self) -> None:
+        """Refresh cached funding interval hours per symbol."""
+        now = datetime.now(timezone.utc)
+        if (
+            self._funding_interval_cache
+            and self._funding_interval_last_refresh
+            and now - self._funding_interval_last_refresh < self._funding_interval_ttl
+        ):
+            return
+        
+        try:
+            response = await self._make_request("/fapi/v1/fundingInfo")
+        except Exception as exc:
+            logger.warning(f"{self.dex_name}: Failed to refresh funding intervals: {exc}")
+            self._funding_interval_last_refresh = now
+            return
+        
+        updated_cache: Dict[str, Decimal] = {}
+        data_iter = response if isinstance(response, list) else response or []
+        for entry in data_iter:
+            symbol = entry.get("symbol")
+            interval_value = entry.get("fundingIntervalHours")
+            if not symbol or interval_value is None:
+                continue
+            try:
+                interval_decimal = Decimal(str(interval_value))
+            except (InvalidOperation, TypeError, ValueError):
+                continue
+            if interval_decimal > 0:
+                updated_cache[symbol] = interval_decimal
+        
+        if updated_cache:
+            self._funding_interval_cache = updated_cache
+        self._funding_interval_last_refresh = now
+    
+    @staticmethod
+    def _parse_next_funding_time(value: Optional[object]) -> Optional[datetime]:
+        """Convert API timestamps (ms/ns) to aware UTC datetime."""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).replace(tzinfo=None)
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            return None
+        
+        if numeric > 10**16:
+            dt = datetime.fromtimestamp(numeric / 1_000_000_000, tz=timezone.utc)
+        elif numeric > 10**12:
+            dt = datetime.fromtimestamp(numeric / 1000, tz=timezone.utc)
+        else:
+            dt = datetime.fromtimestamp(numeric, tz=timezone.utc)
+        return dt.replace(tzinfo=None)
+    
+    async def fetch_funding_rates(self) -> Dict[str, FundingRateSample]:
         """
         Fetch all funding rates from Aster
         
@@ -71,24 +131,25 @@ class AsterFundingAdapter(BaseFundingAdapter):
         which includes current funding rate information for each perpetual market.
         
         Returns:
-            Dictionary mapping normalized symbols to funding rates
-            Example: {"BTC": Decimal("0.0001"), "ETH": Decimal("0.00008")}
+            Dictionary mapping normalized symbols to FundingRateSample entries
             
         Raises:
             Exception: If fetching fails after retries
         """
         try:
-            logger.debug(f"{self.dex_name}: Fetching funding rates...")
+            # logger.debug(f"{self.dex_name}: Fetching funding rates...")
+            
+            await self._refresh_funding_intervals()
             
             # Fetch mark prices for all symbols which includes funding rates
             mark_prices_data = self.aster_client.mark_price()
             
             if not mark_prices_data:
-                logger.warning(f"{self.dex_name}: No mark prices data returned")
+                # logger.warning(f"{self.dex_name}: No mark prices data returned")
                 return {}
             
             # Extract funding rates
-            rates_dict = {}
+            rates_dict: Dict[str, FundingRateSample] = {}
             
             # Handle both single dict and list of dicts response
             if isinstance(mark_prices_data, dict):
@@ -96,7 +157,7 @@ class AsterFundingAdapter(BaseFundingAdapter):
             elif isinstance(mark_prices_data, list):
                 mark_prices_list = mark_prices_data
             else:
-                logger.warning(f"{self.dex_name}: Unexpected mark prices data format: {type(mark_prices_data)}")
+                # logger.warning(f"{self.dex_name}: Unexpected mark prices data format: {type(mark_prices_data)}")
                 return {}
             
             for market_data in mark_prices_list:
@@ -114,27 +175,41 @@ class AsterFundingAdapter(BaseFundingAdapter):
                     
                     if funding_rate is None:
                         # Debug: log available fields for first few symbols only
-                        if len(rates_dict) < 2:
-                            available_fields = list(market_data.keys())
-                            logger.debug(
-                                f"{self.dex_name}: No funding rate for {symbol}. Available fields: {available_fields}"
-                            )
+                        # if len(rates_dict) < 2:
+                        #     available_fields = list(market_data.keys())
+                        #     logger.debug(
+                        #         f"{self.dex_name}: No funding rate for {symbol}. Available fields: {available_fields}"
+                        #     )
                         continue
                     
-                    # Normalize symbol (e.g., "BTCUSDT" -> "BTC")
                     normalized_symbol = self.normalize_symbol(symbol)
+                    raw_rate = Decimal(str(funding_rate))
+                    interval_hours = self._funding_interval_cache.get(
+                        symbol,
+                        self.CANONICAL_INTERVAL_HOURS,
+                    )
+                    if interval_hours <= 0:
+                        interval_hours = self.CANONICAL_INTERVAL_HOURS
+                    normalized_rate = raw_rate * (self.CANONICAL_INTERVAL_HOURS / interval_hours)
                     
-                    # Convert to Decimal
-                    funding_rate_decimal = Decimal(str(funding_rate))
+                    next_funding_time = self._parse_next_funding_time(
+                        market_data.get('nextFundingTime')
+                    )
                     
-                    rates_dict[normalized_symbol] = funding_rate_decimal
+                    rates_dict[normalized_symbol] = FundingRateSample(
+                        normalized_rate=normalized_rate,
+                        raw_rate=raw_rate,
+                        interval_hours=interval_hours,
+                        next_funding_time=next_funding_time,
+                        metadata={'symbol': symbol},
+                    )
                     
-                    # Log details for first few symbols only to avoid spam
-                    if len(rates_dict) <= 3:
-                        logger.debug(
-                            f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
-                            f"{funding_rate_decimal}"
-                        )
+                    # # Log details for first few symbols only to avoid spam
+                    # if len(rates_dict) <= 3:
+                    #     logger.debug(
+                    #         f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
+                    #         f"{normalized_rate} (interval={interval_hours}h)"
+                    #     )
                 
                 except Exception as e:
                     logger.error(
@@ -142,9 +217,9 @@ class AsterFundingAdapter(BaseFundingAdapter):
                     )
                     continue
             
-            logger.info(
-                f"{self.dex_name}: Successfully fetched {len(rates_dict)} funding rates"
-            )
+            # logger.info(
+            #     f"{self.dex_name}: Successfully fetched {len(rates_dict)} funding rates"
+            # )
             
             return rates_dict
         
@@ -166,7 +241,7 @@ class AsterFundingAdapter(BaseFundingAdapter):
             }
         """
         try:
-            logger.debug(f"{self.dex_name}: Fetching market data...")
+            # logger.debug(f"{self.dex_name}: Fetching market data...")
             
             # Fetch 24hr ticker data for volume and mark prices for open interest
             ticker_data = self.aster_client.ticker_24hr_price_change()
@@ -174,7 +249,7 @@ class AsterFundingAdapter(BaseFundingAdapter):
             mark_prices_data = self.aster_client.mark_price()
             
             if not ticker_data:
-                logger.warning(f"{self.dex_name}: No ticker data returned")
+                # logger.warning(f"{self.dex_name}: No ticker data returned")
                 return {}
             
             # Create lookup for mark prices data (for open interest if available)
@@ -200,7 +275,7 @@ class AsterFundingAdapter(BaseFundingAdapter):
             elif isinstance(ticker_data, list):
                 ticker_list = ticker_data
             else:
-                logger.warning(f"{self.dex_name}: Unexpected ticker data format: {type(ticker_data)}")
+                # logger.warning(f"{self.dex_name}: Unexpected ticker data format: {type(ticker_data)}")
                 return {}
             
             for ticker in ticker_list:
@@ -220,9 +295,9 @@ class AsterFundingAdapter(BaseFundingAdapter):
                                 ticker.get('quoteVolume'))
                     
                     # Debug: log available ticker fields for first few symbols
-                    if len(market_data) < 3:  # Only log for first few to avoid spam
-                        ticker_fields = list(ticker.keys())
-                        logger.debug(f"{self.dex_name}: Ticker fields for {symbol}: {ticker_fields}")
+                    # if len(market_data) < 3:  # Only log for first few to avoid spam
+                    #     ticker_fields = list(ticker.keys())
+                    #     logger.debug(f"{self.dex_name}: Ticker fields for {symbol}: {ticker_fields}")
                     
                     # Get open interest from mark prices if available
                     # Note: Aster may not provide open interest data
@@ -232,9 +307,9 @@ class AsterFundingAdapter(BaseFundingAdapter):
                                    mark_data.get('open_interest'))
                     
                     # Debug: log mark price fields for first few symbols
-                    if len(market_data) < 3 and mark_data:
-                        mark_fields = list(mark_data.keys())
-                        logger.debug(f"{self.dex_name}: Mark price fields for {symbol}: {mark_fields}")
+                    # if len(market_data) < 3 and mark_data:
+                    #     mark_fields = list(mark_data.keys())
+                    #     logger.debug(f"{self.dex_name}: Mark price fields for {symbol}: {mark_fields}")
                     
                     # Create market data entry
                     data = {}
@@ -249,12 +324,12 @@ class AsterFundingAdapter(BaseFundingAdapter):
                         market_data[normalized_symbol] = data
                         
                         # Log details for first few symbols only to avoid spam
-                        if len(market_data) <= 3:
-                            logger.debug(
-                                f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
-                                f"volume={data.get('volume_24h', 'N/A')}, "
-                                f"oi={data.get('open_interest', 'N/A')}"
-                            )
+                        # if len(market_data) <= 3:
+                        #     logger.debug(
+                        #         f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
+                        #         f"volume={data.get('volume_24h', 'N/A')}, "
+                        #         f"oi={data.get('open_interest', 'N/A')}"
+                        #     )
                 
                 except Exception as e:
                     logger.error(
@@ -262,9 +337,9 @@ class AsterFundingAdapter(BaseFundingAdapter):
                     )
                     continue
             
-            logger.info(
-                f"{self.dex_name}: Successfully fetched market data for {len(market_data)} symbols"
-            )
+            # logger.info(
+            #     f"{self.dex_name}: Successfully fetched market data for {len(market_data)} symbols"
+            # )
             
             return market_data
         
@@ -300,10 +375,10 @@ class AsterFundingAdapter(BaseFundingAdapter):
         match = re.match(r'^(\d+)([A-Z]+)$', normalized)
         if match:
             multiplier, symbol = match.groups()
-            logger.debug(
-                f"{self.dex_name}: Symbol has multiplier: {dex_symbol} -> "
-                f"{symbol} (multiplier: {multiplier})"
-            )
+            # logger.debug(
+            #     f"{self.dex_name}: Symbol has multiplier: {dex_symbol} -> "
+            #     f"{symbol} (multiplier: {multiplier})"
+            # )
             normalized = symbol
         
         # Clean up any remaining special characters
@@ -327,6 +402,5 @@ class AsterFundingAdapter(BaseFundingAdapter):
     async def close(self) -> None:
         """Close the API client"""
         # Aster SDK doesn't require explicit cleanup
-        logger.debug(f"{self.dex_name}: Adapter closed")
+        # logger.debug(f"{self.dex_name}: Adapter closed")
         await super().close()
-

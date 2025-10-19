@@ -11,11 +11,12 @@ Key endpoints:
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Dict, Optional
 from decimal import Decimal
 import re
 
-from exchange_clients.base import BaseFundingAdapter
+from exchange_clients.base import BaseFundingAdapter, FundingRateSample
 
 # Initialize logger for this module
 logger = logging.getLogger(__name__)
@@ -64,12 +65,12 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
         # Then fetch_market_data() can reuse the cached data
         self._ticker_cache: Dict[str, dict] = {}
         
-        logger.info(
-            f"EdgeX adapter initialized (max_concurrent={max_concurrent_requests}, "
-            f"batch_delay={delay_between_batches}s)"
-        )
+        # logger.info(
+        #     f"EdgeX adapter initialized (max_concurrent={max_concurrent_requests}, "
+        #     f"batch_delay={delay_between_batches}s)"
+        # )
     
-    async def fetch_funding_rates(self) -> Dict[str, Decimal]:
+    async def fetch_funding_rates(self) -> Dict[str, FundingRateSample]:
         """
         Fetch all funding rates from EdgeX
         
@@ -82,10 +83,10 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
         3. Extract funding rates and cache full ticker data
         
         Returns:
-            Dict mapping normalized symbols to funding rates
+            Dict mapping normalized symbols to FundingRateSample entries
         """
         try:
-            logger.debug(f"{self.dex_name}: Fetching contract metadata...")
+            # logger.debug(f"{self.dex_name}: Fetching contract metadata...")
             
             # Clear ticker cache for fresh data
             self._ticker_cache = {}
@@ -103,7 +104,7 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
             contract_list = metadata_response.get('data', {}).get('contractList', [])
             
             if not contract_list:
-                logger.warning(f"{self.dex_name}: No contracts found in metadata")
+                # logger.warning(f"{self.dex_name}: No contracts found in metadata")
                 return {}
             
             # Filter to perpetual contracts only (enableTrade = true)
@@ -120,40 +121,40 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
                     })
             
             if not perpetual_contracts:
-                logger.warning(f"{self.dex_name}: No perpetual contracts found")
+                # logger.warning(f"{self.dex_name}: No perpetual contracts found")
                 return {}
             
-            logger.info(
-                f"{self.dex_name}: Found {len(perpetual_contracts)} perpetual contracts, "
-                f"fetching tickers (funding + market data) in batches "
-                f"(max {self.max_concurrent_requests} concurrent, {self.delay_between_batches}s delay)..."
-            )
+            # logger.info(
+            #     f"{self.dex_name}: Found {len(perpetual_contracts)} perpetual contracts, "
+            #     f"fetching tickers (funding + market data) in batches "
+            #     f"(max {self.max_concurrent_requests} concurrent, {self.delay_between_batches}s delay)..."
+            # )
             
             # Step 2: Fetch tickers (which have both funding rates AND market data) in batches
             results = await self._fetch_tickers_in_batches(perpetual_contracts)
             
             # Step 3: Extract funding rates and cache full ticker data
-            rates_dict = {}
+            rates_dict: Dict[str, FundingRateSample] = {}
             successful = 0
             failed = 0
             
             for result in results:
                 if isinstance(result, Exception):
                     failed += 1
-                    logger.debug(f"{self.dex_name}: Ticker fetch failed: {result}")
+                    # logger.debug(f"{self.dex_name}: Ticker fetch failed: {result}")
                 elif result is not None:
-                    symbol, rate, ticker_data = result
-                    rates_dict[symbol] = rate
+                    symbol, sample, ticker_data = result
+                    rates_dict[symbol] = sample
                     self._ticker_cache[symbol] = ticker_data  # Cache for market data reuse
                     successful += 1
                 else:
                     failed += 1
             
-            logger.info(
-                f"{self.dex_name}: Successfully fetched {successful} funding rates "
-                f"({failed} failed) from {len(perpetual_contracts)} contracts. "
-                f"Ticker data cached for market data extraction."
-            )
+            # logger.info(
+            #     f"{self.dex_name}: Successfully fetched {successful} funding rates "
+            #     f"({failed} failed) from {len(perpetual_contracts)} contracts. "
+            #     f"Ticker data cached for market data extraction."
+            # )
             
             return rates_dict
         
@@ -178,10 +179,10 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
         for i in range(0, len(contracts), self.max_concurrent_requests):
             batch = contracts[i:i + self.max_concurrent_requests]
             
-            logger.debug(
-                f"{self.dex_name}: Processing ticker batch {i // self.max_concurrent_requests + 1} "
-                f"({len(batch)} contracts)"
-            )
+            # logger.debug(
+            #     f"{self.dex_name}: Processing ticker batch {i // self.max_concurrent_requests + 1} "
+            #     f"({len(batch)} contracts)"
+            # )
             
             # Fetch this batch
             tasks = [
@@ -198,20 +199,39 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
             
             # Add delay between batches (except for the last batch)
             if i + self.max_concurrent_requests < len(contracts):
-                logger.debug(
-                    f"{self.dex_name}: Waiting {self.delay_between_batches}s "
-                    f"before next batch..."
-                )
+                # logger.debug(
+                #     f"{self.dex_name}: Waiting {self.delay_between_batches}s "
+                #     f"before next batch..."
+                # )
                 await asyncio.sleep(self.delay_between_batches)
         
         return all_results
     
+    @staticmethod
+    def _parse_timestamp(value: Optional[object]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).replace(tzinfo=None)
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            return None
+        if numeric > 10**16:
+            dt = datetime.fromtimestamp(numeric / 1_000_000_000, tz=timezone.utc)
+        elif numeric > 10**12:
+            dt = datetime.fromtimestamp(numeric / 1000, tz=timezone.utc)
+        else:
+            dt = datetime.fromtimestamp(numeric, tz=timezone.utc)
+        return dt.replace(tzinfo=None)
+
     async def _fetch_single_ticker(
-        self, 
-        contract_id: str, 
+        self,
+        contract_id: str,
         contract_name: str,
         semaphore: asyncio.Semaphore
-    ) -> Optional[tuple[str, Decimal, dict]]:
+    ) -> Optional[tuple[str, FundingRateSample, dict]]:
         """
         Fetch ticker (funding rate + market data) for a single contract
         
@@ -221,7 +241,7 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
             semaphore: Concurrency limiter
             
         Returns:
-            Tuple of (normalized_symbol, funding_rate, ticker_data) or None if failed
+            Tuple of (normalized_symbol, FundingRateSample, ticker_data) or None if failed
         """
         async with semaphore:
             try:
@@ -232,18 +252,18 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
                 )
                 
                 if response.get('code') != 'SUCCESS':
-                    logger.debug(
-                        f"{self.dex_name}: Failed to fetch ticker for {contract_name}: "
-                        f"{response.get('msg', 'Unknown error')}"
-                    )
+                    # logger.debug(
+                    #     f"{self.dex_name}: Failed to fetch ticker for {contract_name}: "
+                    #     f"{response.get('msg', 'Unknown error')}"
+                    # )
                     return None
                 
                 # Extract ticker data
                 data_list = response.get('data', [])
                 if not data_list or len(data_list) == 0:
-                    logger.debug(
-                        f"{self.dex_name}: No ticker data for {contract_name}"
-                    )
+                    # logger.debug(
+                    #     f"{self.dex_name}: No ticker data for {contract_name}"
+                    # )
                     return None
                 
                 ticker = data_list[0]
@@ -251,28 +271,30 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
                 # Extract funding rate
                 funding_rate_str = ticker.get('fundingRate')
                 if funding_rate_str is None:
-                    logger.debug(
-                        f"{self.dex_name}: No funding rate in ticker for {contract_name}"
-                    )
+                    # logger.debug(
+                    #     f"{self.dex_name}: No funding rate in ticker for {contract_name}"
+                    # )
                     return None
                 
-                funding_rate = Decimal(str(funding_rate_str))
-                
-                # Normalize symbol (BTCUSDT -> BTC)
+                raw_rate = Decimal(str(funding_rate_str))
                 normalized_symbol = self.normalize_symbol(contract_name)
-                
-                logger.debug(
-                    f"{self.dex_name}: {contract_name} -> {normalized_symbol}: "
-                    f"funding_rate={funding_rate}, volume=${ticker.get('value', 'N/A')}, "
-                    f"OI={ticker.get('openInterest', 'N/A')}"
+                next_funding_time = self._parse_timestamp(
+                    ticker.get('nextFundingTime') or ticker.get('nextFundingTimeMs')
+                )
+                sample = FundingRateSample(
+                    normalized_rate=raw_rate,
+                    raw_rate=raw_rate,
+                    interval_hours=self.CANONICAL_INTERVAL_HOURS,
+                    next_funding_time=next_funding_time,
+                    metadata={'contract_id': contract_id},
                 )
                 
-                return (normalized_symbol, funding_rate, ticker)
+                return (normalized_symbol, sample, ticker)
             
             except Exception as e:
-                logger.debug(
-                    f"{self.dex_name}: Error fetching ticker for {contract_name}: {e}"
-                )
+                # logger.debug(
+                #     f"{self.dex_name}: Error fetching ticker for {contract_name}: {e}"
+                # )
                 return None
     
     async def fetch_market_data(self) -> Dict[str, Dict[str, Decimal]]:
@@ -297,17 +319,17 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
         try:
             # Fast path: Use cached tickers if available
             if self._ticker_cache:
-                logger.debug(
-                    f"{self.dex_name}: Using cached tickers for market data "
-                    f"({len(self._ticker_cache)} symbols, no API calls needed)..."
-                )
+                # logger.debug(
+                #     f"{self.dex_name}: Using cached tickers for market data "
+                #     f"({len(self._ticker_cache)} symbols, no API calls needed)..."
+                # )
                 return self._extract_market_data_from_cache()
             
             # Slow path: Cache is empty, fetch tickers directly
-            logger.info(
-                f"{self.dex_name}: Ticker cache is empty. "
-                f"Fetching tickers directly for market data (this will be slower)..."
-            )
+            # logger.info(
+            #     f"{self.dex_name}: Ticker cache is empty. "
+            #     f"Fetching tickers directly for market data (this will be slower)..."
+            # )
             
             # Step 1: Fetch all contracts
             metadata_response = await self._make_request("/api/v1/public/meta/getMetaData")
@@ -322,7 +344,7 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
             contract_list = metadata_response.get('data', {}).get('contractList', [])
             
             if not contract_list:
-                logger.warning(f"{self.dex_name}: No contracts found in metadata")
+                # logger.warning(f"{self.dex_name}: No contracts found in metadata")
                 return {}
             
             # Filter to perpetual contracts
@@ -338,13 +360,13 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
                     })
             
             if not perpetual_contracts:
-                logger.warning(f"{self.dex_name}: No perpetual contracts found")
+                # logger.warning(f"{self.dex_name}: No perpetual contracts found")
                 return {}
             
-            logger.info(
-                f"{self.dex_name}: Found {len(perpetual_contracts)} perpetual contracts, "
-                f"fetching tickers in batches for market data..."
-            )
+            # logger.info(
+            #     f"{self.dex_name}: Found {len(perpetual_contracts)} perpetual contracts, "
+            #     f"fetching tickers in batches for market data..."
+            # )
             
             # Step 2: Fetch tickers in batches
             results = await self._fetch_tickers_in_batches(perpetual_contracts)
@@ -357,7 +379,7 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
             for result in results:
                 if isinstance(result, Exception):
                     failed += 1
-                    logger.debug(f"{self.dex_name}: Ticker fetch failed: {result}")
+                    # logger.debug(f"{self.dex_name}: Ticker fetch failed: {result}")
                 elif result is not None:
                     symbol, rate, ticker = result
                     # Cache the ticker for future use
@@ -368,10 +390,10 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
                 else:
                     failed += 1
             
-            logger.info(
-                f"{self.dex_name}: Successfully fetched market data for {successful} symbols "
-                f"({failed} failed). Tickers cached for future calls."
-            )
+            # logger.info(
+            #     f"{self.dex_name}: Successfully fetched market data for {successful} symbols "
+            #     f"({failed} failed). Tickers cached for future calls."
+            # )
             
             return market_data_dict
         
@@ -397,9 +419,9 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
                 oi = market_data_dict[normalized_symbol].get('open_interest')
                 vol_str = f"${vol:,.2f}" if vol else "N/A"
                 oi_str = f"${oi:,.2f}" if oi else "N/A"
-                logger.debug(
-                    f"{self.dex_name}: {normalized_symbol}: Volume={vol_str}, OI={oi_str}"
-                )
+                # logger.debug(
+                #     f"{self.dex_name}: {normalized_symbol}: Volume={vol_str}, OI={oi_str}"
+                # )
                 
                 successful += 1
             
@@ -409,9 +431,9 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
                 )
                 continue
         
-        logger.info(
-            f"{self.dex_name}: Successfully extracted market data for {successful} symbols from cache"
-        )
+        # logger.info(
+        #     f"{self.dex_name}: Successfully extracted market data for {successful} symbols from cache"
+        # )
         
         return market_data_dict
     
@@ -472,10 +494,10 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
         match = re.match(r'^(\d+)([A-Z]+)$', normalized)
         if match:
             multiplier, symbol = match.groups()
-            logger.debug(
-                f"{self.dex_name}: Symbol has multiplier: {dex_symbol} -> "
-                f"{symbol} (multiplier: {multiplier})"
-            )
+            # logger.debug(
+            #     f"{self.dex_name}: Symbol has multiplier: {dex_symbol} -> "
+            #     f"{symbol} (multiplier: {multiplier})"
+            # )
             normalized = symbol
         
         # Clean up any remaining special characters
@@ -497,6 +519,5 @@ class EdgeXFundingAdapter(BaseFundingAdapter):
     
     async def close(self) -> None:
         """Close the adapter and cleanup resources"""
-        logger.debug(f"{self.dex_name}: Adapter closed")
+        # logger.debug(f"{self.dex_name}: Adapter closed")
         await super().close()
-

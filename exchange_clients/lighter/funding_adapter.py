@@ -5,11 +5,12 @@ Fetches funding rates from Lighter using the official Lighter Python SDK.
 This is a read-only adapter (no trading) focused solely on data collection.
 """
 
+from datetime import datetime, timezone
 from typing import Dict, Optional
 from decimal import Decimal
 import re
 
-from exchange_clients.base import BaseFundingAdapter
+from exchange_clients.base import BaseFundingAdapter, FundingRateSample
 
 # Import Lighter SDK
 try:
@@ -19,7 +20,7 @@ try:
 except ImportError:
     LIGHTER_SDK_AVAILABLE = False
     import logging
-    logging.warning("Lighter SDK not available. Install with: pip install lighter-python")
+    # logging.warning("Lighter SDK not available. Install with: pip install lighter-python")  # commented as per log rule
 
 
 class LighterFundingAdapter(BaseFundingAdapter):
@@ -72,7 +73,24 @@ class LighterFundingAdapter(BaseFundingAdapter):
             self.funding_api = FundingApi(self.api_client)
             self.order_api = OrderApi(self.api_client)
     
-    async def fetch_funding_rates(self) -> Dict[str, Decimal]:
+    @staticmethod
+    def _parse_next_funding_time(value: Optional[object]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).replace(tzinfo=None)
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            return None
+        if numeric > 10**12:
+            dt = datetime.fromtimestamp(numeric / 1000, tz=timezone.utc)
+        else:
+            dt = datetime.fromtimestamp(numeric, tz=timezone.utc)
+        return dt.replace(tzinfo=None)
+
+    async def fetch_funding_rates(self) -> Dict[str, FundingRateSample]:
         """
         Fetch all funding rates from Lighter
         
@@ -81,8 +99,7 @@ class LighterFundingAdapter(BaseFundingAdapter):
         other exchanges.
         
         Returns:
-            Dictionary mapping normalized symbols to funding rates
-            Example: {"BTC": Decimal("0.0001"), "ETH": Decimal("0.00008")}
+            Dictionary mapping normalized symbols to FundingRateSample entries
             
         Raises:
             Exception: If fetching fails after retries
@@ -109,16 +126,23 @@ class LighterFundingAdapter(BaseFundingAdapter):
                 return {}
             
             # Convert to our format
-            rates_dict = {}
+            rates_dict: Dict[str, FundingRateSample] = {}
             for rate in lighter_rates:
                 try:
                     # Normalize symbol (e.g., "BTC-PERP" -> "BTC")
                     normalized_symbol = self.normalize_symbol(rate.symbol)
                     
-                    # Convert rate to Decimal
                     funding_rate = Decimal(str(rate.rate))
-                    
-                    rates_dict[normalized_symbol] = funding_rate
+                    next_funding_time = self._parse_next_funding_time(
+                        getattr(rate, 'next_funding_time', None)
+                    )
+                    rates_dict[normalized_symbol] = FundingRateSample(
+                        normalized_rate=funding_rate,
+                        raw_rate=funding_rate,
+                        interval_hours=self.CANONICAL_INTERVAL_HOURS,
+                        next_funding_time=next_funding_time,
+                        metadata={'symbol': rate.symbol},
+                    )
                 
                 except Exception as e:
                     continue
@@ -255,16 +279,16 @@ async def test_lighter_adapter():
     try:
         rates, latency_ms = await adapter.fetch_with_metrics()
         
-        print(f"\n✅ Lighter Adapter Test")
-        print(f"Latency: {latency_ms}ms")
-        print(f"Fetched {len(rates)} rates:\n")
+        # print(f"\n✅ Lighter Adapter Test")
+        # print(f"Latency: {latency_ms}ms")
+        # print(f"Fetched {len(rates)} rates:\n")
         
-        for symbol, rate in sorted(rates.items())[:10]:  # Show first 10
-            annualized_apy = float(rate) * 365 * 3 * 100  # Assuming 8h periods
-            print(f"  {symbol:10s}: {rate:>12} ({annualized_apy:>8.2f}% APY)")
+        # for symbol, rate in sorted(rates.items())[:10]:  # Show first 10
+        #     annualized_apy = float(rate) * 365 * 3 * 100  # Assuming 8h periods
+        #     print(f"  {symbol:10s}: {rate:>12} ({annualized_apy:>8.2f}% APY)")
         
-        if len(rates) > 10:
-            print(f"  ... and {len(rates) - 10} more")
+        # if len(rates) > 10:
+        #     print(f"  ... and {len(rates) - 10} more")
     
     except Exception as e:
         print(f"\n❌ Lighter Adapter Test Failed: {e}")
@@ -277,4 +301,3 @@ async def test_lighter_adapter():
 if __name__ == "__main__":
     import asyncio
     asyncio.run(test_lighter_adapter())
-

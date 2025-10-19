@@ -7,7 +7,7 @@ This is a placeholder for future Paradex funding rate collection implementation.
 from typing import Dict
 from decimal import Decimal
 
-from exchange_clients.base import BaseFundingAdapter
+from exchange_clients.base import BaseFundingAdapter, FundingRateSample
 
 
 class ParadexFundingAdapter(BaseFundingAdapter):
@@ -28,7 +28,7 @@ class ParadexFundingAdapter(BaseFundingAdapter):
             timeout=timeout
         )
     
-    async def fetch_funding_rates(self) -> Dict[str, Decimal]:
+    async def fetch_funding_rates(self) -> Dict[str, FundingRateSample]:
         """Fetch funding rates from Paradex (not implemented)"""
         pass
     
@@ -43,4 +43,3 @@ class ParadexFundingAdapter(BaseFundingAdapter):
     def get_dex_symbol_format(self, normalized_symbol: str) -> str:
         """Convert normalized symbol to Paradex format (not implemented)"""
         pass
-

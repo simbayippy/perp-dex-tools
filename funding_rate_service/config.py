@@ -2,8 +2,10 @@
 Configuration management for Funding Rate Service
 """
 
+from typing import List
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
-from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -23,6 +25,8 @@ class Settings(BaseSettings):
     service_host: str = "0.0.0.0"
     log_level: str = "INFO"
     environment: str = "development"
+    database_log_level: str = "WARNING"
+    http_log_level: str = "WARNING"
     
     # DEX APIs (REST endpoints)
     lighter_api_url: str = "https://mainnet.zklighter.elliot.ai"
@@ -42,11 +46,29 @@ class Settings(BaseSettings):
     collection_interval_seconds: int = 60
     max_concurrent_collections: int = 10
     collection_timeout_seconds: int = 30
+    collection_verbose_logging: bool = False
     
     # Cache settings
     cache_ttl_seconds: int = 60
     cache_max_size_mb: int = 100
     
+    # Adapter controls
+    collection_disabled_dexes: List[str] = Field(
+        default_factory=lambda: ["edgex", "paradex"],
+        description="DEX names to skip during funding collection",
+    )
+    
+    @field_validator("collection_disabled_dexes", mode="before")
+    @classmethod
+    def _split_disabled_dexes(cls, value: List[str] | str | None) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            if not value:
+                return []
+            return [dex.strip() for dex in value.split(",") if dex.strip()]
+        return value
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -56,4 +78,3 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
-

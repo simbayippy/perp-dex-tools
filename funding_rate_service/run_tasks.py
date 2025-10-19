@@ -158,7 +158,7 @@ class TaskRunner:
         
         if not self.args.collection_only:
             logger.info("  • Funding Rate Collection: Every 60 seconds")
-            logger.info("  • Opportunity Analysis: Every 2 minutes")
+            logger.info("  • Opportunity Analysis: Every 60 seconds")
         else:
             logger.info("  • Funding Rate Collection: Every 60 seconds (ONLY)")
         
