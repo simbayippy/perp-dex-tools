@@ -609,6 +609,12 @@ class LighterClient(BaseExchangeClient):
             f"tx_hash={tx_hash} error={error} raw={raw_payload}"
         )
 
+        try:
+            if hasattr(create_order, "order_type") and create_order.order_type is None:
+                create_order.order_type = self.lighter_client.ORDER_TYPE_LIMIT
+        except Exception:
+            pass
+
         if error is not None:
             self.logger.error(f"❌ [LIGHTER] Order submission failed: {error}")
             return OrderResult(

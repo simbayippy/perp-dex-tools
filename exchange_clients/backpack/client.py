@@ -271,8 +271,9 @@ class BackpackClient(BaseExchangeClient):
             return None
         book = self.ws_manager.get_order_book()
         if book and self.logger:
-            self.logger.debug(
-                f"[BACKPACK] Using WebSocket depth ({len(book['bids'])} bids, {len(book['asks'])} asks)"
+            self.logger.info(
+                f"📡 [WEBSOCKET] Using real-time order book from WebSocket "
+                f"({len(book['bids'])} bids, {len(book['asks'])} asks)"
             )
         return book
 
@@ -377,7 +378,6 @@ class BackpackClient(BaseExchangeClient):
             self.logger.error(f"[BACKPACK] Failed to place limit order: {exc}")
             return OrderResult(success=False, error_message=str(exc))
 
-        self.logger.debug(f"[BACKPACK] Limit order response: {result}")
         if isinstance(result, dict) and result.get("code"):
             self.logger.error(f"[BACKPACK] Limit order rejected: {result}")
             return OrderResult(success=False, error_message=result.get("message", "Order rejected"))
