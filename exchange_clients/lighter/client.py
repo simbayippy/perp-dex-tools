@@ -257,6 +257,11 @@ class LighterClient(BaseExchangeClient):
     def _handle_websocket_order_update(self, order_data_list: List[Dict[str, Any]]):
         """Handle order updates from WebSocket."""
         for order_data in order_data_list:
+            try:
+                self.logger.info(f"[LIGHTER] WS order update received: {order_data}")
+            except Exception:
+                pass
+
             market_index = order_data.get('market_index')
             client_order_index = order_data.get('client_order_index')
             server_order_index = order_data.get('order_index')
@@ -265,6 +270,10 @@ class LighterClient(BaseExchangeClient):
                 continue
 
             if str(market_index) != str(self.config.contract_id):
+                self.logger.info(
+                    f"[LIGHTER] Ignoring order update for market {market_index} "
+                    f"(expected {self.config.contract_id})"
+                )
                 continue
 
             side = 'sell' if order_data['is_ask'] else 'buy'
