@@ -78,14 +78,17 @@ class LighterFundingAdapter(BaseFundingAdapter):
         if value is None:
             return None
         if isinstance(value, datetime):
-            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).replace(tzinfo=None)
         try:
             numeric = int(value)
         except (TypeError, ValueError):
             return None
         if numeric > 10**12:
-            return datetime.fromtimestamp(numeric / 1000, tz=timezone.utc)
-        return datetime.fromtimestamp(numeric, tz=timezone.utc)
+            dt = datetime.fromtimestamp(numeric / 1000, tz=timezone.utc)
+        else:
+            dt = datetime.fromtimestamp(numeric, tz=timezone.utc)
+        return dt.replace(tzinfo=None)
 
     async def fetch_funding_rates(self) -> Dict[str, FundingRateSample]:
         """
