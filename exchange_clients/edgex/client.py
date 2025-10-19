@@ -500,6 +500,14 @@ class EdgeXClient(BaseExchangeClient):
         """
         self.logger.log("[EDGEX] get_account_balance not yet implemented", "DEBUG")
         return None
+
+
+   async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+        """
+        Get position snapshot for a symbol using official SDK.
+        """
+        # TODO
+        return None
     
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
         """
