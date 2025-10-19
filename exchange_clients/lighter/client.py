@@ -69,6 +69,7 @@ class LighterClient(BaseExchangeClient):
         self.current_order_client_id = None
         self.current_order = None
         self._min_order_notional: Dict[str, Decimal] = {}
+        self._latest_orders: Dict[str, OrderInfo] = {}
 
     def _validate_config(self) -> None:
         """Validate Lighter configuration."""
@@ -256,19 +257,23 @@ class LighterClient(BaseExchangeClient):
     def _handle_websocket_order_update(self, order_data_list: List[Dict[str, Any]]):
         """Handle order updates from WebSocket."""
         for order_data in order_data_list:
-            if order_data['market_index'] != self.config.contract_id:
+            market_index = order_data.get('market_index')
+            if market_index is None:
+                continue
+
+            if str(market_index) != str(self.config.contract_id):
                 continue
 
             side = 'sell' if order_data['is_ask'] else 'buy'
             # Let strategy determine order type - exchange client just reports the order
             order_type = "ORDER"
 
-            order_id = order_data['order_index']
-            status = order_data['status'].upper()
-            filled_size = Decimal(order_data['filled_base_amount'])
-            size = Decimal(order_data['initial_base_amount'])
-            price = Decimal(order_data['price'])
-            remaining_size = Decimal(order_data['remaining_base_amount'])
+            order_id = str(order_data['order_index'])
+            status = str(order_data.get('status', '')).upper()
+            filled_size = Decimal(str(order_data.get('filled_base_amount', '0')))
+            size = Decimal(str(order_data.get('initial_base_amount', '0')))
+            price = Decimal(str(order_data.get('price', '0')))
+            remaining_size = Decimal(str(order_data.get('remaining_base_amount', '0')))
 
             if order_id in self.orders_cache.keys():
                 if (self.orders_cache[order_id]['status'] == 'OPEN' and
@@ -287,13 +292,17 @@ class LighterClient(BaseExchangeClient):
                 status = 'PARTIALLY_FILLED'
 
             if status == 'OPEN':
-                self.logger.info(f"[{order_type}] [{order_id}] {status} "
-                                f"{size} @ {price}")
+                self.logger.info(
+                    f"[{order_type}] [{order_id}] {status} "
+                    f"{size} @ {price}"
+                )
             else:
-                self.logger.info(f"[{order_type}] [{order_id}] {status} "
-                                f"{filled_size} @ {price}")
+                self.logger.info(
+                    f"[{order_type}] [{order_id}] {status} "
+                    f"{filled_size} @ {price}"
+                )
 
-            if order_data['client_order_index'] == self.current_order_client_id or order_type == 'OPEN':
+            if order_data.get('client_order_index') == self.current_order_client_id or order_type == 'OPEN':
                 current_order = OrderInfo(
                     order_id=order_id,
                     side=side,
@@ -305,9 +314,11 @@ class LighterClient(BaseExchangeClient):
                     cancel_reason=''
                 )
                 self.current_order = current_order
+                self._latest_orders[order_id] = current_order
 
             if status in ['FILLED', 'CANCELED']:
                 self.logger.log_transaction(order_id, side, filled_size, price, status)
+                self._latest_orders[order_id] = current_order
 
     async def _handle_liquidation_notifications(self, notifications: List[Dict[str, Any]]) -> None:
         """Handle liquidation notifications from the Lighter notification channel."""
@@ -605,11 +616,6 @@ class LighterClient(BaseExchangeClient):
         else:
             raw_payload = getattr(create_order, "__dict__", repr(create_order))
 
-        self.logger.info(
-            f"[LIGHTER] create_order response payload={order_params} "
-            f"tx_hash={tx_hash} error={error} raw={raw_payload}"
-        )
-
         if error is not None:
             self.logger.error(f"❌ [LIGHTER] Order submission failed: {error}")
             return OrderResult(
@@ -617,10 +623,6 @@ class LighterClient(BaseExchangeClient):
                 order_id=str(client_order_index),
                 error_message=f"Order creation error: {error}",
             )
-
-        self.logger.info(
-            f"✅ [LIGHTER] Order submitted successfully! client_id={client_order_index} tx_hash={tx_hash}"
-        )
 
         return OrderResult(success=True, order_id=str(client_order_index))
 
@@ -666,6 +668,13 @@ class LighterClient(BaseExchangeClient):
         Note: Lighter uses order_index (int) as order_id, and we need market_id to query orders.
         """
         try:
+            order_id_str = str(order_id)
+
+            # First check latest updates captured from WebSocket
+            cached = self._latest_orders.get(order_id_str)
+            if cached is not None:
+                return cached
+
             if not self.order_api:
                 self.logger.error("Order API not initialized")
                 return None
@@ -714,9 +723,9 @@ class LighterClient(BaseExchangeClient):
             
             # Look for the specific order by order_index
             if orders_response and orders_response.orders:
-                order_id_int = int(order_id)
+                order_id_int = int(order_id_str)
                 for order in orders_response.orders:
-                    if order.order_index == order_id_int:
+                    if int(order.order_index) == order_id_int:
                         # Found the order!
                         size = Decimal(str(order.size_base))
                         filled = Decimal(str(order.matched_base))
@@ -730,7 +739,7 @@ class LighterClient(BaseExchangeClient):
                         else:
                             status = "OPEN"
                         
-                        return OrderInfo(
+                        info = OrderInfo(
                             order_id=order_id,
                             side="buy" if order.is_bid else "sell",
                             size=size,
@@ -739,6 +748,8 @@ class LighterClient(BaseExchangeClient):
                             filled_size=filled,
                             remaining_size=remaining
                         )
+                        self._latest_orders[order_id_str] = info
+                        return info
             
             # Order not found in active orders - might be filled
             return None

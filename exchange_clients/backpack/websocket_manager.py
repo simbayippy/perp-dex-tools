@@ -390,8 +390,6 @@ class BackpackWebSocketManager:
             if final_update is not None and final_update <= self._last_update_id:
                 return
             if first_update > self._last_update_id + 1:
-                if self.logger:
-                    self.logger.warning("[BACKPACK] Depth gap detected; reloading snapshot")
                 asyncio.create_task(self._reload_depth_snapshot())
                 return
 
