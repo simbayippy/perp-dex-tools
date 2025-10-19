@@ -2,8 +2,10 @@
 Configuration management for Funding Rate Service
 """
 
+from typing import List, Optional
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
-from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -47,6 +49,23 @@ class Settings(BaseSettings):
     cache_ttl_seconds: int = 60
     cache_max_size_mb: int = 100
     
+    # Adapter controls
+    collection_disabled_dexes: List[str] = Field(
+        default_factory=lambda: ["edgex"],
+        description="DEX names to skip during funding collection",
+    )
+    
+    @field_validator("collection_disabled_dexes", mode="before")
+    @classmethod
+    def _split_disabled_dexes(cls, value: List[str] | str | None) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            if not value:
+                return []
+            return [dex.strip() for dex in value.split(",") if dex.strip()]
+        return value
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -56,4 +75,3 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
-

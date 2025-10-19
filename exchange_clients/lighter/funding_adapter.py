@@ -19,7 +19,7 @@ try:
 except ImportError:
     LIGHTER_SDK_AVAILABLE = False
     import logging
-    logging.warning("Lighter SDK not available. Install with: pip install lighter-python")
+    # logging.warning("Lighter SDK not available. Install with: pip install lighter-python")  # commented as per log rule
 
 
 class LighterFundingAdapter(BaseFundingAdapter):
@@ -255,16 +255,16 @@ async def test_lighter_adapter():
     try:
         rates, latency_ms = await adapter.fetch_with_metrics()
         
-        print(f"\n✅ Lighter Adapter Test")
-        print(f"Latency: {latency_ms}ms")
-        print(f"Fetched {len(rates)} rates:\n")
+        # print(f"\n✅ Lighter Adapter Test")
+        # print(f"Latency: {latency_ms}ms")
+        # print(f"Fetched {len(rates)} rates:\n")
         
-        for symbol, rate in sorted(rates.items())[:10]:  # Show first 10
-            annualized_apy = float(rate) * 365 * 3 * 100  # Assuming 8h periods
-            print(f"  {symbol:10s}: {rate:>12} ({annualized_apy:>8.2f}% APY)")
+        # for symbol, rate in sorted(rates.items())[:10]:  # Show first 10
+        #     annualized_apy = float(rate) * 365 * 3 * 100  # Assuming 8h periods
+        #     print(f"  {symbol:10s}: {rate:>12} ({annualized_apy:>8.2f}% APY)")
         
-        if len(rates) > 10:
-            print(f"  ... and {len(rates) - 10} more")
+        # if len(rates) > 10:
+        #     print(f"  ... and {len(rates) - 10} more")
     
     except Exception as e:
         print(f"\n❌ Lighter Adapter Test Failed: {e}")

@@ -50,7 +50,7 @@ class BackpackFundingAdapter(BaseFundingAdapter):
         # HTTP session for API calls
         self.session: Optional[aiohttp.ClientSession] = None
         
-        logger.info(f"Backpack adapter initialized with direct API calls")
+        # logger.info(f"Backpack adapter initialized with direct API calls")
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session"""
@@ -90,18 +90,18 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             Exception: If fetching fails after retries
         """
         try:
-            logger.debug(f"{self.dex_name}: Fetching funding rates...")
+            # logger.debug(f"{self.dex_name}: Fetching funding rates...")
             
             # Get ALL mark prices (including funding rates) in one call
             mark_prices_data = await self._make_request("api/v1/markPrices")
             
             if not mark_prices_data:
-                logger.warning(f"{self.dex_name}: No mark prices data returned")
+                # logger.warning(f"{self.dex_name}: No mark prices data returned")
                 return {}
             
             # Ensure we have a list
             if not isinstance(mark_prices_data, list):
-                logger.warning(f"{self.dex_name}: Expected list, got {type(mark_prices_data)}")
+                # logger.warning(f"{self.dex_name}: Expected list, got {type(mark_prices_data)}")
                 return {}
             
             rates_dict = {}
@@ -122,9 +122,9 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                         # Debug: log available fields for first few symbols only
                         if len(rates_dict) < 2:
                             available_fields = list(mark_data.keys())
-                            logger.debug(
-                                f"{self.dex_name}: No funding rate for {symbol}. Available fields: {available_fields}"
-                            )
+                            # logger.debug(
+                            #     f"{self.dex_name}: No funding rate for {symbol}. Available fields: {available_fields}"
+                            # )
                         continue
                     
                     # Normalize symbol (e.g., "BTC_USDC_PERP" -> "BTC")
@@ -137,10 +137,11 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                     
                     # Log details for first few symbols only to avoid spam
                     if len(rates_dict) <= 3:
-                        logger.debug(
-                            f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
-                            f"{funding_rate_decimal}"
-                        )
+                        # logger.debug(
+                        #     f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
+                        #     f"{funding_rate_decimal}"
+                        # )
+                        pass
                 
                 except Exception as e:
                     logger.error(
@@ -150,14 +151,15 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             
             # If no funding rates found, log a helpful message
             if not rates_dict:
-                logger.warning(
-                    f"{self.dex_name}: No funding rates found from {len(mark_prices_data)} mark price entries. "
-                    f"This may indicate an API issue or change in data format."
-                )
+                # logger.warning(
+                #     f"{self.dex_name}: No funding rates found from {len(mark_prices_data)} mark price entries. "
+                #     f"This may indicate an API issue or change in data format."
+                # )
+                pass
             
-            logger.info(
-                f"{self.dex_name}: Successfully fetched {len(rates_dict)} funding rates"
-            )
+            # logger.info(
+            #     f"{self.dex_name}: Successfully fetched {len(rates_dict)} funding rates"
+            # )
             
             return rates_dict
         
@@ -179,7 +181,7 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             }
         """
         try:
-            logger.debug(f"{self.dex_name}: Fetching market data...")
+            # logger.debug(f"{self.dex_name}: Fetching market data...")
             
             # Fetch tickers for volume data (based on API documentation)
             tickers_data = await self._make_request("api/v1/tickers")
@@ -188,7 +190,7 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             open_interest_data = await self._make_request("api/v1/openInterest")
             
             if not tickers_data:
-                logger.warning(f"{self.dex_name}: No tickers data returned")
+                # logger.warning(f"{self.dex_name}: No tickers data returned")
                 return {}
             
             # Create lookup for open interest data
@@ -214,7 +216,7 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             elif isinstance(tickers_data, list):
                 tickers_list = tickers_data
             else:
-                logger.warning(f"{self.dex_name}: Unexpected tickers data format: {type(tickers_data)}")
+                # logger.warning(f"{self.dex_name}: Unexpected tickers data format: {type(tickers_data)}")
                 return {}
             
             for ticker in tickers_list:
@@ -249,11 +251,12 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                         
                         # Log details for first few symbols only to avoid spam
                         if len(market_data) <= 3:
-                            logger.debug(
-                                f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
-                                f"volume={data.get('volume_24h', 'N/A')}, "
-                                f"oi={data.get('open_interest', 'N/A')}"
-                            )
+                            # logger.debug(
+                            #     f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
+                            #     f"volume={data.get('volume_24h', 'N/A')}, "
+                            #     f"oi={data.get('open_interest', 'N/A')}"
+                            # )
+                            pass
                 
                 except Exception as e:
                     logger.error(
@@ -261,9 +264,9 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                     )
                     continue
             
-            logger.info(
-                f"{self.dex_name}: Successfully fetched market data for {len(market_data)} symbols"
-            )
+            # logger.info(
+            #     f"{self.dex_name}: Successfully fetched market data for {len(market_data)} symbols"
+            # )
             
             return market_data
         
@@ -299,10 +302,10 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             # Check if it's a known 1000x token pattern
             base_symbol = normalized[1:]  # Remove 'k' prefix
             if base_symbol in ['PEPE', 'SHIB', 'BONK']:  # Known 1000x tokens
-                logger.debug(
-                    f"{self.dex_name}: Converting 1000x token: {dex_symbol} -> "
-                    f"{base_symbol} (removed k prefix)"
-                )
+                # logger.debug(
+                #     f"{self.dex_name}: Converting 1000x token: {dex_symbol} -> "
+                #     f"{base_symbol} (removed k prefix)"
+                # )
                 normalized = base_symbol
         
         # Clean up any remaining special characters
@@ -331,5 +334,5 @@ class BackpackFundingAdapter(BaseFundingAdapter):
         """Close the HTTP session"""
         if self.session and not self.session.closed:
             await self.session.close()
-            logger.debug(f"{self.dex_name}: HTTP session closed")
+            # logger.debug(f"{self.dex_name}: HTTP session closed")
         await super().close()

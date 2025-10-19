@@ -20,7 +20,7 @@ try:
 except ImportError:
     GRVT_SDK_AVAILABLE = False
     import logging
-    logging.warning("GRVT SDK not available. Install with: pip install grvt-pysdk")
+    # logging.warning("GRVT SDK not available. Install with: pip install grvt-pysdk")
 
 
 class GrvtFundingAdapter(BaseFundingAdapter):

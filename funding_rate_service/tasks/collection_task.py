@@ -17,6 +17,7 @@ from exchange_clients.edgex import EdgeXFundingAdapter
 from exchange_clients.paradex import ParadexFundingAdapter
 from exchange_clients.backpack import BackpackFundingAdapter
 from exchange_clients.aster import AsterFundingAdapter
+from funding_rate_service.config import settings
 from funding_rate_service.utils.logger import logger
 
 
@@ -58,11 +59,12 @@ class CollectionTask(BaseTask):
         logger.info("Initializing DEX adapters for collection...")
         
         adapters = []
+        disabled_dexes = {dex.lower() for dex in settings.collection_disabled_dexes}
         
         # Initialize each adapter with error handling
         adapter_configs = [
             ("Lighter", LighterFundingAdapter),
-            ("GRVT", GrvtFundingAdapter), 
+            ("GRVT", GrvtFundingAdapter),
             ("EdgeX", EdgeXFundingAdapter),
             ("Paradex", ParadexFundingAdapter),
             ("Backpack", BackpackFundingAdapter),
@@ -70,6 +72,9 @@ class CollectionTask(BaseTask):
         ]
         
         for name, adapter_class in adapter_configs:
+            if name.lower() in disabled_dexes:
+                logger.info(f"⏭️ Skipping {name} adapter (disabled via configuration)")
+                continue
             try:
                 adapter = adapter_class()
                 adapters.append(adapter)

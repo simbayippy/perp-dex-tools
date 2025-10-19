@@ -51,3 +51,7 @@ TIMEZONE=Asia/Shanghai
 # EdgeX API Endpoints
 EDGEX_BASE_URL=https://pro.edgex.exchange
 EDGEX_WS_URL=wss://quote.edgex.exchange
+
+# Funding Rate Service Controls
+# Comma-separated DEX names to disable during collection (e.g. "edgex,paradex")
+COLLECTION_DISABLED_DEXES=edgex
