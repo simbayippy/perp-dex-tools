@@ -42,7 +42,6 @@ class BackpackClient(BaseExchangeClient):
         self.secret_key = os.getenv("BACKPACK_SECRET_KEY")
 
         self.ws_manager: Optional[BackpackWebSocketManager] = None
-        self._ws_task: Optional[asyncio.Task] = None
         self._order_update_handler: Optional[Callable[[Dict[str, Any]], None]] = None
 
         try:
@@ -73,31 +72,22 @@ class BackpackClient(BaseExchangeClient):
                 secret_key=self.secret_key,
                 symbol=symbol,
                 order_update_callback=self._handle_websocket_order_update,
+                depth_fetcher=self._fetch_depth_snapshot,
             )
             self.ws_manager.set_logger(self.logger)
         else:
             self.ws_manager.update_symbol(symbol)
 
-        if self._ws_task and not self._ws_task.done():
-            return
-
-        self._ws_task = asyncio.create_task(self.ws_manager.connect())
-
-        # Give the WS manager a brief moment to connect (best-effort).
-        await self.ws_manager.wait_until_ready(timeout=2.0)
+        await self.ws_manager.connect()
+        ready = await self.ws_manager.wait_until_ready(timeout=5.0)
+        if not ready and self.logger:
+            self.logger.warning("[BACKPACK] Timed out waiting for account stream readiness")
+        await self.ws_manager.wait_for_order_book(timeout=5.0)
 
     async def disconnect(self) -> None:
         """Disconnect from Backpack WebSocket and cleanup."""
         if self.ws_manager:
             await self.ws_manager.disconnect()
-
-        if self._ws_task:
-            self._ws_task.cancel()
-            try:
-                await self._ws_task
-            except asyncio.CancelledError:
-                pass
-            self._ws_task = None
 
     def get_exchange_name(self) -> str:
         """Return exchange identifier."""
@@ -117,6 +107,10 @@ class BackpackClient(BaseExchangeClient):
             return Decimal(str(value))
         except (InvalidOperation, TypeError, ValueError):
             return default
+
+    def _fetch_depth_snapshot(self, symbol: str) -> Dict[str, Any]:
+        """Blocking depth snapshot fetch used by the WebSocket manager."""
+        return self.public_client.get_depth(symbol)
 
     def normalize_symbol(self, symbol: str) -> str:
         """
@@ -184,7 +178,11 @@ class BackpackClient(BaseExchangeClient):
 
     @query_retry(default_return=(Decimal("0"), Decimal("0")))
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
-        """Fetch best bid/offer from Backpack public depth."""
+        """Fetch best bid/offer, preferring WebSocket data when available."""
+        if self.ws_manager and self.ws_manager.best_bid is not None and self.ws_manager.best_ask is not None:
+            return self.ws_manager.best_bid, self.ws_manager.best_ask
+
+        # Fall back to REST depth snapshot
         try:
             order_book = self.public_client.get_depth(contract_id)
         except Exception as exc:
@@ -206,17 +204,24 @@ class BackpackClient(BaseExchangeClient):
 
         return best_bid, best_ask
 
-    def _get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
-        """Backpack WebSocket currently does not maintain a local order book."""
-        # TODO
-        return None
+    def get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
+        """Return the latest order book maintained by the WebSocket manager."""
+        if not self.ws_manager:
+            return None
+        return self.ws_manager.get_order_book()
 
     async def get_order_book_depth(
         self,
         contract_id: str,
         levels: int = 10,
     ) -> Dict[str, List[Dict[str, Decimal]]]:
-        """Fetch order book depth via REST fallback."""
+        """Fetch order book depth, preferring WebSocket data when available."""
+        if self.ws_manager:
+            ws_book = self.ws_manager.get_order_book(levels=levels)
+            if ws_book:
+                return ws_book
+
+        # REST fallback
         try:
             order_book = self.public_client.get_depth(contract_id)
         except Exception as exc:
