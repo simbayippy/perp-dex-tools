@@ -29,11 +29,13 @@ class PositionMonitor:
         funding_rate_repo: Any,
         exchange_clients: Dict[str, BaseExchangeClient],
         logger: Any,
+        strategy_config: Any = None,
     ) -> None:
         self._position_manager = position_manager
         self._funding_rate_repo = funding_rate_repo
         self._exchange_clients = exchange_clients
         self._logger = logger
+        self._strategy_config = strategy_config
 
     async def monitor(self) -> None:
         """Refresh open positions with latest funding rates and exchange data."""
@@ -277,6 +279,7 @@ class PositionMonitor:
         message_lines = [
             f"Position {position.symbol} snapshot",
             totals_fragment,
+            self._compose_yield_summary(position),
             separator,
             header_line,
             separator,
@@ -308,3 +311,38 @@ class PositionMonitor:
             return f"{annualized.quantize(quant):.{precision}f}%"
         except Exception:
             return str(rate)
+
+    @staticmethod
+    def _format_percent(value: Optional[Decimal], precision: int = 2) -> str:
+        if value is None:
+            return "n/a"
+        try:
+            dec = Decimal(str(value)) if not isinstance(value, Decimal) else value
+            quant = Decimal("1." + "0" * precision)
+            return f"{(dec * Decimal('100')).quantize(quant):.{precision}f}%"
+        except Exception:
+            return str(value)
+
+    def _compose_yield_summary(self, position: FundingArbPosition) -> str:
+        entry_rate_display = self._format_rate(position.entry_divergence)
+        current_rate_display = self._format_rate(position.current_divergence)
+
+        erosion_ratio = position.get_profit_erosion()
+        erosion_display = self._format_percent(erosion_ratio)
+
+        threshold = None
+        min_profit = None
+        if getattr(self, "_strategy_config", None):
+            risk_cfg = getattr(self._strategy_config, "risk_config", None)
+            if risk_cfg:
+                threshold = getattr(risk_cfg, "min_erosion_threshold", None)
+            min_profit = getattr(self._strategy_config, "min_profit", None)
+
+        threshold_display = self._format_percent(threshold) if threshold is not None else "n/a"
+        min_profit_display = self._format_rate(min_profit) if min_profit is not None else "n/a"
+
+        return (
+            f"Yield | entry {entry_rate_display} | current {current_rate_display} "
+            f"| erosion {erosion_display} (limit {threshold_display}) "
+            f"| min profit {min_profit_display}"
+        )

@@ -1014,8 +1014,18 @@ class LighterClient(BaseExchangeClient):
             pos_symbol = (pos.get("symbol") or "").upper()
             if pos_symbol != normalized_symbol:
                 continue
+ 
+            raw_quantity = pos.get("position") or Decimal("0")
+            try:
+                quantity = Decimal(raw_quantity)
+            except Exception:
+                quantity = Decimal(str(raw_quantity))
 
-            quantity: Decimal = pos.get("position") or Decimal("0")
+            sign_indicator = pos.get("sign")
+            if isinstance(sign_indicator, int) and sign_indicator != 0:
+                quantity = quantity.copy_abs() * (Decimal(1) if sign_indicator > 0 else Decimal(-1))
+
+            quantity = Decimal(quantity)
             entry_price: Optional[Decimal] = pos.get("avg_entry_price")
             exposure: Optional[Decimal] = pos.get("position_value")
             if exposure is not None:
@@ -1030,9 +1040,17 @@ class LighterClient(BaseExchangeClient):
             margin_reserved: Optional[Decimal] = pos.get("allocated_margin")
             liquidation_price: Optional[Decimal] = pos.get("liquidation_price")
 
-            side = "long" if quantity > 0 else "short" if quantity < 0 else pos.get("sign")
-            if isinstance(side, int):
-                side = "long" if side > 0 else "short" if side < 0 else None
+            side = None
+            if isinstance(sign_indicator, int):
+                if sign_indicator > 0:
+                    side = "long"
+                elif sign_indicator < 0:
+                    side = "short"
+            if side is None:
+                if quantity > 0:
+                    side = "long"
+                elif quantity < 0:
+                    side = "short"
 
             metadata: Dict[str, Any] = {
                 "market_id": pos.get("market_id"),

@@ -8,7 +8,7 @@ config:
   - aster
   - lighter
   - grvt
-  target_exposure: !!float '20'
+  target_exposure: !!float '50'
   max_positions: 1
   max_total_exposure_usd: !!float '200'
   min_profit_rate: 0.0001
