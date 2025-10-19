@@ -68,6 +68,7 @@ class LighterClient(BaseExchangeClient):
         self.orders_cache = {}
         self.current_order_client_id = None
         self.current_order = None
+        self._min_order_notional: Dict[str, Decimal] = {}
 
     def _validate_config(self) -> None:
         """Validate Lighter configuration."""
@@ -609,12 +610,6 @@ class LighterClient(BaseExchangeClient):
             f"tx_hash={tx_hash} error={error} raw={raw_payload}"
         )
 
-        try:
-            if hasattr(create_order, "order_type") and create_order.order_type is None:
-                create_order.order_type = self.lighter_client.ORDER_TYPE_LIMIT
-        except Exception:
-            pass
-
         if error is not None:
             self.logger.error(f"❌ [LIGHTER] Order submission failed: {error}")
             return OrderResult(
@@ -887,7 +882,28 @@ class LighterClient(BaseExchangeClient):
             self.logger.error("Failed to get tick size")
             raise ValueError("Failed to get tick size")
 
+        try:
+            min_quote_amount = Decimal(str(order_book_details.min_quote_amount))
+        except Exception as exc:
+            min_quote_amount = None
+            self.logger.debug(f"[LIGHTER] Unable to parse min_quote_amount for {ticker}: {exc}")
+
+        if min_quote_amount is not None:
+            normalized_symbol = self.normalize_symbol(market_info.symbol)
+            self._min_order_notional[normalized_symbol] = min_quote_amount
+            setattr(self.config, "min_order_notional", min_quote_amount)
+            self.logger.debug(
+                f"[LIGHTER] Minimum order notional for {normalized_symbol}: ${min_quote_amount}"
+            )
+
         return self.config.contract_id, self.config.tick_size
+
+    def get_min_order_notional(self, symbol: str) -> Optional[Decimal]:
+        """
+        Return the minimum quote notional required for orders on the given symbol.
+        """
+        normalized = self.normalize_symbol(symbol)
+        return self._min_order_notional.get(normalized)
 
     # Account monitoring methods (Lighter-specific implementations)
     async def get_account_balance(self) -> Optional[Decimal]:

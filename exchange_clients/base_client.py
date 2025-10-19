@@ -225,6 +225,16 @@ class BaseExchangeClient(ABC):
     # ORDER MANAGEMENT
     # ========================================================================
 
+    def get_min_order_notional(self, symbol: str) -> Optional[Decimal]:
+        """
+        Return the minimum quote notional required to place an order on the exchange.
+
+        Subclasses may override to surface exchange-specific requirements. The default
+        implementation returns None to indicate no known limit.
+        """
+        # TODO: change to abstract method in future, if more exchanges have limitation
+        return None
+
     @abstractmethod
     async def place_limit_order(
         self, 

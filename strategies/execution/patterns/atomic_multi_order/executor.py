@@ -554,6 +554,49 @@ class AtomicMultiOrderExecutor:
                     self.logger.warning(f"❌ {error_msg}")
                     return False, error_msg
 
+            log_stage(
+                self.logger,
+                "Minimum Order Notional",
+                icon="💵",
+                stage_id=compose_stage("4"),
+            )
+            self.logger.info("Validating minimum notional requirements...")
+
+            for order_spec in orders:
+                planned_notional = order_spec.size_usd
+                if planned_notional is None:
+                    continue
+                if not isinstance(planned_notional, Decimal):
+                    planned_notional = Decimal(str(planned_notional))
+
+                exchange_client = order_spec.exchange_client
+                try:
+                    min_notional = exchange_client.get_min_order_notional(order_spec.symbol)
+                except Exception as exc:  # pragma: no cover - defensive
+                    self.logger.debug(
+                        f"Skipping min notional check for "
+                        f"{exchange_client.get_exchange_name().upper()}:{order_spec.symbol} "
+                        f"(error: {exc})"
+                    )
+                    continue
+
+                if min_notional is None or min_notional <= Decimal("0"):
+                    continue
+
+                exchange_name = exchange_client.get_exchange_name().upper()
+                if planned_notional < min_notional:
+                    error_msg = (
+                        f"[{exchange_name}] {order_spec.symbol} order notional "
+                        f"${planned_notional:.2f} below minimum ${min_notional:.2f}"
+                    )
+                    self.logger.warning(f"❌ {error_msg}")
+                    return False, error_msg
+
+                self.logger.info(
+                    f"✅ [{exchange_name}] {order_spec.symbol} notional ${planned_notional:.2f} "
+                    f"meets minimum ${min_notional:.2f}"
+                )
+
             self.logger.info("✅ All pre-flight checks passed")
             return True, None
 
