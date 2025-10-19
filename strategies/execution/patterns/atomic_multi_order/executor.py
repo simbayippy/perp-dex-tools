@@ -193,6 +193,20 @@ class AtomicMultiOrderExecutor:
 
                     for ctx in other_contexts:
                         await reconcile_context_after_cancel(ctx, self.logger)
+                        trigger_qty = trigger_ctx.filled_quantity
+                        if not isinstance(trigger_qty, Decimal):
+                            trigger_qty = Decimal(str(trigger_qty))
+                        trigger_qty = trigger_qty.copy_abs()
+
+                        spec_qty = getattr(ctx.spec, "quantity", None)
+                        if spec_qty is not None:
+                            target_qty = min(trigger_qty, Decimal(str(spec_qty)))
+                        else:
+                            target_qty = trigger_qty
+
+                        if target_qty < Decimal("0"):
+                            target_qty = Decimal("0")
+                        ctx.hedge_target_quantity = target_qty
 
                     hedge_success, hedge_error = await self._hedge_manager.hedge(
                         trigger_ctx, contexts, self.logger

@@ -22,6 +22,7 @@ class OrderContext:
     completed: bool = False
     filled_quantity: Decimal = Decimal("0")
     filled_usd: Decimal = Decimal("0")
+    hedge_target_quantity: Optional[Decimal] = None
 
     @property
     def remaining_usd(self) -> Decimal:
@@ -32,10 +33,18 @@ class OrderContext:
     @property
     def remaining_quantity(self) -> Decimal:
         """Remaining base quantity yet to be executed."""
-        spec_quantity = getattr(self.spec, "quantity", None)
-        if spec_quantity is None:
+        target_quantity: Optional[Decimal] = None
+        if self.hedge_target_quantity is not None:
+            target_quantity = Decimal(str(self.hedge_target_quantity))
+        else:
+            spec_quantity = getattr(self.spec, "quantity", None)
+            if spec_quantity is not None:
+                target_quantity = Decimal(str(spec_quantity))
+
+        if target_quantity is None:
             return Decimal("0")
-        remaining = Decimal(str(spec_quantity)) - self.filled_quantity
+
+        remaining = target_quantity - self.filled_quantity
         return remaining if remaining > Decimal("0") else Decimal("0")
 
     def record_fill(self, quantity: Optional[Decimal], price: Optional[Decimal]) -> None:

@@ -42,18 +42,32 @@ class HedgeManager:
 
             spec = ctx.spec
             exchange_name = spec.exchange_client.get_exchange_name().upper()
+            log_parts = []
+            if remaining_qty > Decimal("0"):
+                log_parts.append(f"qty={remaining_qty}")
+            if remaining_usd > Decimal("0"):
+                log_parts.append(f"${float(remaining_usd):.2f}")
+            descriptor = ", ".join(log_parts) if log_parts else "0"
             logger.info(
-                f"⚡ Hedging {spec.symbol} on {exchange_name} for remaining "
-                f"${float(remaining_usd):.2f} (qty={remaining_qty})"
+                f"⚡ Hedging {spec.symbol} on {exchange_name} for remaining {descriptor}"
             )
 
+            size_usd_arg: Optional[Decimal] = None
+            quantity_arg: Optional[Decimal] = None
             try:
+                if remaining_qty > Decimal("0"):
+                    quantity_arg = remaining_qty
+                elif remaining_usd > Decimal("0"):
+                    size_usd_arg = remaining_usd
+                else:
+                    continue
+                
                 execution = await hedge_executor.execute_order(
                     exchange_client=spec.exchange_client,
                     symbol=spec.symbol,
                     side=spec.side,
-                    size_usd=remaining_usd if remaining_usd > Decimal("0") else None,
-                    quantity=remaining_qty if remaining_qty > Decimal("0") else None,
+                    size_usd=size_usd_arg,
+                    quantity=quantity_arg,
                     mode=ExecutionMode.MARKET_ONLY,
                     timeout_seconds=spec.timeout_seconds,
                 )
