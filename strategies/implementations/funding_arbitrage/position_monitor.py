@@ -56,25 +56,23 @@ class PositionMonitor:
                         position.short_dex, position.symbol
                     )
 
-                if rate1_data and rate2_data:
-                    rate1 = Decimal(str(rate1_data["funding_rate"]))
-                    rate2 = Decimal(str(rate2_data["funding_rate"]))
-                    position.current_divergence = rate2 - rate1
-                    position.last_check = datetime.now()
-                else:
-                    self._refresh_position_leg_metrics(position, exchange_snapshots)
-                    await self._position_manager.update(position)
-                    self._logger.log(
-                        f"Could not fetch rates for {position.symbol}",
-                        "WARNING",
-                    )
-                    continue
+        if rate1_data and rate2_data:
+            rate1 = Decimal(str(rate1_data["funding_rate"]))
+            rate2 = Decimal(str(rate2_data["funding_rate"]))
+            position.current_divergence = rate2 - rate1
+            position.last_check = datetime.now()
+        else:
+            rate1 = rate2 = None
+            if rate1_data or rate2_data:
+                self._logger.log(
+                    f"Partial rate data for {position.symbol}: long={bool(rate1_data)} short={bool(rate2_data)}",
+                    "WARNING",
+                )
 
-                self._refresh_position_leg_metrics(position, exchange_snapshots)
-                await self._position_manager.update(position)
+        self._refresh_position_leg_metrics(position, exchange_snapshots, rate1, rate2)
+        await self._position_manager.update(position)
 
-                erosion = position.get_profit_erosion()
-                self._log_exchange_metrics(position)
+        self._log_exchange_metrics(position)
             except Exception as exc:  # pragma: no cover - defensive logging
                 self._logger.log(
                     f"Error monitoring position {position.id}: {exc}",
@@ -131,6 +129,8 @@ class PositionMonitor:
         self,
         position: FundingArbPosition,
         exchange_snapshots: Dict[Tuple[str, str], ExchangePositionSnapshot],
+        long_rate: Optional[Decimal] = None,
+        short_rate: Optional[Decimal] = None,
     ) -> None:
         """Merge exchange snapshots into the position metadata."""
         legs_metadata = position.metadata.setdefault("legs", {})
@@ -213,6 +213,11 @@ class PositionMonitor:
             position.metadata["legs"] = legs_metadata
             position.metadata["exchange_unrealized_pnl"] = total_unrealized
             position.metadata["exchange_funding"] = total_funding
+            rate_map = position.metadata.setdefault("rate_map", {})
+            if long_rate is not None:
+                rate_map[position.long_dex] = long_rate
+            if short_rate is not None:
+                rate_map[position.short_dex] = short_rate
 
     def _log_exchange_metrics(self, position: FundingArbPosition) -> None:
         """
@@ -226,35 +231,56 @@ class PositionMonitor:
         total_unrealized = position.metadata.get("exchange_unrealized_pnl")
         total_funding = position.metadata.get("exchange_funding")
 
-        leg_fragments = []
+        totals_fragment = (
+            f"Totals | uPnL ${self._format_decimal(total_unrealized, precision=2)} | "
+            f"Funding ${self._format_decimal(total_funding, precision=2)}"
+        )
+
+        headers = [
+            ("Exchange", 12),
+            ("Side", 6),
+            ("Qty", 11),
+            ("Entry", 12),
+            ("Mark", 12),
+            ("uPnL", 12),
+            ("Funding", 12),
+            ("8h Rate", 12),
+        ]
+        header_line = " ".join(f"{title:<{width}}" for title, width in headers)
+        separator = "-" * len(header_line)
+
+        rate_lookup = position.metadata.get("rate_map", {})
+
+        rows = []
         for dex, meta in legs_metadata.items():
             side = meta.get("side", "n/a")
-            quantity = self._format_decimal(meta.get("quantity"), precision=3)
-            mark_price = self._format_decimal(meta.get("mark_price"), precision=6)
+            quantity = self._format_decimal(meta.get("quantity"), precision=4)
             entry_price = self._format_decimal(meta.get("entry_price"), precision=6)
-            unrealized = self._format_decimal(meta.get("unrealized_pnl"))
-            funding = self._format_decimal(meta.get("funding_accrued"))
-            exposure = self._format_decimal(meta.get("exposure_usd"))
+            mark_price = self._format_decimal(meta.get("mark_price"), precision=6)
+            unrealized = self._format_decimal(meta.get("unrealized_pnl"), precision=2)
+            funding = self._format_decimal(meta.get("funding_accrued"), precision=2)
+            rate_display = self._format_rate(rate_lookup.get(dex))
 
-            leg_fragments.append(
-                f"{dex.upper()} side={side} qty={quantity} mark={mark_price} "
-                f"entry={entry_price} exposure=${exposure} "
-                f"uPnL=${unrealized} funding=${funding}"
+            rows.append(
+                f"{dex.upper():<{headers[0][1]}}"
+                f"{side:<{headers[1][1]}}"
+                f"{quantity:>{headers[2][1]}}"
+                f"{entry_price:>{headers[3][1]}}"
+                f"{mark_price:>{headers[4][1]}}"
+                f"{unrealized:>{headers[5][1]}}"
+                f"{funding:>{headers[6][1]}}"
+                f"{rate_display:>{headers[7][1]}}"
             )
 
-        totals_fragment = (
-            f"Total uPnL=${self._format_decimal(total_unrealized)} "
-            f"Total funding=${self._format_decimal(total_funding)}"
-        )
-        legs_fragment = "; ".join(leg_fragments)
-        self._logger.log(
-            (
-                f"Position {position.symbol} exchange snapshot ->\n"
-                f"  {totals_fragment};\n"
-                f"  Legs:\n    {legs_fragment}"
-            ),
-            "INFO",
-        )
+        message_lines = [
+            f"Position {position.symbol} snapshot",
+            totals_fragment,
+            separator,
+            header_line,
+            separator,
+            *rows,
+        ]
+        self._logger.log("\n".join(message_lines), "INFO")
 
     @staticmethod
     def _format_decimal(value: Optional[Decimal], precision: int = 2) -> str:
@@ -263,6 +289,20 @@ class PositionMonitor:
             return "n/a"
 
         try:
-            return f"{value:.{precision}f}"
+            dec_value = Decimal(str(value)) if not isinstance(value, Decimal) else value
+            quant = Decimal("1." + "0" * precision)
+            return f"{dec_value.quantize(quant):.{precision}f}"
         except Exception:  # pragma: no cover - fallback for non-decimal types
             return str(value)
+
+    @staticmethod
+    def _format_rate(rate: Optional[Decimal], precision: int = 4) -> str:
+        if rate is None:
+            return "n/a"
+        try:
+            dec_rate = Decimal(str(rate)) if not isinstance(rate, Decimal) else rate
+            annualized = dec_rate * Decimal("3") * Decimal("365") * Decimal("100")
+            quant = Decimal("1." + "0" * precision)
+            return f"{annualized.quantize(quant):.{precision}f}%"
+        except Exception:
+            return str(rate)
