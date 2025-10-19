@@ -188,12 +188,19 @@ class LighterWebSocketManager:
             
             self._log(f"[LIGHTER] 🔄 Switching order book from market {self.market_index} to {new_market_id}", "INFO")
             
-            # Unsubscribe from current market
+            # Unsubscribe from current market order book
             unsubscribe_msg = json.dumps({
                 "type": "unsubscribe",
                 "channel": f"order_book/{self.market_index}"
             })
             await self.ws.send(unsubscribe_msg)
+
+            # Unsubscribe from current account orders channel
+            account_unsub_msg = json.dumps({
+                "type": "unsubscribe",
+                "channel": f"account_orders/{self.market_index}/{self.account_index}"
+            })
+            await self.ws.send(account_unsub_msg)
             
             # Update market index
             old_market_id = self.market_index
@@ -202,12 +209,32 @@ class LighterWebSocketManager:
             # Reset order book state
             await self.reset_order_book()
             
-            # Subscribe to new market
+            # Subscribe to new order book stream
             subscribe_msg = json.dumps({
                 "type": "subscribe",
                 "channel": f"order_book/{new_market_id}"
             })
             await self.ws.send(subscribe_msg)
+
+            # Refresh auth token for account order subscription
+            auth_token = None
+            if self.lighter_client:
+                try:
+                    expiry = int(time.time() + 10 * 60)
+                    auth_token, err = self.lighter_client.create_auth_token_with_expiry(expiry)
+                    if err:
+                        self._log(f"Failed to create auth token for market switch: {err}", "WARNING")
+                except Exception as exc:
+                    self._log(f"Error creating auth token for market switch: {exc}", "ERROR")
+
+            # Subscribe to account orders for new market
+            account_sub_msg = {
+                "type": "subscribe",
+                "channel": f"account_orders/{new_market_id}/{self.account_index}",
+            }
+            if auth_token:
+                account_sub_msg["auth"] = auth_token
+            await self.ws.send(json.dumps(account_sub_msg))
             
             self._log(f"[LIGHTER] ✅ Switched order book from market {old_market_id} to {new_market_id}", "INFO")
             
