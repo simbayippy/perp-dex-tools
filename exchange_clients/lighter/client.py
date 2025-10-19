@@ -301,12 +301,12 @@ class LighterClient(BaseExchangeClient):
 
             if status == 'OPEN':
                 self.logger.info(
-                    f"[{order_type}] [{order_id}] ({linked_order_index}) {status} "
+                    f"[LIGHTER] [{order_type}] [{order_id}] ({linked_order_index}) {status} "
                     f"{size} @ {price}"
                 )
             else:
                 self.logger.info(
-                    f"[{order_type}] [{order_id}] ({linked_order_index}) {status} "
+                    f"[LIGHTER] [{order_type}] [{order_id}] ({linked_order_index}) {status} "
                     f"{filled_size} @ {price}"
                 )
 
