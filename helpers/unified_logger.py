@@ -129,6 +129,8 @@ class UnifiedLogger:
         project_root = Path(__file__).parent.parent
         logs_dir = project_root / "logs"
         logs_dir.mkdir(exist_ok=True)
+        history_dir = project_root / "log"
+        history_dir.mkdir(exist_ok=True)
         
         # File handler for all logs (no colors, includes extra context)
         # Each component gets its own file, so no need to check for duplicates here
@@ -184,6 +186,23 @@ class UnifiedLogger:
             backtrace=True,
             diagnose=True
         )
+
+        # Plain-text history file (no rotation) inside /log/
+        history_file = history_dir / f"{self.component_type.lower()}_{self.component_name.lower()}.txt"
+
+        if not hasattr(_logger, "_perp_dex_history_sinks"):
+            _logger._perp_dex_history_sinks = set()
+
+        if history_file not in _logger._perp_dex_history_sinks:
+            _logger.add(
+                str(history_file),
+                format=file_format,
+                level=self.log_level,
+                filter=format_record_file,
+                backtrace=False,
+                diagnose=False
+            )
+            _logger._perp_dex_history_sinks.add(history_file)
         
         # Error-specific file handler
         error_log_file = logs_dir / f"{self.component_type.lower()}_{self.component_name.lower()}_errors.log"
