@@ -17,9 +17,10 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 import websockets
 
 from exchange_clients.base_models import MissingCredentialsError
+from exchange_clients.base_websocket import BaseWebSocketManager
 
 
-class BackpackWebSocketManager:
+class BackpackWebSocketManager(BaseWebSocketManager):
     """WebSocket manager for Backpack order, position, and depth streams."""
 
     _MAX_BACKOFF_SECONDS = 30.0
@@ -32,17 +33,18 @@ class BackpackWebSocketManager:
         order_update_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
         depth_fetcher: Optional[Callable[[str], Dict[str, Any]]] = None,
         depth_stream_interval: str = "realtime",
+        symbol_formatter: Optional[Callable[[str], str]] = None,
     ):
+        super().__init__()
         self.public_key = public_key
         self.secret_key = secret_key
         self.symbol = symbol
         self.order_update_callback = order_update_callback
         self.depth_fetcher = depth_fetcher
         self.depth_stream_interval = depth_stream_interval
+        self._symbol_formatter = symbol_formatter
 
-        self.logger = None
         self.ws_url = "wss://ws.backpack.exchange"
-        self.running = False
 
         self._account_ws: Optional[websockets.WebSocketClientProtocol] = None
         self._depth_ws: Optional[websockets.WebSocketClientProtocol] = None
@@ -76,9 +78,34 @@ class BackpackWebSocketManager:
     # Public interface
     # ------------------------------------------------------------------ #
 
-    def set_logger(self, logger) -> None:
-        """Attach shared logger instance."""
-        self.logger = logger
+    async def prepare_market_feed(self, symbol: Optional[str]) -> None:
+        """Ensure account and depth streams follow the requested symbol."""
+        if not symbol:
+            return
+
+        target_symbol = symbol
+        if self._symbol_formatter:
+            try:
+                target_symbol = self._symbol_formatter(symbol)
+            except Exception:
+                target_symbol = symbol
+
+        if target_symbol == self.symbol:
+            # Already aligned; make sure order book is marked ready.
+            if not self.order_book_ready and self.depth_fetcher:
+                await self.wait_for_order_book(timeout=2.0)
+            return
+
+        if self.logger:
+            self.logger.info(f"[BACKPACK] 🔄 Switching websocket streams to {target_symbol}")
+
+        self.update_symbol(target_symbol)
+
+        if self.running:
+            await self.disconnect()
+            await self.connect()
+            if self.depth_fetcher:
+                await self.wait_for_order_book(timeout=2.0)
 
     async def wait_until_ready(self, timeout: float = 5.0) -> bool:
         """Wait until the account stream is ready."""

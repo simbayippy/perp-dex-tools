@@ -528,40 +528,8 @@ class PositionOpener:
         strategy = self._strategy
 
         try:
-            # specific to lighter
-            if hasattr(ws_manager, "switch_market"):
-                market_id = getattr(getattr(exchange_client, "config", None), "contract_id", None)
-                if market_id is not None:
-                    try:
-                        await ws_manager.switch_market(int(market_id))
-                    except Exception as exc:
-                        strategy.logger.log(
-                            f"⚠️ [{exchange_client.get_exchange_name().upper()}] "
-                            f"Failed to switch WebSocket market: {exc}",
-                            "DEBUG",
-                        )
-
-            # specific to Aster
-            if hasattr(ws_manager, "start_order_book_stream"):
-                stream_symbol = symbol
-                if hasattr(exchange_client, "normalize_symbol"):
-                    try:
-                        stream_symbol = exchange_client.normalize_symbol(symbol)
-                    except Exception:
-                        pass
-                try:
-                    await ws_manager.start_order_book_stream(stream_symbol)
-                except TypeError:
-                    ws_manager.start_order_book_stream(stream_symbol)
-                except Exception as exc:
-                    strategy.logger.log(
-                        f"⚠️ [{exchange_client.get_exchange_name().upper()}] "
-                        f"Failed to start order book stream: {exc}",
-                        "DEBUG",
-                    )
-
+            await exchange_client.ensure_market_feed(symbol)
             await self._await_ws_snapshot(ws_manager)
-
         except Exception as exc:  # pragma: no cover - defensive logging
             strategy.logger.log(
                 f"⚠️ [{exchange_client.get_exchange_name().upper()}] WebSocket prep error: {exc}",

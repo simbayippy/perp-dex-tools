@@ -78,6 +78,7 @@ class BackpackClient(BaseExchangeClient):
                 symbol=ws_symbol,
                 order_update_callback=self._handle_websocket_order_update,
                 depth_fetcher=self._fetch_depth_snapshot,
+                symbol_formatter=self._ensure_exchange_symbol,
             )
             self.ws_manager.set_logger(self.logger)
         else:

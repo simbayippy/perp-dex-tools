@@ -136,6 +136,7 @@ class AsterClient(BaseExchangeClient):
             secret_key=self.secret_key,
             order_update_callback=self._handle_websocket_order_update,
             liquidation_callback=self._handle_liquidation_event,
+            symbol_formatter=self.normalize_symbol,
         )
 
         # Set logger for WebSocket manager

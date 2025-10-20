@@ -21,6 +21,7 @@ from .base_models import (
     query_retry,
     validate_credentials,
 )
+from .base_websocket import BaseWebSocketManager
 from .events import LiquidationEvent, LiquidationEventDispatcher
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "OrderResult",
     "query_retry",
     "validate_credentials",
+    "BaseWebSocketManager",
     "LiquidationEvent",
     "LiquidationEventDispatcher",
 ]
