@@ -298,6 +298,7 @@ class BackpackClient(BaseExchangeClient):
 
     def _get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
         """Return the latest order book maintained by the WebSocket manager."""
+        print("_get_order_book_from_websocket")
         if not self.ws_manager:
             self.logger.warning(f"📞 [BACKPACK] No WebSocket manager available")
             return None
@@ -315,7 +316,10 @@ class BackpackClient(BaseExchangeClient):
         levels: int = 10,
     ) -> Dict[str, List[Dict[str, Decimal]]]:
         """Fetch order book depth, preferring WebSocket data when available."""
+        print("get_order_book_depth")
         if self.ws_manager:
+            print("ws_manager")
+
             ws_book = self.ws_manager.get_order_book(levels=levels)
             if ws_book:
                 return ws_book
