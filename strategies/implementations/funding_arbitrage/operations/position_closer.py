@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from exchange_clients.events import LiquidationEvent
+from exchange_clients.base_client import BaseExchangeClient
 from ..risk_management import get_risk_manager
 from strategies.execution.core.order_executor import OrderExecutor, ExecutionMode
 from strategies.execution.patterns.atomic_multi_order import OrderSpec
@@ -248,6 +249,8 @@ class PositionCloser:
         """Fetch up-to-date exchange snapshots for both legs."""
         snapshots: Dict[str, Optional["ExchangePositionSnapshot"]] = {}
 
+        legs_metadata = (position.metadata or {}).get("legs", {})
+
         for dex in filter(None, [position.long_dex, position.short_dex]):
             client = self._strategy.exchange_clients.get(dex)
             if client is None:
@@ -258,6 +261,13 @@ class PositionCloser:
                 snapshots[dex] = None
                 continue
 
+            leg_metadata = legs_metadata.get(dex, {}) if isinstance(legs_metadata, dict) else {}
+            await self._prepare_contract_context(
+                client,
+                position.symbol,
+                metadata=leg_metadata,
+                contract_hint=leg_metadata.get("market_id"),
+            )
             await self._ensure_market_feed_once(client, position.symbol)
 
             try:
@@ -287,7 +297,7 @@ class PositionCloser:
                 should_prepare = ws_symbol.upper() != symbol_key
 
         try:
-            if should_prepare and hasattr(client, "ensure_market_feed"):
+            if should_prepare:
                 await client.ensure_market_feed(symbol)
 
             if ws_manager and getattr(ws_manager, "running", False):
@@ -380,6 +390,8 @@ class PositionCloser:
         legs: List[Dict[str, Any]] = []
         live_snapshots = live_snapshots or {}
 
+        position_legs = (position.metadata or {}).get("legs", {})
+
         for dex in filter(None, [position.long_dex, position.short_dex]):
             client = strategy.exchange_clients.get(dex)
             if client is None:
@@ -388,6 +400,14 @@ class PositionCloser:
                     "ERROR",
                 )
                 continue
+
+            leg_hint = position_legs.get(dex, {}) if isinstance(position_legs, dict) else {}
+            await self._prepare_contract_context(
+                client,
+                position.symbol,
+                metadata=leg_hint,
+                contract_hint=leg_hint.get("market_id"),
+            )
             await self._ensure_market_feed_once(client, position.symbol)
 
             snapshot = live_snapshots.get(dex) or live_snapshots.get(dex.lower())
@@ -418,6 +438,15 @@ class PositionCloser:
 
             side = "sell" if snapshot.quantity > 0 else "buy"
             metadata: Dict[str, Any] = getattr(snapshot, "metadata", {}) or {}
+
+            if metadata:
+                await self._prepare_contract_context(
+                    client,
+                    position.symbol,
+                    metadata=metadata,
+                    contract_hint=metadata.get("market_id"),
+                )
+
             contract_id = await self._prepare_contract_context(
                 client,
                 position.symbol,
