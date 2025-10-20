@@ -134,7 +134,7 @@ class FundingArbitrageStrategy(BaseStrategy):
         
         # ⭐ Price Provider (shared data source for all execution components)
         from strategies.execution.core.price_provider import PriceProvider
-        self.price_provider = PriceProvider(prefer_websocket=False)
+        self.price_provider = PriceProvider()
         
         # ⭐ Execution Common layer (atomic delta-neutral execution)
         self.atomic_executor = AtomicMultiOrderExecutor(price_provider=self.price_provider)
