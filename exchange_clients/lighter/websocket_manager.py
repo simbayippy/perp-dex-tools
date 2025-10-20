@@ -524,7 +524,7 @@ class LighterWebSocketManager:
 
         self.running = True
         self._listener_task = asyncio.create_task(self._listen(), name="lighter-ws-listener")
-        self._log("Connected to Lighter websocket", "INFO")
+        self._log("[LIGHTER] 🔗 Connected to websocket", "INFO")
 
     async def disconnect(self):
         """Disconnect from WebSocket."""

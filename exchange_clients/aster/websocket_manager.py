@@ -207,7 +207,7 @@ class AsterWebSocketManager:
             self.running = True
 
             if self.logger:
-                self.logger.info("Connected to Aster WebSocket with listen key")
+                self.logger.info("[ASTER] 🔗 Connected to ws")
 
             # Start keepalive task
             self._keepalive_task = asyncio.create_task(self._start_keepalive_task())

@@ -84,6 +84,7 @@ class BackpackClient(BaseExchangeClient):
             self.ws_manager.update_symbol(ws_symbol)
 
         await self.ws_manager.connect()
+
         if ws_symbol:
             ready = await self.ws_manager.wait_until_ready(timeout=5.0)
             if not ready and self.logger:

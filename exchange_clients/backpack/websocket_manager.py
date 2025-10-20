@@ -115,6 +115,8 @@ class BackpackWebSocketManager:
 
         # Allow tasks to spin up
         await asyncio.sleep(0)
+        if self.logger:
+            self.logger.info("[BACKPACK] 🔗 Connected to ws")
 
     async def disconnect(self) -> None:
         """Stop websocket tasks and close sockets."""

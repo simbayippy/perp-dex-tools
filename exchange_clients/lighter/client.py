@@ -166,7 +166,6 @@ class LighterClient(BaseExchangeClient):
                 if err is not None:
                     raise Exception(f"CheckClient error: {err}")
 
-                self.logger.info("Lighter client initialized successfully")
             except Exception as e:
                 self.logger.error(f"Failed to initialize Lighter client: {e}")
                 raise
