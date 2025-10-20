@@ -199,12 +199,8 @@ class LighterClient(BaseExchangeClient):
             # Set logger for WebSocket manager
             self.ws_manager.set_logger(self.logger)
 
-            # Start WebSocket connection in background task
-            # (Used for real-time price updates and order tracking, not for liquidity checks)
-            asyncio.create_task(self.ws_manager.connect())
-            
-            # Give WebSocket a moment to start connecting
-            await asyncio.sleep(1)
+            # Await WebSocket connection (real-time price updates and order tracking)
+            await self.ws_manager.connect()
 
         except Exception as e:
             self.logger.error(f"Error connecting to Lighter: {e}")
