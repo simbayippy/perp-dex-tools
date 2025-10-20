@@ -353,6 +353,25 @@ class BaseExchangeClient(ABC):
         """
         pass
 
+    def round_to_step(self, quantity: Decimal) -> Decimal:
+        """
+        Round a proposed quantity to the venue's supported increment.
+
+        Exchanges with explicit step sizes should override. Default implementation
+        leaves the quantity unchanged.
+        """
+        return quantity
+
+    def resolve_contract_id(self, symbol: str) -> str:
+        """
+        Resolve the exchange-specific contract identifier for order placement.
+
+        Returns any cached `contract_id` on the client config, or falls back to
+        the provided symbol when no specialization exists.
+        """
+        contract_id = getattr(self.config, "contract_id", None)
+        return contract_id or symbol
+
     @abstractmethod
     async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
         """

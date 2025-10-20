@@ -291,7 +291,7 @@ class AsterClient(BaseExchangeClient):
             
             # Order book is already in standard format from websocket_manager
             self.logger.info(
-                f"📡 [WEBSOCKET] Using real-time order book from WebSocket "
+                f"📡 [ASTER] Using real-time order book from WebSocket "
                 f"({len(self.ws_manager.order_book['bids'])} bids, "
                 f"{len(self.ws_manager.order_book['asks'])} asks)"
             )

@@ -303,11 +303,10 @@ class BackpackClient(BaseExchangeClient):
             self.logger.warning(f"📞 [BACKPACK] No WebSocket manager available")
             return None
         book = self.ws_manager.get_order_book()
-        if book and self.logger:
-            self.logger.info(
-                f"📡 [WEBSOCKET] Using real-time order book from WebSocket "
-                f"({len(book['bids'])} bids, {len(book['asks'])} asks)"
-            )
+        self.logger.info(
+            f"📡 [BACKPACK] Using real-time order book from WebSocket "
+            f"({len(book['bids'])} bids, {len(book['asks'])} asks)"
+        )
         return book
 
     async def get_order_book_depth(
