@@ -181,6 +181,21 @@ class BackpackClient(BaseExchangeClient):
             return f"{value:.{decimals}f}"
         return format(value, "f")
 
+    def _quantize_to_tick(self, price: Decimal, rounding_mode) -> Decimal:
+        tick_size = getattr(self.config, "tick_size", None)
+        if tick_size and tick_size > 0:
+            try:
+                tick = tick_size if isinstance(tick_size, Decimal) else Decimal(str(tick_size))
+            except (InvalidOperation, TypeError, ValueError):
+                tick = None
+            if tick and tick > 0:
+                try:
+                    return price.quantize(tick, rounding=rounding_mode)
+                except (InvalidOperation, TypeError, ValueError):
+                    decimals = max(0, -tick.normalize().as_tuple().exponent)
+                    return Decimal(f"{price:.{decimals}f}")
+        return price
+
     async def _compute_post_only_price(self, contract_id: str, raw_price: Decimal, side: str) -> Decimal:
         """
         Quantize price toward the maker side and avoid matching the top of book.
@@ -190,18 +205,14 @@ class BackpackClient(BaseExchangeClient):
         tick_size = getattr(self.config, "tick_size", None)
         tick: Optional[Decimal] = None
 
+        rounding_mode = ROUND_DOWN if side.lower() == "buy" else ROUND_UP
+        price = self._quantize_to_tick(price, rounding_mode)
+
         if tick_size and tick_size > 0:
             try:
                 tick = tick_size if isinstance(tick_size, Decimal) else Decimal(str(tick_size))
             except (InvalidOperation, TypeError, ValueError):
                 tick = None
-
-        if tick and tick > 0:
-            rounding_mode = ROUND_DOWN if side.lower() == "buy" else ROUND_UP
-            try:
-                price = price.quantize(tick, rounding=rounding_mode)
-            except (InvalidOperation, TypeError, ValueError):
-                price = price if isinstance(price, Decimal) else Decimal(str(price))
 
         best_bid = best_ask = Decimal("0")
         try:
@@ -220,6 +231,8 @@ class BackpackClient(BaseExchangeClient):
 
         if price <= 0 and tick and tick > 0:
             price = tick
+
+        price = self._quantize_to_tick(price, ROUND_DOWN if side.lower() == "buy" else ROUND_UP)
 
         if self.logger and price != original_price:
             self.logger.debug(f"[BACKPACK] Post-only price adjusted: raw={original_price} -> adjusted={price} (best_bid={best_bid or '0'}, best_ask={best_ask or '0'}, tick={tick or 'n/a'})")
