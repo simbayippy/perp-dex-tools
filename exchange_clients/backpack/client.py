@@ -222,14 +222,7 @@ class BackpackClient(BaseExchangeClient):
             price = tick
 
         if self.logger and price != original_price:
-            self.logger.debug(
-                "[BACKPACK] Post-only price adjusted: raw=%s -> adjusted=%s (best_bid=%s, best_ask=%s, tick=%s)",
-                original_price,
-                price,
-                best_bid or "0",
-                best_ask or "0",
-                tick or "n/a",
-            )
+            self.logger.debug(f"[BACKPACK] Post-only price adjusted: raw={original_price} -> adjusted={price} (best_bid={best_bid or '0'}, best_ask={best_ask or '0'}, tick={tick or 'n/a'})")
 
         return price
 
