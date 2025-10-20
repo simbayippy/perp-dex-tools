@@ -709,26 +709,153 @@ class BackpackClient(BaseExchangeClient):
         """
         Fetch leverage limits for symbol.
 
-        Backpack has not published leverage APIs yet; return conservative defaults.
+        Backpack publishes initial margin settings in the market metadata. We derive
+        leverage as floor(1 / initial_margin) and surface the account-level cap as well.
         """
-        # TODO: implement getting leverage info
-        self.logger.info(f"📊 [BACKPACK] Using placeholder leverage info for {symbol}")
-
-
-        # self.logger.info(
-        #     f"📊 [BACKPACK] Leverage info for {symbol}:\n"
-        #     f"  - Symbol max leverage: {max_leverage:.1f}x\n"
-        #     f"  - Account leverage: {account_leverage}x\n"
-        #     f"  - Max notional: None\n"
-        #     f"  - Margin requirement: {min_margin_fraction} ({min_margin_fraction*100:.1f}%)"
-        # )
-        return {
-            "max_leverage": Decimal("10"),
+        exchange_symbol = self._ensure_exchange_symbol(symbol) or symbol
+        result: Dict[str, Any] = {
+            "max_leverage": None,
             "max_notional": None,
-            "margin_requirement": Decimal("0.10"),
+            "margin_requirement": None,
             "brackets": None,
+            "account_leverage": None,
             "error": None,
         }
+
+        def _normalize_fraction(raw: Any) -> Optional[Decimal]:
+            fraction = self._to_decimal(raw, None)
+            if fraction is None:
+                return None
+            if fraction > 1:
+                if fraction >= 1000:
+                    fraction = fraction / Decimal("10000")
+                else:
+                    fraction = fraction / Decimal("100")
+            return fraction
+
+        market_payload: Optional[Dict[str, Any]] = None
+        try:
+            market_payload = await asyncio.to_thread(
+                self.public_client.http_client.get,
+                self.public_client.get_market_url(exchange_symbol),
+            )
+        except Exception as exc:
+            if self.logger:
+                self.logger.debug(f"[BACKPACK] Direct market lookup failed for {exchange_symbol}: {exc}")
+
+        if not isinstance(market_payload, dict):
+            try:
+                markets = await asyncio.to_thread(self.public_client.get_markets)
+            except Exception as exc:
+                message = f"Failed to fetch markets list: {exc}"
+                if self.logger:
+                    self.logger.warning(f"[BACKPACK] {message}")
+                result["error"] = message
+                return result
+
+            if isinstance(markets, list):
+                for market in markets:
+                    if not isinstance(market, dict):
+                        continue
+                    if market.get("symbol") == exchange_symbol:
+                        market_payload = market
+                        break
+                if market_payload is None:
+                    base_symbol = symbol.upper()
+                    market_payload = next(
+                        (
+                            market
+                            for market in markets
+                            if isinstance(market, dict)
+                            and (market.get("baseSymbol") == base_symbol or market.get("baseAsset") == base_symbol)
+                            and (market.get("marketType") or "").upper() in {"PERP", "PERPETUAL"}
+                        ),
+                        None,
+                    )
+
+        if not isinstance(market_payload, dict):
+            result["error"] = f"No market data available for {exchange_symbol}"
+            return result
+
+        perp_info = market_payload.get("perpInfo") or market_payload.get("perp_info") or market_payload
+
+        imf_candidate = (
+            perp_info.get("imfFunction")
+            or perp_info.get("imf_function")
+            or perp_info.get("initialMarginFunction")
+            or perp_info.get("initial_margin_function")
+            if isinstance(perp_info, dict)
+            else None
+        )
+
+        imf_base = self._to_decimal(imf_candidate.get("base"), None) if isinstance(imf_candidate, dict) else None
+
+        initial_margin_fraction = _normalize_fraction(perp_info.get("initialMarginFraction")) if isinstance(perp_info, dict) else None
+        if initial_margin_fraction is None and isinstance(perp_info, dict):
+            initial_margin_fraction = _normalize_fraction(
+                perp_info.get("initialMargin") or perp_info.get("initial_margin") or perp_info.get("imf") or imf_base
+            )
+
+        max_leverage = None
+        if initial_margin_fraction and initial_margin_fraction > 0:
+            max_leverage = Decimal("1") / initial_margin_fraction
+        elif imf_base and imf_base > 0:
+            max_leverage = Decimal("1") / imf_base
+
+        if max_leverage is not None:
+            max_leverage = max_leverage.to_integral_value(rounding=ROUND_DOWN)
+
+        max_notional = None
+        if isinstance(perp_info, dict):
+            max_notional = self._to_decimal(
+                perp_info.get("openInterestLimit")
+                or perp_info.get("riskLimitNotional")
+                or perp_info.get("open_interest_limit"),
+                None,
+            )
+
+        maintenance_margin_fraction = _normalize_fraction(
+            perp_info.get("maintenanceMarginFraction")
+            or perp_info.get("maintenanceMargin")
+            or perp_info.get("maintenance_margin")
+            or perp_info.get("mmf")
+        ) if isinstance(perp_info, dict) else None
+
+        brackets = [
+            {
+                "notional_cap": max_notional,
+                "initial_margin": initial_margin_fraction or imf_base,
+                "maintenance_margin": maintenance_margin_fraction,
+                "max_leverage": max_leverage,
+            }
+        ] if max_leverage is not None else []
+
+        if result["margin_requirement"] is None:
+            result["margin_requirement"] = initial_margin_fraction or imf_base
+
+        result["max_leverage"] = max_leverage
+        result["max_notional"] = max_notional
+        result["brackets"] = brackets or None
+        result["maintenance_margin"] = maintenance_margin_fraction
+
+        # Account-level leverage cap (optional)
+        try:
+            account_info = await asyncio.to_thread(self.account_client.get_account)
+        except Exception as exc:
+            if self.logger:
+                self.logger.debug(f"[BACKPACK] Unable to fetch account leverage cap: {exc}")
+            account_info = None
+
+        if isinstance(account_info, dict):
+            leverage_limit = account_info.get("leverageLimit") or account_info.get("leverage_limit")
+            account_leverage = self._to_decimal(leverage_limit, None)
+            if account_leverage and account_leverage > 0:
+                result["account_leverage"] = account_leverage
+
+        if result["max_leverage"] is None:
+            result["error"] = f"Unable to determine leverage limits for {exchange_symbol}"
+
+        return result
 
     async def get_contract_attributes(self) -> Tuple[str, Decimal]:
         """Populate contract_id and tick_size for current ticker."""
