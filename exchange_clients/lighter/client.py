@@ -741,16 +741,6 @@ class LighterClient(BaseExchangeClient):
             
             # Extract fill price from response if available
             fill_price = None
-            if tx_hash and hasattr(tx_hash, 'code'):
-                self.logger.info(
-                    f"✅ [LIGHTER] Market order submitted! "
-                    f"client_id={client_order_index}, "
-                    f"tx_hash={tx_hash}"
-                )
-            else:
-                self.logger.warning(
-                    f"⚠️ [LIGHTER] Market order submitted but no response details available"
-                )
             
             return OrderResult(
                 success=True,

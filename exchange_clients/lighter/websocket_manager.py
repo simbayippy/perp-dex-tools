@@ -510,6 +510,7 @@ class LighterWebSocketManager:
 
         try:
             self.ws = await websockets.connect(self.ws_url)
+            self._log("[LIGHTER] 🔗 Connected to websocket", "INFO")
         except Exception as exc:
             self._log(f"Failed to connect to Lighter websocket: {exc}", "ERROR")
             raise
@@ -524,7 +525,6 @@ class LighterWebSocketManager:
 
         self.running = True
         self._listener_task = asyncio.create_task(self._listen(), name="lighter-ws-listener")
-        self._log("[LIGHTER] 🔗 Connected to websocket", "INFO")
 
     async def disconnect(self):
         """Disconnect from WebSocket."""

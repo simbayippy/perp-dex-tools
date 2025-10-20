@@ -269,8 +269,10 @@ class BackpackClient(BaseExchangeClient):
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
         """Fetch best bid/offer, preferring WebSocket data when available."""
         if self.ws_manager and self.ws_manager.best_bid is not None and self.ws_manager.best_ask is not None:
+            self.logger.info(f"📡 [BACKPACK] Using real-time BBO from WebSocket")
             return self.ws_manager.best_bid, self.ws_manager.best_ask
 
+        self.logger.info(f"📞 [REST][BACKPACK] Using REST depth snapshot")
         # Fall back to REST depth snapshot
         try:
             symbol = self._ensure_exchange_symbol(contract_id)
