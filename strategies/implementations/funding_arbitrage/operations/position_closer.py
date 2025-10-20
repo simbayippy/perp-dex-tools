@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -25,6 +26,7 @@ class PositionCloser:
         self._strategy = strategy
         self._risk_manager = self._build_risk_manager()
         self._order_executor = OrderExecutor(price_provider=strategy.price_provider)
+        self._ws_prepared: Dict[str, str] = {}
 
     async def evaluateAndClosePositions(self) -> List[str]:
         strategy = self._strategy
@@ -256,6 +258,8 @@ class PositionCloser:
                 snapshots[dex] = None
                 continue
 
+            await self._ensure_market_feed_once(client, position.symbol)
+
             try:
                 snapshots[dex] = await client.get_position_snapshot(position.symbol)
             except Exception as exc:  # pragma: no cover - defensive logging
@@ -266,6 +270,62 @@ class PositionCloser:
                 snapshots[dex] = None
 
         return snapshots
+
+    async def _ensure_market_feed_once(self, client, symbol: str) -> None:
+        """
+        Prepare the client's websocket feed for the target symbol once per session run.
+        """
+        exchange_name = client.get_exchange_name().upper()
+        symbol_key = symbol.upper()
+        previous_symbol = self._ws_prepared.get(exchange_name)
+        should_prepare = previous_symbol != symbol_key
+
+        ws_manager = getattr(client, "ws_manager", None)
+        if not should_prepare and ws_manager is not None:
+            ws_symbol = getattr(ws_manager, "symbol", None)
+            if isinstance(ws_symbol, str):
+                should_prepare = ws_symbol.upper() != symbol_key
+
+        try:
+            if should_prepare and hasattr(client, "ensure_market_feed"):
+                await client.ensure_market_feed(symbol)
+
+            if ws_manager and getattr(ws_manager, "running", False):
+                await self._await_ws_snapshot(ws_manager)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self._strategy.logger.log(
+                f"⚠️ [{exchange_name}] WebSocket prep error during close: {exc}",
+                "DEBUG",
+            )
+        else:
+            self._ws_prepared[exchange_name] = symbol_key
+
+    async def _await_ws_snapshot(self, ws_manager: Any, timeout: float = 1.0) -> None:
+        """
+        Wait briefly for websocket managers to populate top-of-book data.
+        """
+        if not getattr(ws_manager, "running", False):
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            snapshot_ready = False
+            if hasattr(ws_manager, "snapshot_loaded"):
+                snapshot_ready = bool(ws_manager.snapshot_loaded)
+            if getattr(ws_manager, "best_bid", None) is not None:
+                snapshot_ready = True
+            if getattr(ws_manager, "best_ask", None) is not None:
+                snapshot_ready = True
+
+            if snapshot_ready:
+                return
+
+            await asyncio.sleep(0.05)
 
     def _detect_liquidation(
         self,
@@ -328,6 +388,7 @@ class PositionCloser:
                     "ERROR",
                 )
                 continue
+            await self._ensure_market_feed_once(client, position.symbol)
 
             snapshot = live_snapshots.get(dex) or live_snapshots.get(dex.lower())
             if snapshot is None:
