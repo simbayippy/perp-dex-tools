@@ -430,8 +430,6 @@ class OrderExecutor:
     ) -> ExecutionResult:
         """
         Execute market order immediately.
-        
-        ⭐ Pattern from Hummingbot's market order execution ⭐
         """
         try:
             # Get current price for quantity calculation & slippage tracking
@@ -612,19 +610,6 @@ class OrderExecutor:
                     symbol=symbol
                 )
                 return bid, ask
-            
-            # Fallback: Direct exchange client methods
-            # Try dedicated BBO method if available
-            if hasattr(exchange_client, 'fetch_bbo_prices'):
-                bid, ask = await exchange_client.fetch_bbo_prices(symbol)
-                return Decimal(str(bid)), Decimal(str(ask))
-            
-            # Fallback: Get from order book
-            if hasattr(exchange_client, 'get_order_book_depth'):
-                book = await exchange_client.get_order_book_depth(symbol)
-                best_bid = Decimal(str(book['bids'][0]['price']))
-                best_ask = Decimal(str(book['asks'][0]['price']))
-                return best_bid, best_ask
             
             # Last resort: Error
             raise NotImplementedError(

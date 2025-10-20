@@ -651,7 +651,17 @@ class BackpackClient(BaseExchangeClient):
 
         Backpack has not published leverage APIs yet; return conservative defaults.
         """
-        self.logger.debug(f"[BACKPACK] Using placeholder leverage info for {symbol}")
+        # TODO: implement getting leverage info
+        self.logger.info(f"📊 [BACKPACK] Using placeholder leverage info for {symbol}")
+
+
+        # self.logger.info(
+        #     f"📊 [BACKPACK] Leverage info for {symbol}:\n"
+        #     f"  - Symbol max leverage: {max_leverage:.1f}x\n"
+        #     f"  - Account leverage: {account_leverage}x\n"
+        #     f"  - Max notional: None\n"
+        #     f"  - Margin requirement: {min_margin_fraction} ({min_margin_fraction*100:.1f}%)"
+        # )
         return {
             "max_leverage": Decimal("10"),
             "max_notional": None,
