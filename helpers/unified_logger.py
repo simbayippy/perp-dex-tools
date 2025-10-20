@@ -129,8 +129,32 @@ class UnifiedLogger:
         project_root = Path(__file__).parent.parent
         logs_dir = project_root / "logs"
         logs_dir.mkdir(exist_ok=True)
-        history_dir = project_root / "log"
-        history_dir.mkdir(exist_ok=True)
+
+        # Global history file (shared across all components)
+        if not hasattr(_logger, "_perp_dex_history_setup"):
+            history_file = logs_dir / "unified_history.log"
+
+            def ensure_component(record):
+                if "component_id" not in record["extra"]:
+                    record["extra"]["component_id"] = "UNKNOWN"
+                return True
+
+            history_format = (
+                "{time:YYYY-MM-DD HH:mm:ss} | "
+                "{level:<8} | "
+                "{extra[component_id]:<35} | "
+                "{message}"
+            )
+
+            _logger.add(
+                str(history_file),
+                format=history_format,
+                level="DEBUG",
+                filter=ensure_component,
+                backtrace=False,
+                diagnose=False
+            )
+            _logger._perp_dex_history_setup = True
         
         # File handler for all logs (no colors, includes extra context)
         # Each component gets its own file, so no need to check for duplicates here
@@ -187,23 +211,6 @@ class UnifiedLogger:
             diagnose=True
         )
 
-        # Plain-text history file (no rotation) inside /log/
-        history_file = history_dir / f"{self.component_type.lower()}_{self.component_name.lower()}.txt"
-
-        if not hasattr(_logger, "_perp_dex_history_sinks"):
-            _logger._perp_dex_history_sinks = set()
-
-        if history_file not in _logger._perp_dex_history_sinks:
-            _logger.add(
-                str(history_file),
-                format=file_format,
-                level=self.log_level,
-                filter=format_record_file,
-                backtrace=False,
-                diagnose=False
-            )
-            _logger._perp_dex_history_sinks.add(history_file)
-        
         # Error-specific file handler
         error_log_file = logs_dir / f"{self.component_type.lower()}_{self.component_name.lower()}_errors.log"
         
