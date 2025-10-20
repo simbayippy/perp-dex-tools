@@ -43,6 +43,7 @@ class AsterClient(BaseExchangeClient):
         # Initialize logger early
         self.logger = get_exchange_logger("aster", self.config.ticker)
         self._order_update_handler = None
+        self._min_order_notional: Dict[str, Decimal] = {}
 
     def _validate_config(self) -> None:
         """Validate Aster configuration."""
@@ -403,7 +404,6 @@ class AsterClient(BaseExchangeClient):
             OrderResult with order details
         """
         # Contract ID should already be in Aster format (e.g., "MONUSDT")
-        # from get_contract_attributes(), so use it directly
         # NO need to normalize again (would cause "MONUSDTUSDT")
         
         self.logger.debug(f"Using contract_id for order: '{contract_id}'")
@@ -416,17 +416,29 @@ class AsterClient(BaseExchangeClient):
             f"(step_size={getattr(self.config, 'step_size', 'unknown')})"
         )
         
+        rounded_price = self.round_to_tick(price)
+
+        min_notional = self.get_min_order_notional(contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
+        if min_notional is not None:
+            order_notional = rounded_quantity * rounded_price
+            if order_notional < min_notional:
+                message = (
+                    f"[ASTER] Order notional ${order_notional} below minimum ${min_notional}"
+                )
+                self.logger.error(message)
+                raise ValueError(message)
+
         # Place limit order with post-only (GTX) for maker fees
         order_data = {
             'symbol': contract_id,  # Already normalized (e.g., "MONUSDT")
             'side': side.upper(),
             'type': 'LIMIT',
             'quantity': str(rounded_quantity),
-            'price': str(self.round_to_tick(price)),
+            'price': str(rounded_price),
             'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
         }
         
-        self.logger.debug(f"Placing {side.upper()} limit order: {rounded_quantity} @ {price}")
+        self.logger.debug(f"Placing {side.upper()} limit order: {rounded_quantity} @ {rounded_price}")
 
         try:
             result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
@@ -499,6 +511,22 @@ class AsterClient(BaseExchangeClient):
                 f"📐 [ASTER] Rounded quantity: {quantity} → {rounded_quantity}"
             )
 
+            best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
+            if best_bid <= 0 or best_ask <= 0:
+                return OrderResult(success=False, error_message="Invalid bid/ask prices")
+
+            expected_price = best_ask if side.lower() == 'buy' else best_bid
+
+            min_notional = self.get_min_order_notional(contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
+            if min_notional is not None and expected_price > 0:
+                order_notional = rounded_quantity * expected_price
+                if order_notional < min_notional:
+                    message = (
+                        f"[ASTER] Market order notional ${order_notional} below minimum ${min_notional}"
+                    )
+                    self.logger.error(message)
+                    raise ValueError(message)
+
             # Place the market order
             order_data = {
                 'symbol': contract_id,  # Already normalized (e.g., "MONUSDT")
@@ -517,6 +545,7 @@ class AsterClient(BaseExchangeClient):
 
             # Wait for order to fill
             start_time = time.time()
+            order_info = None
             while order_status != 'FILLED' and time.time() - start_time < 10:
                 await asyncio.sleep(0.2)
                 order_info = await self.get_order_info(order_id)
@@ -1018,6 +1047,35 @@ class AsterClient(BaseExchangeClient):
                 'brackets': None
             }
 
+    def get_min_order_notional(self, symbol: Optional[str]) -> Optional[Decimal]:
+        """
+        Return the minimum notional requirement for the given symbol if known.
+        """
+        if not symbol:
+            return getattr(self.config, "min_order_notional", None)
+
+        key = str(symbol).upper()
+        if key in self._min_order_notional:
+            return self._min_order_notional[key]
+
+        # Try stripping common quote assets
+        for suffix in ("USDT", "USD"):
+            if key.endswith(suffix):
+                alt = key[: -len(suffix)]
+                if alt in self._min_order_notional:
+                    return self._min_order_notional[alt]
+
+        # Fallback to current config value if it matches this contract
+        contract_key = str(getattr(self.config, "contract_id", "")).upper()
+        if contract_key and key == contract_key:
+            return getattr(self.config, "min_order_notional", None)
+
+        ticker_key = str(getattr(self.config, "ticker", "")).upper()
+        if ticker_key and key == ticker_key:
+            return getattr(self.config, "min_order_notional", None)
+
+        return None
+
     async def get_contract_attributes(self) -> Tuple[str, Decimal]:
         """Get contract ID and tick size for a ticker."""
         ticker = self.config.ticker
@@ -1062,11 +1120,21 @@ class AsterClient(BaseExchangeClient):
                         # Get LOT_SIZE filter (quantity precision)
                         min_quantity = Decimal(0)
                         step_size = Decimal('1')  # Default to whole numbers
+                        min_notional: Optional[Decimal] = None
                         for filter_info in symbol_info.get('filters', []):
                             if filter_info.get('filterType') == 'LOT_SIZE':
                                 min_quantity = Decimal(filter_info.get('minQty', 0))
                                 step_size_str = filter_info.get('stepSize', '1')
                                 step_size = Decimal(step_size_str.strip('0') if step_size_str.strip('0') else '1')
+                                break
+                        for filter_info in symbol_info.get('filters', []):
+                            if filter_info.get('filterType') == 'MIN_NOTIONAL':
+                                notional_raw = filter_info.get('notional')
+                                if notional_raw is not None:
+                                    try:
+                                        min_notional = Decimal(str(notional_raw))
+                                    except (InvalidOperation, TypeError, ValueError):
+                                        min_notional = None
                                 break
                         
                         # Store step_size in config for quantity rounding
@@ -1074,7 +1142,8 @@ class AsterClient(BaseExchangeClient):
                         
                         self.logger.debug(
                             f"📐 [ASTER] {ticker}USDT filters: "
-                            f"tick_size={self.config.tick_size}, step_size={step_size}, min_qty={min_quantity}"
+                            f"tick_size={self.config.tick_size}, step_size={step_size}, "
+                            f"min_qty={min_quantity}, min_notional={min_notional}"
                         )
 
                         if self.config.quantity < min_quantity:
@@ -1090,6 +1159,14 @@ class AsterClient(BaseExchangeClient):
                         if self.config.tick_size == 0:
                             self.logger.error("Failed to get tick size for ticker")
                             raise ValueError("Failed to get tick size for ticker")
+
+                        if min_notional is not None:
+                            setattr(self.config, "min_order_notional", min_notional)
+                            ticker_key = ticker.upper()
+                            contract_key = (self.config.contract_id or "").upper()
+                            self._min_order_notional[ticker_key] = min_notional
+                            if contract_key:
+                                self._min_order_notional[contract_key] = min_notional
 
                         return self.config.contract_id, self.config.tick_size
                     else:

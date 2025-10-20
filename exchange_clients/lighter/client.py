@@ -642,6 +642,19 @@ class LighterClient(BaseExchangeClient):
         else:
             raw_payload = getattr(create_order, "__dict__", repr(create_order))
 
+        min_notional = getattr(self.config, "min_order_notional", None)
+        if min_notional is not None:
+            notional = Decimal(quantity) * Decimal(price)
+            if notional < min_notional:
+                self.logger.error(
+                    f"[LIGHTER] Order notional ${notional} below minimum ${min_notional}"
+                )
+                return OrderResult(
+                    success=False,
+                    order_id=str(client_order_index),
+                    error_message=f"Order notional below minimum ${min_notional}",
+                )
+
         if error is not None:
             self.logger.error(f"❌ [LIGHTER] Order submission failed: {error}")
             return OrderResult(
@@ -651,6 +664,112 @@ class LighterClient(BaseExchangeClient):
             )
 
         return OrderResult(success=True, order_id=str(client_order_index))
+
+    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
+        """
+        Place a market order with Lighter using official SDK.
+        
+        Uses the dedicated create_market_order() method with avg_execution_price.
+        """
+        try:
+            # Ensure client is initialized
+            if self.lighter_client is None:
+                raise ValueError("Lighter client not initialized. Call connect() first.")
+
+            # Determine order side
+            if side.lower() == 'buy':
+                is_ask = False
+            elif side.lower() == 'sell':
+                is_ask = True
+            else:
+                raise Exception(f"Invalid side: {side}")
+
+            # Generate unique client order index
+            client_order_index = int(time.time() * 1000) % 1000000
+
+            # Get current market price for worst acceptable execution price
+            # (this is the slippage tolerance for market orders)
+            try:
+                best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
+                mid_price = (best_bid + best_ask) / 2
+                
+                # Set worst acceptable price with 5% slippage tolerance
+                slippage_tolerance = Decimal('0.05')  # 5%
+                if is_ask:  # Selling
+                    # Worst case: price goes down
+                    avg_execution_price = mid_price * (Decimal('1') - slippage_tolerance)
+                else:  # Buying
+                    # Worst case: price goes up
+                    avg_execution_price = mid_price * (Decimal('1') + slippage_tolerance)
+                
+                # Convert to Lighter's price format (integer with multiplier)
+                avg_execution_price_int = int(avg_execution_price * self.price_multiplier)
+                
+            except Exception as price_error:
+                self.logger.error(f"Failed to get market price for market order: {price_error}")
+                # Use a very permissive price as fallback (10% slippage)
+                avg_execution_price_int = 0  # 0 means no limit
+            
+            # Convert quantity to Lighter's base amount format
+            base_amount = int(quantity * self.base_amount_multiplier)
+            
+            self.logger.info(
+                f"📤 [LIGHTER] Placing market order: "
+                f"market={contract_id}, "
+                f"client_id={client_order_index}, "
+                f"side={'SELL' if is_ask else 'BUY'}, "
+                f"base_amount={base_amount}, "
+                f"avg_execution_price={avg_execution_price_int}"
+            )
+
+            # ✅ Use dedicated create_market_order method (not generic create_order)
+            create_order, tx_hash, error = await self.lighter_client.create_market_order(
+                market_index=int(contract_id),
+                client_order_index=client_order_index,
+                base_amount=base_amount,
+                avg_execution_price=avg_execution_price_int,
+                is_ask=is_ask,
+                reduce_only=False  # Allow opening or closing positions
+            )
+            
+            if error is not None:
+                self.logger.error(f"❌ [LIGHTER] Market order failed: {error}")
+                return OrderResult(
+                    success=False,
+                    order_id=str(client_order_index),
+                    error_message=f"Market order error: {error}"
+                )
+            
+            # Extract fill price from response if available
+            fill_price = None
+            if tx_hash and hasattr(tx_hash, 'code'):
+                self.logger.info(
+                    f"✅ [LIGHTER] Market order submitted! "
+                    f"client_id={client_order_index}, "
+                    f"tx_hash={tx_hash}"
+                )
+            else:
+                self.logger.warning(
+                    f"⚠️ [LIGHTER] Market order submitted but no response details available"
+                )
+            
+            return OrderResult(
+                success=True,
+                order_id=str(client_order_index),
+                side=side,
+                size=quantity,
+                price=fill_price,  # Will be None until we query order status
+                status='SUBMITTED'
+            )
+
+        except Exception as e:
+            self.logger.error(f"❌ [LIGHTER] Error placing market order: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            return OrderResult(
+                success=False,
+                error_message=f"Market order exception: {e}"
+            )
 
     async def get_order_price(self, side: str = '') -> Decimal:
         """Get the price of an order with Lighter using official SDK."""
@@ -1253,108 +1372,3 @@ class LighterClient(BaseExchangeClient):
             self.logger.error(f"Error getting total asset value: {e}")
             return None
 
-    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
-        """
-        Place a market order with Lighter using official SDK.
-        
-        Uses the dedicated create_market_order() method with avg_execution_price.
-        """
-        try:
-            # Ensure client is initialized
-            if self.lighter_client is None:
-                raise ValueError("Lighter client not initialized. Call connect() first.")
-
-            # Determine order side
-            if side.lower() == 'buy':
-                is_ask = False
-            elif side.lower() == 'sell':
-                is_ask = True
-            else:
-                raise Exception(f"Invalid side: {side}")
-
-            # Generate unique client order index
-            client_order_index = int(time.time() * 1000) % 1000000
-
-            # Get current market price for worst acceptable execution price
-            # (this is the slippage tolerance for market orders)
-            try:
-                best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
-                mid_price = (best_bid + best_ask) / 2
-                
-                # Set worst acceptable price with 5% slippage tolerance
-                slippage_tolerance = Decimal('0.05')  # 5%
-                if is_ask:  # Selling
-                    # Worst case: price goes down
-                    avg_execution_price = mid_price * (Decimal('1') - slippage_tolerance)
-                else:  # Buying
-                    # Worst case: price goes up
-                    avg_execution_price = mid_price * (Decimal('1') + slippage_tolerance)
-                
-                # Convert to Lighter's price format (integer with multiplier)
-                avg_execution_price_int = int(avg_execution_price * self.price_multiplier)
-                
-            except Exception as price_error:
-                self.logger.error(f"Failed to get market price for market order: {price_error}")
-                # Use a very permissive price as fallback (10% slippage)
-                avg_execution_price_int = 0  # 0 means no limit
-            
-            # Convert quantity to Lighter's base amount format
-            base_amount = int(quantity * self.base_amount_multiplier)
-            
-            self.logger.info(
-                f"📤 [LIGHTER] Placing market order: "
-                f"market={contract_id}, "
-                f"client_id={client_order_index}, "
-                f"side={'SELL' if is_ask else 'BUY'}, "
-                f"base_amount={base_amount}, "
-                f"avg_execution_price={avg_execution_price_int}"
-            )
-
-            # ✅ Use dedicated create_market_order method (not generic create_order)
-            create_order, tx_hash, error = await self.lighter_client.create_market_order(
-                market_index=int(contract_id),
-                client_order_index=client_order_index,
-                base_amount=base_amount,
-                avg_execution_price=avg_execution_price_int,
-                is_ask=is_ask,
-                reduce_only=False  # Allow opening or closing positions
-            )
-            
-            if error is not None:
-                self.logger.error(f"❌ [LIGHTER] Market order failed: {error}")
-                return OrderResult(
-                    success=False,
-                    order_id=str(client_order_index),
-                    error_message=f"Market order error: {error}"
-                )
-            
-            # Extract fill price from response if available
-            fill_price = None
-            if tx_hash and hasattr(tx_hash, 'code'):
-                self.logger.info(
-                    f"✅ [LIGHTER] Market order submitted! "
-                    f"client_id={client_order_index}, "
-                    f"tx_hash={tx_hash}"
-                )
-            else:
-                self.logger.warning(
-                    f"⚠️ [LIGHTER] Market order submitted but no response details available"
-                )
-            
-            return OrderResult(
-                success=True,
-                order_id=str(client_order_index),
-                side=side,
-                size=quantity,
-                price=fill_price,  # Will be None until we query order status
-                status='SUBMITTED'
-            )
-
-        except Exception as e:
-            self.logger.error(f"❌ [LIGHTER] Error placing market order: {e}")
-            import traceback
-            self.logger.error(f"Traceback: {traceback.format_exc()}")
-            return OrderResult(
-                success=False,
-                error_message=f"Market order exception: {e}"
-            )
