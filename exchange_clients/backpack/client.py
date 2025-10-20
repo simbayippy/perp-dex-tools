@@ -5,7 +5,7 @@ Backpack exchange client implementation.
 import os
 import asyncio
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation, ROUND_DOWN
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from bpx.public import Public
@@ -180,6 +180,58 @@ class BackpackClient(BaseExchangeClient):
             decimals = max(0, -step.normalize().as_tuple().exponent)
             return f"{value:.{decimals}f}"
         return format(value, "f")
+
+    async def _compute_post_only_price(self, contract_id: str, raw_price: Decimal, side: str) -> Decimal:
+        """
+        Quantize price toward the maker side and avoid matching the top of book.
+        """
+        price = raw_price if isinstance(raw_price, Decimal) else Decimal(str(raw_price))
+        original_price = price
+        tick_size = getattr(self.config, "tick_size", None)
+        tick: Optional[Decimal] = None
+
+        if tick_size and tick_size > 0:
+            try:
+                tick = tick_size if isinstance(tick_size, Decimal) else Decimal(str(tick_size))
+            except (InvalidOperation, TypeError, ValueError):
+                tick = None
+
+        if tick and tick > 0:
+            rounding_mode = ROUND_DOWN if side.lower() == "buy" else ROUND_UP
+            try:
+                price = price.quantize(tick, rounding=rounding_mode)
+            except (InvalidOperation, TypeError, ValueError):
+                price = price if isinstance(price, Decimal) else Decimal(str(price))
+
+        best_bid = best_ask = Decimal("0")
+        try:
+            best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            if self.logger:
+                self.logger.debug(f"[BACKPACK] Failed to refresh BBO for price adjustment: {exc}")
+
+        if tick and tick > 0:
+            if side.lower() == "buy" and best_ask > 0:
+                while price >= best_ask and price - tick > 0:
+                    price -= tick
+            elif side.lower() == "sell" and best_bid > 0:
+                while price <= best_bid:
+                    price += tick
+
+        if price <= 0 and tick and tick > 0:
+            price = tick
+
+        if self.logger and price != original_price:
+            self.logger.debug(
+                "[BACKPACK] Post-only price adjusted: raw=%s -> adjusted=%s (best_bid=%s, best_ask=%s, tick=%s)",
+                original_price,
+                price,
+                best_bid or "0",
+                best_ask or "0",
+                tick or "n/a",
+            )
+
+        return price
 
     # --------------------------------------------------------------------- #
     # WebSocket callbacks
@@ -374,7 +426,9 @@ class BackpackClient(BaseExchangeClient):
     ) -> OrderResult:
         """Place a post-only limit order on Backpack."""
         backpack_side = "Bid" if side.lower() == "buy" else "Ask"
-        rounded_price = self.round_to_tick(price)
+
+        # round price as backpack always seems to instant fill
+        rounded_price = await self._compute_post_only_price(contract_id, price, side)
         quantized_quantity = self._quantize_quantity(quantity)
         min_quantity = getattr(self.config, "min_quantity", None)
         if min_quantity and quantized_quantity < min_quantity:
