@@ -5,7 +5,6 @@ config:
   primary_exchange: lighter
   scan_exchanges:
   - backpack
-  - aster
   - lighter
   - grvt
   target_exposure: !!float '100'
