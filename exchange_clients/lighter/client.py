@@ -401,7 +401,7 @@ class LighterClient(BaseExchangeClient):
         that calls it directly. New code should use PriceProvider instead.
         
         For real-time monitoring, WebSocket data is available via ws_manager.
-        For order execution, use PriceProvider which intelligently caches data.
+        For order execution, use PriceProvider which orchestrates fresh data retrieval.
         """
         try:
             order_book = await self.get_order_book_depth(contract_id, levels=1)
@@ -1356,4 +1356,3 @@ class LighterClient(BaseExchangeClient):
         except Exception as e:
             self.logger.error(f"Error getting total asset value: {e}")
             return None
-

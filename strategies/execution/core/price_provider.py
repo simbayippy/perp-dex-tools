@@ -1,303 +1,168 @@
 """
-Price Provider - Unified price fetching with intelligent caching.
+Price Provider - Unified best bid/offer retrieval without caching.
 
-Provides a clean abstraction over multiple data sources:
-- Cached order book data (from recent liquidity checks)
-- REST API snapshots (for fresh data)
-- WebSocket streams (for real-time monitoring)
+Provides a lightweight abstraction over exchange market data sources:
+ - WebSocket snapshots when available (zero-latency)
+ - REST/API fallbacks for guaranteed freshness
 
-Key features:
-- Cache-first architecture (reuse recent data)
-- Automatic cache invalidation (time-based TTL)
-- Fallback chain for reliability
-- Exchange-agnostic interface
+This module intentionally avoids local caching so every call reflects the
+latest data exposed by the venue. Exchanges are responsible for providing
+their own throttling or rate limiting.
 """
 
-from typing import Any, Dict, Optional, Tuple
+from __future__ import annotations
+
 from decimal import Decimal
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from typing import Any, Callable, Dict, Optional, Tuple
+
 from helpers.unified_logger import get_core_logger
 
 logger = get_core_logger("price_provider")
 
 
-@dataclass
-class PriceData:
-    """
-    Cached price data with metadata.
-    """
-    best_bid: Decimal
-    best_ask: Decimal
-    mid_price: Decimal
-    timestamp: datetime
-    source: str  # "cache", "rest_api", "websocket"
-    
-    def age_seconds(self) -> float:
-        """Get age of price data in seconds."""
-        return (datetime.now() - self.timestamp).total_seconds()
-    
-    def is_valid(self, max_age_seconds: float = 5.0) -> bool:
-        """Check if price data is still valid."""
-        return self.age_seconds() < max_age_seconds
-
-
-class PriceCache:
-    """
-    Simple in-memory cache for recent price data.
-    
-    Thread-safe, time-based invalidation.
-    """
-    
-    def __init__(self, default_ttl_seconds: float = 5.0):
-        """
-        Initialize price cache.
-        
-        Args:
-            default_ttl_seconds: Default time-to-live for cached prices
-        """
-        self.default_ttl = default_ttl_seconds
-        self._cache: Dict[str, PriceData] = {}
-    
-    def get(self, key: str, max_age_seconds: Optional[float] = None) -> Optional[PriceData]:
-        """
-        Get cached price data if still valid.
-        
-        Args:
-            key: Cache key (e.g., "lighter:BTC")
-            max_age_seconds: Maximum age to accept (uses default if None)
-        
-        Returns:
-            PriceData if cached and valid, None otherwise
-        """
-        max_age = max_age_seconds if max_age_seconds is not None else self.default_ttl
-        
-        if key not in self._cache:
-            return None
-        
-        price_data = self._cache[key]
-        
-        if not price_data.is_valid(max_age):
-            # Expired - remove from cache
-            del self._cache[key]
-            return None
-        
-        return price_data
-    
-    def set(self, key: str, price_data: PriceData) -> None:
-        """
-        Store price data in cache.
-        
-        Args:
-            key: Cache key (e.g., "lighter:BTC")
-            price_data: Price data to cache
-        """
-        self._cache[key] = price_data
-    
-    def invalidate(self, key: str) -> None:
-        """
-        Manually invalidate cached data.
-        
-        Args:
-            key: Cache key to invalidate
-        """
-        if key in self._cache:
-            del self._cache[key]
-    
-    def clear(self) -> None:
-        """Clear all cached data."""
-        self._cache.clear()
-
-
 class PriceProvider:
     """
-    Unified price provider with intelligent caching.
-    
-    Provides best bid/ask prices from the most appropriate source:
-    1. Cache (from recent liquidity check) - PREFERRED
-    2. REST API (fresh snapshot) - FALLBACK
-    3. WebSocket (real-time, if available) - OPTIONAL
-    
+    Unified price provider that always fetches fresh market data.
+
     Example:
         provider = PriceProvider()
-        
-        # During liquidity check, automatically caches prices
-        order_book = await exchange_client.get_order_book_depth("BTC", levels=20)
-        provider.cache_order_book(exchange_name, symbol, order_book)
-        
-        # Later, during order execution, reuses cached data
         bid, ask = await provider.get_bbo_prices(exchange_client, "BTC")
-        # ↑ Returns cached data (no API call!) if < 5 seconds old
     """
-    
-    def __init__(
-        self,
-        cache_ttl_seconds: float = 5.0,
-        prefer_websocket: bool = False
-    ):
+
+    def __init__(self, prefer_websocket: bool = False) -> None:
         """
-        Initialize price provider.
-        
         Args:
-            cache_ttl_seconds: How long to consider cached prices valid (default: 5 seconds)
-            prefer_websocket: If True, prefer WebSocket over cache (for HFT strategies)
+            prefer_websocket: If True, try WebSocket snapshots before REST fallbacks.
         """
-        self.cache = PriceCache(default_ttl_seconds=cache_ttl_seconds)
         self.prefer_websocket = prefer_websocket
         self.logger = get_core_logger("price_provider")
-    
-    def _make_cache_key(self, exchange_name: str, symbol: str) -> str:
-        """Generate cache key for exchange + symbol."""
-        return f"{exchange_name}:{symbol}"
-    
+
     async def get_bbo_prices(
         self,
         exchange_client: Any,
         symbol: str,
-        max_cache_age_seconds: Optional[float] = None
     ) -> Tuple[Decimal, Decimal]:
         """
-        Get best bid/offer prices from best available source.
-        
-        Priority (unless prefer_websocket=True):
-        1. Cache (if valid)
-        2. REST API
-        3. WebSocket (if available)
-        
-        Args:
-            exchange_client: Exchange client instance
-            symbol: Trading symbol
-            max_cache_age_seconds: Maximum age to accept from cache
-        
-        Returns:
-            (best_bid, best_ask) as Decimals
+        Fetch the best bid/offer for a symbol from the freshest available source.
+
+        Preference order:
+            1. WebSocket snapshot (if prefer_websocket=True)
+            2. REST/API request
+            3. WebSocket snapshot (fallback when REST fails and prefer_websocket=False)
+
+        Raises:
+            ValueError: If neither source can deliver a valid book.
         """
         exchange_name = exchange_client.get_exchange_name()
-        cache_key = self._make_cache_key(exchange_name, symbol)
-        
-        # Strategy 1: Try cache first (if NOT prefer websocket)
-        if not self.prefer_websocket:
-            cached = self.cache.get(cache_key, max_cache_age_seconds)
-            if cached:
-                self.logger.info(
-                    f"✅ [PRICE] Using cached BBO for {exchange_name}:{symbol} "
-                    f"(age: {cached.age_seconds():.2f}s, source: {cached.source})"
-                )
-                return cached.best_bid, cached.best_ask
 
-        # Strategy 2: Try WebSocket snapshot (if client supports it)
-        ws_snapshot = None
-        get_ws_book = getattr(exchange_client, "_get_order_book_from_websocket", None)
-        if callable(get_ws_book):
-            try:
-                ws_snapshot = get_ws_book()
-            except Exception as exc:
-                self.logger.warning(
-                    f"⚠️ [PRICE] WebSocket snapshot unavailable for "
-                    f"{exchange_name}:{symbol}: {exc}"
-                )
-            else:
-                if ws_snapshot and ws_snapshot.get("bids") and ws_snapshot.get("asks"):
-                    best_bid = ws_snapshot["bids"][0]["price"]
-                    best_ask = ws_snapshot["asks"][0]["price"]
-                    price_data = PriceData(
-                        best_bid=best_bid,
-                        best_ask=best_ask,
-                        mid_price=(best_bid + best_ask) / 2,
-                        timestamp=datetime.now(),
-                        source="websocket",
-                    )
-                    self.cache.set(cache_key, price_data)
-                    self.logger.info(
-                        f"📡 [PRICE] Using WebSocket BBO for {exchange_name}:{symbol} "
-                        f"(bid={best_bid}, ask={best_ask})"
-                    )
-                    return best_bid, best_ask
+        # Optional early WebSocket read.
+        if self.prefer_websocket:
+            ws_prices = self._try_websocket_snapshot(exchange_client, symbol, exchange_name)
+            if ws_prices:
+                return ws_prices
 
-        # Strategy 3: Fetch fresh data from REST API
+        rest_error: Optional[Exception] = None
         try:
-            self.logger.info(
-                f"📞 [{exchange_name.upper()}] Fetching fresh BBO for {symbol} via REST API"
+            return await self._fetch_rest_bbo(exchange_client, symbol, exchange_name)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            rest_error = exc
+            self.logger.warning(
+                f"⚠️ [PRICE] REST BBO fetch failed for {exchange_name}:{symbol}: {exc}"
             )
 
-            order_book = await exchange_client.get_order_book_depth(symbol)
-            
-            if not order_book['bids'] or not order_book['asks']:
-                raise ValueError(f"Empty order book for {symbol}")
-            
-            best_bid = order_book['bids'][0]['price']
-            best_ask = order_book['asks'][0]['price']
-            
-            # Cache the result
-            price_data = PriceData(
-                best_bid=best_bid,
-                best_ask=best_ask,
-                mid_price=(best_bid + best_ask) / 2,
-                timestamp=datetime.now(),
-                source="rest_api"
-            )
-            self.cache.set(cache_key, price_data)
-            
-            self.logger.info(
-                f"✅ [{exchange_name.upper()}] Got fresh BBO: bid={best_bid}, ask={best_ask}"
-            )
-            
-            return best_bid, best_ask
-        
-        except Exception as e:
-            self.logger.error(f"❌ [PRICE] Failed to fetch BBO: {e}")
-            raise ValueError(f"Unable to fetch BBO prices for {symbol}: {e}")
-    
-    def cache_order_book(
+        # Fallback to WebSocket when REST requests fail or when realtime data is preferred later.
+        ws_prices = self._try_websocket_snapshot(exchange_client, symbol, exchange_name)
+        if ws_prices:
+            return ws_prices
+
+        error_message = (
+            f"Unable to fetch BBO prices for {exchange_name}:{symbol}"
+            f"{' - REST error: ' + str(rest_error) if rest_error else ''}"
+        )
+        raise ValueError(error_message)
+
+    async def _fetch_rest_bbo(
         self,
-        exchange_name: str,
+        exchange_client: Any,
         symbol: str,
-        order_book: Dict[str, list],
-        source: str = "liquidity_check"
-    ) -> None:
+        exchange_name: str,
+    ) -> Tuple[Decimal, Decimal]:
         """
-        Cache order book data (called by liquidity analyzer).
-        
-        This is the KEY method that makes the cache-first strategy work.
-        When liquidity analyzer fetches order book, it calls this to cache the result.
-        
-        Args:
-            exchange_name: Exchange name
-            symbol: Trading symbol
-            order_book: Order book dict with 'bids' and 'asks'
-            source: Source of data (for logging)
+        Request fresh best bid/offer via the exchange's REST interface.
         """
-        if not order_book.get('bids') or not order_book.get('asks'):
-            self.logger.warning(
-                f"⚠️  [PRICE] Cannot cache empty order book for {exchange_name}:{symbol}"
+        self.logger.info(
+            f"📞 [{exchange_name.upper()}] Fetching fresh BBO for {symbol} via REST/API"
+        )
+
+        if hasattr(exchange_client, "fetch_bbo_prices"):
+            bid, ask = await exchange_client.fetch_bbo_prices(symbol)
+            bid_dec = Decimal(str(bid))
+            ask_dec = Decimal(str(ask))
+            self.logger.info(
+                f"✅ [{exchange_name.upper()}] REST BBO: bid={bid_dec}, ask={ask_dec}"
             )
-            return
-        
-        best_bid = order_book['bids'][0]['price']
-        best_ask = order_book['asks'][0]['price']
-        
-        price_data = PriceData(
-            best_bid=best_bid,
-            best_ask=best_ask,
-            mid_price=(best_bid + best_ask) / 2,
-            timestamp=datetime.now(),
-            source=source
+            return bid_dec, ask_dec
+
+        if hasattr(exchange_client, "get_order_book_depth"):
+            order_book = await exchange_client.get_order_book_depth(symbol)
+        else:
+            raise ValueError(
+                f"{exchange_name} client does not expose fetch_bbo_prices or get_order_book_depth"
+            )
+
+        bids = order_book.get("bids") if isinstance(order_book, Dict) else None
+        asks = order_book.get("asks") if isinstance(order_book, Dict) else None
+        if not bids or not asks:
+            raise ValueError("Empty order book")
+
+        try:
+            best_bid = Decimal(str(bids[0]["price"]))
+            best_ask = Decimal(str(asks[0]["price"]))
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise ValueError(f"Malformed order book payload: {exc}") from exc
+
+        self.logger.info(
+            f"✅ [{exchange_name.upper()}] REST BBO: bid={best_bid}, ask={best_ask}"
         )
-        
-        cache_key = self._make_cache_key(exchange_name, symbol)
-        self.cache.set(cache_key, price_data)
-        
-        self.logger.debug(
-            f"💾 [PRICE] Cached BBO for {exchange_name}:{symbol}: "
-            f"bid={best_bid}, ask={best_ask} (source: {source})"
+        return best_bid, best_ask
+
+    def _try_websocket_snapshot(
+        self,
+        exchange_client: Any,
+        symbol: str,
+        exchange_name: str,
+    ) -> Optional[Tuple[Decimal, Decimal]]:
+        """
+        Attempt to read best bid/offer from an attached WebSocket manager.
+        """
+        getter: Optional[Callable[[], Dict[str, Any]]] = getattr(
+            exchange_client, "_get_order_book_from_websocket", None
         )
-    
-    def invalidate_cache(self, exchange_name: str, symbol: str) -> None:
-        """
-        Manually invalidate cached prices.
-        
-        Use when you know prices are stale (e.g., after large order fill).
-        """
-        cache_key = self._make_cache_key(exchange_name, symbol)
-        self.cache.invalidate(cache_key)
-        self.logger.debug(f"🗑️  [PRICE] Invalidated cache for {exchange_name}:{symbol}")
+        if not callable(getter):
+            return None
+
+        try:
+            snapshot = getter()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self.logger.debug(
+                f"⚠️ [PRICE] WebSocket snapshot unavailable for {exchange_name}:{symbol}: {exc}"
+            )
+            return None
+
+        if not snapshot or not snapshot.get("bids") or not snapshot.get("asks"):
+            return None
+
+        try:
+            best_bid = Decimal(str(snapshot["bids"][0]["price"]))
+            best_ask = Decimal(str(snapshot["asks"][0]["price"]))
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            self.logger.debug(
+                f"⚠️ [PRICE] Invalid WebSocket snapshot for {exchange_name}:{symbol}: {exc}"
+            )
+            return None
+
+        self.logger.info(
+            f"📡 [PRICE] Using WebSocket BBO for {exchange_name}:{symbol} "
+            f"(bid={best_bid}, ask={best_ask})"
+        )
+        return best_bid, best_ask

@@ -101,7 +101,7 @@ class OrderExecutor:
     def __init__(
         self,
         default_timeout: float = 40.0,
-        price_provider = None,  # Optional PriceProvider for cached prices
+        price_provider = None,  # Optional PriceProvider for shared BBO lookups
         default_limit_price_offset_pct: Decimal = DEFAULT_LIMIT_PRICE_OFFSET_PCT
     ):
         """
@@ -109,7 +109,7 @@ class OrderExecutor:
         
         Args:
             default_timeout: Default timeout for limit orders (seconds)
-            price_provider: Optional PriceProvider for getting cached/fresh prices
+            price_provider: Optional PriceProvider for retrieving shared BBO data
             default_limit_price_offset_pct: Default maker improvement for limit orders
         """
         self.default_timeout = default_timeout
@@ -534,10 +534,10 @@ class OrderExecutor:
         
         Priority for limit orders:
         1. WebSocket BBO (real-time) - PREFERRED
-        2. Fresh REST API call (bypass cache) - FALLBACK
+        2. Fresh REST/API call - FALLBACK
         
-        This ensures limit orders are placed at current market prices, not stale cached prices
-        from liquidity checks that happened 1-2 seconds ago.
+        This ensures limit orders are placed at current market prices, not stale snapshots
+        from liquidity checks that happened seconds earlier.
         
         Returns:
             (best_bid, best_ask) as Decimals
@@ -561,13 +561,13 @@ class OrderExecutor:
                         )
                         return bid, ask
             
-            # 🔄 Priority 2: Force fresh REST API fetch (bypass cache)
+            # 🔄 Priority 2: Force fresh REST/API fetch
             self.logger.info(
                 f"🔄 [PRICE] Fetching FRESH BBO for {exchange_name}:{symbol} "
                 f"(WebSocket not available, forcing REST API call)"
             )
             
-            # Bypass PriceProvider cache - go direct to exchange
+            # Go direct to the exchange client for an authoritative snapshot
             if hasattr(exchange_client, 'fetch_bbo_prices'):
                 bid, ask = await exchange_client.fetch_bbo_prices(symbol)
                 return Decimal(str(bid)), Decimal(str(ask))
@@ -598,14 +598,14 @@ class OrderExecutor:
         Fetch best bid/offer prices using best available method.
         
         Priority:
-        1. PriceProvider (uses cache if available)
+        1. PriceProvider (centralised fetch path)
         2. Direct exchange client method
         
         Returns:
             (best_bid, best_ask) as Decimals
         """
         try:
-            # Use PriceProvider if available (cache-first strategy)
+            # Use PriceProvider when supplied
             if self.price_provider:
                 bid, ask = await self.price_provider.get_bbo_prices(
                     exchange_client=exchange_client,
