@@ -175,7 +175,7 @@ class PriceProvider:
         exchange_name = exchange_client.get_exchange_name()
         cache_key = self._make_cache_key(exchange_name, symbol)
         
-        # Strategy 1: Try cache first (most common case)
+        # Strategy 1: Try cache first (if NOT prefer websocket)
         if not self.prefer_websocket:
             cached = self.cache.get(cache_key, max_cache_age_seconds)
             if cached:
@@ -192,7 +192,7 @@ class PriceProvider:
             try:
                 ws_snapshot = get_ws_book()
             except Exception as exc:
-                self.logger.debug(
+                self.logger.warning(
                     f"⚠️ [PRICE] WebSocket snapshot unavailable for "
                     f"{exchange_name}:{symbol}: {exc}"
                 )
@@ -217,7 +217,7 @@ class PriceProvider:
         # Strategy 3: Fetch fresh data from REST API
         try:
             self.logger.info(
-                f"🔄 [PRICE] Fetching fresh BBO for {exchange_name}:{symbol} via REST API"
+                f"📞 [{exchange_name.upper()}] Fetching fresh BBO for {symbol} via REST API"
             )
 
             order_book = await exchange_client.get_order_book_depth(symbol)
@@ -239,7 +239,7 @@ class PriceProvider:
             self.cache.set(cache_key, price_data)
             
             self.logger.info(
-                f"✅ [PRICE] Got fresh BBO: bid={best_bid}, ask={best_ask}"
+                f"✅ [{exchange_name.upper()}] Got fresh BBO: bid={best_bid}, ask={best_ask}"
             )
             
             return best_bid, best_ask
