@@ -12,6 +12,7 @@ Based on loguru with enhanced formatting and component-specific context.
 
 import os
 import sys
+from datetime import datetime
 from typing import Optional, Dict, Any
 from loguru import logger as _logger
 from pathlib import Path
@@ -155,6 +156,33 @@ class UnifiedLogger:
                 diagnose=False
             )
             _logger._perp_dex_history_setup = True
+
+        # Per-session log file
+        if not hasattr(_logger, "_perp_dex_session_setup"):
+            session_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            session_file = logs_dir / f"session_{session_ts}.log"
+
+            def ensure_component_session(record):
+                if "component_id" not in record["extra"]:
+                    record["extra"]["component_id"] = "UNKNOWN"
+                return True
+
+            session_format = (
+                "{time:YYYY-MM-DD HH:mm:ss} | "
+                "{level:<8} | "
+                "{extra[component_id]:<35} | "
+                "{message}"
+            )
+
+            _logger.add(
+                str(session_file),
+                format=session_format,
+                level="DEBUG",
+                filter=ensure_component_session,
+                backtrace=False,
+                diagnose=False
+            )
+            _logger._perp_dex_session_setup = True
         
         # File handler for all logs (no colors, includes extra context)
         # Each component gets its own file, so no need to check for duplicates here
