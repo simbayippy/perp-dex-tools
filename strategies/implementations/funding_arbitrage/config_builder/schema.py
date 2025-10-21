@@ -26,15 +26,8 @@ FUNDING_INTERVAL_HOURS = Decimal("8")
 HOURS_PER_YEAR = Decimal("8760")
 FUNDING_PAYMENTS_PER_YEAR = HOURS_PER_YEAR / FUNDING_INTERVAL_HOURS  # 1095 periods/year
 
-# Legacy per-interval defaults (used by strategy internals)
-DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL = Decimal("0.0001")
-MIN_PROFIT_RATE_PER_INTERVAL = Decimal("0.00001")
-MAX_PROFIT_RATE_PER_INTERVAL = Decimal("0.1")
-
-# User-facing APY equivalents for interactive prompts
-DEFAULT_MIN_PROFIT_APY = DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL * FUNDING_PAYMENTS_PER_YEAR
-MIN_PROFIT_APY = MIN_PROFIT_RATE_PER_INTERVAL * FUNDING_PAYMENTS_PER_YEAR
-MAX_PROFIT_APY = MAX_PROFIT_RATE_PER_INTERVAL * FUNDING_PAYMENTS_PER_YEAR
+DEFAULT_MIN_PROFIT_APY = Decimal("0.25")
+DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL = (DEFAULT_MIN_PROFIT_APY / FUNDING_PAYMENTS_PER_YEAR).quantize(Decimal("0.0000000001"))
 
 
 # ============================================================================
@@ -90,9 +83,9 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             key="max_positions",
             prompt="Maximum number of concurrent positions?",
             param_type=ParameterType.INTEGER,
-            default=5,
+            default=1,
             min_value=1,
-            max_value=50,
+            max_value=5,
             required=False,
             help_text="Limit the number of open funding arb positions to manage risk",
             show_default_in_prompt=True,
@@ -112,9 +105,9 @@ FUNDING_ARB_SCHEMA = StrategySchema(
         create_decimal_parameter(
             key="min_profit_rate",
             prompt="Minimum annualised net profit (APY) before entering a position? (decimal, 0.50 = 50%)",
-            default=DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL,
-            min_value=MIN_PROFIT_RATE_PER_INTERVAL,
-            max_value=MAX_PROFIT_RATE_PER_INTERVAL,
+            default=DEFAULT_MIN_PROFIT_APY,
+            min_value=Decimal("0"),
+            max_value=None,
             required=True,
             help_text=(
                 "Only take opportunities whose annualised (after-fee) funding yield meets this level. "
