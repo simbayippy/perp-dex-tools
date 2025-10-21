@@ -77,7 +77,7 @@ class BaseExchangeClient(ABC):
         pass
 
     # ========================================================================
-    # LIQUIDATION EVENT STREAMS (OPTIONAL)
+    # EVENT STREAMS (OPTIONAL)
     # ========================================================================
 
     def supports_liquidation_stream(self) -> bool:

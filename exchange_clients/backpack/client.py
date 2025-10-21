@@ -77,6 +77,7 @@ class BackpackClient(BaseExchangeClient):
                 secret_key=self.secret_key,
                 symbol=ws_symbol,
                 order_update_callback=self._handle_websocket_order_update,
+                liquidation_callback=self.handle_liquidation_notification,
                 depth_fetcher=self._fetch_depth_snapshot,
                 symbol_formatter=self._ensure_exchange_symbol,
             )
@@ -104,6 +105,10 @@ class BackpackClient(BaseExchangeClient):
         """Return exchange identifier."""
         return "backpack"
 
+    def supports_liquidation_stream(self) -> bool:
+        """Backpack exposes liquidation-origin events on the order update stream."""
+        return True
+
     # --------------------------------------------------------------------- #
     # Utility helpers
     # --------------------------------------------------------------------- #
@@ -118,6 +123,12 @@ class BackpackClient(BaseExchangeClient):
             return Decimal(str(value))
         except (InvalidOperation, TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _to_internal_symbol(stream_symbol: Optional[str]) -> str:
+        if not stream_symbol:
+            return ""
+        return normalize_backpack_symbol(stream_symbol).upper()
 
     def _ensure_exchange_symbol(self, identifier: Optional[str]) -> Optional[str]:
         """Normalize symbol/contract inputs to Backpack's expected wire format."""
@@ -325,6 +336,70 @@ class BackpackClient(BaseExchangeClient):
                 self._order_update_handler(payload)
         except Exception as exc:
             self.logger.error(f"Error handling Backpack order update: {exc}")
+
+    async def handle_liquidation_notification(self, payload: Dict[str, Any]) -> None:
+        """
+        Convert Backpack order updates triggered by liquidations into LiquidationEvent objects.
+        """
+        try:
+            origin = (payload.get("O") or "").upper()
+            if origin not in {
+                "LIQUIDATION_AUTOCLOSE",
+                "ADL_AUTOCLOSE",
+                "BACKSTOP_LIQUIDITY_PROVIDER",
+            }:
+                return
+
+            event_type = (payload.get("e") or "").lower()
+            if event_type != "orderfill":
+                return
+
+            symbol_raw = payload.get("s")
+            if not symbol_raw:
+                return
+
+            internal_symbol = self._to_internal_symbol(symbol_raw) or (self.config.ticker or symbol_raw)
+
+            side_raw = (payload.get("S") or "").lower()
+            side = "buy" if side_raw in {"bid", "buy"} else "sell" if side_raw in {"ask", "sell"} else side_raw or "buy"
+
+            fill_qty = self._to_decimal(payload.get("l"), Decimal("0")) or Decimal("0")
+            if fill_qty <= 0:
+                fill_qty = self._to_decimal(payload.get("z"), Decimal("0")) or Decimal("0")
+            if fill_qty <= 0:
+                return
+            fill_qty = fill_qty.copy_abs()
+
+            price = self._to_decimal(payload.get("L"), Decimal("0")) or Decimal("0")
+
+            timestamp_us = payload.get("E")
+            timestamp = datetime.now(timezone.utc)
+            if timestamp_us is not None:
+                try:
+                    timestamp = datetime.fromtimestamp(int(timestamp_us) / 1_000_000, tz=timezone.utc)
+                except (ValueError, TypeError, OSError):
+                    timestamp = datetime.now(timezone.utc)
+
+            metadata: Dict[str, Any] = {
+                "order_id": payload.get("i"),
+                "trade_id": payload.get("t"),
+                "origin": origin,
+                "maker": payload.get("m"),
+                "raw": payload,
+            }
+
+            event = LiquidationEvent(
+                exchange=self.get_exchange_name(),
+                symbol=internal_symbol,
+                side=side,
+                quantity=fill_qty,
+                price=price,
+                timestamp=timestamp,
+                metadata=metadata,
+            )
+            await self.emit_liquidation_event(event)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self.logger.error(f"Error handling Backpack liquidation notification: {exc}")
 
     # --------------------------------------------------------------------- #
     # Market data

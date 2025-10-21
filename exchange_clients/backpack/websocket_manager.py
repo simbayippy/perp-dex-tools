@@ -31,6 +31,7 @@ class BackpackWebSocketManager(BaseWebSocketManager):
         secret_key: str,
         symbol: Optional[str],
         order_update_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+        liquidation_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
         depth_fetcher: Optional[Callable[[str], Dict[str, Any]]] = None,
         depth_stream_interval: str = "realtime",
         symbol_formatter: Optional[Callable[[str], str]] = None,
@@ -41,6 +42,7 @@ class BackpackWebSocketManager(BaseWebSocketManager):
         self.symbol = symbol
         self.order_update_callback = order_update_callback
         self.depth_fetcher = depth_fetcher
+        self.liquidation_callback = liquidation_callback
         self.depth_stream_interval = depth_stream_interval
         self._symbol_formatter = symbol_formatter
 
@@ -304,6 +306,43 @@ class BackpackWebSocketManager(BaseWebSocketManager):
         except Exception as exc:  # pragma: no cover - callback safety
             if self.logger:
                 self.logger.error(f"[BACKPACK] Order update callback failed: {exc}")
+
+        # Since the liquidation event is a part of orderUpdate
+        await self._maybe_dispatch_liquidation(payload)
+
+    async def _maybe_dispatch_liquidation(self, payload: Dict[str, Any]) -> None:
+        if not self.liquidation_callback:
+            return
+
+        origin = (payload.get("O") or "").upper()
+        event_type = (payload.get("e") or "").lower()
+        if origin not in {
+            "LIQUIDATION_AUTOCLOSE",
+            "ADL_AUTOCLOSE",
+            "BACKSTOP_LIQUIDITY_PROVIDER",
+        }:
+            return
+        if event_type != "orderfill":
+            return
+
+        last_fill = payload.get("l")
+        executed = payload.get("z")
+        try:
+            last_qty = Decimal(str(last_fill)) if last_fill is not None else Decimal("0")
+        except (InvalidOperation, TypeError):
+            last_qty = Decimal("0")
+        if last_qty <= 0:
+            try:
+                exec_qty = Decimal(str(executed)) if executed is not None else Decimal("0")
+            except (InvalidOperation, TypeError):
+                exec_qty = Decimal("0")
+            if exec_qty <= 0:
+                return
+        try:
+            await self.liquidation_callback(payload)
+        except Exception as exc:  # pragma: no cover - callback safety
+            if self.logger:
+                self.logger.error(f"[BACKPACK] Liquidation callback failed: {exc}")
 
     async def _close_account_ws(self) -> None:
         if self._account_ws:
