@@ -76,6 +76,7 @@ def _strategy(
         logger=StubLogger(),
         failed_symbols=set(),
         price_provider=StubPriceProvider(),
+        atomic_retry_policy=None,
     )
 
 

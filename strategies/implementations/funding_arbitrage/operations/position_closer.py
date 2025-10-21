@@ -502,6 +502,7 @@ class PositionCloser:
             pre_flight_check=False,
             skip_preflight_leverage=True,
             stage_prefix="close",
+            retry_policy=strategy.atomic_retry_policy,
         )
 
         if not result.all_filled:
