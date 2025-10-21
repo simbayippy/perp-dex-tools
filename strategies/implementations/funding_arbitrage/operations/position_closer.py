@@ -401,16 +401,20 @@ class PositionCloser:
             return False
 
         available_exchanges = list(strategy.exchange_clients.keys())
-        whitelist_dexes = available_exchanges if available_exchanges else None
-        required_dex = getattr(strategy.config, "primary_exchange", None)
+        whitelist_dexes = [dex.lower() for dex in available_exchanges] if available_exchanges else None
+        required_dex = getattr(strategy.config, "mandatory_exchange", None)
+        if not required_dex:
+            required_dex = getattr(strategy.config, "primary_exchange", None)
         if isinstance(required_dex, str) and required_dex.strip():
             required_dex = required_dex.strip().lower()
         else:
             required_dex = None
 
+        max_oi_cap = strategy.config.max_oi_usd if required_dex else None
+
         filters = OpportunityFilter(
             min_profit_percent=strategy.config.min_profit,
-            max_oi_usd=strategy.config.max_oi_usd,
+            max_oi_usd=max_oi_cap,
             whitelist_dexes=whitelist_dexes,
             required_dex=required_dex,
             symbol=None,

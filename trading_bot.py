@@ -53,31 +53,31 @@ class TradingBot:
             if is_multi_exchange:
                 # Multi-exchange mode (for funding arbitrage, etc.)
                 # Get list of exchanges from strategy params
-                raw_exchange_list = (
-                    config.strategy_params.get('scan_exchanges')
-                )
+                raw_exchange_list = config.strategy_params.get('scan_exchanges')
 
                 if isinstance(raw_exchange_list, str):
                     exchange_list = [ex.strip().lower() for ex in raw_exchange_list.split(',') if ex.strip()]
                 elif raw_exchange_list:
-                    exchange_list = [str(ex).lower() for ex in raw_exchange_list if str(ex).strip()]
+                    exchange_list = [str(ex).strip().lower() for ex in raw_exchange_list if str(ex).strip()]
                 else:
-                    fallback_exchange = config.strategy_params.get('primary_exchange')
-                    if isinstance(fallback_exchange, str) and fallback_exchange.strip():
-                        exchange_list = [fallback_exchange.strip().lower()]
-                    else:
-                        exchange_list = []
+                    exchange_list = []
+
+                mandatory_exchange = (
+                    config.strategy_params.get('mandatory_exchange')
+                    or config.strategy_params.get('primary_exchange')
+                )
+                if isinstance(mandatory_exchange, str):
+                    mandatory_exchange = mandatory_exchange.strip().lower() or None
+                else:
+                    mandatory_exchange = None
 
                 if not exchange_list:
                     raise ValueError(
                         "Funding arbitrage requires at least one exchange in 'scan_exchanges'."
                     )
 
-                primary_exchange = config.strategy_params.get('primary_exchange')
-                if isinstance(primary_exchange, str) and primary_exchange.strip():
-                    primary_exchange = primary_exchange.strip().lower()
-                else:
-                    primary_exchange = None
+                if mandatory_exchange and mandatory_exchange not in exchange_list:
+                    exchange_list.append(mandatory_exchange)
 
                 self.logger.info(f"Creating clients for exchanges: {exchange_list}")
 
@@ -85,7 +85,7 @@ class TradingBot:
                 self.exchange_clients = ExchangeFactory.create_multiple_exchanges(
                     exchange_names=exchange_list,
                     config=config,
-                    primary_exchange=primary_exchange,
+                    primary_exchange=mandatory_exchange,
                 )
 
                 if not self.exchange_clients:

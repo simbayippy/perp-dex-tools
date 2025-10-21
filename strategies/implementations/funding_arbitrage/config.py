@@ -124,7 +124,7 @@ class FundingArbConfig(BaseModel):
         description="DEXes to use (e.g., ['lighter', 'grvt', 'backpack'])"
     )
     
-    primary_exchange: Optional[str] = Field(
+    mandatory_exchange: Optional[str] = Field(
         default=None,
         description="Optional DEX that must participate in every trade"
     )
@@ -184,8 +184,8 @@ class FundingArbConfig(BaseModel):
     
     # Filtering (for point farming on low-OI DEXes)
     max_oi_usd: Optional[Decimal] = Field(
-        default=Decimal("500000"),
-        description="Max open interest filter (for point farming)"
+        default=None,
+        description="Max open interest allowed on the mandatory exchange (if set)"
     )
     
     # Risk management

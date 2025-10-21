@@ -215,8 +215,15 @@ class OpportunityRepository:
             params["min_oi"] = filters.min_oi_usd
         
         if filters.max_oi_usd:
-            where_clauses.append("o.min_oi_usd <= :max_oi")
-            params["max_oi"] = filters.max_oi_usd
+            if filters.required_dex:
+                where_clauses.append(
+                    "((d1.name = :required_dex AND o.long_dex_oi_usd <= :required_max_oi) "
+                    "OR (d2.name = :required_dex AND o.short_dex_oi_usd <= :required_max_oi))"
+                )
+                params["required_max_oi"] = filters.max_oi_usd
+            else:
+                where_clauses.append("o.min_oi_usd <= :max_oi")
+                params["max_oi"] = filters.max_oi_usd
         
         if filters.oi_ratio_min:
             where_clauses.append("o.oi_ratio >= :oi_ratio_min")

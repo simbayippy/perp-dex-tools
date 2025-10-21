@@ -45,18 +45,6 @@ FUNDING_ARB_SCHEMA = StrategySchema(
         # Exchange Configuration
         # ====================================================================
         ParameterSchema(
-            key="primary_exchange",
-            prompt="Select a PRIMARY exchange (optional, choose 'none' to skip)",
-            param_type=ParameterType.CHOICE,
-            choices=["none"] + ExchangeFactory.get_supported_exchanges(),
-            default="none",
-            required=False,
-            help_text=(
-                "Optional guardrail: pick a DEX that must participate in every trade. "
-                "Select 'none' if any combination of the scanned exchanges is acceptable."
-            ),
-        ),
-        ParameterSchema(
             key="scan_exchanges",
             prompt="Which exchanges should we scan for opportunities?",
             param_type=ParameterType.MULTI_CHOICE,
@@ -65,6 +53,18 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             required=True,
             help_text="We'll look for funding rate divergences across these exchanges",
             show_default_in_prompt=True,
+        ),
+        ParameterSchema(
+            key="mandatory_exchange",
+            prompt="Select a MANDATORY exchange (optional, choose 'none' to skip)",
+            param_type=ParameterType.CHOICE,
+            choices=["none"] + ExchangeFactory.get_supported_exchanges(),
+            default="none",
+            required=False,
+            help_text=(
+                "Optional guardrail: pick a DEX that must participate in every trade. "
+                "Select 'none' if any combination of the scanned exchanges is acceptable."
+            ),
         ),
         # ====================================================================
         # Position Sizing
@@ -83,9 +83,9 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             key="max_positions",
             prompt="Maximum number of concurrent positions?",
             param_type=ParameterType.INTEGER,
-            default=1,
+            default=5,
             min_value=1,
-            max_value=5,
+            max_value=50,
             required=False,
             help_text="Limit the number of open funding arb positions to manage risk",
             show_default_in_prompt=True,
@@ -123,9 +123,8 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             max_value=Decimal("999999999"),
             required=False,
             help_text=(
-                "Skip any trade if the lower of the two legs' open interest is above this cap. "
-                "Use a low cap (e.g., 50000) to focus on point-farming pools; "
-                "leave blank or set a high number to allow larger markets."
+                "Only used when a mandatory exchange is set: skip trades if that exchange's open interest exceeds this cap. "
+                "Use a low cap (e.g., 50000) to focus on point-farming pools; leave blank or set a high number to allow larger markets."
             ),
         ),
         # ====================================================================
@@ -215,7 +214,7 @@ FUNDING_ARB_SCHEMA = StrategySchema(
     ],
     # Category grouping for better UX
     categories={
-        "Exchanges": ["primary_exchange", "scan_exchanges"],
+        "Exchanges": ["scan_exchanges", "mandatory_exchange"],
         "Position Sizing": ["target_exposure", "max_positions", "max_total_exposure_usd"],
         "Profitability": ["min_profit_rate", "max_oi_usd"],
         "Risk Management": [
@@ -250,13 +249,13 @@ def create_default_funding_config() -> dict:
     Useful for quick testing or as a starting point.
     """
     return {
-        "primary_exchange": None,
+        "mandatory_exchange": None,
         "scan_exchanges": ["lighter", "grvt", "backpack"],
         "target_exposure": Decimal("100"),
         "max_positions": 5,
         "max_total_exposure_usd": Decimal("1000"),
         "min_profit_rate": DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL,
-        "max_oi_usd": Decimal("10000000"),
+        "max_oi_usd": None,
         "risk_strategy": "combined",
         "profit_erosion_threshold": Decimal("0.5"),
         "max_position_age_hours": 168,

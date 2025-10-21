@@ -76,16 +76,19 @@ async def ensure_database_connected(logger) -> None:
 
 
 async def build_exchange_clients(trading_config, exchange_list: Iterable[str]):
-    primary_exchange = trading_config.strategy_params.get("primary_exchange")
-    if isinstance(primary_exchange, str) and primary_exchange.strip():
-        primary_exchange = primary_exchange.strip().lower()
+    mandatory_exchange = (
+        trading_config.strategy_params.get("mandatory_exchange")
+        or trading_config.strategy_params.get("primary_exchange")
+    )
+    if isinstance(mandatory_exchange, str) and mandatory_exchange.strip():
+        mandatory_exchange = mandatory_exchange.strip().lower()
     else:
-        primary_exchange = None
+        mandatory_exchange = None
 
     clients = ExchangeFactory.create_multiple_exchanges(
         exchange_names=[ex.lower() for ex in exchange_list],
         config=trading_config,
-        primary_exchange=primary_exchange,
+        primary_exchange=mandatory_exchange,
     )
     for name, client in clients.items():
         await client.connect()
@@ -104,15 +107,29 @@ async def run_monitor(args: argparse.Namespace) -> None:
     if strategy_name != "funding_arbitrage":
         raise SystemExit("This helper only supports funding_arbitrage configs")
 
-    trading_config = _config_dict_to_trading_config(loaded["strategy"], loaded["config"])
-    scan_exchanges = loaded["config"].get("scan_exchanges") or loaded["config"].get("exchanges")
+    config_payload = loaded["config"]
+    if "primary_exchange" in config_payload and "mandatory_exchange" not in config_payload:
+        config_payload["mandatory_exchange"] = config_payload.pop("primary_exchange")
+    if not config_payload.get("mandatory_exchange"):
+        config_payload["mandatory_exchange"] = None
+        config_payload["max_oi_usd"] = None
+    config_payload.pop("primary_exchange", None)
+
+    trading_config = _config_dict_to_trading_config(loaded["strategy"], config_payload)
+    scan_exchanges = config_payload.get("scan_exchanges") or config_payload.get("exchanges")
     if isinstance(scan_exchanges, str):
         exchange_list = [ex.strip() for ex in scan_exchanges.split(",") if ex.strip()]
     elif scan_exchanges:
         exchange_list = [str(ex).strip() for ex in scan_exchanges if str(ex).strip()]
     else:
-        fallback_exchange = loaded["config"].get("primary_exchange")
+        fallback_exchange = config_payload.get("mandatory_exchange") or config_payload.get("primary_exchange")
         exchange_list = [fallback_exchange.strip()] if isinstance(fallback_exchange, str) and fallback_exchange.strip() else []
+
+    mandatory_exchange = config_payload.get("mandatory_exchange") or config_payload.get("primary_exchange")
+    if isinstance(mandatory_exchange, str) and mandatory_exchange.strip():
+        mandatory_exchange = mandatory_exchange.strip().lower()
+        if mandatory_exchange not in [ex.lower() for ex in exchange_list]:
+            exchange_list.append(mandatory_exchange)
 
     if not exchange_list:
         raise SystemExit("Monitor requires at least one exchange via 'scan_exchanges'.")

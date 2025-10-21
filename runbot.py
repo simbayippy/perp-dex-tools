@@ -110,8 +110,14 @@ async def main():
     # Load config
     loaded = load_config_from_yaml(config_path)
     strategy_name = loaded["strategy"]
-    strategy_config = loaded["config"]
-    strategy_config["_config_path"] = str(config_path)
+        strategy_config = loaded["config"]
+        if "primary_exchange" in strategy_config and "mandatory_exchange" not in strategy_config:
+            strategy_config["mandatory_exchange"] = strategy_config.pop("primary_exchange")
+        if not strategy_config.get("mandatory_exchange"):
+            strategy_config["mandatory_exchange"] = None
+            strategy_config["max_oi_usd"] = None
+        strategy_config.pop("primary_exchange", None)
+        strategy_config["_config_path"] = str(config_path)
 
     print(f"\n✓ Loaded configuration from: {config_path}")
     print(f"  Strategy: {strategy_name}")
@@ -164,9 +170,9 @@ def _config_dict_to_trading_config(strategy_name: str, config_dict: dict) -> Tra
         ticker = config_dict.get("ticker", "BTC")
         quantity = config_dict.get("quantity", Decimal("100"))
     elif strategy_name == "funding_arbitrage":
-        primary_exchange = config_dict.get("primary_exchange")
-        if isinstance(primary_exchange, str) and primary_exchange.strip():
-            exchange = primary_exchange.strip()
+        mandatory_exchange = config_dict.get("mandatory_exchange") or config_dict.get("primary_exchange")
+        if isinstance(mandatory_exchange, str) and mandatory_exchange.strip():
+            exchange = mandatory_exchange.strip()
         else:
             exchange = "multi"
         ticker = "ALL"  # Funding arb scans all tickers (not limited to one)
