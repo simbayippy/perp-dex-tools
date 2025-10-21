@@ -1,0 +1,21 @@
+strategy: funding_arbitrage
+created_at: '2025-10-21T07:32:42.733598'
+version: '1.0'
+config:
+  primary_exchange: lighter
+  scan_exchanges:
+  - backpack
+  - lighter
+  - grvt
+  target_exposure: !!float '80'
+  max_positions: 1
+  max_total_exposure_usd: !!float '200'
+  min_profit_rate: 0.0005
+  max_oi_usd: !!float '10000000'
+  risk_strategy: combined
+  profit_erosion_threshold: 0.5
+  max_position_age_hours: 24
+  max_new_positions_per_cycle: 1
+  limit_order_offset_pct: 0.01
+  check_interval_seconds: 60
+  dry_run: false
