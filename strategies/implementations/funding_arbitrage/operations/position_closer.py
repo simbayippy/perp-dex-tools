@@ -96,6 +96,8 @@ class PositionCloser:
                     position, current_rates
                 )
                 if should_exit:
+                    if await self._should_skip_erosion_exit(position, reason):
+                        return False, "HOLD_TOP_OPPORTUNITY"
                     return True, reason
             except Exception as exc:  # pragma: no cover - defensive logging
                 strategy.logger.log(
@@ -109,6 +111,8 @@ class PositionCloser:
 
         erosion = position.get_profit_erosion()
         if erosion < strategy.config.risk_config.min_erosion_threshold:
+            if await self._should_skip_erosion_exit(position, "PROFIT_EROSION"):
+                return False, "HOLD_TOP_OPPORTUNITY"
             return True, "PROFIT_EROSION"
 
         if position.get_age_hours() > strategy.config.risk_config.max_position_age_hours:
@@ -374,6 +378,79 @@ class PositionCloser:
         if snapshot is None or snapshot.quantity is None:
             return False
         return snapshot.quantity.copy_abs() > cls._ZERO_TOLERANCE
+
+    async def _should_skip_erosion_exit(
+        self,
+        position: "FundingArbPosition",
+        trigger_reason: Optional[str],
+    ) -> bool:
+        """
+        Guard against closing/re-opening the same opportunity when erosion triggers.
+        """
+        if trigger_reason != "PROFIT_EROSION":
+            return False
+
+        strategy = self._strategy
+        opportunity_finder = getattr(strategy, "opportunity_finder", None)
+        if opportunity_finder is None:
+            return False
+
+        try:
+            from funding_rate_service.models.filters import OpportunityFilter
+        except Exception:
+            return False
+
+        available_exchanges = list(strategy.exchange_clients.keys())
+        whitelist_dexes = available_exchanges if available_exchanges else None
+
+        filters = OpportunityFilter(
+            min_profit_percent=strategy.config.min_profit,
+            max_oi_usd=strategy.config.max_oi_usd,
+            whitelist_dexes=whitelist_dexes,
+            symbol=None,
+            limit=1,
+        )
+
+        try:
+            opportunities = await opportunity_finder.find_opportunities(filters)
+        except Exception as exc:
+            strategy.logger.log(
+                f"Failed to score opportunities while checking erosion guard for "
+                f"{position.symbol}: {exc}",
+                "ERROR",
+            )
+            return False
+
+        if not opportunities:
+            return False
+
+        best = opportunities[0]
+        try:
+            net_profit = best.net_profit_percent
+        except AttributeError:
+            net_profit = None
+
+        if (
+            best
+            and self._symbols_match(position.symbol, best.symbol)
+            and best.long_dex.lower() == position.long_dex.lower()
+            and best.short_dex.lower() == position.short_dex.lower()
+            and net_profit is not None
+            and net_profit >= strategy.config.min_profit
+        ):
+            try:
+                net_display = net_profit * Decimal("100")
+            except Exception:
+                net_display = net_profit
+
+            strategy.logger.log(
+                f"Holding {position.symbol}: erosion trigger fired but opportunity "
+                f"still ranks highest ({net_display}% net).",
+                "INFO",
+            )
+            return True
+
+        return False
 
     async def _close_exchange_positions(
         self,
