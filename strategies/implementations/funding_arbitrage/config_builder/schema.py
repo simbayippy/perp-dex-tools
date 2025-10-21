@@ -57,7 +57,7 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             param_type=ParameterType.CHOICE,
             choices=["none"] + ExchangeFactory.get_supported_exchanges(),
             default="none",
-            required=True,
+            required=False,
             help_text=(
                 "Optional guardrail: pick a DEX that must participate in every trade. "
                 "Select 'none' if any combination of the scanned exchanges is acceptable."
@@ -112,9 +112,9 @@ FUNDING_ARB_SCHEMA = StrategySchema(
         create_decimal_parameter(
             key="min_profit_rate",
             prompt="Minimum annualised net profit (APY) before entering a position? (decimal, 0.50 = 50%)",
-            default=DEFAULT_MIN_PROFIT_APY,
-            min_value=MIN_PROFIT_APY,
-            max_value=MAX_PROFIT_APY,
+            default=DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL,
+            min_value=MIN_PROFIT_RATE_PER_INTERVAL,
+            max_value=MAX_PROFIT_RATE_PER_INTERVAL,
             required=True,
             help_text=(
                 "Only take opportunities whose annualised (after-fee) funding yield meets this level. "
