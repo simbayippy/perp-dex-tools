@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
+from exchange_clients import BaseExchangeClient
 from strategies.execution.patterns.atomic_multi_order import (
     AtomicExecutionResult,
     OrderSpec,
@@ -200,6 +201,7 @@ class PositionOpener:
             pre_flight_check=True,
             skip_preflight_leverage=True,
             stage_prefix="3",
+            retry_policy=strategy.atomic_retry_policy,
         )
 
         if not result.all_filled:
@@ -369,8 +371,8 @@ class PositionOpener:
         *,
         symbol: str,
         adjusted_size: Decimal,
-        long_client: Any,
-        short_client: Any,
+        long_client: BaseExchangeClient,
+        short_client: BaseExchangeClient,
         limit_offset_pct: Optional[Decimal],
     ) -> Optional[OrderPlan]:
         """Derive an execution plan that respects venue step sizes."""
@@ -432,7 +434,7 @@ class PositionOpener:
                 size_usd=long_notional,
                 quantity=common_qty,
                 execution_mode="limit_only",
-                timeout_seconds=60.0,
+                timeout_seconds=30.0,
                 limit_price_offset_pct=limit_offset_pct,
             ),
             OrderSpec(
@@ -442,7 +444,7 @@ class PositionOpener:
                 size_usd=short_notional,
                 quantity=common_qty,
                 execution_mode="limit_only",
-                timeout_seconds=60.0,
+                timeout_seconds=30.0,
                 limit_price_offset_pct=limit_offset_pct,
             ),
         ]
@@ -456,20 +458,18 @@ class PositionOpener:
             short_price=short_price,
         )
 
-    def _round_quantity(self, client: Any, quantity: Decimal) -> Decimal:
+    def _round_quantity(self, client: BaseExchangeClient, quantity: Decimal) -> Decimal:
         """Round quantity to the exchange's supported precision."""
         if quantity <= Decimal("0"):
             return Decimal("0")
 
-        rounded = None
-        rounder = getattr(client, "round_to_step", None)
-        if callable(rounder):
-            try:
-                rounded = rounder(quantity)
-            except Exception:
-                rounded = None
+        rounded = client.round_to_step(quantity)
 
-        if rounded is None:
+        if rounded <= Decimal("0"):
+            return Decimal("0")
+
+        # Fallback to config-driven rounding when the client leaves quantity unchanged.
+        if rounded == quantity:
             step_size = getattr(getattr(client, "config", None), "step_size", None)
             if step_size:
                 try:
@@ -477,19 +477,15 @@ class PositionOpener:
                     if step > 0:
                         rounded = (quantity / step).to_integral_value(rounding=ROUND_DOWN) * step
                 except (InvalidOperation, TypeError):
-                    rounded = None
-
-        if rounded is None:
-            multiplier = getattr(client, "base_amount_multiplier", None)
-            if multiplier:
-                try:
-                    step = Decimal("1") / Decimal(multiplier)
-                    rounded = quantity.quantize(step, rounding=ROUND_DOWN)
-                except (InvalidOperation, TypeError):
-                    rounded = None
-
-        if rounded is None:
-            rounded = quantity
+                    rounded = quantity
+            if rounded == quantity:
+                multiplier = getattr(client, "base_amount_multiplier", None)
+                if multiplier:
+                    try:
+                        step = Decimal("1") / Decimal(multiplier)
+                        rounded = quantity.quantize(step, rounding=ROUND_DOWN)
+                    except (InvalidOperation, TypeError):
+                        pass
 
         min_qty = getattr(getattr(client, "config", None), "min_quantity", None)
         if min_qty is not None:
@@ -519,46 +515,16 @@ class PositionOpener:
         except (InvalidOperation, TypeError):
             return Decimal("0")
 
-    async def _prepare_websocket_feeds(self, exchange_client: Any, symbol: str) -> None:
+    async def _prepare_websocket_feeds(self, exchange_client: BaseExchangeClient, symbol: str) -> None:
         """Ensure exchange WebSocket streams are aligned with the symbol we intend to trade."""
-        ws_manager = getattr(exchange_client, "ws_manager", None)
-        if not ws_manager:
-            return
-
         strategy = self._strategy
 
         try:
-            if hasattr(ws_manager, "switch_market"):
-                market_id = getattr(getattr(exchange_client, "config", None), "contract_id", None)
-                if market_id is not None:
-                    try:
-                        await ws_manager.switch_market(int(market_id))
-                    except Exception as exc:
-                        strategy.logger.log(
-                            f"⚠️ [{exchange_client.get_exchange_name().upper()}] "
-                            f"Failed to switch WebSocket market: {exc}",
-                            "DEBUG",
-                        )
+            await exchange_client.ensure_market_feed(symbol)
 
-            if hasattr(ws_manager, "start_order_book_stream"):
-                stream_symbol = symbol
-                if hasattr(exchange_client, "normalize_symbol"):
-                    try:
-                        stream_symbol = exchange_client.normalize_symbol(symbol)
-                    except Exception:
-                        pass
-                try:
-                    await ws_manager.start_order_book_stream(stream_symbol)
-                except TypeError:
-                    ws_manager.start_order_book_stream(stream_symbol)
-                except Exception as exc:
-                    strategy.logger.log(
-                        f"⚠️ [{exchange_client.get_exchange_name().upper()}] "
-                        f"Failed to start order book stream: {exc}",
-                        "DEBUG",
-                    )
-
-            await self._await_ws_snapshot(ws_manager)
+            ws_manager = exchange_client.ws_manager
+            if ws_manager:
+                await self._await_ws_snapshot(ws_manager)
         except Exception as exc:  # pragma: no cover - defensive logging
             strategy.logger.log(
                 f"⚠️ [{exchange_client.get_exchange_name().upper()}] WebSocket prep error: {exc}",
@@ -801,7 +767,7 @@ class PositionOpener:
             return base_dec
         return base_dec + inc_dec
 
-    async def _ensure_contract_attributes(self, exchange_client: Any, symbol: str) -> bool:
+    async def _ensure_contract_attributes(self, exchange_client: BaseExchangeClient, symbol: str) -> bool:
         """Ensure the given exchange client is prepared to trade the symbol."""
         strategy = self._strategy
         try:

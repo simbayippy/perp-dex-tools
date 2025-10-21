@@ -1,8 +1,6 @@
 """
 Order Executor - Smart order placement with tiered execution.
 
-⭐ Inspired by Hummingbot's PositionExecutor ⭐
-
 Provides intelligent order execution with multiple modes:
 - limit_only: Place limit order, wait for fill
 - limit_with_fallback: Try limit first, fallback to market if timeout
@@ -16,13 +14,14 @@ Key features:
 - Execution quality metrics
 """
 
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 from decimal import Decimal
 from enum import Enum
 from dataclasses import dataclass
 import time
 import asyncio
 from helpers.unified_logger import get_core_logger
+from exchange_clients import BaseExchangeClient
 
 logger = get_core_logger("order_executor")
 
@@ -31,7 +30,6 @@ class ExecutionMode(Enum):
     """
     Execution modes for order placement.
     
-    ⭐ From Hummingbot's TripleBarrierConfig pattern ⭐
     """
     LIMIT_ONLY = "limit_only"
     LIMIT_WITH_FALLBACK = "limit_with_fallback"
@@ -101,7 +99,7 @@ class OrderExecutor:
     def __init__(
         self,
         default_timeout: float = 40.0,
-        price_provider = None,  # Optional PriceProvider for cached prices
+        price_provider = None,  # Optional PriceProvider for shared BBO lookups
         default_limit_price_offset_pct: Decimal = DEFAULT_LIMIT_PRICE_OFFSET_PCT
     ):
         """
@@ -109,7 +107,7 @@ class OrderExecutor:
         
         Args:
             default_timeout: Default timeout for limit orders (seconds)
-            price_provider: Optional PriceProvider for getting cached/fresh prices
+            price_provider: Optional PriceProvider for retrieving shared BBO data
             default_limit_price_offset_pct: Default maker improvement for limit orders
         """
         self.default_timeout = default_timeout
@@ -119,7 +117,7 @@ class OrderExecutor:
     
     async def execute_order(
         self,
-        exchange_client: Any,
+        exchange_client: BaseExchangeClient,
         symbol: str,
         side: str,
         size_usd: Optional[Decimal] = None,
@@ -152,12 +150,10 @@ class OrderExecutor:
         timeout = timeout_seconds or self.default_timeout
         
         # Get exchange name for better logging
-        exchange_name = "unknown"
-        if hasattr(exchange_client, 'get_exchange_name'):
-            try:
-                exchange_name = exchange_client.get_exchange_name()
-            except:
-                pass
+        try:
+            exchange_name = exchange_client.get_exchange_name()
+        except Exception:
+            exchange_name = "unknown"
         
         # Choose emoji based on side
         emoji = "🟢" if side == "buy" else "🔴"
@@ -256,7 +252,7 @@ class OrderExecutor:
     
     async def _execute_limit(
         self,
-        exchange_client: Any,
+        exchange_client: BaseExchangeClient,
         symbol: str,
         side: str,
         size_usd: Optional[Decimal],
@@ -272,12 +268,9 @@ class OrderExecutor:
         - Buy: best_ask - offset (better than market for us)
         - Sell: best_bid + offset (better than market for us)
         
-        ⭐ Pattern from Hummingbot's PositionExecutor ⭐
         """
         try:
-            # 🔴 CRITICAL: Get FRESH prices for limit orders (Issue #3 fix)
-            # Use WebSocket BBO if available (real-time), else force fresh REST fetch
-            best_bid, best_ask = await self._fetch_bbo_prices_for_limit_order(exchange_client, symbol)
+            best_bid, best_ask = await self._fetch_bbo_prices(exchange_client, symbol)
             mid_price = (best_bid + best_ask) / 2
             
             # Calculate limit price (maker order with small improvement)
@@ -296,15 +289,12 @@ class OrderExecutor:
                     raise ValueError("Limit execution requires size_usd or quantity")
                 order_quantity = (Decimal(str(size_usd)) / limit_price).copy_abs()
 
-            rounder = getattr(exchange_client, "round_to_step", None)
-            if callable(rounder):
-                order_quantity = rounder(order_quantity)
+            order_quantity = exchange_client.round_to_step(order_quantity)
             if order_quantity <= Decimal("0"):
                 raise ValueError("Order quantity rounded to zero")
             
             # Get the exchange-specific contract ID (normalized symbol)
-            # Each exchange has already normalized the symbol during initialization
-            contract_id = getattr(exchange_client.config, 'contract_id', symbol)
+            contract_id = exchange_client.resolve_contract_id(symbol)
             
             exchange_name = exchange_client.get_exchange_name()
             self.logger.info(
@@ -329,7 +319,65 @@ class OrderExecutor:
                 )
             
             order_id = order_result.order_id
-            
+
+            partial_filled_qty = Decimal("0")
+            partial_fill_price: Optional[Decimal] = None
+
+            def _coerce_decimal(value):
+                if isinstance(value, Decimal):
+                    return value
+                if value is None:
+                    return None
+                try:
+                    return Decimal(str(value))
+                except Exception:
+                    return None
+
+            def _update_partial_fill(quantity_candidate, price_candidate) -> None:
+                nonlocal partial_filled_qty, partial_fill_price
+                qty_dec = _coerce_decimal(quantity_candidate)
+                if qty_dec is None or qty_dec <= partial_filled_qty:
+                    return
+                partial_filled_qty = qty_dec
+                price_dec = _coerce_decimal(price_candidate)
+                if price_dec is not None:
+                    partial_fill_price = price_dec
+
+            def _build_partial_execution_result(
+                execution_mode: str,
+                message: str,
+            ) -> ExecutionResult:
+                filled_qty = partial_filled_qty if partial_filled_qty > Decimal("0") else None
+                fill_price = None
+                if filled_qty is not None:
+                    fill_price = partial_fill_price or limit_price
+                slippage_usd = Decimal("0")
+                slippage_pct = Decimal("0")
+                if filled_qty is not None and fill_price is not None and limit_price > 0:
+                    price_delta = abs(fill_price - limit_price)
+                    slippage_usd = price_delta * filled_qty
+                    slippage_pct = price_delta / limit_price
+                    self.logger.info(
+                        f"[{exchange_name.upper()}] Limit order {order_id} {execution_mode} after partial fill "
+                        f"{filled_qty} @ ${fill_price}"
+                    )
+
+                if filled_qty is not None:
+                    message = f"{message} (partial fill qty={filled_qty})"
+
+                return ExecutionResult(
+                    success=filled_qty is not None,
+                    filled=False,
+                    fill_price=fill_price,
+                    filled_quantity=filled_qty,
+                    expected_price=limit_price,
+                    slippage_usd=slippage_usd,
+                    slippage_pct=slippage_pct,
+                    execution_mode_used=execution_mode,
+                    order_id=order_id,
+                    error_message=message,
+                )
+
             # Wait for fill (with timeout)
             start_wait = time.time()
             
@@ -338,20 +386,43 @@ class OrderExecutor:
                     self.logger.info(
                         f"[{exchange_name.upper()}] Cancellation requested for limit order {order_id}"
                     )
+                    cancel_result = None
                     try:
-                        await exchange_client.cancel_order(order_id)
+                        cancel_result = await exchange_client.cancel_order(order_id)
                     except Exception as e:
                         self.logger.error(f"Failed to cancel order {order_id}: {e}")
-                    return ExecutionResult(
-                        success=False,
-                        filled=False,
-                        error_message="Limit order cancelled by executor",
-                        execution_mode_used="limit_cancelled",
-                        order_id=order_id
+                    else:
+                        if cancel_result:
+                            _update_partial_fill(
+                                getattr(cancel_result, "filled_size", None),
+                                getattr(cancel_result, "price", None),
+                            )
+
+                    try:
+                        order_snapshot = await exchange_client.get_order_info(order_id)
+                    except Exception as e:
+                        self.logger.warning(
+                            f"[{exchange_name.upper()}] Failed to fetch final order snapshot for {order_id}: {e}"
+                        )
+                    else:
+                        if order_snapshot:
+                            _update_partial_fill(
+                                getattr(order_snapshot, "filled_size", None),
+                                getattr(order_snapshot, "price", None),
+                            )
+
+                    return _build_partial_execution_result(
+                        execution_mode="limit_cancelled",
+                        message="Limit order cancelled by executor",
                     )
                 # Check order status
                 order_info = await exchange_client.get_order_info(order_id)
-                
+                if order_info:
+                    _update_partial_fill(
+                        getattr(order_info, "filled_size", None),
+                        getattr(order_info, "price", None),
+                    )
+
                 if order_info and order_info.status == "FILLED":
                     fill_price = Decimal(str(order_info.price))
                     filled_qty = Decimal(str(order_info.filled_size))
@@ -387,27 +458,42 @@ class OrderExecutor:
                 f"[{exchange_name.upper()}] Limit order timeout after {timeout_seconds}s, canceling {order_id}"
             )
             
+            cancel_result = None
             try:
-                await exchange_client.cancel_order(order_id)
+                cancel_result = await exchange_client.cancel_order(order_id)
             except Exception as e:
                 self.logger.error(f"Failed to cancel order {order_id}: {e}")
-            
-            return ExecutionResult(
-                success=False,
-                filled=False,
-                error_message=f"Limit order timeout after {timeout_seconds}s",
-                execution_mode_used="limit_timeout",
-                order_id=order_id
+            else:
+                if cancel_result:
+                    _update_partial_fill(
+                        getattr(cancel_result, "filled_size", None),
+                        getattr(cancel_result, "price", None),
+                    )
+
+            try:
+                order_snapshot = await exchange_client.get_order_info(order_id)
+            except Exception as e:
+                self.logger.warning(
+                    f"[{exchange_name.upper()}] Failed to fetch final order snapshot for {order_id}: {e}"
+                )
+            else:
+                if order_snapshot:
+                    _update_partial_fill(
+                        getattr(order_snapshot, "filled_size", None),
+                        getattr(order_snapshot, "price", None),
+                    )
+
+            return _build_partial_execution_result(
+                execution_mode="limit_timeout",
+                message=f"Limit order timeout after {timeout_seconds}s",
             )
         
         except Exception as e:
             # Extract exchange name for better error messages
-            exchange_name = "unknown"
-            if hasattr(exchange_client, 'get_exchange_name'):
-                try:
-                    exchange_name = exchange_client.get_exchange_name()
-                except:
-                    pass
+            try:
+                exchange_name = exchange_client.get_exchange_name()
+            except Exception:
+                exchange_name = "unknown"
             
             self.logger.error(
                 f"[{exchange_name.upper()}] Limit order execution failed for {symbol}: {e}",
@@ -422,7 +508,7 @@ class OrderExecutor:
     
     async def _execute_market(
         self,
-        exchange_client: Any,
+        exchange_client: BaseExchangeClient,
         symbol: str,
         side: str,
         size_usd: Optional[Decimal],
@@ -430,8 +516,6 @@ class OrderExecutor:
     ) -> ExecutionResult:
         """
         Execute market order immediately.
-        
-        ⭐ Pattern from Hummingbot's market order execution ⭐
         """
         try:
             # Get current price for quantity calculation & slippage tracking
@@ -446,14 +530,12 @@ class OrderExecutor:
                     raise ValueError("Market execution requires size_usd or quantity")
                 order_quantity = (Decimal(str(size_usd)) / expected_price).copy_abs()
 
-            rounder = getattr(exchange_client, "round_to_step", None)
-            if callable(rounder):
-                order_quantity = rounder(order_quantity)
+            order_quantity = exchange_client.round_to_step(order_quantity)
             if order_quantity <= Decimal("0"):
                 raise ValueError("Order quantity rounded to zero")
             
             # Get the exchange-specific contract ID (normalized symbol)
-            contract_id = getattr(exchange_client.config, 'contract_id', symbol)
+            contract_id = exchange_client.resolve_contract_id(symbol)
             
             exchange_name = exchange_client.get_exchange_name()
             self.logger.info(
@@ -504,12 +586,10 @@ class OrderExecutor:
         
         except Exception as e:
             # Extract exchange name for better error messages
-            exchange_name = "unknown"
-            if hasattr(exchange_client, 'get_exchange_name'):
-                try:
-                    exchange_name = exchange_client.get_exchange_name()
-                except:
-                    pass
+            try:
+                exchange_name = exchange_client.get_exchange_name()
+            except Exception:
+                exchange_name = "unknown"
             
             self.logger.error(
                 f"[{exchange_name.upper()}] Market order execution failed for {symbol}: {e}",
@@ -522,114 +602,30 @@ class OrderExecutor:
                 execution_mode_used="market_error"
             )
     
-    async def _fetch_bbo_prices_for_limit_order(
-        self,
-        exchange_client: Any,
-        symbol: str
-    ) -> tuple[Decimal, Decimal]:
-        """
-        Fetch FRESH BBO prices specifically for limit order placement.
-        
-        🔴 CRITICAL (Issue #3 fix): Limit orders need real-time prices, not cached data!
-        
-        Priority for limit orders:
-        1. WebSocket BBO (real-time) - PREFERRED
-        2. Fresh REST API call (bypass cache) - FALLBACK
-        
-        This ensures limit orders are placed at current market prices, not stale cached prices
-        from liquidity checks that happened 1-2 seconds ago.
-        
-        Returns:
-            (best_bid, best_ask) as Decimals
-        """
-        exchange_name = exchange_client.get_exchange_name()
-        
-        try:
-            # 🔴 Priority 1: Try WebSocket BBO (real-time, zero latency)
-            if hasattr(exchange_client, 'ws_manager') and exchange_client.ws_manager:
-                ws_manager = exchange_client.ws_manager
-                
-                # Check if WebSocket has fresh BBO data
-                if hasattr(ws_manager, 'best_bid') and hasattr(ws_manager, 'best_ask'):
-                    if ws_manager.best_bid is not None and ws_manager.best_ask is not None:
-                        bid = Decimal(str(ws_manager.best_bid))
-                        ask = Decimal(str(ws_manager.best_ask))
-                        
-                        self.logger.info(
-                            f"🔴 [PRICE] Using WebSocket BBO for {exchange_name}:{symbol} "
-                            f"(bid={bid}, ask={ask}) - REAL-TIME"
-                        )
-                        return bid, ask
-            
-            # 🔄 Priority 2: Force fresh REST API fetch (bypass cache)
-            self.logger.info(
-                f"🔄 [PRICE] Fetching FRESH BBO for {exchange_name}:{symbol} "
-                f"(WebSocket not available, forcing REST API call)"
-            )
-            
-            # Bypass PriceProvider cache - go direct to exchange
-            if hasattr(exchange_client, 'fetch_bbo_prices'):
-                bid, ask = await exchange_client.fetch_bbo_prices(symbol)
-                return Decimal(str(bid)), Decimal(str(ask))
-            
-            # Fallback: Get from order book
-            if hasattr(exchange_client, 'get_order_book_depth'):
-                book = await exchange_client.get_order_book_depth(symbol)
-                if book['bids'] and book['asks']:
-                    best_bid = Decimal(str(book['bids'][0]['price']))
-                    best_ask = Decimal(str(book['asks'][0]['price']))
-                    return best_bid, best_ask
-            
-            # Last resort: Error
-            raise NotImplementedError(
-                f"{exchange_name} must implement fetch_bbo_prices() or get_order_book_depth()"
-            )
-        
-        except Exception as e:
-            self.logger.error(f"Failed to fetch fresh BBO prices for limit order: {e}")
-            raise
-    
     async def _fetch_bbo_prices(
         self,
-        exchange_client: Any,
+        exchange_client: BaseExchangeClient,
         symbol: str
     ) -> tuple[Decimal, Decimal]:
         """
-        Fetch best bid/offer prices using best available method.
-        
-        Priority:
-        1. PriceProvider (uses cache if available)
-        2. Direct exchange client method
+        Fetch best bid/offer prices using the configured price provider or exchange client.
         
         Returns:
             (best_bid, best_ask) as Decimals
         """
         try:
-            # Use PriceProvider if available (cache-first strategy)
             if self.price_provider:
                 bid, ask = await self.price_provider.get_bbo_prices(
                     exchange_client=exchange_client,
                     symbol=symbol
                 )
                 return bid, ask
-            
-            # Fallback: Direct exchange client methods
-            # Try dedicated BBO method if available
-            if hasattr(exchange_client, 'fetch_bbo_prices'):
-                bid, ask = await exchange_client.fetch_bbo_prices(symbol)
-                return Decimal(str(bid)), Decimal(str(ask))
-            
-            # Fallback: Get from order book
-            if hasattr(exchange_client, 'get_order_book_depth'):
-                book = await exchange_client.get_order_book_depth(symbol)
-                best_bid = Decimal(str(book['bids'][0]['price']))
-                best_ask = Decimal(str(book['asks'][0]['price']))
-                return best_bid, best_ask
-            
-            # Last resort: Error
-            raise NotImplementedError(
-                "Exchange client must implement fetch_bbo_prices() or get_order_book_depth()"
-            )
+
+            # fallback to exchange client's fetch_bbo_prices()
+            bid, ask = await exchange_client.fetch_bbo_prices(symbol)
+            bid_dec = Decimal(str(bid))
+            ask_dec = Decimal(str(ask))
+            return bid_dec, ask_dec
         
         except Exception as e:
             self.logger.error(f"Failed to fetch BBO prices: {e}")

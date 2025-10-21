@@ -15,8 +15,10 @@ from urllib.parse import urlencode
 import aiohttp
 import websockets
 
+from exchange_clients.base_websocket import BaseWebSocketManager
 
-class AsterWebSocketManager:
+
+class AsterWebSocketManager(BaseWebSocketManager):
     """WebSocket manager for Aster order updates and order book."""
 
     def __init__(
@@ -26,17 +28,18 @@ class AsterWebSocketManager:
         secret_key: str,
         order_update_callback: Callable,
         liquidation_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+        symbol_formatter: Optional[Callable[[str], str]] = None,
     ):
+        super().__init__()
         self.api_key = api_key
         self.secret_key = secret_key
         self.order_update_callback = order_update_callback
         self.liquidation_callback = liquidation_callback
+        self._symbol_formatter = symbol_formatter
         self.websocket = None
-        self.running = False
         self.base_url = "https://fapi.asterdex.com"
         self.ws_url = "wss://fstream.asterdex.com"
         self.listen_key = None
-        self.logger = None
         self._keepalive_task = None
         self._last_ping_time = None
         self.config = config
@@ -207,7 +210,7 @@ class AsterWebSocketManager:
             self.running = True
 
             if self.logger:
-                self.logger.info("Connected to Aster WebSocket with listen key")
+                self.logger.info("[ASTER] 🔗 Connected to ws")
 
             # Start keepalive task
             self._keepalive_task = asyncio.create_task(self._start_keepalive_task())
@@ -455,27 +458,28 @@ class AsterWebSocketManager:
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error processing book ticker: {e}")
-    
-    async def start_order_book_stream(self, symbol: str):
-        """
-        Start order book depth stream for a specific symbol.
-        
-        Uses partial depth stream (@depth20@100ms) for real-time order book snapshots.
-        This provides top 20 bids and asks with 100ms updates, sufficient for liquidity checks.
-        
-        Args:
-            symbol: Normalized symbol (e.g., "MONUSDT", "SKYUSDT")
-        """
-        # If already subscribed to this symbol, no need to restart
-        if self._current_depth_symbol == symbol and self._depth_task and not self._depth_task.done():
+
+    async def prepare_market_feed(self, symbol: Optional[str]) -> None:
+        """Ensure the depth stream is aligned with the requested symbol."""
+        if not symbol:
+            return
+
+        stream_symbol = symbol
+        if self._symbol_formatter:
+            try:
+                stream_symbol = self._symbol_formatter(symbol)
+            except Exception:
+                stream_symbol = symbol
+
+        if self._current_depth_symbol == stream_symbol and self._depth_task and not self._depth_task.done():
             if self.logger:
-                self.logger.debug(f"Already subscribed to depth stream for {symbol}")
+                self.logger.debug(f"Already subscribed to depth stream for {stream_symbol}")
             return
         
         # Cancel existing depth task if different symbol
         if self._depth_task and not self._depth_task.done():
             if self.logger:
-                self.logger.info(f"Switching depth stream from {self._current_depth_symbol} to {symbol}")
+                self.logger.info(f"Switching depth stream from {self._current_depth_symbol} to {stream_symbol}")
             self._depth_task.cancel()
             try:
                 await self._depth_task
@@ -483,11 +487,11 @@ class AsterWebSocketManager:
                 pass
         
         # Start new depth task
-        self._current_depth_symbol = symbol
-        self._depth_task = asyncio.create_task(self._connect_depth_stream(symbol))
+        self._current_depth_symbol = stream_symbol
+        self._depth_task = asyncio.create_task(self._connect_depth_stream(stream_symbol))
         
         if self.logger:
-            self.logger.info(f"📚 Started order book depth stream for {symbol}")
+            self.logger.info(f"📚 Started order book depth stream for {stream_symbol}")
     
     async def _connect_depth_stream(self, symbol: str):
         """

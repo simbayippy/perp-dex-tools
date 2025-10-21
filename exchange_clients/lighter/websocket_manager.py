@@ -17,8 +17,10 @@ import time
 from typing import Dict, Any, List, Optional, Tuple, Callable, Awaitable
 import websockets
 
+from exchange_clients.base_websocket import BaseWebSocketManager
 
-class LighterWebSocketManager:
+
+class LighterWebSocketManager(BaseWebSocketManager):
     """WebSocket manager for Lighter order updates and order book."""
 
     def __init__(
@@ -30,8 +32,7 @@ class LighterWebSocketManager:
         self.config = config
         self.order_update_callback = order_update_callback
         self.liquidation_callback = liquidation_callback
-        self.logger = None
-        self.running = False
+        super().__init__()
         self.ws = None
         self._listener_task: Optional[asyncio.Task] = None
 
@@ -167,27 +168,31 @@ class LighterWebSocketManager:
             self._log(f"Error validating order book integrity: {e}", "ERROR")
             return False
 
-    async def switch_market(self, new_market_id: int):
-        """
-        Switch to a different market for order book updates.
-        
-        This is necessary when an opportunity is found for a symbol different
-        from the one configured at startup.
-        
-        Args:
-            new_market_id: Market ID to switch to (e.g., 79 for SKY)
-        """
+    async def prepare_market_feed(self, symbol: Optional[str]) -> None:
+        """Ensure the order book stream targets the requested symbol."""
+        if symbol is None:
+            return
+
+        market_id = getattr(self.config, "contract_id", None)
+        if market_id is None:
+            self._log(
+                f"[LIGHTER] No contract_id set on config; cannot align websocket for {symbol}",
+                "DEBUG",
+            )
+            return
+
         try:
+            target_market = int(market_id)
+
             if not self.ws or not self.running:
                 self._log(f"Cannot switch market: WebSocket not connected", "WARNING")
-                return False
+                return
             
-            # If already subscribed to this market, no need to switch
-            if self.market_index == new_market_id:
-                self._log(f"Already subscribed to market {new_market_id}", "DEBUG")
-                return True
+            if self.market_index == target_market:
+                self._log(f"Already subscribed to market {target_market}", "DEBUG")
+                return
             
-            self._log(f"[LIGHTER] 🔄 Switching order book from market {self.market_index} to {new_market_id}", "INFO")
+            self._log(f"[LIGHTER] 🔄 Switching order book from market {self.market_index} to {target_market}", "INFO")
             
             # Unsubscribe from current market order book
             unsubscribe_msg = json.dumps({
@@ -203,21 +208,17 @@ class LighterWebSocketManager:
             })
             await self.ws.send(account_unsub_msg)
             
-            # Update market index
             old_market_id = self.market_index
-            self.market_index = new_market_id
+            self.market_index = target_market
             
-            # Reset order book state
             await self.reset_order_book()
             
-            # Subscribe to new order book stream
             subscribe_msg = json.dumps({
                 "type": "subscribe",
-                "channel": f"order_book/{new_market_id}"
+                "channel": f"order_book/{target_market}"
             })
             await self.ws.send(subscribe_msg)
 
-            # Refresh auth token for account order subscription
             auth_token = None
             if self.lighter_client:
                 try:
@@ -231,22 +232,17 @@ class LighterWebSocketManager:
             # Subscribe to account orders for new market
             account_sub_msg = {
                 "type": "subscribe",
-                "channel": f"account_orders/{new_market_id}/{self.account_index}",
+                "channel": f"account_orders/{target_market}/{self.account_index}",
             }
             if auth_token:
                 account_sub_msg["auth"] = auth_token
             await self.ws.send(json.dumps(account_sub_msg))
             
-            self._log(f"[LIGHTER] ✅ Switched order book from market {old_market_id} to {new_market_id}", "INFO")
+            self._log(f"[LIGHTER] ✅ Switched order book from market {old_market_id} to {target_market}", "INFO")
             
-            # Wait for initial snapshot
             await asyncio.sleep(0.5)
-            
-            return True
-            
-        except Exception as e:
-            self._log(f"Error switching market: {e}", "ERROR")
-            return False
+        except Exception as exc:
+            self._log(f"Error switching market: {exc}", "ERROR")
 
     async def request_fresh_snapshot(self):
         """Request a fresh order book snapshot when we detect inconsistencies."""
@@ -510,6 +506,7 @@ class LighterWebSocketManager:
 
         try:
             self.ws = await websockets.connect(self.ws_url)
+            self._log("[LIGHTER] 🔗 Connected to websocket", "INFO")
         except Exception as exc:
             self._log(f"Failed to connect to Lighter websocket: {exc}", "ERROR")
             raise
@@ -524,7 +521,6 @@ class LighterWebSocketManager:
 
         self.running = True
         self._listener_task = asyncio.create_task(self._listen(), name="lighter-ws-listener")
-        self._log("Connected to Lighter websocket", "INFO")
 
     async def disconnect(self):
         """Disconnect from WebSocket."""

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import asyncio
+import inspect
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from exchange_clients.events import LiquidationEvent, LiquidationEventDispatcher
+
+if TYPE_CHECKING:
+    from .base_websocket import BaseWebSocketManager
 
 from .base_models import ExchangePositionSnapshot, OrderInfo, OrderResult
 
@@ -51,6 +55,7 @@ class BaseExchangeClient(ABC):
         self.config = config
         self._validate_config()
         self._liquidation_dispatcher = LiquidationEventDispatcher()
+        self.ws_manager: Optional["BaseWebSocketManager"] = None
 
     @abstractmethod
     def _validate_config(self) -> None:
@@ -72,7 +77,7 @@ class BaseExchangeClient(ABC):
         pass
 
     # ========================================================================
-    # LIQUIDATION EVENT STREAMS (OPTIONAL)
+    # EVENT STREAMS (OPTIONAL)
     # ========================================================================
 
     def supports_liquidation_stream(self) -> bool:
@@ -108,6 +113,16 @@ class BaseExchangeClient(ABC):
         """
         await self._liquidation_dispatcher.emit(event)
 
+    async def handle_liquidation_notification(self, payload: Any) -> None:
+        """
+        Optional normalization hook for subclasses to convert raw liquidation messages.
+
+        Default implementation does nothing; exchanges should override when they
+        subscribe to liquidation feeds and need to normalize payloads before calling
+        emit_liquidation_event().
+        """
+        return None
+
     # ========================================================================
     # CONNECTION MANAGEMENT
     # ========================================================================
@@ -135,6 +150,29 @@ class BaseExchangeClient(ABC):
         - Cancel background tasks
         """
         pass
+
+    async def ensure_market_feed(self, symbol: str) -> None:
+        """
+        Ensure the exchange's websocket subscriptions target the given symbol.
+
+        Default implementation delegates to the attached websocket manager.
+        """
+        manager = self.ws_manager
+        if manager is None:
+            return
+
+        try:
+            result = manager.prepare_market_feed(symbol)
+            if inspect.isawaitable(result):
+                await result
+        except Exception as exc:
+            logger = getattr(self, "logger", None)
+            if logger and hasattr(logger, "log"):
+                logger.log(
+                    f"⚠️ [{self.get_exchange_name().upper()}] "
+                    f"WebSocket feed preparation failed: {exc}",
+                    "DEBUG",
+                )
 
     @abstractmethod
     def get_exchange_name(self) -> str:
@@ -325,6 +363,25 @@ class BaseExchangeClient(ABC):
         """
         pass
 
+    def round_to_step(self, quantity: Decimal) -> Decimal:
+        """
+        Round a proposed quantity to the venue's supported increment.
+
+        Exchanges with explicit step sizes should override. Default implementation
+        leaves the quantity unchanged.
+        """
+        return quantity
+
+    def resolve_contract_id(self, symbol: str) -> str:
+        """
+        Resolve the exchange-specific contract identifier for order placement.
+
+        Returns any cached `contract_id` on the client config, or falls back to
+        the provided symbol when no specialization exists.
+        """
+        contract_id = getattr(self.config, "contract_id", None)
+        return contract_id or symbol
+
     @abstractmethod
     async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
         """
@@ -478,42 +535,6 @@ class BaseExchangeClient(ABC):
             - If symbol not found on exchange: Set error="Symbol XXX not listed on {exchange}"
             - If API fails: Set error="Failed to query leverage info: {reason}"
             - If data incomplete: Set error="Unable to determine leverage limits for {symbol}"
-            
-        Example Implementation (Query from API):
-            ```python
-            async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
-                try:
-                    normalized_symbol = f"{symbol}USDT"
-                    result = await self._make_request('GET', '/api/v1/leverageBracket', 
-                                                       {'symbol': normalized_symbol})
-                    brackets = result.get('brackets', [])
-                    
-                    if not brackets:
-                        return {
-                            'max_leverage': None,
-                            'max_notional': None,
-                            'margin_requirement': None,
-                            'brackets': None,
-                            'error': f'No leverage data available for {symbol}'
-                        }
-                    
-                    first_bracket = brackets[0]
-                    return {
-                        'max_leverage': Decimal(str(first_bracket.get('initialLeverage', 10))),
-                        'max_notional': Decimal(str(first_bracket.get('notionalCap'))) if first_bracket.get('notionalCap') else None,
-                        'margin_requirement': Decimal('1') / Decimal(str(first_bracket.get('initialLeverage', 10))),
-                        'brackets': brackets,
-                        'error': None
-                    }
-                except Exception as e:
-                    return {
-                        'max_leverage': None,
-                        'max_notional': None,
-                        'margin_requirement': None,
-                        'brackets': None,
-                        'error': f'Failed to query leverage info: {str(e)}'
-                    }
-            ```
         """
         pass
 

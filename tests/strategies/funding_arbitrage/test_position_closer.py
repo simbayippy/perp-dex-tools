@@ -174,6 +174,7 @@ def _make_strategy(position_manager, exchange_clients, risk_config=None):
         funding_rate_repo=None,
         price_provider=price_provider,
         atomic_executor=StubAtomicExecutor(),
+        atomic_retry_policy=None,
     )
 
 

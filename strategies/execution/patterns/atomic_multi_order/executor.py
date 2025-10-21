@@ -23,6 +23,7 @@ from strategies.execution.core.liquidity_analyzer import (
 
 from .contexts import OrderContext
 from .hedge_manager import HedgeManager
+from .retry_manager import RetryManager, RetryPolicy
 from .utils import (
     apply_result_to_context,
     context_to_filled_dict,
@@ -44,7 +45,7 @@ class OrderSpec:
     size_usd: Decimal
     quantity: Optional[Decimal] = None
     execution_mode: str = "limit_only"
-    timeout_seconds: float = 60.0
+    timeout_seconds: float = 30.0
     limit_price_offset_pct: Optional[Decimal] = None
 
 
@@ -64,6 +65,8 @@ class AtomicExecutionResult:
     rollback_performed: bool = False
     rollback_cost_usd: Optional[Decimal] = None
     residual_imbalance_usd: Decimal = Decimal("0")
+    retry_attempts: int = 0
+    retry_success: bool = False
 
 
 class AtomicMultiOrderExecutor:
@@ -73,6 +76,7 @@ class AtomicMultiOrderExecutor:
         self.price_provider = price_provider
         self.logger = get_core_logger("atomic_multi_order")
         self._hedge_manager = HedgeManager(price_provider=price_provider)
+        self._retry_manager = RetryManager(price_provider=price_provider)
 
     async def execute_atomically(
         self,
@@ -81,6 +85,7 @@ class AtomicMultiOrderExecutor:
         pre_flight_check: bool = True,
         skip_preflight_leverage: bool = False,
         stage_prefix: Optional[str] = None,
+        retry_policy: Optional[RetryPolicy] = None,
     ) -> AtomicExecutionResult:
         start_time = time.time()
         elapsed_ms = lambda: int((time.time() - start_time) * 1000)
@@ -146,6 +151,8 @@ class AtomicMultiOrderExecutor:
             hedge_error: Optional[str] = None
             rollback_performed = False
             rollback_cost = Decimal("0")
+            retry_attempts = 0
+            retry_success = False
 
             while pending_tasks:
                 done, pending_tasks = await asyncio.wait(
@@ -247,6 +254,9 @@ class AtomicMultiOrderExecutor:
                         if not rollback_on_partial:
                             hedge_error = hedge_error or "Hedge failure"
                         else:
+                            self.logger.warning(
+                                f"Hedge failed ({hedge_error or 'no error supplied'}) — attempting rollback of partial fills"
+                            )
                             for ctx in contexts:
                                 ctx.cancel_event.set()
                             remaining = [ctx.task for ctx in contexts if not ctx.completed]
@@ -259,6 +269,9 @@ class AtomicMultiOrderExecutor:
                                 if c.filled_quantity > Decimal("0") and c.result
                             ]
                             rollback_cost = await self._rollback_filled_orders(rollback_payload)
+                            self.logger.warning(
+                                f"Rollback completed after hedge failure; total cost ${rollback_cost:.4f}"
+                            )
                             for ctx in contexts:
                                 ctx.filled_quantity = Decimal("0")
                                 ctx.filled_usd = Decimal("0")
@@ -270,8 +283,32 @@ class AtomicMultiOrderExecutor:
             remaining_tasks = [ctx.task for ctx in contexts if not ctx.completed]
             if remaining_tasks:
                 await asyncio.gather(*remaining_tasks, return_exceptions=True)
-                for ctx in contexts:
-                    await reconcile_context_after_cancel(ctx, self.logger)
+            for ctx in contexts:
+                await reconcile_context_after_cancel(ctx, self.logger)
+
+            needs_retry = any(ctx.remaining_quantity > Decimal("0") for ctx in contexts)
+            if needs_retry and retry_policy and retry_policy.max_attempts > 0:
+                self.logger.info("🔁 Initiating retry cycle for unmatched legs.")
+                retry_success, retry_attempts = await self._retry_manager.execute_retries(
+                    contexts=contexts,
+                    policy=retry_policy,
+                    place_order=lambda spec, cancel_event: self._place_single_order(
+                        spec, cancel_event=cancel_event
+                    ),
+                    logger=self.logger,
+                    compose_stage=compose_stage,
+                )
+                if retry_attempts:
+                    for ctx in contexts:
+                        await reconcile_context_after_cancel(ctx, self.logger)
+                    if retry_success:
+                        self.logger.info("✅ Retry attempts filled remaining deficits.")
+                    else:
+                        self.logger.warning(
+                            "⚠️ Retry attempts exhausted; residual imbalance remains."
+                        )
+                    needs_retry = any(ctx.remaining_quantity > Decimal("0") for ctx in contexts)
+
 
             filled_orders = [
                 ctx.result for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal("0")
@@ -304,6 +341,8 @@ class AtomicMultiOrderExecutor:
                     rollback_performed=True,
                     rollback_cost_usd=rollback_cost,
                     residual_imbalance_usd=imbalance,
+                    retry_attempts=retry_attempts,
+                    retry_success=retry_success,
                 )
 
             if filled_orders and len(filled_orders) == len(orders):
@@ -323,6 +362,8 @@ class AtomicMultiOrderExecutor:
                     rollback_performed=False,
                     rollback_cost_usd=Decimal("0"),
                     residual_imbalance_usd=imbalance,
+                    retry_attempts=retry_attempts,
+                    retry_success=retry_success,
                 )
 
             error_message = hedge_error or f"Partial fill: {len(filled_orders)}/{len(orders)}"
@@ -345,6 +386,8 @@ class AtomicMultiOrderExecutor:
                 rollback_performed=False,
                 rollback_cost_usd=Decimal("0"),
                 residual_imbalance_usd=imbalance,
+                retry_attempts=retry_attempts,
+                retry_success=retry_success,
             )
 
         except Exception as exc:

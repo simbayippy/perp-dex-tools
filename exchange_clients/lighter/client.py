@@ -166,7 +166,6 @@ class LighterClient(BaseExchangeClient):
                 if err is not None:
                     raise Exception(f"CheckClient error: {err}")
 
-                self.logger.info("Lighter client initialized successfully")
             except Exception as e:
                 self.logger.error(f"Failed to initialize Lighter client: {e}")
                 raise
@@ -194,18 +193,14 @@ class LighterClient(BaseExchangeClient):
             self.ws_manager = LighterWebSocketManager(
                 config=self.config,
                 order_update_callback=self._handle_websocket_order_update,
-                liquidation_callback=self._handle_liquidation_notifications,
+                liquidation_callback=self.handle_liquidation_notification,
             )
 
             # Set logger for WebSocket manager
             self.ws_manager.set_logger(self.logger)
 
-            # Start WebSocket connection in background task
-            # (Used for real-time price updates and order tracking, not for liquidity checks)
-            asyncio.create_task(self.ws_manager.connect())
-            
-            # Give WebSocket a moment to start connecting
-            await asyncio.sleep(1)
+            # Await WebSocket connection (real-time price updates and order tracking)
+            await self.ws_manager.connect()
 
         except Exception as e:
             self.logger.error(f"Error connecting to Lighter: {e}")
@@ -299,14 +294,15 @@ class LighterClient(BaseExchangeClient):
             if status == 'OPEN' and filled_size > 0:
                 status = 'PARTIALLY_FILLED'
 
+            # log websocket order update
             if status == 'OPEN':
                 self.logger.info(
-                    f"[LIGHTER] [{order_type}] [{order_id}] ({linked_order_index}) {status} "
+                    f"[WEBSOCKET] [LIGHTER] {status} "
                     f"{size} @ {price}"
                 )
             else:
                 self.logger.info(
-                    f"[LIGHTER] [{order_type}] [{order_id}] ({linked_order_index}) {status} "
+                    f"[WEBSOCKET] [LIGHTER] {status} "
                     f"{filled_size} @ {price}"
                 )
 
@@ -346,8 +342,8 @@ class LighterClient(BaseExchangeClient):
                 if server_order_index is not None:
                     self._latest_orders[str(server_order_index)] = current_order
 
-    async def _handle_liquidation_notifications(self, notifications: List[Dict[str, Any]]) -> None:
-        """Handle liquidation notifications from the Lighter notification channel."""
+    async def handle_liquidation_notification(self, notifications: List[Dict[str, Any]]) -> None:
+        """Normalize liquidation notifications from the Lighter stream."""
         for notification in notifications:
             try:
                 if notification.get("kind") != "liquidation":
@@ -406,7 +402,7 @@ class LighterClient(BaseExchangeClient):
         that calls it directly. New code should use PriceProvider instead.
         
         For real-time monitoring, WebSocket data is available via ws_manager.
-        For order execution, use PriceProvider which intelligently caches data.
+        For order execution, use PriceProvider which orchestrates fresh data retrieval.
         """
         try:
             order_book = await self.get_order_book_depth(contract_id, levels=1)
@@ -431,8 +427,8 @@ class LighterClient(BaseExchangeClient):
             Order book dict if WebSocket is connected and has data, None otherwise
         """
         try:
-            # ✅ Check if ws_manager exists first (may not exist if connect() wasn't called)
-            if not hasattr(self, 'ws_manager') or not self.ws_manager:
+            if not self.ws_manager:
+                self.logger.warning(f"📞 [BACKPACK] No WebSocket manager available")
                 return None
             
             if not self.ws_manager.running:
@@ -460,7 +456,7 @@ class LighterClient(BaseExchangeClient):
             ]
             
             self.logger.info(
-                f"📡 [WEBSOCKET] Using real-time order book from WebSocket "
+                f"📡 [LIGHTER] Using real-time order book from WebSocket "
                 f"({len(bids)} bids, {len(asks)} asks)"
             )
             
@@ -742,16 +738,6 @@ class LighterClient(BaseExchangeClient):
             
             # Extract fill price from response if available
             fill_price = None
-            if tx_hash and hasattr(tx_hash, 'code'):
-                self.logger.info(
-                    f"✅ [LIGHTER] Market order submitted! "
-                    f"client_id={client_order_index}, "
-                    f"tx_hash={tx_hash}"
-                )
-            else:
-                self.logger.warning(
-                    f"⚠️ [LIGHTER] Market order submitted but no response details available"
-                )
             
             return OrderResult(
                 success=True,
@@ -1371,4 +1357,3 @@ class LighterClient(BaseExchangeClient):
         except Exception as e:
             self.logger.error(f"Error getting total asset value: {e}")
             return None
-

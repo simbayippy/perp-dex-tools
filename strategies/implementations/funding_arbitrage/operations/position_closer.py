@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from exchange_clients.events import LiquidationEvent
+from exchange_clients.base_client import BaseExchangeClient
 from ..risk_management import get_risk_manager
 from strategies.execution.core.order_executor import OrderExecutor, ExecutionMode
 from strategies.execution.patterns.atomic_multi_order import OrderSpec
@@ -25,6 +27,7 @@ class PositionCloser:
         self._strategy = strategy
         self._risk_manager = self._build_risk_manager()
         self._order_executor = OrderExecutor(price_provider=strategy.price_provider)
+        self._ws_prepared: Dict[str, str] = {}
 
     async def evaluateAndClosePositions(self) -> List[str]:
         strategy = self._strategy
@@ -246,6 +249,8 @@ class PositionCloser:
         """Fetch up-to-date exchange snapshots for both legs."""
         snapshots: Dict[str, Optional["ExchangePositionSnapshot"]] = {}
 
+        legs_metadata = (position.metadata or {}).get("legs", {})
+
         for dex in filter(None, [position.long_dex, position.short_dex]):
             client = self._strategy.exchange_clients.get(dex)
             if client is None:
@@ -255,6 +260,15 @@ class PositionCloser:
                 )
                 snapshots[dex] = None
                 continue
+
+            leg_metadata = legs_metadata.get(dex, {}) if isinstance(legs_metadata, dict) else {}
+            await self._prepare_contract_context(
+                client,
+                position.symbol,
+                metadata=leg_metadata,
+                contract_hint=leg_metadata.get("market_id"),
+            )
+            await self._ensure_market_feed_once(client, position.symbol)
 
             try:
                 snapshots[dex] = await client.get_position_snapshot(position.symbol)
@@ -266,6 +280,62 @@ class PositionCloser:
                 snapshots[dex] = None
 
         return snapshots
+
+    async def _ensure_market_feed_once(self, client, symbol: str) -> None:
+        """
+        Prepare the client's websocket feed for the target symbol once per session run.
+        """
+        exchange_name = client.get_exchange_name().upper()
+        symbol_key = symbol.upper()
+        previous_symbol = self._ws_prepared.get(exchange_name)
+        should_prepare = previous_symbol != symbol_key
+
+        ws_manager = getattr(client, "ws_manager", None)
+        if not should_prepare and ws_manager is not None:
+            ws_symbol = getattr(ws_manager, "symbol", None)
+            if isinstance(ws_symbol, str):
+                should_prepare = ws_symbol.upper() != symbol_key
+
+        try:
+            if should_prepare:
+                await client.ensure_market_feed(symbol)
+
+            if ws_manager and getattr(ws_manager, "running", False):
+                await self._await_ws_snapshot(ws_manager)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self._strategy.logger.log(
+                f"⚠️ [{exchange_name}] WebSocket prep error during close: {exc}",
+                "DEBUG",
+            )
+        else:
+            self._ws_prepared[exchange_name] = symbol_key
+
+    async def _await_ws_snapshot(self, ws_manager: Any, timeout: float = 1.0) -> None:
+        """
+        Wait briefly for websocket managers to populate top-of-book data.
+        """
+        if not getattr(ws_manager, "running", False):
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            snapshot_ready = False
+            if hasattr(ws_manager, "snapshot_loaded"):
+                snapshot_ready = bool(ws_manager.snapshot_loaded)
+            if getattr(ws_manager, "best_bid", None) is not None:
+                snapshot_ready = True
+            if getattr(ws_manager, "best_ask", None) is not None:
+                snapshot_ready = True
+
+            if snapshot_ready:
+                return
+
+            await asyncio.sleep(0.05)
 
     def _detect_liquidation(
         self,
@@ -320,6 +390,8 @@ class PositionCloser:
         legs: List[Dict[str, Any]] = []
         live_snapshots = live_snapshots or {}
 
+        position_legs = (position.metadata or {}).get("legs", {})
+
         for dex in filter(None, [position.long_dex, position.short_dex]):
             client = strategy.exchange_clients.get(dex)
             if client is None:
@@ -328,6 +400,15 @@ class PositionCloser:
                     "ERROR",
                 )
                 continue
+
+            leg_hint = position_legs.get(dex, {}) if isinstance(position_legs, dict) else {}
+            await self._prepare_contract_context(
+                client,
+                position.symbol,
+                metadata=leg_hint,
+                contract_hint=leg_hint.get("market_id"),
+            )
+            await self._ensure_market_feed_once(client, position.symbol)
 
             snapshot = live_snapshots.get(dex) or live_snapshots.get(dex.lower())
             if snapshot is None:
@@ -356,7 +437,22 @@ class PositionCloser:
                 continue
 
             side = "sell" if snapshot.quantity > 0 else "buy"
-            metadata = getattr(snapshot, "metadata", {}) or {}
+            metadata: Dict[str, Any] = getattr(snapshot, "metadata", {}) or {}
+
+            if metadata:
+                await self._prepare_contract_context(
+                    client,
+                    position.symbol,
+                    metadata=metadata,
+                    contract_hint=metadata.get("market_id"),
+                )
+
+            contract_id = await self._prepare_contract_context(
+                client,
+                position.symbol,
+                metadata=metadata,
+                contract_hint=metadata.get("market_id"),
+            )
             legs.append(
                 {
                     "dex": dex,
@@ -364,7 +460,8 @@ class PositionCloser:
                     "snapshot": snapshot,
                     "side": side,
                     "quantity": quantity,
-                    "contract_id": metadata.get("market_id"),
+                    "contract_id": contract_id,
+                    "metadata": metadata,
                 }
             )
 
@@ -405,6 +502,7 @@ class PositionCloser:
             pre_flight_check=False,
             skip_preflight_leverage=True,
             stage_prefix="close",
+            retry_policy=strategy.atomic_retry_policy,
         )
 
         if not result.all_filled:
@@ -419,7 +517,12 @@ class PositionCloser:
         leg: Dict[str, Any],
     ) -> None:
         strategy = self._strategy
-        self._prepare_contract_context(leg["client"], leg.get("contract_id"), symbol)
+        leg["contract_id"] = await self._prepare_contract_context(
+            leg["client"],
+            symbol,
+            metadata=leg.get("metadata") or {},
+            contract_hint=leg.get("contract_id"),
+        )
         price = self._extract_snapshot_price(leg["snapshot"])
         if price is None or price <= Decimal("0"):
             price = await self._fetch_mid_price(leg["client"], symbol)
@@ -455,7 +558,12 @@ class PositionCloser:
         symbol: str,
         leg: Dict[str, Any],
     ) -> OrderSpec:
-        self._prepare_contract_context(leg["client"], leg.get("contract_id"), symbol)
+        leg["contract_id"] = await self._prepare_contract_context(
+            leg["client"],
+            symbol,
+            metadata=leg.get("metadata") or {},
+            contract_hint=leg.get("contract_id"),
+        )
         price = self._extract_snapshot_price(leg["snapshot"])
         if price is None or price <= Decimal("0"):
             price = await self._fetch_mid_price(leg["client"], symbol)
@@ -530,25 +638,123 @@ class PositionCloser:
 
         return (bid + ask) / 2
 
-    @staticmethod
-    def _prepare_contract_context(client, contract_id: Optional[Any], symbol: str) -> None:
+    async def _prepare_contract_context(
+        self,
+        client,
+        symbol: str,
+        *,
+        metadata: Optional[Dict[str, Any]] = None,
+        contract_hint: Optional[Any] = None,
+    ) -> Optional[Any]:
         """
-        Ensure the exchange client is pointed at the correct contract before sending orders.
+        Ensure the exchange client is configured with the correct contract metadata.
 
-        Some DEX connectors (e.g., Lighter) rely on config.contract_id/ ticker to resolve
-        market IDs when submitting standalone close orders.
+        Closing legs often happens long after a position was opened. Some exchange
+        clients reset their cached contract identifiers (contract_id, ticker, base
+        multipliers) between runs, so we re-hydrate them on demand using the live
+        snapshot metadata and connector helpers.
         """
-        try:
-            if contract_id:
-                setattr(client.config, "contract_id", contract_id)
-        except Exception:
-            pass
+        metadata = metadata or {}
+        config = getattr(client, "config", None)
 
-        try:
-            if symbol:
-                setattr(client.config, "ticker", symbol)
-        except Exception:
-            pass
+        def _is_valid_contract(value: Any) -> bool:
+            if value is None:
+                return False
+            if isinstance(value, str):
+                stripped = value.strip()
+                if not stripped:
+                    return False
+                if stripped.upper() in {"ALL", "MULTI", "MULTI_SYMBOL"}:
+                    return False
+                return True
+            if isinstance(value, (int, Decimal)):
+                return value != 0
+            return True
+
+        candidate_ids: List[Any] = [
+            contract_hint,
+            metadata.get("contract_id"),
+            metadata.get("market_id"),
+            metadata.get("backpack_symbol"),
+            metadata.get("exchange_symbol"),
+        ]
+        if config is not None:
+            candidate_ids.append(getattr(config, "contract_id", None))
+
+        resolved_contract: Optional[Any] = next(
+            (cid for cid in candidate_ids if _is_valid_contract(cid)), None
+        )
+
+        if not _is_valid_contract(resolved_contract) and hasattr(client, "normalize_symbol"):
+            try:
+                normalized = client.normalize_symbol(symbol)
+            except Exception:
+                normalized = None
+            if _is_valid_contract(normalized):
+                resolved_contract = normalized
+
+        base_multiplier_missing = hasattr(client, "base_amount_multiplier") and getattr(
+            client, "base_amount_multiplier", None
+        ) is None
+        price_multiplier_missing = hasattr(client, "price_multiplier") and getattr(
+            client, "price_multiplier", None
+        ) is None
+        needs_refresh = not _is_valid_contract(resolved_contract)
+
+        if (needs_refresh or base_multiplier_missing or price_multiplier_missing) and hasattr(
+            client, "get_contract_attributes"
+        ):
+            ticker_restore = None
+            candidate_ticker = (
+                metadata.get("symbol")
+                or metadata.get("backpack_symbol")
+                or metadata.get("exchange_symbol")
+                or symbol
+            )
+            if config is not None and candidate_ticker:
+                ticker_restore = getattr(config, "ticker", None)
+                try:
+                    setattr(config, "ticker", candidate_ticker)
+                except Exception:
+                    ticker_restore = None
+
+            try:
+                attr = await client.get_contract_attributes()
+                refreshed_id: Optional[Any]
+                if isinstance(attr, tuple):
+                    refreshed_id = attr[0]
+                else:
+                    refreshed_id = attr
+                if _is_valid_contract(refreshed_id):
+                    resolved_contract = refreshed_id
+            except Exception as exc:
+                self._strategy.logger.log(
+                    f"⚠️ [{client.get_exchange_name().upper()}] Failed to refresh contract attributes "
+                    f"for {symbol}: {exc}",
+                    "WARNING",
+                )
+            finally:
+                if ticker_restore is not None and config is not None:
+                    try:
+                        setattr(config, "ticker", ticker_restore)
+                    except Exception:
+                        pass
+
+        if config is not None:
+            try:
+                if _is_valid_contract(resolved_contract):
+                    setattr(config, "contract_id", resolved_contract)
+                ticker_value = getattr(config, "ticker", None)
+                if not ticker_value or str(ticker_value).upper() in {"ALL", "MULTI", "MULTI_SYMBOL"}:
+                    setattr(config, "ticker", symbol)
+            except Exception:
+                pass
+
+        # Surface the resolved contract_id to callers and leg metadata
+        if _is_valid_contract(resolved_contract):
+            metadata.setdefault("contract_id", resolved_contract)
+            return resolved_contract
+        return None
 
     @staticmethod
     def _symbols_match(position_symbol: Optional[str], event_symbol: Optional[str]) -> bool:

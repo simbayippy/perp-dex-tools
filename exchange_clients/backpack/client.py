@@ -5,7 +5,7 @@ Backpack exchange client implementation.
 import os
 import asyncio
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation, ROUND_DOWN
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from bpx.public import Public
@@ -77,13 +77,16 @@ class BackpackClient(BaseExchangeClient):
                 secret_key=self.secret_key,
                 symbol=ws_symbol,
                 order_update_callback=self._handle_websocket_order_update,
+                liquidation_callback=self.handle_liquidation_notification,
                 depth_fetcher=self._fetch_depth_snapshot,
+                symbol_formatter=self._ensure_exchange_symbol,
             )
             self.ws_manager.set_logger(self.logger)
         else:
             self.ws_manager.update_symbol(ws_symbol)
 
         await self.ws_manager.connect()
+
         if ws_symbol:
             ready = await self.ws_manager.wait_until_ready(timeout=5.0)
             if not ready and self.logger:
@@ -102,6 +105,10 @@ class BackpackClient(BaseExchangeClient):
         """Return exchange identifier."""
         return "backpack"
 
+    def supports_liquidation_stream(self) -> bool:
+        """Backpack exposes liquidation-origin events on the order update stream."""
+        return True
+
     # --------------------------------------------------------------------- #
     # Utility helpers
     # --------------------------------------------------------------------- #
@@ -116,6 +123,12 @@ class BackpackClient(BaseExchangeClient):
             return Decimal(str(value))
         except (InvalidOperation, TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _to_internal_symbol(stream_symbol: Optional[str]) -> str:
+        if not stream_symbol:
+            return ""
+        return normalize_backpack_symbol(stream_symbol).upper()
 
     def _ensure_exchange_symbol(self, identifier: Optional[str]) -> Optional[str]:
         """Normalize symbol/contract inputs to Backpack's expected wire format."""
@@ -179,6 +192,69 @@ class BackpackClient(BaseExchangeClient):
             return f"{value:.{decimals}f}"
         return format(value, "f")
 
+    def _quantize_to_tick(self, price: Decimal, rounding_mode) -> Decimal:
+        tick_size = getattr(self.config, "tick_size", None)
+        if tick_size and tick_size > 0:
+            try:
+                tick = tick_size if isinstance(tick_size, Decimal) else Decimal(str(tick_size))
+            except (InvalidOperation, TypeError, ValueError):
+                tick = None
+            if tick and tick > 0:
+                try:
+                    return price.quantize(tick, rounding=rounding_mode)
+                except (InvalidOperation, TypeError, ValueError):
+                    decimals = max(0, -tick.normalize().as_tuple().exponent)
+                    return Decimal(f"{price:.{decimals}f}")
+        # Fallback: Backpack enforces 4 decimal places on price inputs.
+        default_tick = Decimal("0.0001")
+        try:
+            return price.quantize(default_tick, rounding=rounding_mode)
+        except (InvalidOperation, TypeError, ValueError):
+            return price
+
+    async def _compute_post_only_price(self, contract_id: str, raw_price: Decimal, side: str) -> Decimal:
+        """
+        Quantize price toward the maker side and avoid matching the top of book.
+        """
+        price = raw_price if isinstance(raw_price, Decimal) else Decimal(str(raw_price))
+        original_price = price
+        tick_size = getattr(self.config, "tick_size", None)
+        tick: Optional[Decimal] = None
+
+        rounding_mode = ROUND_DOWN if side.lower() == "buy" else ROUND_UP
+        price = self._quantize_to_tick(price, rounding_mode)
+
+        if tick_size and tick_size > 0:
+            try:
+                tick = tick_size if isinstance(tick_size, Decimal) else Decimal(str(tick_size))
+            except (InvalidOperation, TypeError, ValueError):
+                tick = None
+
+        best_bid = best_ask = Decimal("0")
+        try:
+            best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            if self.logger:
+                self.logger.debug(f"[BACKPACK] Failed to refresh BBO for price adjustment: {exc}")
+
+        if tick and tick > 0:
+            if side.lower() == "buy" and best_ask > 0:
+                while price >= best_ask and price - tick > 0:
+                    price -= tick
+            elif side.lower() == "sell" and best_bid > 0:
+                while price <= best_bid:
+                    price += tick
+
+        if price <= 0 and tick and tick > 0:
+            price = tick
+
+        price = self._quantize_to_tick(price, ROUND_DOWN if side.lower() == "buy" else ROUND_UP)
+
+        if self.logger and price != original_price:
+            self.logger.debug(f"[BACKPACK] Post-only price adjusted: raw={original_price} -> adjusted={price} (best_bid={best_bid or '0'}, best_ask={best_ask or '0'}, tick={tick or 'n/a'})")
+
+        return price
+
     # --------------------------------------------------------------------- #
     # WebSocket callbacks
     # --------------------------------------------------------------------- #
@@ -241,7 +317,13 @@ class BackpackClient(BaseExchangeClient):
 
             if status == "FILLED":
                 self.logger.info(
-                    f"[ORDER] [{order_id}] FILLED {filled or quantity} @ {price or 'n/a'}"
+                    f"[WEBSOCKET] [BACKPACK] {status} "
+                    f"{filled or quantity} @ {price or 'n/a'}"
+                )
+            else:
+                self.logger.info(
+                    f"[WEBSOCKET] [BACKPACK] {status} "
+                    f"{filled or quantity} @ {price or 'n/a'}"
                 )
 
             if self._order_update_handler:
@@ -260,6 +342,70 @@ class BackpackClient(BaseExchangeClient):
         except Exception as exc:
             self.logger.error(f"Error handling Backpack order update: {exc}")
 
+    async def handle_liquidation_notification(self, payload: Dict[str, Any]) -> None:
+        """
+        Convert Backpack order updates triggered by liquidations into LiquidationEvent objects.
+        """
+        try:
+            origin = (payload.get("O") or "").upper()
+            if origin not in {
+                "LIQUIDATION_AUTOCLOSE",
+                "ADL_AUTOCLOSE",
+                "BACKSTOP_LIQUIDITY_PROVIDER",
+            }:
+                return
+
+            event_type = (payload.get("e") or "").lower()
+            if event_type != "orderfill":
+                return
+
+            symbol_raw = payload.get("s")
+            if not symbol_raw:
+                return
+
+            internal_symbol = self._to_internal_symbol(symbol_raw) or (self.config.ticker or symbol_raw)
+
+            side_raw = (payload.get("S") or "").lower()
+            side = "buy" if side_raw in {"bid", "buy"} else "sell" if side_raw in {"ask", "sell"} else side_raw or "buy"
+
+            fill_qty = self._to_decimal(payload.get("l"), Decimal("0")) or Decimal("0")
+            if fill_qty <= 0:
+                fill_qty = self._to_decimal(payload.get("z"), Decimal("0")) or Decimal("0")
+            if fill_qty <= 0:
+                return
+            fill_qty = fill_qty.copy_abs()
+
+            price = self._to_decimal(payload.get("L"), Decimal("0")) or Decimal("0")
+
+            timestamp_us = payload.get("E")
+            timestamp = datetime.now(timezone.utc)
+            if timestamp_us is not None:
+                try:
+                    timestamp = datetime.fromtimestamp(int(timestamp_us) / 1_000_000, tz=timezone.utc)
+                except (ValueError, TypeError, OSError):
+                    timestamp = datetime.now(timezone.utc)
+
+            metadata: Dict[str, Any] = {
+                "order_id": payload.get("i"),
+                "trade_id": payload.get("t"),
+                "origin": origin,
+                "maker": payload.get("m"),
+                "raw": payload,
+            }
+
+            event = LiquidationEvent(
+                exchange=self.get_exchange_name(),
+                symbol=internal_symbol,
+                side=side,
+                quantity=fill_qty,
+                price=price,
+                timestamp=timestamp,
+                metadata=metadata,
+            )
+            await self.emit_liquidation_event(event)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self.logger.error(f"Error handling Backpack liquidation notification: {exc}")
+
     # --------------------------------------------------------------------- #
     # Market data
     # --------------------------------------------------------------------- #
@@ -268,8 +414,10 @@ class BackpackClient(BaseExchangeClient):
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
         """Fetch best bid/offer, preferring WebSocket data when available."""
         if self.ws_manager and self.ws_manager.best_bid is not None and self.ws_manager.best_ask is not None:
+            self.logger.info(f"📡 [BACKPACK] Using real-time BBO from WebSocket")
             return self.ws_manager.best_bid, self.ws_manager.best_ask
 
+        self.logger.info(f"📞 [REST][BACKPACK] Using REST depth snapshot")
         # Fall back to REST depth snapshot
         try:
             symbol = self._ensure_exchange_symbol(contract_id)
@@ -296,13 +444,13 @@ class BackpackClient(BaseExchangeClient):
     def _get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
         """Return the latest order book maintained by the WebSocket manager."""
         if not self.ws_manager:
+            self.logger.warning(f"📞 [BACKPACK] No WebSocket manager available")
             return None
         book = self.ws_manager.get_order_book()
-        if book and self.logger:
-            self.logger.info(
-                f"📡 [WEBSOCKET] Using real-time order book from WebSocket "
-                f"({len(book['bids'])} bids, {len(book['asks'])} asks)"
-            )
+        self.logger.info(
+            f"📡 [BACKPACK] Using real-time order book from WebSocket "
+            f"({len(book['bids'])} bids, {len(book['asks'])} asks)"
+        )
         return book
 
     async def get_order_book_depth(
@@ -370,7 +518,9 @@ class BackpackClient(BaseExchangeClient):
     ) -> OrderResult:
         """Place a post-only limit order on Backpack."""
         backpack_side = "Bid" if side.lower() == "buy" else "Ask"
-        rounded_price = self.round_to_tick(price)
+
+        # round price as backpack always seems to instant fill
+        rounded_price = await self._compute_post_only_price(contract_id, price, side)
         quantized_quantity = self._quantize_quantity(quantity)
         min_quantity = getattr(self.config, "min_quantity", None)
         if min_quantity and quantized_quantity < min_quantity:
@@ -645,16 +795,166 @@ class BackpackClient(BaseExchangeClient):
         """
         Fetch leverage limits for symbol.
 
-        Backpack has not published leverage APIs yet; return conservative defaults.
+        Backpack publishes initial margin settings in the market metadata. We derive
+        leverage as floor(1 / initial_margin) and surface the account-level cap as well.
         """
-        self.logger.debug(f"[BACKPACK] Using placeholder leverage info for {symbol}")
-        return {
-            "max_leverage": Decimal("10"),
+        exchange_symbol = self._ensure_exchange_symbol(symbol) or symbol
+        result: Dict[str, Any] = {
+            "max_leverage": None,
             "max_notional": None,
-            "margin_requirement": Decimal("0.10"),
+            "margin_requirement": None,
             "brackets": None,
+            "account_leverage": None,
             "error": None,
         }
+
+        def _normalize_fraction(raw: Any) -> Optional[Decimal]:
+            fraction = self._to_decimal(raw, None)
+            if fraction is None:
+                return None
+            if fraction > 1:
+                if fraction >= 1000:
+                    fraction = fraction / Decimal("10000")
+                else:
+                    fraction = fraction / Decimal("100")
+            return fraction
+
+        market_payload: Optional[Dict[str, Any]] = None
+        try:
+            market_payload = await asyncio.to_thread(
+                self.public_client.http_client.get,
+                self.public_client.get_market_url(exchange_symbol),
+            )
+        except Exception as exc:
+            if self.logger:
+                self.logger.debug(f"[BACKPACK] Direct market lookup failed for {exchange_symbol}: {exc}")
+
+        if not isinstance(market_payload, dict):
+            try:
+                markets = await asyncio.to_thread(self.public_client.get_markets)
+            except Exception as exc:
+                message = f"Failed to fetch markets list: {exc}"
+                if self.logger:
+                    self.logger.warning(f"[BACKPACK] {message}")
+                result["error"] = message
+                return result
+
+            if isinstance(markets, list):
+                for market in markets:
+                    if not isinstance(market, dict):
+                        continue
+                    if market.get("symbol") == exchange_symbol:
+                        market_payload = market
+                        break
+                if market_payload is None:
+                    base_symbol = symbol.upper()
+                    market_payload = next(
+                        (
+                            market
+                            for market in markets
+                            if isinstance(market, dict)
+                            and (market.get("baseSymbol") == base_symbol or market.get("baseAsset") == base_symbol)
+                            and (market.get("marketType") or "").upper() in {"PERP", "PERPETUAL"}
+                        ),
+                        None,
+                    )
+
+        if not isinstance(market_payload, dict):
+            result["error"] = f"No market data available for {exchange_symbol}"
+            return result
+
+        perp_info = market_payload.get("perpInfo") or market_payload.get("perp_info") or market_payload
+
+        imf_candidate = (
+            perp_info.get("imfFunction")
+            or perp_info.get("imf_function")
+            or perp_info.get("initialMarginFunction")
+            or perp_info.get("initial_margin_function")
+            if isinstance(perp_info, dict)
+            else None
+        )
+
+        imf_base = self._to_decimal(imf_candidate.get("base"), None) if isinstance(imf_candidate, dict) else None
+
+        initial_margin_fraction = _normalize_fraction(perp_info.get("initialMarginFraction")) if isinstance(perp_info, dict) else None
+        if initial_margin_fraction is None and isinstance(perp_info, dict):
+            initial_margin_fraction = _normalize_fraction(
+                perp_info.get("initialMargin") or perp_info.get("initial_margin") or perp_info.get("imf") or imf_base
+            )
+
+        max_leverage = None
+        if initial_margin_fraction and initial_margin_fraction > 0:
+            max_leverage = Decimal("1") / initial_margin_fraction
+        elif imf_base and imf_base > 0:
+            max_leverage = Decimal("1") / imf_base
+
+        if max_leverage is not None:
+            max_leverage = max_leverage.to_integral_value(rounding=ROUND_DOWN)
+
+        max_notional = None
+        if isinstance(perp_info, dict):
+            max_notional = self._to_decimal(
+                perp_info.get("openInterestLimit")
+                or perp_info.get("riskLimitNotional")
+                or perp_info.get("open_interest_limit"),
+                None,
+            )
+
+        maintenance_margin_fraction = _normalize_fraction(
+            perp_info.get("maintenanceMarginFraction")
+            or perp_info.get("maintenanceMargin")
+            or perp_info.get("maintenance_margin")
+            or perp_info.get("mmf")
+        ) if isinstance(perp_info, dict) else None
+
+        brackets = [
+            {
+                "notional_cap": max_notional,
+                "initial_margin": initial_margin_fraction or imf_base,
+                "maintenance_margin": maintenance_margin_fraction,
+                "max_leverage": max_leverage,
+            }
+        ] if max_leverage is not None else []
+
+        if result["margin_requirement"] is None:
+            result["margin_requirement"] = initial_margin_fraction or imf_base
+
+        result["max_leverage"] = max_leverage
+        result["max_notional"] = max_notional
+        result["brackets"] = brackets or None
+        result["maintenance_margin"] = maintenance_margin_fraction
+
+        # Account-level leverage cap (optional)
+        try:
+            account_info = await asyncio.to_thread(self.account_client.get_account)
+        except Exception as exc:
+            if self.logger:
+                self.logger.debug(f"[BACKPACK] Unable to fetch account leverage cap: {exc}")
+            account_info = None
+
+        if isinstance(account_info, dict):
+            leverage_limit = account_info.get("leverageLimit") or account_info.get("leverage_limit")
+            account_leverage = self._to_decimal(leverage_limit, None)
+            if account_leverage and account_leverage > 0:
+                result["account_leverage"] = account_leverage
+
+        if result["max_leverage"] is None:
+            result["error"] = f"Unable to determine leverage limits for {exchange_symbol}"
+
+        # Log leverage info summary
+        if self.logger and result["max_leverage"] is not None:
+            margin_req = result["margin_requirement"]
+            margin_pct = (margin_req * 100) if margin_req else None
+            
+            self.logger.info(
+                f"📊 [BACKPACK] Leverage info for {symbol}:\n"
+                f"  - Symbol max leverage: {result['max_leverage']:.1f}x\n"
+                f"  - Account leverage: {result.get('account_leverage', 'N/A')}x\n"
+                f"  - Max notional: {result['max_notional'] or 'None'}\n"
+                f"  - Margin requirement: {margin_req} ({margin_pct:.1f}%)" if margin_pct else f"  - Margin requirement: {margin_req}"
+            )
+
+        return result
 
     async def get_contract_attributes(self) -> Tuple[str, Decimal]:
         """Populate contract_id and tick_size for current ticker."""

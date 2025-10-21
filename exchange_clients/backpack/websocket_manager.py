@@ -17,9 +17,10 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 import websockets
 
 from exchange_clients.base_models import MissingCredentialsError
+from exchange_clients.base_websocket import BaseWebSocketManager
 
 
-class BackpackWebSocketManager:
+class BackpackWebSocketManager(BaseWebSocketManager):
     """WebSocket manager for Backpack order, position, and depth streams."""
 
     _MAX_BACKOFF_SECONDS = 30.0
@@ -30,19 +31,22 @@ class BackpackWebSocketManager:
         secret_key: str,
         symbol: Optional[str],
         order_update_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+        liquidation_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
         depth_fetcher: Optional[Callable[[str], Dict[str, Any]]] = None,
         depth_stream_interval: str = "realtime",
+        symbol_formatter: Optional[Callable[[str], str]] = None,
     ):
+        super().__init__()
         self.public_key = public_key
         self.secret_key = secret_key
         self.symbol = symbol
         self.order_update_callback = order_update_callback
         self.depth_fetcher = depth_fetcher
+        self.liquidation_callback = liquidation_callback
         self.depth_stream_interval = depth_stream_interval
+        self._symbol_formatter = symbol_formatter
 
-        self.logger = None
         self.ws_url = "wss://ws.backpack.exchange"
-        self.running = False
 
         self._account_ws: Optional[websockets.WebSocketClientProtocol] = None
         self._depth_ws: Optional[websockets.WebSocketClientProtocol] = None
@@ -76,9 +80,34 @@ class BackpackWebSocketManager:
     # Public interface
     # ------------------------------------------------------------------ #
 
-    def set_logger(self, logger) -> None:
-        """Attach shared logger instance."""
-        self.logger = logger
+    async def prepare_market_feed(self, symbol: Optional[str]) -> None:
+        """Ensure account and depth streams follow the requested symbol."""
+        if not symbol:
+            return
+
+        target_symbol = symbol
+        if self._symbol_formatter:
+            try:
+                target_symbol = self._symbol_formatter(symbol)
+            except Exception:
+                target_symbol = symbol
+
+        if target_symbol == self.symbol:
+            # Already aligned; make sure order book is marked ready.
+            if not self.order_book_ready and self.depth_fetcher:
+                await self.wait_for_order_book(timeout=2.0)
+            return
+
+        if self.logger:
+            self.logger.info(f"[BACKPACK] 🔄 Switching websocket streams to {target_symbol}")
+
+        self.update_symbol(target_symbol)
+
+        if self.running:
+            await self.disconnect()
+            await self.connect()
+            if self.depth_fetcher:
+                await self.wait_for_order_book(timeout=2.0)
 
     async def wait_until_ready(self, timeout: float = 5.0) -> bool:
         """Wait until the account stream is ready."""
@@ -115,6 +144,8 @@ class BackpackWebSocketManager:
 
         # Allow tasks to spin up
         await asyncio.sleep(0)
+        if self.logger:
+            self.logger.info("[BACKPACK] 🔗 Connected to ws")
 
     async def disconnect(self) -> None:
         """Stop websocket tasks and close sockets."""
@@ -275,6 +306,43 @@ class BackpackWebSocketManager:
         except Exception as exc:  # pragma: no cover - callback safety
             if self.logger:
                 self.logger.error(f"[BACKPACK] Order update callback failed: {exc}")
+
+        # Since the liquidation event is a part of orderUpdate
+        await self._maybe_dispatch_liquidation(payload)
+
+    async def _maybe_dispatch_liquidation(self, payload: Dict[str, Any]) -> None:
+        if not self.liquidation_callback:
+            return
+
+        origin = (payload.get("O") or "").upper()
+        event_type = (payload.get("e") or "").lower()
+        if origin not in {
+            "LIQUIDATION_AUTOCLOSE",
+            "ADL_AUTOCLOSE",
+            "BACKSTOP_LIQUIDITY_PROVIDER",
+        }:
+            return
+        if event_type != "orderfill":
+            return
+
+        last_fill = payload.get("l")
+        executed = payload.get("z")
+        try:
+            last_qty = Decimal(str(last_fill)) if last_fill is not None else Decimal("0")
+        except (InvalidOperation, TypeError):
+            last_qty = Decimal("0")
+        if last_qty <= 0:
+            try:
+                exec_qty = Decimal(str(executed)) if executed is not None else Decimal("0")
+            except (InvalidOperation, TypeError):
+                exec_qty = Decimal("0")
+            if exec_qty <= 0:
+                return
+        try:
+            await self.liquidation_callback(payload)
+        except Exception as exc:  # pragma: no cover - callback safety
+            if self.logger:
+                self.logger.error(f"[BACKPACK] Liquidation callback failed: {exc}")
 
     async def _close_account_ws(self) -> None:
         if self._account_ws:
