@@ -153,7 +153,9 @@ class UnifiedLogger:
                 level="DEBUG",
                 filter=ensure_component,
                 backtrace=False,
-                diagnose=False
+                diagnose=False,
+                enqueue=True,  # ← Add this for thread-safe async writes
+                buffering=1    # ← Add this for line-buffered mode
             )
             _logger._perp_dex_history_setup = True
 
@@ -180,7 +182,9 @@ class UnifiedLogger:
                 level="DEBUG",
                 filter=ensure_component_session,
                 backtrace=False,
-                diagnose=False
+                diagnose=False,
+                enqueue=True,  # ← Add this
+                buffering=1    # ← Add this
             )
             _logger._perp_dex_session_setup = True
         
