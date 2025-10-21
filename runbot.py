@@ -110,14 +110,14 @@ async def main():
     # Load config
     loaded = load_config_from_yaml(config_path)
     strategy_name = loaded["strategy"]
-        strategy_config = loaded["config"]
-        if "primary_exchange" in strategy_config and "mandatory_exchange" not in strategy_config:
-            strategy_config["mandatory_exchange"] = strategy_config.pop("primary_exchange")
-        if not strategy_config.get("mandatory_exchange"):
-            strategy_config["mandatory_exchange"] = None
-            strategy_config["max_oi_usd"] = None
-        strategy_config.pop("primary_exchange", None)
-        strategy_config["_config_path"] = str(config_path)
+    strategy_config = loaded["config"]
+    if "primary_exchange" in strategy_config and "mandatory_exchange" not in strategy_config:
+        strategy_config["mandatory_exchange"] = strategy_config.pop("primary_exchange")
+    if not strategy_config.get("mandatory_exchange"):
+        strategy_config["mandatory_exchange"] = None
+        strategy_config["max_oi_usd"] = None
+    strategy_config.pop("primary_exchange", None)
+    strategy_config["_config_path"] = str(config_path)
 
     print(f"\n✓ Loaded configuration from: {config_path}")
     print(f"  Strategy: {strategy_name}")
