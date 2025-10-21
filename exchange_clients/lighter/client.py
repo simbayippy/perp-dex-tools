@@ -193,7 +193,7 @@ class LighterClient(BaseExchangeClient):
             self.ws_manager = LighterWebSocketManager(
                 config=self.config,
                 order_update_callback=self._handle_websocket_order_update,
-                liquidation_callback=self._handle_liquidation_notifications,
+                liquidation_callback=self.handle_liquidation_notification,
             )
 
             # Set logger for WebSocket manager
@@ -342,8 +342,8 @@ class LighterClient(BaseExchangeClient):
                 if server_order_index is not None:
                     self._latest_orders[str(server_order_index)] = current_order
 
-    async def _handle_liquidation_notifications(self, notifications: List[Dict[str, Any]]) -> None:
-        """Handle liquidation notifications from the Lighter notification channel."""
+    async def handle_liquidation_notification(self, notifications: List[Dict[str, Any]]) -> None:
+        """Normalize liquidation notifications from the Lighter stream."""
         for notification in notifications:
             try:
                 if notification.get("kind") != "liquidation":

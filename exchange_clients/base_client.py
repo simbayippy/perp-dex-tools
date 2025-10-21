@@ -113,6 +113,16 @@ class BaseExchangeClient(ABC):
         """
         await self._liquidation_dispatcher.emit(event)
 
+    async def handle_liquidation_notification(self, payload: Any) -> None:
+        """
+        Optional normalization hook for subclasses to convert raw liquidation messages.
+
+        Default implementation does nothing; exchanges should override when they
+        subscribe to liquidation feeds and need to normalize payloads before calling
+        emit_liquidation_event().
+        """
+        return None
+
     # ========================================================================
     # CONNECTION MANAGEMENT
     # ========================================================================

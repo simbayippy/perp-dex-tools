@@ -43,6 +43,7 @@ class AsterClient(BaseExchangeClient):
         # Initialize logger early
         self.logger = get_exchange_logger("aster", self.config.ticker)
         self._order_update_handler = None
+        self._latest_orders: Dict[str, OrderInfo] = {}
         self._min_order_notional: Dict[str, Decimal] = {}
 
     def _validate_config(self) -> None:
@@ -135,7 +136,7 @@ class AsterClient(BaseExchangeClient):
             api_key=self.api_key,
             secret_key=self.secret_key,
             order_update_callback=self._handle_websocket_order_update,
-            liquidation_callback=self._handle_liquidation_event,
+            liquidation_callback=self.handle_liquidation_notification,
             symbol_formatter=self.normalize_symbol,
         )
 
@@ -199,16 +200,85 @@ class AsterClient(BaseExchangeClient):
         # Round down to nearest step size
         return (quantity / step_size).quantize(Decimal('1'), rounding=ROUND_DOWN) * step_size
 
+    @staticmethod
+    def _to_decimal(value: Any, default: Optional[Decimal] = None) -> Optional[Decimal]:
+        """Best-effort conversion to Decimal."""
+        if value is None or value == "":
+            return default
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return default
+
     async def _handle_websocket_order_update(self, order_data: Dict[str, Any]):
         """Handle order updates from WebSocket."""
         try:
+            order_id = str(order_data.get("order_id") or order_data.get("i") or order_data.get("orderId") or "")
+            if not order_id:
+                return
+
+            symbol = order_data.get("contract_id") or order_data.get("symbol") or order_data.get("s")
+            expected_symbol = getattr(self.config, "contract_id", None)
+            if expected_symbol and symbol and symbol != expected_symbol:
+                return
+
+            side_raw = (order_data.get("side") or order_data.get("S") or "").lower()
+            side = side_raw if side_raw in {"buy", "sell"} else side_raw.lower()
+
+            quantity = self._to_decimal(order_data.get("size"), Decimal("0"))
+            filled = self._to_decimal(order_data.get("filled_size"), Decimal("0"))
+            price = self._to_decimal(order_data.get("price"), Decimal("0"))
+
+            remaining = None
+            if quantity is not None and filled is not None:
+                remaining = quantity - filled
+                if remaining < Decimal("0"):
+                    remaining = Decimal("0")
+
+            status = (order_data.get("status") or order_data.get("X") or "").upper()
+            if status == "OPEN" and filled and filled > Decimal("0"):
+                status = "PARTIALLY_FILLED"
+
+            info = OrderInfo(
+                order_id=order_id,
+                side=side or "",
+                size=quantity or Decimal("0"),
+                price=price or Decimal("0"),
+                status=status,
+                filled_size=filled or Decimal("0"),
+                remaining_size=remaining or Decimal("0"),
+            )
+            self._latest_orders[order_id] = info
+
+            if status in {"FILLED", "CANCELED"}:
+                self.logger.info(
+                    f"[WEBSOCKET] [ASTER] {status} "
+                    f"{filled or quantity} @ {price or 'n/a'}"
+                )
+            else:
+                self.logger.info(
+                    f"[WEBSOCKET] [ASTER] {status} "
+                    f"{filled or quantity} @ {price or 'n/a'}"
+                )
+
             if self._order_update_handler:
-                self._order_update_handler(order_data)
+                payload = {
+                    "order_id": order_id,
+                    "side": side,
+                    "order_type": order_data.get("order_type") or order_data.get("o") or order_data.get("type") or "UNKNOWN",
+                    "status": status,
+                    "size": quantity,
+                    "price": price,
+                    "contract_id": symbol,
+                    "filled_size": filled,
+                    "raw_event": order_data,
+                }
+                self._order_update_handler(payload)
         except Exception as e:
             self.logger.error(f"Error handling WebSocket order update: {e}")
 
-    async def _handle_liquidation_event(self, payload: Dict[str, Any]) -> None:
-        """Handle forceOrder liquidation events from the user data stream."""
+    async def handle_liquidation_notification(self, payload: Dict[str, Any]) -> None:
+        """Normalize forceOrder messages into LiquidationEvent instances."""
         order = payload.get("o", {})
         symbol = order.get("s")
         if not symbol:
@@ -451,16 +521,45 @@ class AsterClient(BaseExchangeClient):
             raise
         order_status = result.get('status', '')
         order_id = result.get('orderId', '')
+        order_id_str = str(order_id)
 
-        # Wait briefly to confirm order status
+        if order_id_str and order_id_str not in self._latest_orders:
+            self._latest_orders[order_id_str] = OrderInfo(
+                order_id=order_id_str,
+                side=side,
+                size=quantity,
+                price=price,
+                status=order_status or 'NEW',
+                filled_size=Decimal("0"),
+                remaining_size=quantity,
+            )
+
+        # Wait briefly to confirm order status using WebSocket cache (with REST fallback)
         start_time = time.time()
-        while order_status == 'NEW' and time.time() - start_time < 2:
+        order_status_upper = (order_status or '').upper()
+        final_info: Optional[OrderInfo] = None
+        while order_status_upper in {'NEW', 'PARTIALLY_FILLED', 'OPEN'} and time.time() - start_time < 2:
+            cached = self._latest_orders.get(order_id_str)
+            if cached:
+                order_status_upper = (cached.status or '').upper()
+                final_info = cached
+                if order_status_upper in {'FILLED', 'CANCELED', 'EXPIRED', 'REJECTED', 'PARTIALLY_FILLED'}:
+                    break
             await asyncio.sleep(0.1)
             order_info = await self.get_order_info(order_id)
             if order_info is not None:
-                order_status = order_info.status
+                final_info = order_info
+                order_status_upper = (order_info.status or '').upper()
+                if order_status_upper in {'FILLED', 'CANCELED', 'EXPIRED', 'REJECTED', 'PARTIALLY_FILLED'}:
+                    break
 
-        if order_status in ['NEW', 'PARTIALLY_FILLED']:
+        if final_info is None:
+            final_info = self._latest_orders.get(order_id_str)
+
+        if final_info is not None:
+            order_status_upper = (final_info.status or '').upper()
+
+        if order_status_upper in {'NEW', 'PARTIALLY_FILLED', 'OPEN'}:
             return OrderResult(
                 success=True, 
                 order_id=order_id, 
@@ -469,7 +568,7 @@ class AsterClient(BaseExchangeClient):
                 price=price, 
                 status='OPEN'
             )
-        elif order_status == 'FILLED':
+        elif order_status_upper == 'FILLED':
             return OrderResult(
                 success=True, 
                 order_id=order_id, 
@@ -478,15 +577,15 @@ class AsterClient(BaseExchangeClient):
                 price=price, 
                 status='FILLED'
             )
-        elif order_status == 'EXPIRED':
+        elif order_status_upper in {'CANCELED', 'EXPIRED', 'REJECTED'}:
             return OrderResult(
                 success=False, 
-                error_message='Limit order was rejected (post-only constraint)'
+                error_message=f'Limit order did not remain open: {order_status_upper}'
             )
         else:
             return OrderResult(
                 success=False, 
-                error_message=f'Unknown order status: {order_status}'
+                error_message=f'Unknown order status: {order_status_upper or order_status}'
             )
 
     async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
@@ -581,7 +680,37 @@ class AsterClient(BaseExchangeClient):
             })
 
             if 'orderId' in result:
-                return OrderResult(success=True, filled_size=Decimal(result.get('executedQty', 0)))
+                order_id_str = str(result.get('orderId', order_id))
+                filled_size = self._to_decimal(result.get('executedQty'), Decimal("0"))
+                status = result.get('status') or 'CANCELED'
+
+                cached = self._latest_orders.get(order_id_str)
+                if cached:
+                    remaining_size = cached.size - (filled_size or Decimal("0"))
+                    if remaining_size < Decimal("0"):
+                        remaining_size = Decimal("0")
+                    updated = OrderInfo(
+                        order_id=cached.order_id,
+                        side=cached.side,
+                        size=cached.size,
+                        price=cached.price,
+                        status=status,
+                        filled_size=filled_size or cached.filled_size,
+                        remaining_size=remaining_size,
+                    )
+                else:
+                    updated = OrderInfo(
+                        order_id=order_id_str,
+                        side="",
+                        size=filled_size or Decimal("0"),
+                        price=Decimal("0"),
+                        status=status,
+                        filled_size=filled_size or Decimal("0"),
+                        remaining_size=Decimal("0"),
+                    )
+                self._latest_orders[order_id_str] = updated
+
+                return OrderResult(success=True, order_id=order_id_str, status=status, filled_size=filled_size)
             else:
                 return OrderResult(success=False, error_message=result.get('msg', 'Unknown error'))
 
@@ -591,6 +720,13 @@ class AsterClient(BaseExchangeClient):
     @query_retry()
     async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
         """Get order information from Aster."""
+        order_id_str = str(order_id)
+        cached = self._latest_orders.get(order_id_str)
+        if cached is not None:
+            status_upper = (cached.status or "").upper()
+            if status_upper in {"FILLED", "CANCELED", "REJECTED", "EXPIRED"}:
+                return cached
+
         result = await self._make_request('GET', '/fapi/v1/order', {
             'symbol': self.config.contract_id,
             'orderId': order_id
@@ -598,21 +734,29 @@ class AsterClient(BaseExchangeClient):
 
         order_type = result.get('type', '')
         if order_type == 'MARKET':
-            price = Decimal(result.get('avgPrice', 0))
+            price = self._to_decimal(result.get('avgPrice'), Decimal("0"))
         else:
-            price = Decimal(result.get('price', 0))
+            price = self._to_decimal(result.get('price'), Decimal("0"))
 
         if 'orderId' in result:
-            return OrderInfo(
+            size = self._to_decimal(result.get('origQty'), Decimal("0"))
+            filled = self._to_decimal(result.get('executedQty'), Decimal("0"))
+            remaining = None
+            if size is not None and filled is not None:
+                remaining = size - filled
+
+            info = OrderInfo(
                 order_id=str(result['orderId']),
-                side=result.get('side', '').lower(),
-                size=Decimal(result.get('origQty', 0)),
-                price=price,
+                side=(result.get('side') or '').lower(),
+                size=size or Decimal("0"),
+                price=price or Decimal("0"),
                 status=result.get('status', ''),
-                filled_size=Decimal(result.get('executedQty', 0)),
-                remaining_size=Decimal(result.get('origQty', 0)) - Decimal(result.get('executedQty', 0))
+                filled_size=filled or Decimal("0"),
+                remaining_size=remaining or Decimal("0"),
             )
-        return None
+            self._latest_orders[order_id_str] = info
+            return info
+        return cached
 
     @query_retry(default_return=[])
     async def get_active_orders(self, contract_id: str) -> List[OrderInfo]:
@@ -621,15 +765,25 @@ class AsterClient(BaseExchangeClient):
 
         orders = []
         for order in result:
-            orders.append(OrderInfo(
-                order_id=str(order['orderId']),
-                side=order.get('side', '').lower(),
-                size=Decimal(order.get('origQty', 0)) - Decimal(order.get('executedQty', 0)),
-                price=Decimal(order.get('price', 0)),
+            order_id_str = str(order.get('orderId', ''))
+            size = self._to_decimal(order.get('origQty'), Decimal("0"))
+            filled = self._to_decimal(order.get('executedQty'), Decimal("0"))
+            remaining = None
+            if size is not None and filled is not None:
+                remaining = size - filled
+
+            info = OrderInfo(
+                order_id=order_id_str,
+                side=(order.get('side', '') or '').lower(),
+                size=size or Decimal("0"),
+                price=self._to_decimal(order.get('price'), Decimal("0")) or Decimal("0"),
                 status=order.get('status', ''),
-                filled_size=Decimal(order.get('executedQty', 0)),
-                remaining_size=Decimal(order.get('origQty', 0)) - Decimal(order.get('executedQty', 0))
-            ))
+                filled_size=filled or Decimal("0"),
+                remaining_size=remaining or Decimal("0"),
+            )
+            orders.append(info)
+            if order_id_str:
+                self._latest_orders[order_id_str] = info
 
         return orders
 
