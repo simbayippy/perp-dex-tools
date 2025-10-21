@@ -247,6 +247,9 @@ class AtomicMultiOrderExecutor:
                         if not rollback_on_partial:
                             hedge_error = hedge_error or "Hedge failure"
                         else:
+                            self.logger.warning(
+                                f"Hedge failed ({hedge_error or 'no error supplied'}) — attempting rollback of partial fills"
+                            )
                             for ctx in contexts:
                                 ctx.cancel_event.set()
                             remaining = [ctx.task for ctx in contexts if not ctx.completed]
@@ -259,6 +262,9 @@ class AtomicMultiOrderExecutor:
                                 if c.filled_quantity > Decimal("0") and c.result
                             ]
                             rollback_cost = await self._rollback_filled_orders(rollback_payload)
+                            self.logger.warning(
+                                f"Rollback completed after hedge failure; total cost ${rollback_cost:.4f}"
+                            )
                             for ctx in contexts:
                                 ctx.filled_quantity = Decimal("0")
                                 ctx.filled_usd = Decimal("0")
@@ -270,8 +276,8 @@ class AtomicMultiOrderExecutor:
             remaining_tasks = [ctx.task for ctx in contexts if not ctx.completed]
             if remaining_tasks:
                 await asyncio.gather(*remaining_tasks, return_exceptions=True)
-                for ctx in contexts:
-                    await reconcile_context_after_cancel(ctx, self.logger)
+            for ctx in contexts:
+                await reconcile_context_after_cancel(ctx, self.logger)
 
             filled_orders = [
                 ctx.result for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal("0")

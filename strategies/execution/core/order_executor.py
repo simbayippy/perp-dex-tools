@@ -319,7 +319,65 @@ class OrderExecutor:
                 )
             
             order_id = order_result.order_id
-            
+
+            partial_filled_qty = Decimal("0")
+            partial_fill_price: Optional[Decimal] = None
+
+            def _coerce_decimal(value):
+                if isinstance(value, Decimal):
+                    return value
+                if value is None:
+                    return None
+                try:
+                    return Decimal(str(value))
+                except Exception:
+                    return None
+
+            def _update_partial_fill(quantity_candidate, price_candidate) -> None:
+                nonlocal partial_filled_qty, partial_fill_price
+                qty_dec = _coerce_decimal(quantity_candidate)
+                if qty_dec is None or qty_dec <= partial_filled_qty:
+                    return
+                partial_filled_qty = qty_dec
+                price_dec = _coerce_decimal(price_candidate)
+                if price_dec is not None:
+                    partial_fill_price = price_dec
+
+            def _build_partial_execution_result(
+                execution_mode: str,
+                message: str,
+            ) -> ExecutionResult:
+                filled_qty = partial_filled_qty if partial_filled_qty > Decimal("0") else None
+                fill_price = None
+                if filled_qty is not None:
+                    fill_price = partial_fill_price or limit_price
+                slippage_usd = Decimal("0")
+                slippage_pct = Decimal("0")
+                if filled_qty is not None and fill_price is not None and limit_price > 0:
+                    price_delta = abs(fill_price - limit_price)
+                    slippage_usd = price_delta * filled_qty
+                    slippage_pct = price_delta / limit_price
+                    self.logger.info(
+                        f"[{exchange_name.upper()}] Limit order {order_id} {execution_mode} after partial fill "
+                        f"{filled_qty} @ ${fill_price}"
+                    )
+
+                if filled_qty is not None:
+                    message = f"{message} (partial fill qty={filled_qty})"
+
+                return ExecutionResult(
+                    success=filled_qty is not None,
+                    filled=False,
+                    fill_price=fill_price,
+                    filled_quantity=filled_qty,
+                    expected_price=limit_price,
+                    slippage_usd=slippage_usd,
+                    slippage_pct=slippage_pct,
+                    execution_mode_used=execution_mode,
+                    order_id=order_id,
+                    error_message=message,
+                )
+
             # Wait for fill (with timeout)
             start_wait = time.time()
             
@@ -328,20 +386,43 @@ class OrderExecutor:
                     self.logger.info(
                         f"[{exchange_name.upper()}] Cancellation requested for limit order {order_id}"
                     )
+                    cancel_result = None
                     try:
-                        await exchange_client.cancel_order(order_id)
+                        cancel_result = await exchange_client.cancel_order(order_id)
                     except Exception as e:
                         self.logger.error(f"Failed to cancel order {order_id}: {e}")
-                    return ExecutionResult(
-                        success=False,
-                        filled=False,
-                        error_message="Limit order cancelled by executor",
-                        execution_mode_used="limit_cancelled",
-                        order_id=order_id
+                    else:
+                        if cancel_result:
+                            _update_partial_fill(
+                                getattr(cancel_result, "filled_size", None),
+                                getattr(cancel_result, "price", None),
+                            )
+
+                    try:
+                        order_snapshot = await exchange_client.get_order_info(order_id)
+                    except Exception as e:
+                        self.logger.warning(
+                            f"[{exchange_name.upper()}] Failed to fetch final order snapshot for {order_id}: {e}"
+                        )
+                    else:
+                        if order_snapshot:
+                            _update_partial_fill(
+                                getattr(order_snapshot, "filled_size", None),
+                                getattr(order_snapshot, "price", None),
+                            )
+
+                    return _build_partial_execution_result(
+                        execution_mode="limit_cancelled",
+                        message="Limit order cancelled by executor",
                     )
                 # Check order status
                 order_info = await exchange_client.get_order_info(order_id)
-                
+                if order_info:
+                    _update_partial_fill(
+                        getattr(order_info, "filled_size", None),
+                        getattr(order_info, "price", None),
+                    )
+
                 if order_info and order_info.status == "FILLED":
                     fill_price = Decimal(str(order_info.price))
                     filled_qty = Decimal(str(order_info.filled_size))
@@ -377,17 +458,34 @@ class OrderExecutor:
                 f"[{exchange_name.upper()}] Limit order timeout after {timeout_seconds}s, canceling {order_id}"
             )
             
+            cancel_result = None
             try:
-                await exchange_client.cancel_order(order_id)
+                cancel_result = await exchange_client.cancel_order(order_id)
             except Exception as e:
                 self.logger.error(f"Failed to cancel order {order_id}: {e}")
-            
-            return ExecutionResult(
-                success=False,
-                filled=False,
-                error_message=f"Limit order timeout after {timeout_seconds}s",
-                execution_mode_used="limit_timeout",
-                order_id=order_id
+            else:
+                if cancel_result:
+                    _update_partial_fill(
+                        getattr(cancel_result, "filled_size", None),
+                        getattr(cancel_result, "price", None),
+                    )
+
+            try:
+                order_snapshot = await exchange_client.get_order_info(order_id)
+            except Exception as e:
+                self.logger.warning(
+                    f"[{exchange_name.upper()}] Failed to fetch final order snapshot for {order_id}: {e}"
+                )
+            else:
+                if order_snapshot:
+                    _update_partial_fill(
+                        getattr(order_snapshot, "filled_size", None),
+                        getattr(order_snapshot, "price", None),
+                    )
+
+            return _build_partial_execution_result(
+                execution_mode="limit_timeout",
+                message=f"Limit order timeout after {timeout_seconds}s",
             )
         
         except Exception as e:
