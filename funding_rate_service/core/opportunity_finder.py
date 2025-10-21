@@ -357,11 +357,7 @@ class OpportunityFinder:
                     target_oi = short_oi
                 else:
                     logger.info(
-                        "[OPP] %s skipped: required_dex=%s not present (%s/%s)",
-                        symbol,
-                        required_dex_lower,
-                        dex_long,
-                        dex_short,
+                        f"[OPP] {symbol} skipped: required_dex={required_dex_lower} not present ({dex_long}/{dex_short})"
                     )
                     return None
 
@@ -370,57 +366,34 @@ class OpportunityFinder:
                         target_oi = Decimal(str(target_oi))
                     except Exception:
                         logger.info(
-                            "[OPP] %s skipped: unable to coerce target OI %s for dex %s",
-                            symbol,
-                            target_oi,
-                            required_dex_lower,
+                            f"[OPP] {symbol} skipped: unable to coerce target OI {target_oi} for dex {required_dex_lower}"
                         )
                         return None
 
                 if target_oi is None:
                     logger.info(
-                        "[OPP] %s skipped: missing OI for required dex %s",
-                        symbol,
-                        required_dex_lower,
+                        f"[OPP] {symbol} skipped: missing OI for required dex {required_dex_lower}"
                     )
                     return None
 
-            if filters.max_oi_usd is not None and target_oi > filters.max_oi_usd:
+                if filters.max_oi_usd is not None and target_oi > filters.max_oi_usd:
+                    logger.info(
+                        f"[OPP] {symbol} skipped: required dex {required_dex_lower} OI {target_oi} exceeds cap {filters.max_oi_usd}"
+                    )
+                    return None
+
                 logger.info(
-                    "[OPP] %s skipped: required dex %s OI %s exceeds cap %s",
-                    symbol,
-                    required_dex_lower,
-                    target_oi,
-                    filters.max_oi_usd,
+                    f"[OPP] {symbol} accepted: required dex {required_dex_lower} OI {target_oi} within cap {filters.max_oi_usd}"
                 )
-                return None
             else:
+                if min_oi and min_oi > filters.max_oi_usd:
+                    logger.info(
+                        f"[OPP] {symbol} skipped: min OI {min_oi} exceeds cap {filters.max_oi_usd} ({dex_long}/{dex_short})"
+                    )
+                    return None
+
                 logger.info(
-                    "[OPP] %s accepted: required dex %s OI %s within cap %s",
-                    symbol,
-                    required_dex_lower,
-                    target_oi,
-                    filters.max_oi_usd,
-                )
-        else:
-            if min_oi and min_oi > filters.max_oi_usd:
-                logger.info(
-                    "[OPP] %s skipped: min OI %s exceeds cap %s (%s/%s)",
-                    symbol,
-                    min_oi,
-                    filters.max_oi_usd,
-                    dex_long,
-                    dex_short,
-                )
-                return None
-            else:
-                logger.info(
-                    "[OPP] %s accepted: min OI %s within cap %s (%s/%s)",
-                    symbol,
-                    min_oi,
-                    filters.max_oi_usd,
-                    dex_long,
-                    dex_short,
+                    f"[OPP] {symbol} accepted: min OI {min_oi} within cap {filters.max_oi_usd} ({dex_long}/{dex_short})"
                 )
         if filters.oi_ratio_min and oi_ratio:
             if oi_ratio < filters.oi_ratio_min:
