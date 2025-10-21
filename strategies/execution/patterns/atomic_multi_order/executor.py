@@ -45,7 +45,7 @@ class OrderSpec:
     size_usd: Decimal
     quantity: Optional[Decimal] = None
     execution_mode: str = "limit_only"
-    timeout_seconds: float = 60.0
+    timeout_seconds: float = 30.0
     limit_price_offset_pct: Optional[Decimal] = None
 
 

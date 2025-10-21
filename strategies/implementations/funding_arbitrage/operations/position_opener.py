@@ -434,7 +434,7 @@ class PositionOpener:
                 size_usd=long_notional,
                 quantity=common_qty,
                 execution_mode="limit_only",
-                timeout_seconds=60.0,
+                timeout_seconds=30.0,
                 limit_price_offset_pct=limit_offset_pct,
             ),
             OrderSpec(
@@ -444,7 +444,7 @@ class PositionOpener:
                 size_usd=short_notional,
                 quantity=common_qty,
                 execution_mode="limit_only",
-                timeout_seconds=60.0,
+                timeout_seconds=30.0,
                 limit_price_offset_pct=limit_offset_pct,
             ),
         ]
