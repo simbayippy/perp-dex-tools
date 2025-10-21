@@ -38,6 +38,10 @@ class OpportunityFilter(BaseModel):
         default=None, 
         description="Exclude opportunities involving any of these DEXs"
     )
+    required_dex: Optional[str] = Field(
+        default=None,
+        description="Require this DEX to appear on at least one leg"
+    )
     
     # Profitability filters
     min_divergence: Optional[Decimal] = Field(
@@ -101,4 +105,3 @@ class OpportunityFilter(BaseModel):
     
     class Config:
         from_attributes = True
-

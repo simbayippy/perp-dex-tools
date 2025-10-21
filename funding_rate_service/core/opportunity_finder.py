@@ -289,6 +289,12 @@ class OpportunityFinder:
         # Exclude filter (neither DEX should be in exclude list)
         if filters.exclude_dexes and (dex_long in filters.exclude_dexes or dex_short in filters.exclude_dexes):
             return None
+
+        # Required DEX filter (must appear on at least one side)
+        if filters.required_dex:
+            required = filters.required_dex.lower()
+            if dex_long.lower() != required and dex_short.lower() != required:
+                return None
         
         # Volume metrics
         long_volume = long_rate_data.get('volume_24h')
@@ -525,5 +531,4 @@ class OpportunityFinder:
             logger.error(f"Query: {query}")
             logger.error(f"Params: {params}")
             return []
-
 

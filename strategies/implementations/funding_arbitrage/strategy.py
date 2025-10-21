@@ -287,11 +287,17 @@ class FundingArbitrageStrategy(BaseStrategy):
         # Check both 'scan_exchanges' (from YAML) and 'exchanges' (from CLI) for backward compat
         exchanges_str = strategy_params.get('scan_exchanges') or strategy_params.get('exchanges', trading_config.exchange)
         if isinstance(exchanges_str, str):
-            exchanges = [ex.strip() for ex in exchanges_str.split(',')]
+            exchanges = [ex.strip().lower() for ex in exchanges_str.split(',') if ex.strip()]
         elif isinstance(exchanges_str, list):
-            exchanges = exchanges_str
+            exchanges = [str(ex).strip().lower() for ex in exchanges_str if str(ex).strip()]
         else:
             exchanges = [trading_config.exchange]
+
+        primary_exchange = strategy_params.get('primary_exchange')
+        if isinstance(primary_exchange, str):
+            primary_exchange = primary_exchange.strip().lower() or None
+        else:
+            primary_exchange = None
         
         from .config import RiskManagementConfig
         from funding_rate_service.config import settings
@@ -319,6 +325,7 @@ class FundingArbitrageStrategy(BaseStrategy):
         funding_config = FundingArbConfig(
             exchange=trading_config.exchange,  # Primary exchange
             exchanges=exchanges,  # All exchanges for arbitrage
+            primary_exchange=primary_exchange,
             symbols=[trading_config.ticker],
             max_positions=strategy_params.get('max_positions', 5),
             default_position_size_usd=target_exposure,  # Use target_exposure as default position size

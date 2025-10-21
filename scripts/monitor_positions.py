@@ -76,10 +76,16 @@ async def ensure_database_connected(logger) -> None:
 
 
 async def build_exchange_clients(trading_config, exchange_list: Iterable[str]):
+    primary_exchange = trading_config.strategy_params.get("primary_exchange")
+    if isinstance(primary_exchange, str) and primary_exchange.strip():
+        primary_exchange = primary_exchange.strip().lower()
+    else:
+        primary_exchange = None
+
     clients = ExchangeFactory.create_multiple_exchanges(
-        exchange_names=list(exchange_list),
+        exchange_names=[ex.lower() for ex in exchange_list],
         config=trading_config,
-        primary_exchange=trading_config.exchange,
+        primary_exchange=primary_exchange,
     )
     for name, client in clients.items():
         await client.connect()
@@ -102,8 +108,14 @@ async def run_monitor(args: argparse.Namespace) -> None:
     scan_exchanges = loaded["config"].get("scan_exchanges") or loaded["config"].get("exchanges")
     if isinstance(scan_exchanges, str):
         exchange_list = [ex.strip() for ex in scan_exchanges.split(",") if ex.strip()]
+    elif scan_exchanges:
+        exchange_list = [str(ex).strip() for ex in scan_exchanges if str(ex).strip()]
     else:
-        exchange_list = list(scan_exchanges or [trading_config.exchange])
+        fallback_exchange = loaded["config"].get("primary_exchange")
+        exchange_list = [fallback_exchange.strip()] if isinstance(fallback_exchange, str) and fallback_exchange.strip() else []
+
+    if not exchange_list:
+        raise SystemExit("Monitor requires at least one exchange via 'scan_exchanges'.")
 
     await ensure_database_connected(logger)
     exchange_clients = await build_exchange_clients(trading_config, exchange_list)

@@ -11,7 +11,6 @@ from strategies.base_schema import (
     StrategySchema,
     ParameterSchema,
     ParameterType,
-    create_exchange_choice_parameter,
     create_decimal_parameter,
     create_boolean_parameter,
 )
@@ -52,11 +51,17 @@ FUNDING_ARB_SCHEMA = StrategySchema(
         # ====================================================================
         # Exchange Configuration
         # ====================================================================
-        create_exchange_choice_parameter(
+        ParameterSchema(
             key="primary_exchange",
-            prompt="Which exchange should be your PRIMARY exchange?",
+            prompt="Select a PRIMARY exchange (optional, choose 'none' to skip)",
+            param_type=ParameterType.CHOICE,
+            choices=["none"] + ExchangeFactory.get_supported_exchanges(),
+            default="none",
             required=True,
-            help_text="This exchange will handle the main connection and risk management",
+            help_text=(
+                "Optional guardrail: pick a DEX that must participate in every trade. "
+                "Select 'none' if any combination of the scanned exchanges is acceptable."
+            ),
         ),
         ParameterSchema(
             key="scan_exchanges",
@@ -249,7 +254,7 @@ def create_default_funding_config() -> dict:
     Useful for quick testing or as a starting point.
     """
     return {
-        "primary_exchange": "lighter",
+        "primary_exchange": None,
         "scan_exchanges": ["lighter", "grvt", "backpack"],
         "target_exposure": Decimal("100"),
         "max_positions": 5,

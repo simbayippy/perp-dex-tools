@@ -124,6 +124,11 @@ class FundingArbConfig(BaseModel):
         description="DEXes to use (e.g., ['lighter', 'grvt', 'backpack'])"
     )
     
+    primary_exchange: Optional[str] = Field(
+        default=None,
+        description="Optional DEX that must participate in every trade"
+    )
+    
     # Trading pairs
     symbols: Optional[List[str]] = Field(
         default=None,

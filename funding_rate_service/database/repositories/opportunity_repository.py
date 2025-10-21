@@ -184,6 +184,10 @@ class OpportunityRepository:
             dex_list = [d.lower() for d in filters.exclude_dexes]
             where_clauses.append("d1.name != ALL(:exclude_dexes) AND d2.name != ALL(:exclude_dexes)")
             params["exclude_dexes"] = dex_list
+
+        if filters.required_dex:
+            where_clauses.append("(d1.name = :required_dex OR d2.name = :required_dex)")
+            params["required_dex"] = filters.required_dex.lower()
         
         if filters.min_divergence:
             where_clauses.append("o.divergence >= :min_divergence")
@@ -320,4 +324,3 @@ class OpportunityRepository:
             query += f" AND s.symbol = '{filters.symbol.upper()}'"
         
         return await self.db.fetch_val(query)
-

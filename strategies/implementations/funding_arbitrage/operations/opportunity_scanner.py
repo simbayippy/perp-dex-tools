@@ -27,10 +27,17 @@ class OpportunityScanner:
             from funding_rate_service.models.filters import OpportunityFilter
 
             available_exchanges = list(strategy.exchange_clients.keys())
+            primary_dex = getattr(strategy.config, "primary_exchange", None)
+            if isinstance(primary_dex, str) and primary_dex.strip():
+                primary_dex = primary_dex.strip().lower()
+            else:
+                primary_dex = None
+
             filters = OpportunityFilter(
                 min_profit_percent=strategy.config.min_profit,
                 max_oi_usd=strategy.config.max_oi_usd,
                 whitelist_dexes=available_exchanges if available_exchanges else None,
+                required_dex=primary_dex,
                 symbol=None,
                 limit=10,
             )

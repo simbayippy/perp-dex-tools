@@ -272,6 +272,20 @@ class InteractiveConfigBuilder:
                 converted, display_value = self._convert_min_profit_input(value)
                 config[param.key] = converted
                 self._display_overrides[param.key] = display_value
+            elif param.key == "primary_exchange":
+                normalized: Optional[str]
+                if isinstance(value, str):
+                    value_str = value.strip().lower()
+                    normalized = value_str if value_str and value_str != "none" else None
+                else:
+                    normalized = None
+
+                config[param.key] = normalized
+
+                display_value = (
+                    normalized.upper() if normalized else "None"
+                )
+                self._display_overrides[param.key] = display_value
             else:
                 config[param.key] = value
                 if value is not None:

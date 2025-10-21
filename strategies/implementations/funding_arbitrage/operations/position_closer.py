@@ -402,11 +402,17 @@ class PositionCloser:
 
         available_exchanges = list(strategy.exchange_clients.keys())
         whitelist_dexes = available_exchanges if available_exchanges else None
+        required_dex = getattr(strategy.config, "primary_exchange", None)
+        if isinstance(required_dex, str) and required_dex.strip():
+            required_dex = required_dex.strip().lower()
+        else:
+            required_dex = None
 
         filters = OpportunityFilter(
             min_profit_percent=strategy.config.min_profit,
             max_oi_usd=strategy.config.max_oi_usd,
             whitelist_dexes=whitelist_dexes,
+            required_dex=required_dex,
             symbol=None,
             limit=1,
         )

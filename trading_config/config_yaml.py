@@ -188,7 +188,7 @@ def create_example_configs():
         "created_at": datetime.now().isoformat(),
         "version": "1.0",
         "config": {
-            "primary_exchange": "lighter",
+            "primary_exchange": None,
             "scan_exchanges": ["lighter", "grvt", "backpack", "edgex"],
             "target_exposure": Decimal("100"),
             "max_positions": 5,
