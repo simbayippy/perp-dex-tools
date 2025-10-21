@@ -129,8 +129,11 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             min_value=Decimal("1000"),
             max_value=Decimal("999999999"),
             required=False,
-            help_text="For POINT FARMING: use low values (e.g., 50000) to target small markets. "
-            "For PURE PROFIT: use high values (e.g., 10M+) to access all markets",
+            help_text=(
+                "Skip any trade if the lower of the two legs' open interest is above this cap. "
+                "Use a low cap (e.g., 50000) to focus on point-farming pools; "
+                "leave blank or set a high number to allow larger markets."
+            ),
         ),
         # ====================================================================
         # Risk Management
