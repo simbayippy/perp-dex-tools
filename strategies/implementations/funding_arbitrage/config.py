@@ -66,6 +66,43 @@ class RiskManagementConfig(BaseModel):
 
 
 # ============================================================================
+# Atomic Execution Retry Configuration
+# ============================================================================
+
+class AtomicRetryConfig(BaseModel):
+    """Settings for re-attempting partially filled atomic legs."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable retry attempts for partially filled atomic orders.",
+    )
+    max_attempts: int = Field(
+        default=2,
+        description="Maximum number of retry passes to attempt after the initial batch.",
+    )
+    per_attempt_timeout_seconds: float = Field(
+        default=15.0,
+        description="Timeout applied to each retry order (seconds).",
+    )
+    retry_delay_seconds: float = Field(
+        default=1.0,
+        description="Delay between retry passes (seconds).",
+    )
+    max_retry_duration_seconds: float = Field(
+        default=30.0,
+        description="Maximum cumulative time spent retrying before falling back to hedge.",
+    )
+    min_retry_quantity: Decimal = Field(
+        default=Decimal("0"),
+        description="Minimum remaining quantity required to trigger a retry attempt.",
+    )
+    limit_price_offset_pct_override: Optional[Decimal] = Field(
+        default=None,
+        description="Optional override for limit price offset during retries.",
+    )
+
+
+# ============================================================================
 # Main Configuration
 # ============================================================================
 
@@ -196,39 +233,3 @@ class FundingArbConfig(BaseModel):
     def get_risk_strategy(self) -> str:
         """Get risk management strategy name"""
         return self.risk_config.strategy
-
-# ============================================================================
-# Atomic Execution Retry Configuration
-# ============================================================================
-
-class AtomicRetryConfig(BaseModel):
-    """Settings for re-attempting partially filled atomic legs."""
-
-    enabled: bool = Field(
-        default=False,
-        description="Enable retry attempts for partially filled atomic orders.",
-    )
-    max_attempts: int = Field(
-        default=0,
-        description="Maximum number of retry passes to attempt after the initial batch.",
-    )
-    per_attempt_timeout_seconds: float = Field(
-        default=15.0,
-        description="Timeout applied to each retry order (seconds).",
-    )
-    retry_delay_seconds: float = Field(
-        default=1.0,
-        description="Delay between retry passes (seconds).",
-    )
-    max_retry_duration_seconds: float = Field(
-        default=30.0,
-        description="Maximum cumulative time spent retrying before falling back to hedge.",
-    )
-    min_retry_quantity: Decimal = Field(
-        default=Decimal("0"),
-        description="Minimum remaining quantity required to trigger a retry attempt.",
-    )
-    limit_price_offset_pct_override: Optional[Decimal] = Field(
-        default=None,
-        description="Optional override for limit price offset during retries.",
-    )
