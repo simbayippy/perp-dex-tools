@@ -205,7 +205,12 @@ class BackpackClient(BaseExchangeClient):
                 except (InvalidOperation, TypeError, ValueError):
                     decimals = max(0, -tick.normalize().as_tuple().exponent)
                     return Decimal(f"{price:.{decimals}f}")
-        return price
+        # Fallback: Backpack enforces 4 decimal places on price inputs.
+        default_tick = Decimal("0.0001")
+        try:
+            return price.quantize(default_tick, rounding=rounding_mode)
+        except (InvalidOperation, TypeError, ValueError):
+            return price
 
     async def _compute_post_only_price(self, contract_id: str, raw_price: Decimal, side: str) -> Decimal:
         """
