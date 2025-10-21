@@ -32,6 +32,20 @@ from strategies.implementations.funding_arbitrage.config_builder import get_fund
 from strategies.implementations.grid.config_builder import get_grid_schema
 
 
+# Funding arbitrage uses 8-hour funding periods (≈1095 per year)
+FUNDING_PAYMENTS_PER_YEAR = Decimal("1095")
+
+
+def _format_decimal(value: Decimal, precision: int) -> str:
+    """
+    Format a Decimal with fixed precision while trimming trailing zeros.
+    """
+    formatted = f"{value:.{precision}f}"
+    if "." in formatted:
+        formatted = formatted.rstrip("0").rstrip(".")
+    return formatted
+
+
 # ============================================================================
 # Custom Styling
 # ============================================================================
@@ -68,6 +82,7 @@ class InteractiveConfigBuilder:
             "grid": get_grid_schema(),
             "funding_arbitrage": get_funding_arb_schema()
         }
+        self._display_overrides: Dict[str, str] = {}
     
     def build_config(self, use_cli_fallback: bool = False) -> Optional[Dict[str, Any]]:
         """
@@ -240,6 +255,7 @@ class InteractiveConfigBuilder:
         
         config = {}
         total_params = len(schema.parameters)
+        self._display_overrides = {}
         
         for idx, param in enumerate(schema.parameters, 1):
             print(f"\n[{idx}/{total_params}] ", end="")
@@ -249,12 +265,19 @@ class InteractiveConfigBuilder:
                 # User cancelled
                 print("\n\nConfiguration cancelled.")
                 return None
-            
-            config[param.key] = value
-            
-            # Show confirmation
-            if value is not None:
-                display_value = self._format_value_display(value)
+
+            display_value: Optional[str] = None
+
+            if param.key == "min_profit_rate" and value is not None:
+                converted, display_value = self._convert_min_profit_input(value)
+                config[param.key] = converted
+                self._display_overrides[param.key] = display_value
+            else:
+                config[param.key] = value
+                if value is not None:
+                    display_value = self._format_value_display(value)
+
+            if display_value is not None:
                 print(f"✓ {param.key}: {display_value}")
         
         return config
@@ -379,6 +402,16 @@ class InteractiveConfigBuilder:
         else:
             return str(value)
     
+    def _convert_min_profit_input(self, apy_value: Decimal) -> tuple[Decimal, str]:
+        """
+        Convert an APY input (decimal fraction) into the per-funding-interval rate.
+        """
+        per_interval = apy_value / FUNDING_PAYMENTS_PER_YEAR
+        per_interval_str = _format_decimal(per_interval, 9)
+        apy_percent_str = _format_decimal(apy_value * Decimal("100"), 2)
+        display = f"{per_interval_str} per 8h (~{apy_percent_str}% APY)"
+        return per_interval, display
+    
     def _show_summary_and_confirm(self, schema: StrategySchema, config: Dict) -> bool:
         """
         Show configuration summary and ask for confirmation.
@@ -399,13 +432,15 @@ class InteractiveConfigBuilder:
                 print(f"{category_name}:")
                 for key in param_keys:
                     if key in config:
-                        value_display = self._format_value_display(config[key])
+                        override = self._display_overrides.get(key)
+                        value_display = override or self._format_value_display(config[key])
                         print(f"  • {key}: {value_display}")
                 print()
         else:
             # Show all parameters
             for key, value in config.items():
-                value_display = self._format_value_display(value)
+                override = self._display_overrides.get(key)
+                value_display = override or self._format_value_display(value)
                 print(f"  • {key}: {value_display}")
         
         print(f"{'='*70}\n")
