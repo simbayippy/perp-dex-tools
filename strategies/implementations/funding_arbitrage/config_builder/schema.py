@@ -19,6 +19,26 @@ from exchange_clients.factory import ExchangeFactory
 
 
 # ============================================================================
+# Constants
+# ============================================================================
+
+# Funding occurs every 8 hours on most perp venues.
+FUNDING_INTERVAL_HOURS = Decimal("8")
+HOURS_PER_YEAR = Decimal("8760")
+FUNDING_PAYMENTS_PER_YEAR = HOURS_PER_YEAR / FUNDING_INTERVAL_HOURS  # 1095 periods/year
+
+# Legacy per-interval defaults (used by strategy internals)
+DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL = Decimal("0.0001")
+MIN_PROFIT_RATE_PER_INTERVAL = Decimal("0.00001")
+MAX_PROFIT_RATE_PER_INTERVAL = Decimal("0.1")
+
+# User-facing APY equivalents for interactive prompts
+DEFAULT_MIN_PROFIT_APY = DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL * FUNDING_PAYMENTS_PER_YEAR
+MIN_PROFIT_APY = MIN_PROFIT_RATE_PER_INTERVAL * FUNDING_PAYMENTS_PER_YEAR
+MAX_PROFIT_APY = MAX_PROFIT_RATE_PER_INTERVAL * FUNDING_PAYMENTS_PER_YEAR
+
+
+# ============================================================================
 # Funding Arbitrage Strategy Schema
 # ============================================================================
 
@@ -86,13 +106,16 @@ FUNDING_ARB_SCHEMA = StrategySchema(
         # ====================================================================
         create_decimal_parameter(
             key="min_profit_rate",
-            prompt="Minimum profit rate to enter position (e.g., 0.0001 = 0.01%)?",
-            default=Decimal("0.0001"),
-            min_value=Decimal("0.00001"),
-            max_value=Decimal("0.1"),
+            prompt="Minimum annualised net profit (APY) before entering a position? (decimal, 0.50 = 50%)",
+            default=DEFAULT_MIN_PROFIT_APY,
+            min_value=MIN_PROFIT_APY,
+            max_value=MAX_PROFIT_APY,
             required=True,
-            help_text="Only enter positions with net profit (after fees) above this threshold. "
-            "Lower = more opportunities but lower profit per trade",
+            help_text=(
+                "Only take opportunities whose annualised (after-fee) funding yield meets this level. "
+                "Enter as a decimal fraction: 0.10 ≈ 10% APY. The builder converts this to the "
+                "per-funding-interval rate (8h cadence) required by the strategy."
+            ),
         ),
         create_decimal_parameter(
             key="max_oi_usd",
@@ -231,7 +254,7 @@ def create_default_funding_config() -> dict:
         "target_exposure": Decimal("100"),
         "max_positions": 5,
         "max_total_exposure_usd": Decimal("1000"),
-        "min_profit_rate": Decimal("0.0001"),
+        "min_profit_rate": DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL,
         "max_oi_usd": Decimal("10000000"),
         "risk_strategy": "combined",
         "profit_erosion_threshold": Decimal("0.5"),
