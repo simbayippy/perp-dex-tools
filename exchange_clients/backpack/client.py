@@ -301,7 +301,13 @@ class BackpackClient(BaseExchangeClient):
 
             if status == "FILLED":
                 self.logger.info(
-                    f"[ORDER] [{order_id}] FILLED {filled or quantity} @ {price or 'n/a'}"
+                    f"[WEBSOCKET] [BACKPACK] {status} "
+                    f"{filled or quantity} @ {price or 'n/a'}"
+                )
+            else:
+                self.logger.info(
+                    f"[WEBSOCKET] [BACKPACK] {status} "
+                    f"{filled or quantity} @ {price or 'n/a'}"
                 )
 
             if self._order_update_handler:

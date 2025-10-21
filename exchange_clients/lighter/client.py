@@ -294,14 +294,15 @@ class LighterClient(BaseExchangeClient):
             if status == 'OPEN' and filled_size > 0:
                 status = 'PARTIALLY_FILLED'
 
+            # log websocket order update
             if status == 'OPEN':
                 self.logger.info(
-                    f"[LIGHTER] [{order_type}] [{order_id}] ({linked_order_index}) {status} "
+                    f"[WEBSOCKET] [LIGHTER] {status} "
                     f"{size} @ {price}"
                 )
             else:
                 self.logger.info(
-                    f"[LIGHTER] [{order_type}] [{order_id}] ({linked_order_index}) {status} "
+                    f"[WEBSOCKET] [LIGHTER] {status} "
                     f"{filled_size} @ {price}"
                 )
 
