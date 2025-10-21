@@ -244,12 +244,12 @@ class FundingArbFeeCalculator:
             is_profitable=is_profitable
         )
         
-        logger.debug(
-            f"Calculated costs for {dex_long} LONG / {dex_short} SHORT: "
-            f"fees={float(total_fee_bps):.2f}bps, "
-            f"net_rate={float(net_rate):.6f}, "
-            f"net_apy={float(net_apy):.2f}%"
-        )
+        # logger.debug(
+        #     f"Calculated costs for {dex_long} LONG / {dex_short} SHORT: "
+        #     f"fees={float(total_fee_bps):.2f}bps, "
+        #     f"net_rate={float(net_rate):.6f}, "
+        #     f"net_apy={float(net_apy):.2f}%"
+        # )
         
         return costs
     
