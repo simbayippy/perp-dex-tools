@@ -32,7 +32,7 @@ from helpers.unified_logger import get_exchange_logger
 class BackpackClient(BaseExchangeClient):
     """Backpack exchange client implementation."""
 
-    # Backpack exchange enforces a maximum of 3 decimal places for price values
+    # Default maximum decimal places (fallback if we can't infer from market data)
     MAX_PRICE_DECIMALS = 3
 
     def __init__(self, config: Dict[str, Any]):
@@ -48,6 +48,9 @@ class BackpackClient(BaseExchangeClient):
         self._order_update_handler: Optional[Callable[[Dict[str, Any]], None]] = None
         self._market_symbol_map: Dict[str, str] = {}
         self._latest_orders: Dict[str, OrderInfo] = {}
+        
+        # Cache inferred decimal precision per symbol based on observed prices
+        self._symbol_precision: Dict[str, int] = {}
 
         try:
             self.public_client = Public()
@@ -126,6 +129,60 @@ class BackpackClient(BaseExchangeClient):
             return Decimal(str(value))
         except (InvalidOperation, TypeError, ValueError):
             return default
+    
+    @staticmethod
+    def _get_decimal_places(price: Decimal) -> int:
+        """
+        Infer the number of decimal places from a price.
+        
+        Examples:
+            0.7794 -> 4
+            0.001 -> 3
+            100.50 -> 2
+            1000 -> 0
+        """
+        if not isinstance(price, Decimal):
+            price = Decimal(str(price))
+        
+        # Get the exponent (negative for decimals)
+        sign, digits, exponent = price.as_tuple()
+        
+        if isinstance(exponent, int):
+            # Negative exponent means decimal places
+            return abs(exponent) if exponent < 0 else 0
+        
+        # Fallback: count digits after decimal point in string representation
+        price_str = str(price)
+        if '.' in price_str:
+            return len(price_str.split('.')[1].rstrip('0'))
+        return 0
+    
+    def _infer_precision_from_prices(self, symbol: str, bid: Decimal, ask: Decimal) -> int:
+        """
+        Infer the decimal precision for a symbol from observed BBO prices.
+        Caches the result for future use.
+        """
+        # Get max precision from both bid and ask
+        bid_precision = self._get_decimal_places(bid)
+        ask_precision = self._get_decimal_places(ask)
+        precision = max(bid_precision, ask_precision)
+        
+        # Cache it
+        self._symbol_precision[symbol] = precision
+        
+        self.logger.debug(
+            f"[BACKPACK] Inferred precision for {symbol}: {precision}dp "
+            f"(bid={bid} [{bid_precision}dp], ask={ask} [{ask_precision}dp])"
+        )
+        
+        return precision
+    
+    def _get_symbol_precision(self, symbol: str) -> int:
+        """
+        Get the cached decimal precision for a symbol.
+        Falls back to MAX_PRICE_DECIMALS if not yet inferred.
+        """
+        return self._symbol_precision.get(symbol, self.MAX_PRICE_DECIMALS)
 
     @staticmethod
     def _to_internal_symbol(stream_symbol: Optional[str]) -> str:
@@ -195,36 +252,43 @@ class BackpackClient(BaseExchangeClient):
             return f"{value:.{decimals}f}"
         return format(value, "f")
 
-    def _enforce_max_decimals(self, price: Decimal) -> Decimal:
+    def _enforce_max_decimals(self, price: Decimal, symbol: Optional[str] = None) -> Decimal:
         """
-        Enforce Backpack's maximum decimal precision of 3 decimal places.
+        Enforce decimal precision limits for prices.
+        
+        Uses inferred precision from market data if available for the symbol,
+        otherwise falls back to MAX_PRICE_DECIMALS.
         
         Args:
             price: Price to enforce precision on
+            symbol: Optional symbol to use for precision lookup
             
         Returns:
-            Price with at most MAX_PRICE_DECIMALS decimal places
+            Price with appropriate decimal places
         """
         if not isinstance(price, Decimal):
             price = Decimal(str(price))
+        
+        # Determine precision: use inferred if available, else default
+        max_decimals = self._get_symbol_precision(symbol) if symbol else self.MAX_PRICE_DECIMALS
         
         # Get the current number of decimal places
         exponent = price.as_tuple().exponent
         current_decimals = abs(exponent) if isinstance(exponent, int) else 0
         
         # If already within limits, return as is
-        if current_decimals <= self.MAX_PRICE_DECIMALS:
+        if current_decimals <= max_decimals:
             return price
         
-        # Round to MAX_PRICE_DECIMALS
-        tick = Decimal(10) ** -self.MAX_PRICE_DECIMALS
+        # Round to max_decimals
+        tick = Decimal(10) ** -max_decimals
         try:
             return price.quantize(tick, rounding=ROUND_DOWN)
         except (InvalidOperation, TypeError, ValueError):
             # Fallback: use string formatting
-            return Decimal(f"{price:.{self.MAX_PRICE_DECIMALS}f}")
+            return Decimal(f"{price:.{max_decimals}f}")
 
-    def _quantize_to_tick(self, price: Decimal, rounding_mode) -> Decimal:
+    def _quantize_to_tick(self, price: Decimal, rounding_mode, symbol: Optional[str] = None) -> Decimal:
         tick_size = getattr(self.config, "tick_size", None)
         if tick_size and tick_size > 0:
             try:
@@ -234,16 +298,17 @@ class BackpackClient(BaseExchangeClient):
             if tick and tick > 0:
                 try:
                     quantized_price = price.quantize(tick, rounding=rounding_mode)
-                    # Ensure the result doesn't exceed Backpack's max decimal precision
-                    return self._enforce_max_decimals(quantized_price)
+                    # Ensure the result doesn't exceed symbol's decimal precision
+                    return self._enforce_max_decimals(quantized_price, symbol)
                 except (InvalidOperation, TypeError, ValueError):
                     decimals = max(0, -tick.normalize().as_tuple().exponent)
-                    # Enforce Backpack's max decimal precision
-                    decimals = min(decimals, self.MAX_PRICE_DECIMALS)
+                    # Enforce symbol's max decimal precision
+                    max_decimals = self._get_symbol_precision(symbol) if symbol else self.MAX_PRICE_DECIMALS
+                    decimals = min(decimals, max_decimals)
                     return Decimal(f"{price:.{decimals}f}")
         
-        # Enforce Backpack's maximum of 3 decimal places
-        return self._enforce_max_decimals(price)
+        # Enforce symbol's decimal precision
+        return self._enforce_max_decimals(price, symbol)
 
     async def _compute_post_only_price(self, contract_id: str, raw_price: Decimal, side: str) -> Decimal:
         """
@@ -255,7 +320,7 @@ class BackpackClient(BaseExchangeClient):
         tick: Optional[Decimal] = None
 
         rounding_mode = ROUND_DOWN if side.lower() == "buy" else ROUND_UP
-        price = self._quantize_to_tick(price, rounding_mode)
+        price = self._quantize_to_tick(price, rounding_mode, contract_id)
 
         if tick_size and tick_size > 0:
             try:
@@ -281,7 +346,7 @@ class BackpackClient(BaseExchangeClient):
         if price <= 0 and tick and tick > 0:
             price = tick
 
-        price = self._quantize_to_tick(price, ROUND_DOWN if side.lower() == "buy" else ROUND_UP)
+        price = self._quantize_to_tick(price, ROUND_DOWN if side.lower() == "buy" else ROUND_UP, contract_id)
 
         if self.logger and price != original_price:
             self.logger.debug(f"[BACKPACK] Post-only price adjusted: raw={original_price} -> adjusted={price} (best_bid={best_bid or '0'}, best_ask={best_ask or '0'}, tick={tick or 'n/a'})")
@@ -449,15 +514,21 @@ class BackpackClient(BaseExchangeClient):
         # Efficient: Direct access to cached BBO from WebSocket
         if self.ws_manager and self.ws_manager.best_bid is not None and self.ws_manager.best_ask is not None:
             self.logger.info(f"📡 [BACKPACK] Using real-time BBO from WebSocket")
-            return self.ws_manager.best_bid, self.ws_manager.best_ask
+            bid, ask = self.ws_manager.best_bid, self.ws_manager.best_ask
+        else:
+            self.logger.info(f"📞 [REST][BACKPACK] Using REST depth snapshot")
+            order_book = await self.get_order_book_depth(contract_id, levels=1)
+            
+            if not order_book['bids'] or not order_book['asks']:
+                raise ValueError(f"Empty order book for {contract_id}")
+            
+            bid, ask = order_book['bids'][0]['price'], order_book['asks'][0]['price']
         
-        self.logger.info(f"📞 [REST][BACKPACK] Using REST depth snapshot")
-        order_book = await self.get_order_book_depth(contract_id, levels=1)
+        # Infer decimal precision from observed prices
+        if bid and ask and bid > 0 and ask > 0:
+            self._infer_precision_from_prices(contract_id, bid, ask)
         
-        if not order_book['bids'] or not order_book['asks']:
-            raise ValueError(f"Empty order book for {contract_id}")
-        
-        return order_book['bids'][0]['price'], order_book['asks'][0]['price']
+        return bid, ask
 
     async def get_order_book_depth(
         self,
@@ -612,29 +683,51 @@ class BackpackClient(BaseExchangeClient):
                         )
                         best_bid = best_ask = None
                     
-                    # Adjust price further away from best price
-                    # Each retry moves 1-2 ticks further to increase chance of success
-                    adjustment_ticks = Decimal(attempt + 1)
+                    # Get the inferred precision for this symbol
+                    symbol_precision = self._get_symbol_precision(contract_id)
+                    min_tick = Decimal(10) ** -symbol_precision  # e.g., 4dp -> 0.0001
+                    
+                    # Progressive adjustment: more aggressive on each retry
+                    # Must be meaningful relative to the symbol's precision
+                    # Attempt 1: 2-5 ticks, Attempt 2: 5-10 ticks
+                    base_adjustment_ticks = Decimal((attempt + 1) * 3)  # 3, 6, 9...
+                    
+                    # Ensure tick_size is meaningful; if it's smaller than symbol precision, use min_tick
+                    effective_tick = tick_size if tick_size >= min_tick else min_tick
+                    adjustment = effective_tick * base_adjustment_ticks
+                    
+                    self.logger.info(
+                        f"[BACKPACK] Adjustment: {base_adjustment_ticks} ticks × {effective_tick} = {adjustment} "
+                        f"(symbol precision: {symbol_precision}dp)"
+                    )
                     
                     if side.lower() == "buy":
                         # Buy: reduce price (move down, away from best ask)
                         if best_ask and best_ask > 0:
                             # Use current best ask as reference point
-                            current_price = best_ask - (tick_size * adjustment_ticks)
+                            current_price = best_ask - adjustment
                         else:
                             # Fallback: reduce from current price
-                            current_price = current_price - (tick_size * adjustment_ticks)
+                            current_price = current_price - adjustment
                     else:
                         # Sell: increase price (move up, away from best bid)
                         if best_bid and best_bid > 0:
                             # Use current best bid as reference point
-                            current_price = best_bid + (tick_size * adjustment_ticks)
+                            current_price = best_bid + adjustment
                         else:
                             # Fallback: increase from current price
-                            current_price = current_price + (tick_size * adjustment_ticks)
+                            current_price = current_price + adjustment
                     
-                    # Ensure price stays within max decimals
-                    current_price = self._enforce_max_decimals(current_price)
+                    # Quantize to symbol precision to ensure it's valid
+                    try:
+                        precision_quantizer = Decimal(10) ** -symbol_precision
+                        current_price = current_price.quantize(
+                            precision_quantizer,
+                            rounding=ROUND_DOWN if side.lower() == "buy" else ROUND_UP
+                        )
+                    except (InvalidOperation, ValueError):
+                        # Fallback to string formatting
+                        current_price = Decimal(f"{current_price:.{symbol_precision}f}")
                     
                     # Sanity check: price must be positive
                     if current_price <= 0:
