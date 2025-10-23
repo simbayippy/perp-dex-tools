@@ -223,24 +223,59 @@ class BackpackClient(BaseExchangeClient):
         """
         return self._ensure_exchange_symbol(symbol) or symbol
 
-    def _quantize_quantity(self, quantity: Any) -> Decimal:
+    def _quantize_quantity(self, quantity: Any, max_decimals: Optional[int] = None) -> Decimal:
+        """
+        Quantize quantity to appropriate decimal places.
+        
+        Args:
+            quantity: The quantity to quantize
+            max_decimals: Optional maximum decimal places to enforce
+            
+        Returns:
+            Quantized quantity
+        """
         if not isinstance(quantity, Decimal):
             quantity = Decimal(str(quantity))
 
         step_size = getattr(self.config, "step_size", None)
         if not step_size or step_size <= 0:
-            return quantity
+            # No step_size configured - default to 8 decimal places for crypto
+            default_decimals = max_decimals if max_decimals is not None else 8
+            quantizer = Decimal(10) ** -default_decimals
+            return quantity.quantize(quantizer, rounding=ROUND_DOWN)
+        
         try:
             if not isinstance(step_size, Decimal):
                 step_size = Decimal(str(step_size))
-            return quantity.quantize(step_size, rounding=ROUND_DOWN)
+            quantized = quantity.quantize(step_size, rounding=ROUND_DOWN)
+            
+            # Enforce max_decimals if provided
+            if max_decimals is not None:
+                quantizer = Decimal(10) ** -max_decimals
+                quantized = quantized.quantize(quantizer, rounding=ROUND_DOWN)
+            
+            return quantized
         except (InvalidOperation, ValueError):
             decimals = max(0, -Decimal(str(step_size)).normalize().as_tuple().exponent)
+            if max_decimals is not None:
+                decimals = min(decimals, max_decimals)
             return Decimal(f"{quantity:.{decimals}f}")
 
-    def _format_decimal(self, value: Any, step: Optional[Decimal] = None) -> str:
+    def _format_decimal(self, value: Any, step: Optional[Decimal] = None, max_decimals: int = 8) -> str:
+        """
+        Format a decimal value as a string with appropriate precision.
+        
+        Args:
+            value: The value to format
+            step: Optional step size to quantize to
+            max_decimals: Maximum decimal places (default: 8 for crypto)
+            
+        Returns:
+            Formatted string representation
+        """
         if not isinstance(value, Decimal):
             value = Decimal(str(value))
+        
         if step and step > 0:
             try:
                 if not isinstance(step, Decimal):
@@ -249,8 +284,12 @@ class BackpackClient(BaseExchangeClient):
             except (InvalidOperation, ValueError):
                 pass
             decimals = max(0, -step.normalize().as_tuple().exponent)
+            # Cap at max_decimals
+            decimals = min(decimals, max_decimals)
             return f"{value:.{decimals}f}"
-        return format(value, "f")
+        
+        # No step provided - default to max_decimals
+        return f"{value:.{max_decimals}f}".rstrip('0').rstrip('.')
 
     def _enforce_max_decimals(self, price: Decimal, symbol: Optional[str] = None) -> Decimal:
         """
@@ -613,6 +652,9 @@ class BackpackClient(BaseExchangeClient):
 
         quantity_str = self._format_decimal(quantized_quantity, getattr(self.config, "step_size", None))
         
+        # Track quantity precision for potential retries
+        quantity_max_decimals = 8  # Start with 8 decimal places
+        
         # Get tick size for price adjustments
         tick_size = getattr(self.config, "tick_size", Decimal("0.001"))
         if not isinstance(tick_size, Decimal):
@@ -623,6 +665,15 @@ class BackpackClient(BaseExchangeClient):
         current_price = rounded_price
         
         for attempt in range(max_retries):
+            # Recalculate quantity_str if precision was adjusted
+            if attempt > 0:
+                quantized_quantity = self._quantize_quantity(quantity, max_decimals=quantity_max_decimals)
+                quantity_str = self._format_decimal(
+                    quantized_quantity, 
+                    getattr(self.config, "step_size", None),
+                    max_decimals=quantity_max_decimals
+                )
+            
             payload_preview = {
                 "symbol": contract_id,
                 "side": backpack_side,
@@ -636,7 +687,7 @@ class BackpackClient(BaseExchangeClient):
             if attempt > 0:
                 self.logger.info(
                     f"[BACKPACK] Retry {attempt}/{max_retries-1}: "
-                    f"Adjusting price from ${rounded_price} to ${current_price}"
+                    f"quantity={quantity_str}, price=${current_price}"
                 )
             else:
                 self.logger.debug(f"[BACKPACK] Executing limit order payload: {payload_preview}")
@@ -655,10 +706,32 @@ class BackpackClient(BaseExchangeClient):
                 self.logger.error(f"[BACKPACK] Failed to place limit order: {exc}")
                 return OrderResult(success=False, error_message=str(exc))
 
-            # Check for rejection due to immediate matching
+            # Check for rejection due to immediate matching or decimal precision
             if isinstance(result, dict) and result.get("code"):
                 error_code = result.get("code", "")
                 error_msg = result.get("message", "").lower()
+                
+                # Handle quantity decimal too long error
+                if (error_code == "INVALID_CLIENT_REQUEST" and
+                    "quantity decimal too long" in error_msg and
+                    attempt < max_retries - 1):
+                    
+                    # Progressively reduce decimal places: 8 -> 4 -> 2
+                    if quantity_max_decimals > 2:
+                        quantity_max_decimals = max(2, quantity_max_decimals // 2)
+                        self.logger.warning(
+                            f"[BACKPACK] Quantity decimal too long. "
+                            f"Reducing to {quantity_max_decimals} decimal places..."
+                        )
+                        continue
+                    else:
+                        self.logger.error(
+                            f"[BACKPACK] Quantity decimal too long even at {quantity_max_decimals}dp"
+                        )
+                        return OrderResult(
+                            success=False, 
+                            error_message=f"Quantity precision error: {result.get('message')}"
+                        )
                 
                 # Detect "would immediately match" error
                 if (error_code == "INVALID_ORDER" and 
@@ -802,52 +875,106 @@ class BackpackClient(BaseExchangeClient):
             )
             self.logger.error(f"[BACKPACK] {message}")
             return OrderResult(success=False, error_message=message)
+        
         quantity_str = self._format_decimal(quantized_quantity, getattr(self.config, "step_size", None))
-        payload_preview = {
-            "symbol": contract_id,
-            "side": backpack_side,
-            "orderType": OrderTypeEnum.MARKET,
-            "quantity": quantity_str,
-        }
-        self.logger.debug(f"[BACKPACK] Executing market order payload: {payload_preview}")
+        
+        # Track quantity precision for potential retries
+        quantity_max_decimals = 8
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            # Recalculate quantity_str if precision was adjusted
+            if attempt > 0:
+                quantized_quantity = self._quantize_quantity(quantity, max_decimals=quantity_max_decimals)
+                quantity_str = self._format_decimal(
+                    quantized_quantity,
+                    getattr(self.config, "step_size", None),
+                    max_decimals=quantity_max_decimals
+                )
+            
+            payload_preview = {
+                "symbol": contract_id,
+                "side": backpack_side,
+                "orderType": OrderTypeEnum.MARKET,
+                "quantity": quantity_str,
+            }
+            
+            if attempt > 0:
+                self.logger.info(f"[BACKPACK] Market order retry {attempt}: quantity={quantity_str}")
+            else:
+                self.logger.debug(f"[BACKPACK] Executing market order payload: {payload_preview}")
 
-        try:
-            result = self.account_client.execute_order(
-                symbol=contract_id,
-                side=backpack_side,
-                order_type=OrderTypeEnum.MARKET,
-                quantity=quantity_str,
+            try:
+                result = self.account_client.execute_order(
+                    symbol=contract_id,
+                    side=backpack_side,
+                    order_type=OrderTypeEnum.MARKET,
+                    quantity=quantity_str,
+                )
+            except Exception as exc:
+                self.logger.error(f"[BACKPACK] Failed to place market order: {exc}")
+                return OrderResult(success=False, error_message=str(exc))
+
+            self.logger.debug(f"[BACKPACK] Market order response: {result}")
+            
+            # Check for errors
+            if isinstance(result, dict) and result.get("code"):
+                error_code = result.get("code", "")
+                error_msg = result.get("message", "").lower()
+                
+                # Handle quantity decimal too long error
+                if (error_code == "INVALID_CLIENT_REQUEST" and
+                    "quantity decimal too long" in error_msg and
+                    attempt < max_retries - 1):
+                    
+                    if quantity_max_decimals > 2:
+                        quantity_max_decimals = max(2, quantity_max_decimals // 2)
+                        self.logger.warning(
+                            f"[BACKPACK] Market order quantity decimal too long. "
+                            f"Reducing to {quantity_max_decimals} decimal places..."
+                        )
+                        continue
+                    else:
+                        self.logger.error(
+                            f"[BACKPACK] Quantity decimal too long even at {quantity_max_decimals}dp"
+                        )
+                        return OrderResult(
+                            success=False,
+                            error_message=f"Quantity precision error: {result.get('message')}"
+                        )
+                
+                # Other errors
+                self.logger.error(f"[BACKPACK] Market order rejected: {result}")
+                return OrderResult(success=False, error_message=result.get("message", "Order rejected"))
+
+            # Order succeeded
+            if not result or "id" not in result:
+                return OrderResult(success=False, error_message="Market order response missing order id")
+
+            status = (result.get("status") or "").upper()
+            executed_qty = self._to_decimal(result.get("executedQuantity"), Decimal("0"))
+            executed_quote_qty = self._to_decimal(result.get("executedQuoteQuantity"), Decimal("0"))
+            avg_price = Decimal("0")
+            if executed_qty and executed_qty > 0:
+                avg_price = (executed_quote_qty or Decimal("0")) / executed_qty
+
+            success = status == "FILLED"
+
+            return OrderResult(
+                success=success,
+                order_id=str(result.get("id")),
+                side=side.lower(),
+                size=executed_qty or quantized_quantity,
+                price=avg_price,
+                status=status,
+                filled_size=executed_qty,
+                error_message=None if success else f"Market order status: {status}",
             )
-        except Exception as exc:
-            self.logger.error(f"[BACKPACK] Failed to place market order: {exc}")
-            return OrderResult(success=False, error_message=str(exc))
-
-        self.logger.debug(f"[BACKPACK] Market order response: {result}")
-        if isinstance(result, dict) and result.get("code"):
-            self.logger.error(f"[BACKPACK] Market order rejected: {result}")
-            return OrderResult(success=False, error_message=result.get("message", "Order rejected"))
-
-        if not result or "id" not in result:
-            return OrderResult(success=False, error_message="Market order response missing order id")
-
-        status = (result.get("status") or "").upper()
-        executed_qty = self._to_decimal(result.get("executedQuantity"), Decimal("0"))
-        executed_quote_qty = self._to_decimal(result.get("executedQuoteQuantity"), Decimal("0"))
-        avg_price = Decimal("0")
-        if executed_qty and executed_qty > 0:
-            avg_price = (executed_quote_qty or Decimal("0")) / executed_qty
-
-        success = status == "FILLED"
-
+        
+        # Max retries exceeded
         return OrderResult(
-            success=success,
-            order_id=str(result.get("id")),
-            side=side.lower(),
-            size=executed_qty or quantized_quantity,
-            price=avg_price,
-            status=status,
-            filled_size=executed_qty,
-            error_message=None if success else f"Market order status: {status}",
+            success=False,
+            error_message="Max retries exceeded for market order placement"
         )
 
     async def cancel_order(self, order_id: str) -> OrderResult:
