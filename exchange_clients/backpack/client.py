@@ -32,6 +32,9 @@ from helpers.unified_logger import get_exchange_logger
 class BackpackClient(BaseExchangeClient):
     """Backpack exchange client implementation."""
 
+    # Backpack exchange enforces a maximum of 3 decimal places for price values
+    MAX_PRICE_DECIMALS = 3
+
     def __init__(self, config: Dict[str, Any]):
         """Initialize Backpack client."""
         super().__init__(config)
@@ -192,6 +195,35 @@ class BackpackClient(BaseExchangeClient):
             return f"{value:.{decimals}f}"
         return format(value, "f")
 
+    def _enforce_max_decimals(self, price: Decimal) -> Decimal:
+        """
+        Enforce Backpack's maximum decimal precision of 3 decimal places.
+        
+        Args:
+            price: Price to enforce precision on
+            
+        Returns:
+            Price with at most MAX_PRICE_DECIMALS decimal places
+        """
+        if not isinstance(price, Decimal):
+            price = Decimal(str(price))
+        
+        # Get the current number of decimal places
+        exponent = price.as_tuple().exponent
+        current_decimals = abs(exponent) if isinstance(exponent, int) else 0
+        
+        # If already within limits, return as is
+        if current_decimals <= self.MAX_PRICE_DECIMALS:
+            return price
+        
+        # Round to MAX_PRICE_DECIMALS
+        tick = Decimal(10) ** -self.MAX_PRICE_DECIMALS
+        try:
+            return price.quantize(tick, rounding=ROUND_DOWN)
+        except (InvalidOperation, TypeError, ValueError):
+            # Fallback: use string formatting
+            return Decimal(f"{price:.{self.MAX_PRICE_DECIMALS}f}")
+
     def _quantize_to_tick(self, price: Decimal, rounding_mode) -> Decimal:
         tick_size = getattr(self.config, "tick_size", None)
         if tick_size and tick_size > 0:
@@ -201,16 +233,17 @@ class BackpackClient(BaseExchangeClient):
                 tick = None
             if tick and tick > 0:
                 try:
-                    return price.quantize(tick, rounding=rounding_mode)
+                    quantized_price = price.quantize(tick, rounding=rounding_mode)
+                    # Ensure the result doesn't exceed Backpack's max decimal precision
+                    return self._enforce_max_decimals(quantized_price)
                 except (InvalidOperation, TypeError, ValueError):
                     decimals = max(0, -tick.normalize().as_tuple().exponent)
+                    # Enforce Backpack's max decimal precision
+                    decimals = min(decimals, self.MAX_PRICE_DECIMALS)
                     return Decimal(f"{price:.{decimals}f}")
-        # Fallback: Backpack enforces 4 decimal places on price inputs.
-        default_tick = Decimal("0.0001")
-        try:
-            return price.quantize(default_tick, rounding=rounding_mode)
-        except (InvalidOperation, TypeError, ValueError):
-            return price
+        
+        # Enforce Backpack's maximum of 3 decimal places
+        return self._enforce_max_decimals(price)
 
     async def _compute_post_only_price(self, contract_id: str, raw_price: Decimal, side: str) -> Decimal:
         """
