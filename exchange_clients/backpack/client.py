@@ -446,45 +446,18 @@ class BackpackClient(BaseExchangeClient):
     @query_retry(default_return=(Decimal("0"), Decimal("0")))
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
         """Fetch best bid/offer, preferring WebSocket data when available."""
+        # Efficient: Direct access to cached BBO from WebSocket
         if self.ws_manager and self.ws_manager.best_bid is not None and self.ws_manager.best_ask is not None:
             self.logger.info(f"📡 [BACKPACK] Using real-time BBO from WebSocket")
             return self.ws_manager.best_bid, self.ws_manager.best_ask
-
+        
         self.logger.info(f"📞 [REST][BACKPACK] Using REST depth snapshot")
-        # Fall back to REST depth snapshot
-        try:
-            symbol = self._ensure_exchange_symbol(contract_id)
-            order_book = self.public_client.get_depth(symbol)
-        except Exception as exc:
-            self.logger.error(f"[BACKPACK] Failed to fetch depth for {contract_id}: {exc}")
-            raise
-
-        bids = order_book.get("bids", []) if isinstance(order_book, dict) else []
-        asks = order_book.get("asks", []) if isinstance(order_book, dict) else []
-
-        try:
-            best_bid = max((self._to_decimal(level[0], Decimal("0")) for level in bids), default=Decimal("0"))
-        except Exception:
-            best_bid = Decimal("0")
-
-        try:
-            best_ask = min((self._to_decimal(level[0], Decimal("0")) for level in asks if level), default=Decimal("0"))
-        except Exception:
-            best_ask = Decimal("0")
-
-        return best_bid, best_ask
-
-    def _get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
-        """Return the latest order book maintained by the WebSocket manager."""
-        if not self.ws_manager:
-            self.logger.warning(f"📞 [BACKPACK] No WebSocket manager available")
-            return None
-        book = self.ws_manager.get_order_book()
-        self.logger.info(
-            f"📡 [BACKPACK] Using real-time order book from WebSocket "
-            f"({len(book['bids'])} bids, {len(book['asks'])} asks)"
-        )
-        return book
+        order_book = await self.get_order_book_depth(contract_id, levels=1)
+        
+        if not order_book['bids'] or not order_book['asks']:
+            raise ValueError(f"Empty order book for {contract_id}")
+        
+        return order_book['bids'][0]['price'], order_book['asks'][0]['price']
 
     async def get_order_book_depth(
         self,

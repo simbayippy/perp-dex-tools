@@ -393,10 +393,10 @@ class LighterClient(BaseExchangeClient):
                     f"Failed to parse liquidation notification: {notification} ({exc})"
                 )
 
-    @query_retry(default_return=(0, 0))
+    @query_retry(default_return=(Decimal("0"), Decimal("0")))
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
         """
-        Get best bid/offer prices using REST API.
+        Get best bid/offer prices, preferring WebSocket data when available.
         
         Note: This method is kept for backward compatibility with legacy code
         that calls it directly. New code should use PriceProvider instead.
@@ -404,6 +404,13 @@ class LighterClient(BaseExchangeClient):
         For real-time monitoring, WebSocket data is available via ws_manager.
         For order execution, use PriceProvider which orchestrates fresh data retrieval.
         """
+        # Efficient: Direct access to cached BBO from WebSocket
+        if self.ws_manager and self.ws_manager.best_bid is not None and self.ws_manager.best_ask is not None:
+            self.logger.info(f"📡 [LIGHTER] Using real-time BBO from WebSocket")
+            return Decimal(str(self.ws_manager.best_bid)), Decimal(str(self.ws_manager.best_ask))
+        
+        # DRY: Reuse existing orderbook logic for REST fallback
+        self.logger.info(f"📞 [REST][LIGHTER] Using REST API fallback")
         try:
             order_book = await self.get_order_book_depth(contract_id, levels=1)
             
@@ -418,56 +425,6 @@ class LighterClient(BaseExchangeClient):
         except Exception as e:
             self.logger.error(f"❌ [LIGHTER] Failed to get BBO prices: {e}")
             raise ValueError(f"Unable to fetch BBO prices for {contract_id}: {e}")
-
-    def _get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
-        """
-        Get order book from WebSocket if available (zero latency).
-        
-        Returns:
-            Order book dict if WebSocket is connected and has data, None otherwise
-        """
-        try:
-            if not self.ws_manager:
-                self.logger.warning(f"📞 [BACKPACK] No WebSocket manager available")
-                return None
-            
-            if not self.ws_manager.running:
-                return None
-            
-            if not self.ws_manager.snapshot_loaded:
-                return None
-            
-            
-            if not self.ws_manager.snapshot_loaded:
-                return None
-            
-            # Check if order book has data
-            if not self.ws_manager.order_book["bids"] or not self.ws_manager.order_book["asks"]:
-                return None
-            
-            # Convert WebSocket order book to standard format
-            bids = [
-                {'price': Decimal(str(price)), 'size': Decimal(str(size))}
-                for price, size in sorted(self.ws_manager.order_book["bids"].items(), reverse=True)
-            ]
-            asks = [
-                {'price': Decimal(str(price)), 'size': Decimal(str(size))}
-                for price, size in sorted(self.ws_manager.order_book["asks"].items())
-            ]
-            
-            self.logger.info(
-                f"📡 [LIGHTER] Using real-time order book from WebSocket "
-                f"({len(bids)} bids, {len(asks)} asks)"
-            )
-            
-            return {
-                'bids': bids,
-                'asks': asks
-            }
-            
-        except Exception as e:
-            self.logger.warning(f"Failed to get order book from WebSocket: {e}")
-            return None
 
     async def get_order_book_depth(
         self, 
@@ -488,17 +445,18 @@ class LighterClient(BaseExchangeClient):
         """
         try:
             # 🔴 Priority 1: Try WebSocket (real-time, zero latency)
-            ws_book = self._get_order_book_from_websocket()
-            if ws_book:
-                # Limit to requested levels
-                return {
-                    'bids': ws_book['bids'][:levels],
-                    'asks': ws_book['asks'][:levels]
-                }
+            if self.ws_manager:
+                ws_book = self.ws_manager.get_order_book(levels)
+                if ws_book:
+                    self.logger.info(
+                        f"📡 [LIGHTER] Using real-time order book from WebSocket "
+                        f"({len(ws_book['bids'])} bids, {len(ws_book['asks'])} asks)"
+                    )
+                    return ws_book
             
             # 🔄 Priority 2: Fall back to REST API
             self.logger.info(
-                f"📞 [REST] Fetching order book via REST API (WebSocket not available)"
+                f"📞 [REST][LIGHTER] Fetching order book via REST API (WebSocket not available)"
             )
             # Use REST API for order book (more reliable than WebSocket for one-time queries)
             url = f"{self.base_url}/api/v1/orderBookOrders"
