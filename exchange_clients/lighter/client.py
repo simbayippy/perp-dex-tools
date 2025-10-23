@@ -1091,13 +1091,29 @@ class LighterClient(BaseExchangeClient):
             self.logger.debug("[LIGHTER] No account_index configured, cannot fetch funding")
             return None
         
+        # Generate auth token for API call
+        if not hasattr(self, 'lighter_client') or self.lighter_client is None:
+            self.logger.debug("[LIGHTER] No lighter_client available for auth")
+            return None
+        
         try:
-            # Fetch position funding history
+            auth_token, error = self.lighter_client.create_auth_token_with_expiry()
+            if error:
+                self.logger.debug(f"[LIGHTER] Error creating auth token for funding: {error}")
+                return None
+        except Exception as exc:
+            self.logger.debug(f"[LIGHTER] Failed to create auth token: {exc}")
+            return None
+        
+        try:
+            # Fetch position funding history with authentication
             response = await self.account_api.position_funding(
                 account_index=account_index,
                 market_id=market_id,
                 limit=100,  # Get recent funding payments
                 side=side if side else 'all',
+                auth=auth_token,  # Required for main accounts
+                _request_timeout=10,
             )
             
             if not response or not hasattr(response, 'position_fundings'):
