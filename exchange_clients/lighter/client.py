@@ -1107,12 +1107,14 @@ class LighterClient(BaseExchangeClient):
         
         try:
             # Fetch position funding history with authentication
+            # Lighter requires BOTH auth (query param) and authorization (header) for main accounts
             response = await self.account_api.position_funding(
                 account_index=account_index,
                 market_id=market_id,
                 limit=100,  # Get recent funding payments
                 side=side if side else 'all',
-                auth=auth_token,  # Required for main accounts
+                auth=auth_token,  # Query parameter
+                authorization=auth_token,  # Header parameter - required for main accounts
                 _request_timeout=10,
             )
             
