@@ -1309,9 +1309,9 @@ class BackpackClient(BaseExchangeClient):
             )
 
             entry_price = self._to_decimal(
-                position.get("averageEntryPrice")
-                or position.get("avgEntryPrice")
-                or position.get("entryPrice"),
+                position.get("entryPrice")  # Backpack's actual field name
+                or position.get("averageEntryPrice")
+                or position.get("avgEntryPrice"),
             )
 
             mark_price = self._to_decimal(
@@ -1332,15 +1332,22 @@ class BackpackClient(BaseExchangeClient):
                 exposure = mark_price * quantity.copy_abs()
 
             unrealized = self._to_decimal(
-                position.get("unrealizedPnl")
+                position.get("pnlUnrealized")  # Backpack's actual field name
+                or position.get("unrealizedPnl")
                 or position.get("unrealizedPnlUsd")
                 or position.get("unrealizedPnL")
                 or position.get("pnl"),
             )
 
-            realized = self._to_decimal(position.get("realizedPnl") or position.get("realizedPnlUsd"))
+            realized = self._to_decimal(
+                position.get("pnlRealized")  # Backpack's actual field name
+                or position.get("realizedPnl")
+                or position.get("realizedPnlUsd")
+            )
             funding_accrued = self._to_decimal(
-                position.get("fundingFees") or position.get("fundingAccrued")
+                position.get("cumulativeFundingPayment")  # Backpack's actual field name
+                or position.get("fundingFees")
+                or position.get("fundingAccrued")
             )
             margin_reserved = self._to_decimal(
                 position.get("initialMargin")
@@ -1348,7 +1355,10 @@ class BackpackClient(BaseExchangeClient):
                 or position.get("allocatedMargin")
             )
             leverage = self._to_decimal(position.get("leverage"))
-            liquidation_price = self._to_decimal(position.get("liquidationPrice"))
+            liquidation_price = self._to_decimal(
+                position.get("estLiquidationPrice")  # Backpack's actual field name
+                or position.get("liquidationPrice")
+            )
 
             side = None
             if isinstance(quantity, Decimal):
@@ -1359,7 +1369,7 @@ class BackpackClient(BaseExchangeClient):
 
             metadata: Dict[str, Any] = {
                 "backpack_symbol": raw_symbol,
-                "position_id": position.get("id") or position.get("positionId"),
+                "position_id": position.get("positionId") or position.get("id"),  # Backpack uses 'positionId'
                 "updated_at": position.get("updatedAt"),
             }
             if notional is not None:
