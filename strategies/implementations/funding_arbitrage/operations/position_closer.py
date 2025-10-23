@@ -668,8 +668,8 @@ class PositionCloser:
             side=leg["side"],
             size_usd=notional,
             quantity=quantity,
-            execution_mode="limit_with_fallback",
-            timeout_seconds=60.0,
+            execution_mode="limit_only",
+            timeout_seconds=30.0,
             limit_price_offset_pct=limit_offset_pct,
         )
 
