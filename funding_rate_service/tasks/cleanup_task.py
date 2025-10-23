@@ -9,7 +9,7 @@ from typing import Dict, Any
 from datetime import datetime, timedelta
 
 from funding_rate_service.tasks.base_task import BaseTask
-from funding_rate_service.database.connection import database
+from database.connection import database
 from funding_rate_service.utils.logger import logger
 
 

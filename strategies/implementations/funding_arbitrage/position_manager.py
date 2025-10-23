@@ -24,10 +24,10 @@ from .models import FundingArbPosition
 
 # Import database connection from funding_rate_service (optional for testing)
 try:
-    from funding_rate_service.database.connection import database
+    from database.connection import database
     from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
-    from funding_rate_service.database.repositories.symbol_repository import SymbolRepository
-    from funding_rate_service.database.repositories.dex_repository import DEXRepository
+    from database.repositories.symbol_repository import SymbolRepository
+    from database.repositories.dex_repository import DEXRepository
     DATABASE_AVAILABLE = True
 except ImportError:
     # For testing - database not available

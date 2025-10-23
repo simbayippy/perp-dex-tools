@@ -10,8 +10,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from funding_rate_service.database.connection import database
-from funding_rate_service.database.migration_manager import run_startup_migrations
+from database.connection import database
+from database.migration_manager import run_startup_migrations
 from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
 from funding_rate_service.core.fee_calculator import fee_calculator
 from funding_rate_service.core.opportunity_finder import OpportunityFinder

@@ -20,8 +20,8 @@ from .models import FundingArbPosition
 # Make imports conditional to avoid config loading issues during import
 try:
     from funding_rate_service.core.opportunity_finder import OpportunityFinder
-    from funding_rate_service.database.repositories import FundingRateRepository
-    from funding_rate_service.database.connection import database
+    from database.repositories import FundingRateRepository
+    from database.connection import database
     FUNDING_SERVICE_AVAILABLE = True
 except ImportError as e:
     # For testing or when funding service config is not available
