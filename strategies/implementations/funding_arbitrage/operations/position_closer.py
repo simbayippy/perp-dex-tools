@@ -137,6 +137,7 @@ class PositionCloser:
 
             await self._close_exchange_positions(
                 position,
+                reason=reason,
                 live_snapshots=live_snapshots,
             )
 
@@ -466,6 +467,7 @@ class PositionCloser:
         self,
         position: "FundingArbPosition",
         *,
+        reason: str = "UNKNOWN",
         live_snapshots: Optional[
             Dict[str, Optional["ExchangePositionSnapshot"]]
         ] = None,
@@ -559,17 +561,34 @@ class PositionCloser:
             return
 
         if len(legs) == 1:
-            await self._force_close_leg(position.symbol, legs[0])
+            await self._force_close_leg(position.symbol, legs[0], reason=reason)
             return
 
-        await self._close_legs_atomically(position, legs)
+        await self._close_legs_atomically(position, legs, reason=reason)
 
     async def _close_legs_atomically(
         self,
         position: "FundingArbPosition",
         legs: List[Dict[str, Any]],
+        reason: str = "UNKNOWN",
     ) -> None:
         strategy = self._strategy
+        
+        # Log the close operation with details
+        leg_summary = []
+        for leg in legs:
+            dex = leg.get("dex", "UNKNOWN")
+            side = leg.get("side", "?")
+            quantity = leg.get("quantity", Decimal("0"))
+            leg_summary.append(f"{dex.upper()}:{side}:{quantity}")
+        
+        strategy.logger.log(
+            f"🔒 Closing position {position.symbol} atomically | "
+            f"Reason: {reason} | "
+            f"Legs: [{', '.join(leg_summary)}]",
+            "INFO"
+        )
+        
         order_specs: List[OrderSpec] = []
 
         for leg in legs:
@@ -602,8 +621,21 @@ class PositionCloser:
         self,
         symbol: str,
         leg: Dict[str, Any],
+        reason: str = "UNKNOWN",
     ) -> None:
         strategy = self._strategy
+        
+        dex = leg.get("dex", "UNKNOWN")
+        side = leg.get("side", "?")
+        quantity = leg.get("quantity", Decimal("0"))
+        
+        strategy.logger.log(
+            f"🔒 Closing single leg {symbol} | "
+            f"Reason: {reason} | "
+            f"Leg: {dex.upper()}:{side}:{quantity}",
+            "INFO"
+        )
+        
         leg["contract_id"] = await self._prepare_contract_context(
             leg["client"],
             symbol,

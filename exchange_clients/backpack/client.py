@@ -956,13 +956,20 @@ class BackpackClient(BaseExchangeClient):
     async def get_account_positions(self) -> Decimal:
         """Return absolute position size for configured contract."""
         try:
-            positions = self.account_client.get_open_positions()
+            positions = await asyncio.to_thread(self.account_client.get_open_positions)
         except Exception as exc:
             self.logger.error(f"[BACKPACK] Failed to fetch open positions: {exc}")
             return Decimal("0")
 
         contract_id = getattr(self.config, "contract_id", None)
         if not positions or not contract_id:
+            return Decimal("0")
+        
+        # Validate response type
+        if not isinstance(positions, list):
+            self.logger.warning(
+                f"[BACKPACK] Unexpected response type from get_open_positions: {type(positions).__name__}"
+            )
             return Decimal("0")
 
         for position in positions:
@@ -1285,12 +1292,34 @@ class BackpackClient(BaseExchangeClient):
         target_symbol = self.normalize_symbol(normalized_symbol)
 
         try:
-            positions = self.account_client.get_open_positions()
+            # Wrap synchronous SDK call in asyncio.to_thread
+            positions = await asyncio.to_thread(self.account_client.get_open_positions)
         except Exception as exc:
             self.logger.warning(f"[BACKPACK] Failed to fetch positions for snapshot: {exc}")
             return None
 
+        # Validate response is actually a list, not an error string/dict
         if not positions:
+            return None
+        
+        # Handle API error responses (e.g., {"code": "ERROR", "message": "..."})
+        if isinstance(positions, dict):
+            if positions.get("code") or positions.get("error"):
+                self.logger.warning(
+                    f"[BACKPACK] API error fetching positions: {positions.get('message') or positions}"
+                )
+                return None
+        
+        # Handle unexpected string responses
+        if isinstance(positions, str):
+            self.logger.warning(f"[BACKPACK] Unexpected string response from API: {positions}")
+            return None
+        
+        # Ensure it's iterable (list)
+        if not isinstance(positions, list):
+            self.logger.warning(
+                f"[BACKPACK] Unexpected response type: {type(positions).__name__}"
+            )
             return None
 
         for position in positions:
