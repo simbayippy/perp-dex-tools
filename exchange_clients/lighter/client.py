@@ -6,7 +6,6 @@ import os
 import asyncio
 import time
 from datetime import datetime, timezone
-import aiohttp
 from decimal import Decimal, InvalidOperation
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -393,10 +392,10 @@ class LighterClient(BaseExchangeClient):
                     f"Failed to parse liquidation notification: {notification} ({exc})"
                 )
 
-    @query_retry(default_return=(0, 0))
+    @query_retry(default_return=(Decimal("0"), Decimal("0")))
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
         """
-        Get best bid/offer prices using REST API.
+        Get best bid/offer prices, preferring WebSocket data when available.
         
         Note: This method is kept for backward compatibility with legacy code
         that calls it directly. New code should use PriceProvider instead.
@@ -404,6 +403,13 @@ class LighterClient(BaseExchangeClient):
         For real-time monitoring, WebSocket data is available via ws_manager.
         For order execution, use PriceProvider which orchestrates fresh data retrieval.
         """
+        # Efficient: Direct access to cached BBO from WebSocket
+        if self.ws_manager and self.ws_manager.best_bid is not None and self.ws_manager.best_ask is not None:
+            self.logger.info(f"📡 [LIGHTER] Using real-time BBO from WebSocket")
+            return Decimal(str(self.ws_manager.best_bid)), Decimal(str(self.ws_manager.best_ask))
+        
+        # DRY: Reuse existing orderbook logic for REST fallback
+        self.logger.info(f"📞 [REST][LIGHTER] Using REST API fallback")
         try:
             order_book = await self.get_order_book_depth(contract_id, levels=1)
             
@@ -418,56 +424,6 @@ class LighterClient(BaseExchangeClient):
         except Exception as e:
             self.logger.error(f"❌ [LIGHTER] Failed to get BBO prices: {e}")
             raise ValueError(f"Unable to fetch BBO prices for {contract_id}: {e}")
-
-    def _get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
-        """
-        Get order book from WebSocket if available (zero latency).
-        
-        Returns:
-            Order book dict if WebSocket is connected and has data, None otherwise
-        """
-        try:
-            if not self.ws_manager:
-                self.logger.warning(f"📞 [BACKPACK] No WebSocket manager available")
-                return None
-            
-            if not self.ws_manager.running:
-                return None
-            
-            if not self.ws_manager.snapshot_loaded:
-                return None
-            
-            
-            if not self.ws_manager.snapshot_loaded:
-                return None
-            
-            # Check if order book has data
-            if not self.ws_manager.order_book["bids"] or not self.ws_manager.order_book["asks"]:
-                return None
-            
-            # Convert WebSocket order book to standard format
-            bids = [
-                {'price': Decimal(str(price)), 'size': Decimal(str(size))}
-                for price, size in sorted(self.ws_manager.order_book["bids"].items(), reverse=True)
-            ]
-            asks = [
-                {'price': Decimal(str(price)), 'size': Decimal(str(size))}
-                for price, size in sorted(self.ws_manager.order_book["asks"].items())
-            ]
-            
-            self.logger.info(
-                f"📡 [LIGHTER] Using real-time order book from WebSocket "
-                f"({len(bids)} bids, {len(asks)} asks)"
-            )
-            
-            return {
-                'bids': bids,
-                'asks': asks
-            }
-            
-        except Exception as e:
-            self.logger.warning(f"Failed to get order book from WebSocket: {e}")
-            return None
 
     async def get_order_book_depth(
         self, 
@@ -488,20 +444,19 @@ class LighterClient(BaseExchangeClient):
         """
         try:
             # 🔴 Priority 1: Try WebSocket (real-time, zero latency)
-            ws_book = self._get_order_book_from_websocket()
-            if ws_book:
-                # Limit to requested levels
-                return {
-                    'bids': ws_book['bids'][:levels],
-                    'asks': ws_book['asks'][:levels]
-                }
+            if self.ws_manager:
+                ws_book = self.ws_manager.get_order_book(levels)
+                if ws_book:
+                    self.logger.info(
+                        f"📡 [LIGHTER] Using real-time order book from WebSocket "
+                        f"({len(ws_book['bids'])} bids, {len(ws_book['asks'])} asks)"
+                    )
+                    return ws_book
             
-            # 🔄 Priority 2: Fall back to REST API
+            # 🔄 Priority 2: Fall back to REST API using SDK
             self.logger.info(
-                f"📞 [REST] Fetching order book via REST API (WebSocket not available)"
+                f"📞 [REST][LIGHTER] Fetching order book via REST API (WebSocket not available)"
             )
-            # Use REST API for order book (more reliable than WebSocket for one-time queries)
-            url = f"{self.base_url}/api/v1/orderBookOrders"
             
             # Lighter uses integer market_id for API calls
             # Try to convert contract_id to int first (if already an int ID)
@@ -520,63 +475,59 @@ class LighterClient(BaseExchangeClient):
                     )
                     return {'bids': [], 'asks': []}
 
+            # API max is 100 for Lighter
             if levels < 100:
-                # API max is 100 for lighter, while default is set to 20
-                # so we use the highest of the 2
-                levels = 100 #lighter specific
-
-            params = {
-                'market_id': market_id,
-                'limit': levels  # API max is 100
-            }
+                levels = 100  # Lighter specific: use max to get full depth
             
             self.logger.info(
-                f"📊 [LIGHTER] Fetching order book: market_id={market_id}, limit={params['limit']}"
+                f"📊 [LIGHTER] Fetching order book: market_id={market_id}, limit={levels}"
             )
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params) as response:
-                    if response.status != 200:
-                        response_text = await response.text()
-                        self.logger.error(
-                            f"❌ [LIGHTER] Failed to get order book: HTTP {response.status}, "
-                            f"URL: {url}, params: {params}, response: {response_text[:300]}"
-                        )
-                        return {'bids': [], 'asks': []}
-                    
-                    data = await response.json()
-                    
-                    if data.get('code') != 200:
-                        self.logger.error(
-                            f"❌ [LIGHTER] Order book API error response: {data}"
-                        )
-                        return {'bids': [], 'asks': []}
-                    
-                    # Extract bids and asks from Lighter response
-                    bids_raw = data.get('bids', [])
-                    asks_raw = data.get('asks', [])
-                    
-                    # Convert to standardized format
-                    # Lighter format: [{'price': '1243.5281', 'remaining_base_amount': '0.20'}, ...]
-                    bids = [
-                        {
-                            'price': Decimal(bid['price']), 
-                            'size': Decimal(bid['remaining_base_amount'])
-                        } 
-                        for bid in bids_raw
-                    ]
-                    asks = [
-                        {
-                            'price': Decimal(ask['price']), 
-                            'size': Decimal(ask['remaining_base_amount'])
-                        } 
-                        for ask in asks_raw
-                    ]
-                    
-                    return {
-                        'bids': bids,
-                        'asks': asks
-                    }
+            # Use SDK to fetch order book
+            try:
+                order_api = lighter.OrderApi(self.api_client)
+                result = await order_api.order_book_orders(
+                    market_id=market_id,
+                    limit=levels,
+                    _request_timeout=10
+                )
+                
+                # Check if the API returned success
+                if result.code != 200:
+                    self.logger.error(
+                        f"❌ [LIGHTER] Order book API error: code={result.code}, message={result.message}"
+                    )
+                    return {'bids': [], 'asks': []}
+                
+                # Convert to standardized format
+                # SDK returns SimpleOrder objects with price and remaining_base_amount as strings
+                bids = [
+                    {
+                        'price': Decimal(bid.price), 
+                        'size': Decimal(bid.remaining_base_amount)
+                    } 
+                    for bid in result.bids
+                ]
+                asks = [
+                    {
+                        'price': Decimal(ask.price), 
+                        'size': Decimal(ask.remaining_base_amount)
+                    } 
+                    for ask in result.asks
+                ]
+                
+                return {
+                    'bids': bids,
+                    'asks': asks
+                }
+                
+            except Exception as api_error:
+                self.logger.error(
+                    f"❌ [LIGHTER] SDK order book fetch failed: {api_error}"
+                )
+                import traceback
+                self.logger.debug(f"Traceback: {traceback.format_exc()}")
+                return {'bids': [], 'asks': []}
 
         except Exception as e:
             self.logger.error(f"❌ [LIGHTER] Error fetching order book depth for {contract_id}: {e}")
@@ -1117,6 +1068,81 @@ class LighterClient(BaseExchangeClient):
             self.logger.error(f"Error getting detailed positions: {e}")
             return []
 
+    async def _get_cumulative_funding(
+        self,
+        market_id: int,
+        side: Optional[str] = None,
+    ) -> Optional[Decimal]:
+        """
+        Fetch cumulative funding fees for a position using Lighter's position funding API.
+        
+        Args:
+            market_id: The market ID for the position
+            side: Position side ('long' or 'short'), optional filter
+            
+        Returns:
+            Cumulative funding fees as Decimal, None if unavailable
+        """
+        if not hasattr(self, 'account_api') or self.account_api is None:
+            return None
+        
+        account_index = getattr(self.config, "account_index", None)
+        if account_index is None:
+            self.logger.debug("[LIGHTER] No account_index configured, cannot fetch funding")
+            return None
+        
+        # Generate auth token for API call
+        if not hasattr(self, 'lighter_client') or self.lighter_client is None:
+            self.logger.debug("[LIGHTER] No lighter_client available for auth")
+            return None
+        
+        try:
+            auth_token, error = self.lighter_client.create_auth_token_with_expiry()
+            if error:
+                self.logger.debug(f"[LIGHTER] Error creating auth token for funding: {error}")
+                return None
+        except Exception as exc:
+            self.logger.debug(f"[LIGHTER] Failed to create auth token: {exc}")
+            return None
+        
+        try:
+            # Fetch position funding history with authentication
+            # Lighter requires BOTH auth (query param) and authorization (header) for main accounts
+            response = await self.account_api.position_funding(
+                account_index=account_index,
+                market_id=market_id,
+                limit=100,  # Get recent funding payments
+                side=side if side else 'all',
+                auth=auth_token,  # Query parameter
+                authorization=auth_token,  # Header parameter - required for main accounts
+                _request_timeout=10,
+            )
+            
+            if not response or not hasattr(response, 'position_fundings'):
+                return None
+            
+            fundings = response.position_fundings
+            if not fundings:
+                return None
+            
+            # Sum up all funding 'change' values to get cumulative funding
+            cumulative = Decimal("0")
+            for funding in fundings:
+                try:
+                    change = Decimal(str(funding.change))
+                    cumulative += change
+                except Exception as exc:
+                    self.logger.debug(f"[LIGHTER] Failed to parse funding change: {exc}")
+                    continue
+            
+            return cumulative if cumulative != Decimal("0") else None
+            
+        except Exception as exc:
+            self.logger.debug(
+                f"[LIGHTER] Error fetching funding for market_id={market_id}: {exc}"
+            )
+            return None
+
     async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
         """
         Retrieve detailed metrics for a specific symbol.
@@ -1170,6 +1196,17 @@ class LighterClient(BaseExchangeClient):
                     side = "long"
                 elif quantity < 0:
                     side = "short"
+            
+            # Fetch cumulative funding fees for this position
+            market_id = pos.get("market_id")
+            funding_accrued = None
+            if market_id is not None:
+                try:
+                    funding_accrued = await self._get_cumulative_funding(market_id, side)
+                except Exception as exc:
+                    self.logger.debug(
+                        f"[LIGHTER] Failed to fetch funding for {symbol} (market_id={market_id}): {exc}"
+                    )
 
             metadata: Dict[str, Any] = {
                 "market_id": pos.get("market_id"),
@@ -1185,7 +1222,7 @@ class LighterClient(BaseExchangeClient):
                 exposure_usd=exposure,
                 unrealized_pnl=unrealized,
                 realized_pnl=realized,
-                funding_accrued=None,
+                funding_accrued=funding_accrued,
                 margin_reserved=margin_reserved,
                 leverage=None,
                 liquidation_price=liquidation_price,

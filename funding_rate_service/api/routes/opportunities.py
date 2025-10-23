@@ -31,6 +31,7 @@ async def get_opportunities(
     dexes: Optional[str] = Query(None, description="Comma-separated list - show opps involving ANY of these"),
     whitelist_dexes: Optional[str] = Query(None, description="Comma-separated list - BOTH sides must be from this list"),
     exclude_dexes: Optional[str] = Query(None, description="Comma-separated list - exclude opps with these DEXs"),
+    required_dex: Optional[str] = Query(None, description="DEX that must be present on at least one leg"),
     
     # Profitability filters
     min_divergence: Optional[Decimal] = Query(Decimal('0.0001'), description="Minimum divergence"),
@@ -83,6 +84,7 @@ async def get_opportunities(
             dexes=dexes_list,
             whitelist_dexes=whitelist_dexes_list,
             exclude_dexes=exclude_dexes_list,
+            required_dex=required_dex.strip().lower() if required_dex else None,
             min_divergence=min_divergence,
             min_profit_percent=min_profit,
             min_volume_24h=min_volume,
@@ -155,6 +157,7 @@ async def get_best_opportunity(
     dex: Optional[str] = Query(None, description="Show opportunities involving this DEX"),
     whitelist_dexes: Optional[str] = Query(None, description="Comma-separated list - BOTH sides must be from this list"),
     exclude_dexes: Optional[str] = Query(None, description="Comma-separated list - exclude opps with these DEXs"),
+    required_dex: Optional[str] = Query(None, description="DEX that must be present on at least one leg"),
     min_profit: Optional[Decimal] = Query(Decimal('0'), description="Minimum net profit percent"),
     max_oi: Optional[Decimal] = Query(None, description="Maximum open interest (for low OI farming)")
 ) -> Dict[str, Any]:
@@ -174,6 +177,7 @@ async def get_best_opportunity(
             dex=dex.lower() if dex else None,
             whitelist_dexes=whitelist_dexes_list,
             exclude_dexes=exclude_dexes_list,
+            required_dex=required_dex.strip().lower() if required_dex else None,
             min_profit_percent=min_profit,
             max_oi_usd=max_oi,
             limit=1  # Only get the best one
@@ -259,4 +263,3 @@ async def get_opportunities_for_symbol(
     except Exception as e:
         logger.error(f"Error finding opportunities for {symbol}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-

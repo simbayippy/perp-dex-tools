@@ -112,10 +112,6 @@ class ExchangeFactory:
         if primary_exchange and primary_exchange not in exchange_names:
             raise ValueError(f"Primary exchange '{primary_exchange}' not in exchange_names list")
         
-        # Set primary to first exchange if not specified
-        if not primary_exchange:
-            primary_exchange = exchange_names[0]
-        
         clients = {}
         failed_exchanges = []
         
@@ -147,7 +143,7 @@ class ExchangeFactory:
                 failed_exchanges.append((exchange_name, str(e)))
                 
                 # If this is the primary exchange, we must fail
-                if exchange_name == primary_exchange:
+                if primary_exchange and exchange_name == primary_exchange:
                     # Clean up already created clients
                     for created_client in clients.values():
                         try:
@@ -184,9 +180,13 @@ class ExchangeFactory:
                     print(f"   • {ex_name}: {error[:80]}")
             print(f"\n✅ Successfully created {len(clients)} trading client(s): {list(clients.keys())}\n")
         
-        # Ensure we have at least the primary exchange
+        # Ensure we have at least one exchange client available
         if not clients:
-            raise ValueError(f"Failed to create any exchange clients. Primary exchange '{primary_exchange}' is required.")
+            if primary_exchange:
+                raise ValueError(
+                    f"Failed to create any exchange clients. Primary exchange '{primary_exchange}' could not be instantiated."
+                )
+            raise ValueError("Failed to create any exchange clients.")
         
         return clients
 

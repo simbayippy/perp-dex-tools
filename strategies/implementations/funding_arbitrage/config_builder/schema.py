@@ -11,7 +11,6 @@ from strategies.base_schema import (
     StrategySchema,
     ParameterSchema,
     ParameterType,
-    create_exchange_choice_parameter,
     create_decimal_parameter,
     create_boolean_parameter,
 )
@@ -27,15 +26,8 @@ FUNDING_INTERVAL_HOURS = Decimal("8")
 HOURS_PER_YEAR = Decimal("8760")
 FUNDING_PAYMENTS_PER_YEAR = HOURS_PER_YEAR / FUNDING_INTERVAL_HOURS  # 1095 periods/year
 
-# Legacy per-interval defaults (used by strategy internals)
-DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL = Decimal("0.0001")
-MIN_PROFIT_RATE_PER_INTERVAL = Decimal("0.00001")
-MAX_PROFIT_RATE_PER_INTERVAL = Decimal("0.1")
-
-# User-facing APY equivalents for interactive prompts
-DEFAULT_MIN_PROFIT_APY = DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL * FUNDING_PAYMENTS_PER_YEAR
-MIN_PROFIT_APY = MIN_PROFIT_RATE_PER_INTERVAL * FUNDING_PAYMENTS_PER_YEAR
-MAX_PROFIT_APY = MAX_PROFIT_RATE_PER_INTERVAL * FUNDING_PAYMENTS_PER_YEAR
+DEFAULT_MIN_PROFIT_APY = Decimal("0.25")
+DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL = (DEFAULT_MIN_PROFIT_APY / FUNDING_PAYMENTS_PER_YEAR).quantize(Decimal("0.0000000001"))
 
 
 # ============================================================================
@@ -52,12 +44,6 @@ FUNDING_ARB_SCHEMA = StrategySchema(
         # ====================================================================
         # Exchange Configuration
         # ====================================================================
-        create_exchange_choice_parameter(
-            key="primary_exchange",
-            prompt="Which exchange should be your PRIMARY exchange?",
-            required=True,
-            help_text="This exchange will handle the main connection and risk management",
-        ),
         ParameterSchema(
             key="scan_exchanges",
             prompt="Which exchanges should we scan for opportunities?",
@@ -67,6 +53,18 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             required=True,
             help_text="We'll look for funding rate divergences across these exchanges",
             show_default_in_prompt=True,
+        ),
+        ParameterSchema(
+            key="mandatory_exchange",
+            prompt="Select a MANDATORY exchange (optional, choose 'none' to skip)",
+            param_type=ParameterType.CHOICE,
+            choices=["none"] + ExchangeFactory.get_supported_exchanges(),
+            default="none",
+            required=False,
+            help_text=(
+                "Optional guardrail: pick a DEX that must participate in every trade. "
+                "Select 'none' if any combination of the scanned exchanges is acceptable."
+            ),
         ),
         # ====================================================================
         # Position Sizing
@@ -108,8 +106,8 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             key="min_profit_rate",
             prompt="Minimum annualised net profit (APY) before entering a position? (decimal, 0.50 = 50%)",
             default=DEFAULT_MIN_PROFIT_APY,
-            min_value=MIN_PROFIT_APY,
-            max_value=MAX_PROFIT_APY,
+            min_value=Decimal("0"),
+            max_value=None,
             required=True,
             help_text=(
                 "Only take opportunities whose annualised (after-fee) funding yield meets this level. "
@@ -124,8 +122,10 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             min_value=Decimal("1000"),
             max_value=Decimal("999999999"),
             required=False,
-            help_text="For POINT FARMING: use low values (e.g., 50000) to target small markets. "
-            "For PURE PROFIT: use high values (e.g., 10M+) to access all markets",
+            help_text=(
+                "Only used when a mandatory exchange is set: skip trades if that exchange's open interest exceeds this cap. "
+                "Use a low cap (e.g., 50000) to focus on point-farming pools; leave blank or set a high number to allow larger markets."
+            ),
         ),
         # ====================================================================
         # Risk Management
@@ -214,7 +214,7 @@ FUNDING_ARB_SCHEMA = StrategySchema(
     ],
     # Category grouping for better UX
     categories={
-        "Exchanges": ["primary_exchange", "scan_exchanges"],
+        "Exchanges": ["scan_exchanges", "mandatory_exchange"],
         "Position Sizing": ["target_exposure", "max_positions", "max_total_exposure_usd"],
         "Profitability": ["min_profit_rate", "max_oi_usd"],
         "Risk Management": [
@@ -249,13 +249,13 @@ def create_default_funding_config() -> dict:
     Useful for quick testing or as a starting point.
     """
     return {
-        "primary_exchange": "lighter",
+        "mandatory_exchange": None,
         "scan_exchanges": ["lighter", "grvt", "backpack"],
         "target_exposure": Decimal("100"),
         "max_positions": 5,
         "max_total_exposure_usd": Decimal("1000"),
         "min_profit_rate": DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL,
-        "max_oi_usd": Decimal("10000000"),
+        "max_oi_usd": None,
         "risk_strategy": "combined",
         "profit_erosion_threshold": Decimal("0.5"),
         "max_position_age_hours": 168,

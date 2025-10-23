@@ -53,24 +53,50 @@ class TradingBot:
             if is_multi_exchange:
                 # Multi-exchange mode (for funding arbitrage, etc.)
                 # Get list of exchanges from strategy params
-                # Check both 'scan_exchanges' (from YAML) and 'exchanges' (from CLI) for backward compat
-                exchange_list = config.strategy_params.get('scan_exchanges') or config.strategy_params.get('exchanges', [config.exchange])
-                if isinstance(exchange_list, str):
-                    exchange_list = [ex.strip() for ex in exchange_list.split(',')]
-                
+                raw_exchange_list = config.strategy_params.get('scan_exchanges')
+
+                if isinstance(raw_exchange_list, str):
+                    exchange_list = [ex.strip().lower() for ex in raw_exchange_list.split(',') if ex.strip()]
+                elif raw_exchange_list:
+                    exchange_list = [str(ex).strip().lower() for ex in raw_exchange_list if str(ex).strip()]
+                else:
+                    exchange_list = []
+
+                mandatory_exchange = (
+                    config.strategy_params.get('mandatory_exchange')
+                    or config.strategy_params.get('primary_exchange')
+                )
+                if isinstance(mandatory_exchange, str):
+                    mandatory_exchange = mandatory_exchange.strip().lower() or None
+                else:
+                    mandatory_exchange = None
+
+                if not exchange_list:
+                    raise ValueError(
+                        "Funding arbitrage requires at least one exchange in 'scan_exchanges'."
+                    )
+
+                if mandatory_exchange and mandatory_exchange not in exchange_list:
+                    exchange_list.append(mandatory_exchange)
+
                 self.logger.info(f"Creating clients for exchanges: {exchange_list}")
-                
+
                 # Create multiple exchange clients
                 self.exchange_clients = ExchangeFactory.create_multiple_exchanges(
                     exchange_names=exchange_list,
                     config=config,
-                    primary_exchange=config.exchange
+                    primary_exchange=mandatory_exchange,
                 )
-                
-                # Set primary exchange client for backward compatibility
-                self.exchange_client = self.exchange_clients[config.exchange]
-                
-                self.logger.info(f"Created {len(self.exchange_clients)} exchange clients")
+
+                if not self.exchange_clients:
+                    raise ValueError("Failed to instantiate any exchange clients.")
+
+                # Set a representative exchange client for backward compatibility
+                self.exchange_client = next(iter(self.exchange_clients.values()))
+
+                self.logger.info(
+                    f"Created {len(self.exchange_clients)} exchange clients: {list(self.exchange_clients.keys())}"
+                )
             else:
                 # Single exchange mode (for grid strategy, etc.)
                 self.exchange_client = ExchangeFactory.create_exchange(

@@ -254,11 +254,17 @@ class InteractiveConfigBuilder:
         print(f"{'='*70}\n")
         
         config = {}
-        total_params = len(schema.parameters)
+        max_oi_param = next((p for p in schema.parameters if p.key == "max_oi_usd"), None)
+        base_params = [p for p in schema.parameters if p.key != "max_oi_usd"]
+        total_params = len(base_params)
         self._display_overrides = {}
         
-        for idx, param in enumerate(schema.parameters, 1):
-            print(f"\n[{idx}/{total_params}] ", end="")
+        mandatory_selected = None
+        display_idx = 0
+
+        for param in base_params:
+            display_idx += 1
+            print(f"\n[{display_idx}/{total_params}] ", end="")
             
             value = self._prompt_parameter(param)
             if value is None and param.required:
@@ -272,6 +278,21 @@ class InteractiveConfigBuilder:
                 converted, display_value = self._convert_min_profit_input(value)
                 config[param.key] = converted
                 self._display_overrides[param.key] = display_value
+            elif param.key == "mandatory_exchange":
+                normalized: Optional[str]
+                if isinstance(value, str):
+                    value_str = value.strip().lower()
+                    normalized = value_str if value_str and value_str != "none" else None
+                else:
+                    normalized = None
+
+                config[param.key] = normalized
+                mandatory_selected = normalized
+
+                display_value = (
+                    normalized.upper() if normalized else "None"
+                )
+                self._display_overrides[param.key] = display_value
             else:
                 config[param.key] = value
                 if value is not None:
@@ -280,6 +301,33 @@ class InteractiveConfigBuilder:
             if display_value is not None:
                 print(f"✓ {param.key}: {display_value}")
         
+        if mandatory_selected and max_oi_param is not None:
+            total_params += 1
+            display_idx += 1
+            print(f"\n[{display_idx}/{total_params}] ", end="")
+            value = self._prompt_parameter(max_oi_param)
+            if value is None and max_oi_param.required:
+                print("\n\nConfiguration cancelled.")
+                return None
+            config[max_oi_param.key] = value
+            display_value = self._format_value_display(value)
+            if display_value is not None:
+                print(f"✓ {max_oi_param.key}: {display_value}")
+            self._display_overrides[max_oi_param.key] = display_value
+        else:
+            config["max_oi_usd"] = None
+            self._display_overrides["max_oi_usd"] = "None"
+
+        scan_list = config.get("scan_exchanges") or []
+        mandatory_exchange = config.get("mandatory_exchange")
+        if mandatory_exchange:
+            if mandatory_exchange not in scan_list:
+                scan_list.append(mandatory_exchange)
+            ordered_unique = list(dict.fromkeys(scan_list))
+            config["scan_exchanges"] = [ex.lower() for ex in ordered_unique]
+        else:
+            config["scan_exchanges"] = [ex.lower() for ex in scan_list]
+
         return config
     
     def _prompt_parameter(self, param: ParameterSchema) -> Any:

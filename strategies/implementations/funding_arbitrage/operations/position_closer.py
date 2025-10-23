@@ -137,6 +137,7 @@ class PositionCloser:
 
             await self._close_exchange_positions(
                 position,
+                reason=reason,
                 live_snapshots=live_snapshots,
             )
 
@@ -401,12 +402,22 @@ class PositionCloser:
             return False
 
         available_exchanges = list(strategy.exchange_clients.keys())
-        whitelist_dexes = available_exchanges if available_exchanges else None
+        whitelist_dexes = [dex.lower() for dex in available_exchanges] if available_exchanges else None
+        required_dex = getattr(strategy.config, "mandatory_exchange", None)
+        if not required_dex:
+            required_dex = getattr(strategy.config, "primary_exchange", None)
+        if isinstance(required_dex, str) and required_dex.strip():
+            required_dex = required_dex.strip().lower()
+        else:
+            required_dex = None
+
+        max_oi_cap = strategy.config.max_oi_usd if required_dex else None
 
         filters = OpportunityFilter(
             min_profit_percent=strategy.config.min_profit,
-            max_oi_usd=strategy.config.max_oi_usd,
+            max_oi_usd=max_oi_cap,
             whitelist_dexes=whitelist_dexes,
+            required_dex=required_dex,
             symbol=None,
             limit=1,
         )
@@ -456,6 +467,7 @@ class PositionCloser:
         self,
         position: "FundingArbPosition",
         *,
+        reason: str = "UNKNOWN",
         live_snapshots: Optional[
             Dict[str, Optional["ExchangePositionSnapshot"]]
         ] = None,
@@ -549,17 +561,34 @@ class PositionCloser:
             return
 
         if len(legs) == 1:
-            await self._force_close_leg(position.symbol, legs[0])
+            await self._force_close_leg(position.symbol, legs[0], reason=reason)
             return
 
-        await self._close_legs_atomically(position, legs)
+        await self._close_legs_atomically(position, legs, reason=reason)
 
     async def _close_legs_atomically(
         self,
         position: "FundingArbPosition",
         legs: List[Dict[str, Any]],
+        reason: str = "UNKNOWN",
     ) -> None:
         strategy = self._strategy
+        
+        # Log the close operation with details
+        leg_summary = []
+        for leg in legs:
+            dex = leg.get("dex", "UNKNOWN")
+            side = leg.get("side", "?")
+            quantity = leg.get("quantity", Decimal("0"))
+            leg_summary.append(f"{dex.upper()}:{side}:{quantity}")
+        
+        strategy.logger.log(
+            f"🔒 Closing position {position.symbol} atomically | "
+            f"Reason: {reason} | "
+            f"Legs: [{', '.join(leg_summary)}]",
+            "INFO"
+        )
+        
         order_specs: List[OrderSpec] = []
 
         for leg in legs:
@@ -592,8 +621,21 @@ class PositionCloser:
         self,
         symbol: str,
         leg: Dict[str, Any],
+        reason: str = "UNKNOWN",
     ) -> None:
         strategy = self._strategy
+        
+        dex = leg.get("dex", "UNKNOWN")
+        side = leg.get("side", "?")
+        quantity = leg.get("quantity", Decimal("0"))
+        
+        strategy.logger.log(
+            f"🔒 Closing single leg {symbol} | "
+            f"Reason: {reason} | "
+            f"Leg: {dex.upper()}:{side}:{quantity}",
+            "INFO"
+        )
+        
         leg["contract_id"] = await self._prepare_contract_context(
             leg["client"],
             symbol,
@@ -658,8 +700,8 @@ class PositionCloser:
             side=leg["side"],
             size_usd=notional,
             quantity=quantity,
-            execution_mode="limit_with_fallback",
-            timeout_seconds=60.0,
+            execution_mode="limit_only",
+            timeout_seconds=30.0,
             limit_price_offset_pct=limit_offset_pct,
         )
 

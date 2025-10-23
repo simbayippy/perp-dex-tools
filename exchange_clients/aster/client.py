@@ -326,9 +326,20 @@ class AsterClient(BaseExchangeClient):
             return stream_symbol[:-4]
         return stream_symbol
 
-    @query_retry(default_return=(0, 0))
+    @query_retry(default_return=(Decimal("0"), Decimal("0")))
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
-        """Fetch best bid and ask prices from Aster."""
+        """
+        Fetch best bid and ask prices from Aster.
+        
+        Tries WebSocket book ticker first (real-time), falls back to REST API.
+        """
+        # Efficient: Direct access to cached BBO from WebSocket
+        if self.ws_manager and self.ws_manager.best_bid is not None and self.ws_manager.best_ask is not None:
+            self.logger.info(f"📡 [ASTER] Using real-time BBO from WebSocket")
+            return Decimal(str(self.ws_manager.best_bid)), Decimal(str(self.ws_manager.best_ask))
+        
+        # DRY: Fall back to REST API
+        self.logger.info(f"📞 [REST][ASTER] Using REST API fallback")
         # Normalize symbol to Aster's format
         normalized_symbol = self.normalize_symbol(contract_id)
         result = await self._make_request('GET', '/fapi/v1/ticker/bookTicker', {'symbol': normalized_symbol})
@@ -337,40 +348,6 @@ class AsterClient(BaseExchangeClient):
         best_ask = Decimal(result.get('askPrice', 0))
 
         return best_bid, best_ask
-
-    def _get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
-        """
-        Get order book from WebSocket if available.
-        
-        Aster WebSocket maintains order book via partial depth stream (@depth20@100ms).
-        This provides top 20 bids and asks with 100ms updates.
-        
-        Returns:
-            Order book dict if WebSocket depth stream is active and has data, None otherwise
-        """
-        try:
-            if not self.ws_manager or not self.ws_manager.running:
-                return None
-            
-            if not self.ws_manager.order_book_ready:
-                return None
-            
-            # Check if order book has data
-            if not self.ws_manager.order_book.get('bids') or not self.ws_manager.order_book.get('asks'):
-                return None
-            
-            # Order book is already in standard format from websocket_manager
-            self.logger.info(
-                f"📡 [ASTER] Using real-time order book from WebSocket "
-                f"({len(self.ws_manager.order_book['bids'])} bids, "
-                f"{len(self.ws_manager.order_book['asks'])} asks)"
-            )
-            
-            return self.ws_manager.order_book
-            
-        except Exception as e:
-            self.logger.warning(f"Failed to get order book from WebSocket: {e}")
-            return None
 
     async def get_order_book_depth(
         self, 
@@ -390,12 +367,14 @@ class AsterClient(BaseExchangeClient):
             Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
         """
         # 🔴 Priority 1: Try WebSocket depth stream (100ms snapshots, zero latency)
-        ws_book = self._get_order_book_from_websocket()
-        if ws_book:
-            return {
-                'bids': ws_book['bids'][:levels],
-                'asks': ws_book['asks'][:levels]
-            }
+        if self.ws_manager:
+            ws_book = self.ws_manager.get_order_book(levels)
+            if ws_book:
+                self.logger.info(
+                    f"📡 [ASTER] Using real-time order book from WebSocket "
+                    f"({len(ws_book['bids'])} bids, {len(ws_book['asks'])} asks)"
+                )
+                return ws_book
         
         # 🔄 Priority 2: Fall back to REST API
         # Normalize symbol to Aster's format (e.g., "ZORA" → "ZORAUSDT")

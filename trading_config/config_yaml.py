@@ -125,6 +125,14 @@ def validate_config_file(file_path: Path) -> tuple[bool, Optional[str]]:
         loaded = load_config_from_yaml(file_path)
         strategy_name = loaded["strategy"]
         config = loaded["config"]
+
+        if "primary_exchange" in config and "mandatory_exchange" not in config:
+            config["mandatory_exchange"] = config.pop("primary_exchange")
+
+        if not config.get("mandatory_exchange"):
+            config["mandatory_exchange"] = None
+            config["max_oi_usd"] = None
+        config.pop("primary_exchange", None)
         
         # Get schema
         from strategies.implementations.funding_arbitrage.config_builder import get_funding_arb_schema
@@ -188,13 +196,13 @@ def create_example_configs():
         "created_at": datetime.now().isoformat(),
         "version": "1.0",
         "config": {
-            "primary_exchange": "lighter",
+            "mandatory_exchange": None,
             "scan_exchanges": ["lighter", "grvt", "backpack", "edgex"],
             "target_exposure": Decimal("100"),
             "max_positions": 5,
             "max_total_exposure_usd": Decimal("1000"),
             "min_profit_rate": Decimal("0.0001"),
-            "max_oi_usd": Decimal("10000000"),
+            "max_oi_usd": None,
             "risk_strategy": "combined",
             "profit_erosion_threshold": Decimal("0.5"),
             "max_position_age_hours": 168,

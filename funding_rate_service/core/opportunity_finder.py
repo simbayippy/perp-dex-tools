@@ -236,6 +236,8 @@ class OpportunityFinder:
         """
         dex_long = long_rate_data['dex_name']
         dex_short = short_rate_data['dex_name']
+        dex_long_lower = dex_long.lower()
+        dex_short_lower = dex_short.lower()
         
         rate_long = long_rate_data['funding_rate']
         rate_short = short_rate_data['funding_rate']
@@ -265,30 +267,39 @@ class OpportunityFinder:
             return None
         
         # Apply DEX filters (position-agnostic)
-        
+
+        required_dex_lower: Optional[str] = None
+        if filters.required_dex:
+            required_dex_lower = filters.required_dex.lower()
+
         # Single DEX filter (must be on one side)
-        if filters.dex and not (dex_long == filters.dex or dex_short == filters.dex):
+        if filters.dex and not (dex_long_lower == filters.dex or dex_short_lower == filters.dex):
             return None
-        
+
         # DEX pair filter (must be exactly these two DEXs in any order)
         if filters.dex_pair:
             if not (
-                (dex_long in filters.dex_pair and dex_short in filters.dex_pair) and
-                dex_long != dex_short
+                (dex_long_lower in filters.dex_pair and dex_short_lower in filters.dex_pair) and
+                dex_long_lower != dex_short_lower
             ):
                 return None
-        
+
         # DEXes filter (at least one DEX must be involved)
-        if filters.dexes and not (dex_long in filters.dexes or dex_short in filters.dexes):
+        if filters.dexes and not (dex_long_lower in filters.dexes or dex_short_lower in filters.dexes):
             return None
-        
+
         # Whitelist filter (both DEXs must be in whitelist)
-        if filters.whitelist_dexes and not (dex_long in filters.whitelist_dexes and dex_short in filters.whitelist_dexes):
+        if filters.whitelist_dexes and not (dex_long_lower in filters.whitelist_dexes and dex_short_lower in filters.whitelist_dexes):
             return None
-        
+
         # Exclude filter (neither DEX should be in exclude list)
-        if filters.exclude_dexes and (dex_long in filters.exclude_dexes or dex_short in filters.exclude_dexes):
+        if filters.exclude_dexes and (dex_long_lower in filters.exclude_dexes or dex_short_lower in filters.exclude_dexes):
             return None
+
+        # Required DEX filter (must appear on at least one side)
+        if required_dex_lower:
+            if dex_long_lower != required_dex_lower and dex_short_lower != required_dex_lower:
+                return None
         
         # Volume metrics
         long_volume = long_rate_data.get('volume_24h')
@@ -304,8 +315,16 @@ class OpportunityFinder:
                 return None
         
         # OI metrics
-        long_oi = long_rate_data.get('open_interest_usd')
-        short_oi = short_rate_data.get('open_interest_usd')
+        long_oi_raw = long_rate_data.get('open_interest_usd')
+        short_oi_raw = short_rate_data.get('open_interest_usd')
+        try:
+            long_oi = Decimal(str(long_oi_raw)) if long_oi_raw is not None else None
+        except Exception:
+            long_oi = None
+        try:
+            short_oi = Decimal(str(short_oi_raw)) if short_oi_raw is not None else None
+        except Exception:
+            short_oi = None
         
         min_oi = None
         max_oi = None
@@ -330,9 +349,52 @@ class OpportunityFinder:
         if filters.min_oi_usd and min_oi:
             if min_oi < filters.min_oi_usd:
                 return None
-        if filters.max_oi_usd and min_oi:
-            if min_oi > filters.max_oi_usd:
-                return None
+        if filters.max_oi_usd:
+            if required_dex_lower:
+                if dex_long.lower() == required_dex_lower:
+                    target_oi = long_oi
+                elif dex_short.lower() == required_dex_lower:
+                    target_oi = short_oi
+                else:
+                    logger.info(
+                        f"[OPP] {symbol} skipped: required_dex={required_dex_lower} not present ({dex_long}/{dex_short})"
+                    )
+                    return None
+
+                if target_oi is not None and not isinstance(target_oi, Decimal):
+                    try:
+                        target_oi = Decimal(str(target_oi))
+                    except Exception:
+                        logger.info(
+                            f"[OPP] {symbol} skipped: unable to coerce target OI {target_oi} for dex {required_dex_lower}"
+                        )
+                        return None
+
+                if target_oi is None:
+                    logger.info(
+                        f"[OPP] {symbol} skipped: missing OI for required dex {required_dex_lower}"
+                    )
+                    return None
+
+                if filters.max_oi_usd is not None and target_oi > filters.max_oi_usd:
+                    logger.info(
+                        f"[OPP] {symbol} skipped: required dex {required_dex_lower} OI {target_oi} exceeds cap {filters.max_oi_usd}"
+                    )
+                    return None
+
+                logger.debug(
+                    f"[OPP] {symbol} accepted: required dex {required_dex_lower} OI {target_oi} within cap {filters.max_oi_usd}"
+                )
+            else:
+                if min_oi and min_oi > filters.max_oi_usd:
+                    logger.info(
+                        f"[OPP] {symbol} skipped: min OI {min_oi} exceeds cap {filters.max_oi_usd} ({dex_long}/{dex_short})"
+                    )
+                    return None
+
+                logger.debug(
+                    f"[OPP] {symbol} accepted: min OI {min_oi} within cap {filters.max_oi_usd} ({dex_long}/{dex_short})"
+                )
         if filters.oi_ratio_min and oi_ratio:
             if oi_ratio < filters.oi_ratio_min:
                 return None
@@ -525,5 +587,3 @@ class OpportunityFinder:
             logger.error(f"Query: {query}")
             logger.error(f"Params: {params}")
             return []
-
-

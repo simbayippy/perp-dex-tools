@@ -294,6 +294,43 @@ class LighterWebSocketManager(BaseWebSocketManager):
             self._log(f"Error getting best levels: {e}", "ERROR")
             return (None, None), (None, None)
 
+    def get_order_book(self, levels: Optional[int] = None) -> Optional[Dict[str, List[Dict[str, Any]]]]:
+        """
+        Get formatted order book with optional level limiting.
+        
+        Args:
+            levels: Optional number of levels to return per side.
+            
+        Returns:
+            Order book dict with 'bids' and 'asks' lists, or None if not ready.
+        """
+        if not self.snapshot_loaded:
+            return None
+        
+        try:
+            from decimal import Decimal
+            
+            # Convert to standard format and sort
+            bids = [
+                {'price': Decimal(str(price)), 'size': Decimal(str(size))}
+                for price, size in sorted(self.order_book["bids"].items(), reverse=True)
+            ]
+            asks = [
+                {'price': Decimal(str(price)), 'size': Decimal(str(size))}
+                for price, size in sorted(self.order_book["asks"].items())
+            ]
+            
+            # Apply level limiting if requested
+            if levels is not None:
+                bids = bids[:levels]
+                asks = asks[:levels]
+            
+            return {'bids': bids, 'asks': asks}
+            
+        except Exception as e:
+            self._log(f"Error formatting order book: {e}", "ERROR")
+            return None
+
     def cleanup_old_order_book_levels(self):
         """Clean up old order book levels to prevent memory leaks."""
         try:

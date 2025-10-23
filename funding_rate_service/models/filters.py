@@ -38,6 +38,10 @@ class OpportunityFilter(BaseModel):
         default=None, 
         description="Exclude opportunities involving any of these DEXs"
     )
+    required_dex: Optional[str] = Field(
+        default=None,
+        description="Require this DEX to appear on at least one leg"
+    )
     
     # Profitability filters
     min_divergence: Optional[Decimal] = Field(
@@ -70,7 +74,7 @@ class OpportunityFilter(BaseModel):
     )
     max_oi_usd: Optional[Decimal] = Field(
         default=None, 
-        description="Maximum open interest (e.g., 2000000 for low OI farming < $2M)"
+        description="Maximum open interest. When used with required_dex, caps that DEX's OI; otherwise applies to both legs (min OI)."
     )
     oi_ratio_min: Optional[Decimal] = Field(
         default=None, 
@@ -101,4 +105,3 @@ class OpportunityFilter(BaseModel):
     
     class Config:
         from_attributes = True
-

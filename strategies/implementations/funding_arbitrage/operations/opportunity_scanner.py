@@ -26,18 +26,29 @@ class OpportunityScanner:
 
             from funding_rate_service.models.filters import OpportunityFilter
 
-            available_exchanges = list(strategy.exchange_clients.keys())
+            available_exchanges = [name.lower() for name in strategy.exchange_clients.keys()]
+            mandatory_dex = getattr(strategy.config, "mandatory_exchange", None)
+            if not mandatory_dex:
+                mandatory_dex = getattr(strategy.config, "primary_exchange", None)
+            if isinstance(mandatory_dex, str) and mandatory_dex.strip():
+                mandatory_dex = mandatory_dex.strip().lower()
+            else:
+                mandatory_dex = None
+
+            max_oi_cap = strategy.config.max_oi_usd if mandatory_dex else None
+
             filters = OpportunityFilter(
                 min_profit_percent=strategy.config.min_profit,
-                max_oi_usd=strategy.config.max_oi_usd,
+                max_oi_usd=max_oi_cap,
                 whitelist_dexes=available_exchanges if available_exchanges else None,
+                required_dex=mandatory_dex,
                 symbol=None,
                 limit=10,
             )
 
             strategy.logger.log(
                 f"Filters - min_profit: {strategy.config.min_profit}, "
-                f"max_oi_usd: {strategy.config.max_oi_usd}, "
+                f"mandatory_dex: {mandatory_dex}, max_oi_cap: {max_oi_cap}, "
                 f"configured_dexes: {strategy.config.exchanges}, available_dexes: {available_exchanges}",
                 "DEBUG",
             )

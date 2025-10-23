@@ -35,6 +35,7 @@ from decimal import Decimal
 from datetime import datetime, timezone
 from uuid import uuid4
 
+
 # Execution layer imports
 from strategies.execution.patterns.atomic_multi_order import (
     AtomicMultiOrderExecutor,
@@ -81,16 +82,15 @@ class FundingArbitrageStrategy(BaseStrategy):
         if isinstance(exchange_client, dict):
             exchange_clients = exchange_client
         else:
-            # Single exchange client - create dict using the primary exchange name
-            # Try to get exchange name from client, fallback to config
+            # Single exchange client - create dict using the connector name
             if hasattr(exchange_client, 'get_exchange_name'):
                 try:
-                    primary_exchange = exchange_client.get_exchange_name()
-                except:
-                    primary_exchange = funding_config.exchange
+                    exchange_name = exchange_client.get_exchange_name()
+                except Exception:
+                    exchange_name = funding_config.exchange
             else:
-                primary_exchange = funding_config.exchange
-            exchange_clients = {primary_exchange: exchange_client}
+                exchange_name = funding_config.exchange
+            exchange_clients = {exchange_name: exchange_client}
         
         # Initialize BaseStrategy (note: no exchange_client for multi-DEX)
         super().__init__(funding_config, exchange_client=None)
@@ -287,11 +287,22 @@ class FundingArbitrageStrategy(BaseStrategy):
         # Check both 'scan_exchanges' (from YAML) and 'exchanges' (from CLI) for backward compat
         exchanges_str = strategy_params.get('scan_exchanges') or strategy_params.get('exchanges', trading_config.exchange)
         if isinstance(exchanges_str, str):
-            exchanges = [ex.strip() for ex in exchanges_str.split(',')]
+            exchanges = [ex.strip().lower() for ex in exchanges_str.split(',') if ex.strip()]
         elif isinstance(exchanges_str, list):
-            exchanges = exchanges_str
+            exchanges = [str(ex).strip().lower() for ex in exchanges_str if str(ex).strip()]
         else:
             exchanges = [trading_config.exchange]
+
+        mandatory_exchange = strategy_params.get('mandatory_exchange')
+        if not mandatory_exchange:
+            mandatory_exchange = strategy_params.get('primary_exchange')
+        if isinstance(mandatory_exchange, str):
+            mandatory_exchange = mandatory_exchange.strip().lower() or None
+        else:
+            mandatory_exchange = None
+
+        if mandatory_exchange and mandatory_exchange not in exchanges:
+            exchanges.append(mandatory_exchange)
         
         from .config import RiskManagementConfig
         from funding_rate_service.config import settings
@@ -316,17 +327,24 @@ class FundingArbitrageStrategy(BaseStrategy):
             check_interval_seconds=strategy_params.get('check_interval_seconds', RiskManagementConfig().check_interval_seconds),
         )
 
+        max_oi_value = strategy_params.get('max_oi_usd')
+        if mandatory_exchange and max_oi_value is not None:
+            max_oi_usd = Decimal(str(max_oi_value))
+        else:
+            max_oi_usd = None
+
         funding_config = FundingArbConfig(
-            exchange=trading_config.exchange,  # Primary exchange
-            exchanges=exchanges,  # All exchanges for arbitrage
+            exchange=trading_config.exchange,
+            exchanges=exchanges,
+            mandatory_exchange=mandatory_exchange,
             symbols=[trading_config.ticker],
             max_positions=strategy_params.get('max_positions', 5),
             default_position_size_usd=target_exposure,  # Use target_exposure as default position size
             max_position_size_usd=target_exposure * Decimal('10'),  # Max is 10x the default
             max_total_exposure_usd=Decimal(str(strategy_params.get('max_total_exposure_usd', float(target_exposure) * 5))),
-            min_profit=Decimal(str(strategy_params.get('min_profit_rate', 0.0001))),
+            min_profit=Decimal(str(strategy_params.get('min_profit_rate', DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL))),
             limit_order_offset_pct=limit_order_offset_pct,
-            max_oi_usd=Decimal(str(strategy_params.get('max_oi_usd', 10000000.0))),  # 10M default
+            max_oi_usd=max_oi_usd,
             max_new_positions_per_cycle=strategy_params.get('max_new_positions_per_cycle', 2),
             # Required database URL from funding_rate_service settings
             database_url=settings.database_url,
@@ -465,3 +483,4 @@ class FundingArbitrageStrategy(BaseStrategy):
                     "ERROR",
                 )
     
+DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL = Decimal("0.0002283105")

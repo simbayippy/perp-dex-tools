@@ -32,6 +32,9 @@ from helpers.unified_logger import get_exchange_logger
 class BackpackClient(BaseExchangeClient):
     """Backpack exchange client implementation."""
 
+    # Default maximum decimal places (fallback if we can't infer from market data)
+    MAX_PRICE_DECIMALS = 3
+
     def __init__(self, config: Dict[str, Any]):
         """Initialize Backpack client."""
         super().__init__(config)
@@ -45,6 +48,9 @@ class BackpackClient(BaseExchangeClient):
         self._order_update_handler: Optional[Callable[[Dict[str, Any]], None]] = None
         self._market_symbol_map: Dict[str, str] = {}
         self._latest_orders: Dict[str, OrderInfo] = {}
+        
+        # Cache inferred decimal precision per symbol based on observed prices
+        self._symbol_precision: Dict[str, int] = {}
 
         try:
             self.public_client = Public()
@@ -123,6 +129,60 @@ class BackpackClient(BaseExchangeClient):
             return Decimal(str(value))
         except (InvalidOperation, TypeError, ValueError):
             return default
+    
+    @staticmethod
+    def _get_decimal_places(price: Decimal) -> int:
+        """
+        Infer the number of decimal places from a price.
+        
+        Examples:
+            0.7794 -> 4
+            0.001 -> 3
+            100.50 -> 2
+            1000 -> 0
+        """
+        if not isinstance(price, Decimal):
+            price = Decimal(str(price))
+        
+        # Get the exponent (negative for decimals)
+        sign, digits, exponent = price.as_tuple()
+        
+        if isinstance(exponent, int):
+            # Negative exponent means decimal places
+            return abs(exponent) if exponent < 0 else 0
+        
+        # Fallback: count digits after decimal point in string representation
+        price_str = str(price)
+        if '.' in price_str:
+            return len(price_str.split('.')[1].rstrip('0'))
+        return 0
+    
+    def _infer_precision_from_prices(self, symbol: str, bid: Decimal, ask: Decimal) -> int:
+        """
+        Infer the decimal precision for a symbol from observed BBO prices.
+        Caches the result for future use.
+        """
+        # Get max precision from both bid and ask
+        bid_precision = self._get_decimal_places(bid)
+        ask_precision = self._get_decimal_places(ask)
+        precision = max(bid_precision, ask_precision)
+        
+        # Cache it
+        self._symbol_precision[symbol] = precision
+        
+        self.logger.debug(
+            f"[BACKPACK] Inferred precision for {symbol}: {precision}dp "
+            f"(bid={bid} [{bid_precision}dp], ask={ask} [{ask_precision}dp])"
+        )
+        
+        return precision
+    
+    def _get_symbol_precision(self, symbol: str) -> int:
+        """
+        Get the cached decimal precision for a symbol.
+        Falls back to MAX_PRICE_DECIMALS if not yet inferred.
+        """
+        return self._symbol_precision.get(symbol, self.MAX_PRICE_DECIMALS)
 
     @staticmethod
     def _to_internal_symbol(stream_symbol: Optional[str]) -> str:
@@ -192,7 +252,43 @@ class BackpackClient(BaseExchangeClient):
             return f"{value:.{decimals}f}"
         return format(value, "f")
 
-    def _quantize_to_tick(self, price: Decimal, rounding_mode) -> Decimal:
+    def _enforce_max_decimals(self, price: Decimal, symbol: Optional[str] = None) -> Decimal:
+        """
+        Enforce decimal precision limits for prices.
+        
+        Uses inferred precision from market data if available for the symbol,
+        otherwise falls back to MAX_PRICE_DECIMALS.
+        
+        Args:
+            price: Price to enforce precision on
+            symbol: Optional symbol to use for precision lookup
+            
+        Returns:
+            Price with appropriate decimal places
+        """
+        if not isinstance(price, Decimal):
+            price = Decimal(str(price))
+        
+        # Determine precision: use inferred if available, else default
+        max_decimals = self._get_symbol_precision(symbol) if symbol else self.MAX_PRICE_DECIMALS
+        
+        # Get the current number of decimal places
+        exponent = price.as_tuple().exponent
+        current_decimals = abs(exponent) if isinstance(exponent, int) else 0
+        
+        # If already within limits, return as is
+        if current_decimals <= max_decimals:
+            return price
+        
+        # Round to max_decimals
+        tick = Decimal(10) ** -max_decimals
+        try:
+            return price.quantize(tick, rounding=ROUND_DOWN)
+        except (InvalidOperation, TypeError, ValueError):
+            # Fallback: use string formatting
+            return Decimal(f"{price:.{max_decimals}f}")
+
+    def _quantize_to_tick(self, price: Decimal, rounding_mode, symbol: Optional[str] = None) -> Decimal:
         tick_size = getattr(self.config, "tick_size", None)
         if tick_size and tick_size > 0:
             try:
@@ -201,16 +297,18 @@ class BackpackClient(BaseExchangeClient):
                 tick = None
             if tick and tick > 0:
                 try:
-                    return price.quantize(tick, rounding=rounding_mode)
+                    quantized_price = price.quantize(tick, rounding=rounding_mode)
+                    # Ensure the result doesn't exceed symbol's decimal precision
+                    return self._enforce_max_decimals(quantized_price, symbol)
                 except (InvalidOperation, TypeError, ValueError):
                     decimals = max(0, -tick.normalize().as_tuple().exponent)
+                    # Enforce symbol's max decimal precision
+                    max_decimals = self._get_symbol_precision(symbol) if symbol else self.MAX_PRICE_DECIMALS
+                    decimals = min(decimals, max_decimals)
                     return Decimal(f"{price:.{decimals}f}")
-        # Fallback: Backpack enforces 4 decimal places on price inputs.
-        default_tick = Decimal("0.0001")
-        try:
-            return price.quantize(default_tick, rounding=rounding_mode)
-        except (InvalidOperation, TypeError, ValueError):
-            return price
+        
+        # Enforce symbol's decimal precision
+        return self._enforce_max_decimals(price, symbol)
 
     async def _compute_post_only_price(self, contract_id: str, raw_price: Decimal, side: str) -> Decimal:
         """
@@ -222,7 +320,7 @@ class BackpackClient(BaseExchangeClient):
         tick: Optional[Decimal] = None
 
         rounding_mode = ROUND_DOWN if side.lower() == "buy" else ROUND_UP
-        price = self._quantize_to_tick(price, rounding_mode)
+        price = self._quantize_to_tick(price, rounding_mode, contract_id)
 
         if tick_size and tick_size > 0:
             try:
@@ -248,7 +346,7 @@ class BackpackClient(BaseExchangeClient):
         if price <= 0 and tick and tick > 0:
             price = tick
 
-        price = self._quantize_to_tick(price, ROUND_DOWN if side.lower() == "buy" else ROUND_UP)
+        price = self._quantize_to_tick(price, ROUND_DOWN if side.lower() == "buy" else ROUND_UP, contract_id)
 
         if self.logger and price != original_price:
             self.logger.debug(f"[BACKPACK] Post-only price adjusted: raw={original_price} -> adjusted={price} (best_bid={best_bid or '0'}, best_ask={best_ask or '0'}, tick={tick or 'n/a'})")
@@ -413,45 +511,24 @@ class BackpackClient(BaseExchangeClient):
     @query_retry(default_return=(Decimal("0"), Decimal("0")))
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
         """Fetch best bid/offer, preferring WebSocket data when available."""
+        # Efficient: Direct access to cached BBO from WebSocket
         if self.ws_manager and self.ws_manager.best_bid is not None and self.ws_manager.best_ask is not None:
             self.logger.info(f"📡 [BACKPACK] Using real-time BBO from WebSocket")
-            return self.ws_manager.best_bid, self.ws_manager.best_ask
-
-        self.logger.info(f"📞 [REST][BACKPACK] Using REST depth snapshot")
-        # Fall back to REST depth snapshot
-        try:
-            symbol = self._ensure_exchange_symbol(contract_id)
-            order_book = self.public_client.get_depth(symbol)
-        except Exception as exc:
-            self.logger.error(f"[BACKPACK] Failed to fetch depth for {contract_id}: {exc}")
-            raise
-
-        bids = order_book.get("bids", []) if isinstance(order_book, dict) else []
-        asks = order_book.get("asks", []) if isinstance(order_book, dict) else []
-
-        try:
-            best_bid = max((self._to_decimal(level[0], Decimal("0")) for level in bids), default=Decimal("0"))
-        except Exception:
-            best_bid = Decimal("0")
-
-        try:
-            best_ask = min((self._to_decimal(level[0], Decimal("0")) for level in asks if level), default=Decimal("0"))
-        except Exception:
-            best_ask = Decimal("0")
-
-        return best_bid, best_ask
-
-    def _get_order_book_from_websocket(self) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
-        """Return the latest order book maintained by the WebSocket manager."""
-        if not self.ws_manager:
-            self.logger.warning(f"📞 [BACKPACK] No WebSocket manager available")
-            return None
-        book = self.ws_manager.get_order_book()
-        self.logger.info(
-            f"📡 [BACKPACK] Using real-time order book from WebSocket "
-            f"({len(book['bids'])} bids, {len(book['asks'])} asks)"
-        )
-        return book
+            bid, ask = self.ws_manager.best_bid, self.ws_manager.best_ask
+        else:
+            self.logger.info(f"📞 [REST][BACKPACK] Using REST depth snapshot")
+            order_book = await self.get_order_book_depth(contract_id, levels=1)
+            
+            if not order_book['bids'] or not order_book['asks']:
+                raise ValueError(f"Empty order book for {contract_id}")
+            
+            bid, ask = order_book['bids'][0]['price'], order_book['asks'][0]['price']
+        
+        # Infer decimal precision from observed prices
+        if bid and ask and bid > 0 and ask > 0:
+            self._infer_precision_from_prices(contract_id, bid, ask)
+        
+        return bid, ask
 
     async def get_order_book_depth(
         self,
@@ -516,7 +593,11 @@ class BackpackClient(BaseExchangeClient):
         price: Decimal,
         side: str,
     ) -> OrderResult:
-        """Place a post-only limit order on Backpack."""
+        """
+        Place a post-only limit order on Backpack.
+        
+        Automatically retries with adjusted prices if the order would immediately match.
+        """
         backpack_side = "Bid" if side.lower() == "buy" else "Ask"
 
         # round price as backpack always seems to instant fill
@@ -531,61 +612,178 @@ class BackpackClient(BaseExchangeClient):
             return OrderResult(success=False, error_message=message)
 
         quantity_str = self._format_decimal(quantized_quantity, getattr(self.config, "step_size", None))
-        payload_preview = {
-            "symbol": contract_id,
-            "side": backpack_side,
-            "orderType": OrderTypeEnum.LIMIT,
-            "quantity": quantity_str,
-            "price": str(rounded_price),
-            "post_only": True,
-            "time_in_force": TimeInForceEnum.GTC,
-        }
-        self.logger.debug(f"[BACKPACK] Executing limit order payload: {payload_preview}")
+        
+        # Get tick size for price adjustments
+        tick_size = getattr(self.config, "tick_size", Decimal("0.001"))
+        if not isinstance(tick_size, Decimal):
+            tick_size = Decimal(str(tick_size))
+        
+        # Retry up to 3 times with progressively adjusted prices
+        max_retries = 3
+        current_price = rounded_price
+        
+        for attempt in range(max_retries):
+            payload_preview = {
+                "symbol": contract_id,
+                "side": backpack_side,
+                "orderType": OrderTypeEnum.LIMIT,
+                "quantity": quantity_str,
+                "price": str(current_price),
+                "post_only": True,
+                "time_in_force": TimeInForceEnum.GTC,
+            }
+            
+            if attempt > 0:
+                self.logger.info(
+                    f"[BACKPACK] Retry {attempt}/{max_retries-1}: "
+                    f"Adjusting price from ${rounded_price} to ${current_price}"
+                )
+            else:
+                self.logger.debug(f"[BACKPACK] Executing limit order payload: {payload_preview}")
 
-        try:
-            result = self.account_client.execute_order(
-                symbol=contract_id,
-                side=backpack_side,
-                order_type=OrderTypeEnum.LIMIT,
-                quantity=quantity_str,
-                price=str(rounded_price),
-                post_only=True,
-                time_in_force=TimeInForceEnum.GTC,
-            )
-        except Exception as exc:
-            self.logger.error(f"[BACKPACK] Failed to place limit order: {exc}")
-            return OrderResult(success=False, error_message=str(exc))
+            try:
+                result = self.account_client.execute_order(
+                    symbol=contract_id,
+                    side=backpack_side,
+                    order_type=OrderTypeEnum.LIMIT,
+                    quantity=quantity_str,
+                    price=str(current_price),
+                    post_only=True,
+                    time_in_force=TimeInForceEnum.GTC,
+                )
+            except Exception as exc:
+                self.logger.error(f"[BACKPACK] Failed to place limit order: {exc}")
+                return OrderResult(success=False, error_message=str(exc))
 
-        if isinstance(result, dict) and result.get("code"):
-            self.logger.error(f"[BACKPACK] Limit order rejected: {result}")
-            return OrderResult(success=False, error_message=result.get("message", "Order rejected"))
+            # Check for rejection due to immediate matching
+            if isinstance(result, dict) and result.get("code"):
+                error_code = result.get("code", "")
+                error_msg = result.get("message", "").lower()
+                
+                # Detect "would immediately match" error
+                if (error_code == "INVALID_ORDER" and 
+                    "immediately match" in error_msg and 
+                    attempt < max_retries - 1):
+                    
+                    self.logger.warning(
+                        f"[BACKPACK] Order would immediately match at ${current_price}. "
+                        f"Adjusting price to be more maker-friendly..."
+                    )
+                    
+                    # Fetch latest BBO to ensure we're adjusting based on current market
+                    try:
+                        best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
+                        self.logger.debug(
+                            f"[BACKPACK] Latest BBO: bid=${best_bid}, ask=${best_ask}"
+                        )
+                    except Exception as exc:
+                        self.logger.warning(
+                            f"[BACKPACK] Failed to fetch latest BBO for retry: {exc}. "
+                            f"Using incremental adjustment."
+                        )
+                        best_bid = best_ask = None
+                    
+                    # Get the inferred precision for this symbol
+                    symbol_precision = self._get_symbol_precision(contract_id)
+                    min_tick = Decimal(10) ** -symbol_precision  # e.g., 4dp -> 0.0001
+                    
+                    # Progressive adjustment: more aggressive on each retry
+                    # Must be meaningful relative to the symbol's precision
+                    # Attempt 1: 2-5 ticks, Attempt 2: 5-10 ticks
+                    base_adjustment_ticks = Decimal((attempt + 1) * 3)  # 3, 6, 9...
+                    
+                    # Ensure tick_size is meaningful; if it's smaller than symbol precision, use min_tick
+                    effective_tick = tick_size if tick_size >= min_tick else min_tick
+                    adjustment = effective_tick * base_adjustment_ticks
+                    
+                    self.logger.info(
+                        f"[BACKPACK] Adjustment: {base_adjustment_ticks} ticks × {effective_tick} = {adjustment} "
+                        f"(symbol precision: {symbol_precision}dp)"
+                    )
+                    
+                    if side.lower() == "buy":
+                        # Buy: reduce price (move down, away from best ask)
+                        if best_ask and best_ask > 0:
+                            # Use current best ask as reference point
+                            current_price = best_ask - adjustment
+                        else:
+                            # Fallback: reduce from current price
+                            current_price = current_price - adjustment
+                    else:
+                        # Sell: increase price (move up, away from best bid)
+                        if best_bid and best_bid > 0:
+                            # Use current best bid as reference point
+                            current_price = best_bid + adjustment
+                        else:
+                            # Fallback: increase from current price
+                            current_price = current_price + adjustment
+                    
+                    # Quantize to symbol precision to ensure it's valid
+                    try:
+                        precision_quantizer = Decimal(10) ** -symbol_precision
+                        current_price = current_price.quantize(
+                            precision_quantizer,
+                            rounding=ROUND_DOWN if side.lower() == "buy" else ROUND_UP
+                        )
+                    except (InvalidOperation, ValueError):
+                        # Fallback to string formatting
+                        current_price = Decimal(f"{current_price:.{symbol_precision}f}")
+                    
+                    # Sanity check: price must be positive
+                    if current_price <= 0:
+                        self.logger.error(
+                            f"[BACKPACK] Price adjustment resulted in invalid price: ${current_price}"
+                        )
+                        return OrderResult(
+                            success=False, 
+                            error_message="Price adjustment failed: price became non-positive"
+                        )
+                    
+                    # Continue to next retry attempt
+                    continue
+                
+                # Different error or max retries reached
+                self.logger.error(f"[BACKPACK] Limit order rejected: {result}")
+                return OrderResult(success=False, error_message=result.get("message", "Order rejected"))
 
-        if not result or "id" not in result:
-            return OrderResult(success=False, error_message="Limit order response missing order id")
+            # Order was accepted
+            if not result or "id" not in result:
+                return OrderResult(success=False, error_message="Limit order response missing order id")
 
-        order_id = str(result["id"])
+            order_id = str(result["id"])
+            
+            if attempt > 0:
+                self.logger.info(
+                    f"✅ [BACKPACK] Order accepted after {attempt} price adjustment(s) at ${current_price}"
+                )
 
-        await asyncio.sleep(0.05)
-        info = await self.get_order_info(order_id)
+            await asyncio.sleep(0.05)
+            info = await self.get_order_info(order_id)
 
-        if info:
+            if info:
+                return OrderResult(
+                    success=info.status not in {"Rejected", "Cancelled"},
+                    order_id=info.order_id,
+                    side=info.side,
+                    size=info.size,
+                    price=info.price,
+                    status=info.status,
+                    filled_size=info.filled_size,
+                )
+
             return OrderResult(
-                success=info.status not in {"Rejected", "Cancelled"},
-                order_id=info.order_id,
-                side=info.side,
-                size=info.size,
-                price=info.price,
-                status=info.status,
-                filled_size=info.filled_size,
+                success=True,
+                order_id=order_id,
+                side=side.lower(),
+                size=quantized_quantity,
+                price=current_price,
+                status="OPEN",
             )
-
+        
+        # Should not reach here, but just in case
         return OrderResult(
-            success=True,
-            order_id=order_id,
-            side=side.lower(),
-            size=quantized_quantity,
-            price=rounded_price,
-            status="OPEN",
+            success=False, 
+            error_message="Max retries exceeded for limit order placement"
         )
 
     async def place_market_order(
@@ -758,13 +956,20 @@ class BackpackClient(BaseExchangeClient):
     async def get_account_positions(self) -> Decimal:
         """Return absolute position size for configured contract."""
         try:
-            positions = self.account_client.get_open_positions()
+            positions = await asyncio.to_thread(self.account_client.get_open_positions)
         except Exception as exc:
             self.logger.error(f"[BACKPACK] Failed to fetch open positions: {exc}")
             return Decimal("0")
 
         contract_id = getattr(self.config, "contract_id", None)
         if not positions or not contract_id:
+            return Decimal("0")
+        
+        # Validate response type
+        if not isinstance(positions, list):
+            self.logger.warning(
+                f"[BACKPACK] Unexpected response type from get_open_positions: {type(positions).__name__}"
+            )
             return Decimal("0")
 
         for position in positions:
@@ -1087,12 +1292,34 @@ class BackpackClient(BaseExchangeClient):
         target_symbol = self.normalize_symbol(normalized_symbol)
 
         try:
-            positions = self.account_client.get_open_positions()
+            # Wrap synchronous SDK call in asyncio.to_thread
+            positions = await asyncio.to_thread(self.account_client.get_open_positions)
         except Exception as exc:
             self.logger.warning(f"[BACKPACK] Failed to fetch positions for snapshot: {exc}")
             return None
 
+        # Validate response is actually a list, not an error string/dict
         if not positions:
+            return None
+        
+        # Handle API error responses (e.g., {"code": "ERROR", "message": "..."})
+        if isinstance(positions, dict):
+            if positions.get("code") or positions.get("error"):
+                self.logger.warning(
+                    f"[BACKPACK] API error fetching positions: {positions.get('message') or positions}"
+                )
+                return None
+        
+        # Handle unexpected string responses
+        if isinstance(positions, str):
+            self.logger.warning(f"[BACKPACK] Unexpected string response from API: {positions}")
+            return None
+        
+        # Ensure it's iterable (list)
+        if not isinstance(positions, list):
+            self.logger.warning(
+                f"[BACKPACK] Unexpected response type: {type(positions).__name__}"
+            )
             return None
 
         for position in positions:
@@ -1111,9 +1338,9 @@ class BackpackClient(BaseExchangeClient):
             )
 
             entry_price = self._to_decimal(
-                position.get("averageEntryPrice")
-                or position.get("avgEntryPrice")
-                or position.get("entryPrice"),
+                position.get("entryPrice")  # Backpack's actual field name
+                or position.get("averageEntryPrice")
+                or position.get("avgEntryPrice"),
             )
 
             mark_price = self._to_decimal(
@@ -1134,15 +1361,22 @@ class BackpackClient(BaseExchangeClient):
                 exposure = mark_price * quantity.copy_abs()
 
             unrealized = self._to_decimal(
-                position.get("unrealizedPnl")
+                position.get("pnlUnrealized")  # Backpack's actual field name
+                or position.get("unrealizedPnl")
                 or position.get("unrealizedPnlUsd")
                 or position.get("unrealizedPnL")
                 or position.get("pnl"),
             )
 
-            realized = self._to_decimal(position.get("realizedPnl") or position.get("realizedPnlUsd"))
+            realized = self._to_decimal(
+                position.get("pnlRealized")  # Backpack's actual field name
+                or position.get("realizedPnl")
+                or position.get("realizedPnlUsd")
+            )
             funding_accrued = self._to_decimal(
-                position.get("fundingFees") or position.get("fundingAccrued")
+                position.get("cumulativeFundingPayment")  # Backpack's actual field name
+                or position.get("fundingFees")
+                or position.get("fundingAccrued")
             )
             margin_reserved = self._to_decimal(
                 position.get("initialMargin")
@@ -1150,7 +1384,10 @@ class BackpackClient(BaseExchangeClient):
                 or position.get("allocatedMargin")
             )
             leverage = self._to_decimal(position.get("leverage"))
-            liquidation_price = self._to_decimal(position.get("liquidationPrice"))
+            liquidation_price = self._to_decimal(
+                position.get("estLiquidationPrice")  # Backpack's actual field name
+                or position.get("liquidationPrice")
+            )
 
             side = None
             if isinstance(quantity, Decimal):
@@ -1161,7 +1398,7 @@ class BackpackClient(BaseExchangeClient):
 
             metadata: Dict[str, Any] = {
                 "backpack_symbol": raw_symbol,
-                "position_id": position.get("id") or position.get("positionId"),
+                "position_id": position.get("positionId") or position.get("id"),  # Backpack uses 'positionId'
                 "updated_at": position.get("updatedAt"),
             }
             if notional is not None:

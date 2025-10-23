@@ -299,7 +299,7 @@ class OrderExecutor:
             exchange_name = exchange_client.get_exchange_name()
             self.logger.info(
                 f"[{exchange_name.upper()}] Placing limit {side} {symbol} (contract_id={contract_id}): "
-                f"{order_quantity} @ ${limit_price} (mid: ${mid_price}, offset: {price_offset_pct}%)"
+                f"{order_quantity} @ ${limit_price} (mid: ${mid_price}, offset: {price_offset_pct * Decimal('100')}%)"
             )
             
             # Place limit order using the normalized contract_id

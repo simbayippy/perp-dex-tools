@@ -605,6 +605,36 @@ class AsterWebSocketManager(BaseWebSocketManager):
             if self.logger:
                 self.logger.error(f"Error processing depth update: {e}")
 
+    def get_order_book(self, levels: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """
+        Get formatted order book with optional level limiting.
+        
+        Args:
+            levels: Optional number of levels to return per side.
+            
+        Returns:
+            Order book dict with 'bids' and 'asks' lists, or None if not ready.
+        """
+        if not self.order_book_ready:
+            return None
+        
+        try:
+            # Order book is already in standard format from depth stream
+            bids = self.order_book.get('bids', [])
+            asks = self.order_book.get('asks', [])
+            
+            # Apply level limiting if requested
+            if levels is not None:
+                bids = bids[:levels]
+                asks = asks[:levels]
+            
+            return {'bids': bids, 'asks': asks}
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error formatting order book: {e}")
+            return None
+
     async def disconnect(self):
         """Disconnect from WebSocket."""
         self.running = False

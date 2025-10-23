@@ -46,3 +46,17 @@ class BaseWebSocketManager(ABC):
         strategy's normalized format and implementers are responsible for any
         required conversion.
         """
+
+    @abstractmethod
+    def get_order_book(self, levels: Optional[int] = None) -> Optional[Any]:
+        """
+        Get formatted order book with optional level limiting.
+        
+        Args:
+            levels: Optional number of levels to return per side.
+            
+        Returns:
+            Order book dict with 'bids' and 'asks' lists, or None if not ready.
+            Format: {'bids': [{'price': Decimal, 'size': Decimal}, ...], 
+                     'asks': [{'price': Decimal, 'size': Decimal}, ...]}
+        """
