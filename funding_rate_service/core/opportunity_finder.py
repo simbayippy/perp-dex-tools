@@ -382,7 +382,7 @@ class OpportunityFinder:
                     )
                     return None
 
-                logger.info(
+                logger.debug(
                     f"[OPP] {symbol} accepted: required dex {required_dex_lower} OI {target_oi} within cap {filters.max_oi_usd}"
                 )
             else:
@@ -392,7 +392,7 @@ class OpportunityFinder:
                     )
                     return None
 
-                logger.info(
+                logger.debug(
                     f"[OPP] {symbol} accepted: min OI {min_oi} within cap {filters.max_oi_usd} ({dex_long}/{dex_short})"
                 )
         if filters.oi_ratio_min and oi_ratio:
