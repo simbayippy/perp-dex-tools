@@ -6,7 +6,6 @@ import os
 import asyncio
 import time
 from datetime import datetime, timezone
-import aiohttp
 from decimal import Decimal, InvalidOperation
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -454,12 +453,10 @@ class LighterClient(BaseExchangeClient):
                     )
                     return ws_book
             
-            # 🔄 Priority 2: Fall back to REST API
+            # 🔄 Priority 2: Fall back to REST API using SDK
             self.logger.info(
                 f"📞 [REST][LIGHTER] Fetching order book via REST API (WebSocket not available)"
             )
-            # Use REST API for order book (more reliable than WebSocket for one-time queries)
-            url = f"{self.base_url}/api/v1/orderBookOrders"
             
             # Lighter uses integer market_id for API calls
             # Try to convert contract_id to int first (if already an int ID)
@@ -478,63 +475,59 @@ class LighterClient(BaseExchangeClient):
                     )
                     return {'bids': [], 'asks': []}
 
+            # API max is 100 for Lighter
             if levels < 100:
-                # API max is 100 for lighter, while default is set to 20
-                # so we use the highest of the 2
-                levels = 100 #lighter specific
-
-            params = {
-                'market_id': market_id,
-                'limit': levels  # API max is 100
-            }
+                levels = 100  # Lighter specific: use max to get full depth
             
             self.logger.info(
-                f"📊 [LIGHTER] Fetching order book: market_id={market_id}, limit={params['limit']}"
+                f"📊 [LIGHTER] Fetching order book: market_id={market_id}, limit={levels}"
             )
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params) as response:
-                    if response.status != 200:
-                        response_text = await response.text()
-                        self.logger.error(
-                            f"❌ [LIGHTER] Failed to get order book: HTTP {response.status}, "
-                            f"URL: {url}, params: {params}, response: {response_text[:300]}"
-                        )
-                        return {'bids': [], 'asks': []}
-                    
-                    data = await response.json()
-                    
-                    if data.get('code') != 200:
-                        self.logger.error(
-                            f"❌ [LIGHTER] Order book API error response: {data}"
-                        )
-                        return {'bids': [], 'asks': []}
-                    
-                    # Extract bids and asks from Lighter response
-                    bids_raw = data.get('bids', [])
-                    asks_raw = data.get('asks', [])
-                    
-                    # Convert to standardized format
-                    # Lighter format: [{'price': '1243.5281', 'remaining_base_amount': '0.20'}, ...]
-                    bids = [
-                        {
-                            'price': Decimal(bid['price']), 
-                            'size': Decimal(bid['remaining_base_amount'])
-                        } 
-                        for bid in bids_raw
-                    ]
-                    asks = [
-                        {
-                            'price': Decimal(ask['price']), 
-                            'size': Decimal(ask['remaining_base_amount'])
-                        } 
-                        for ask in asks_raw
-                    ]
-                    
-                    return {
-                        'bids': bids,
-                        'asks': asks
-                    }
+            # Use SDK to fetch order book
+            try:
+                order_api = lighter.OrderApi(self.api_client)
+                result = await order_api.order_book_orders(
+                    market_id=market_id,
+                    limit=levels,
+                    _request_timeout=10
+                )
+                
+                # Check if the API returned success
+                if result.code != 200:
+                    self.logger.error(
+                        f"❌ [LIGHTER] Order book API error: code={result.code}, message={result.message}"
+                    )
+                    return {'bids': [], 'asks': []}
+                
+                # Convert to standardized format
+                # SDK returns SimpleOrder objects with price and remaining_base_amount as strings
+                bids = [
+                    {
+                        'price': Decimal(bid.price), 
+                        'size': Decimal(bid.remaining_base_amount)
+                    } 
+                    for bid in result.bids
+                ]
+                asks = [
+                    {
+                        'price': Decimal(ask.price), 
+                        'size': Decimal(ask.remaining_base_amount)
+                    } 
+                    for ask in result.asks
+                ]
+                
+                return {
+                    'bids': bids,
+                    'asks': asks
+                }
+                
+            except Exception as api_error:
+                self.logger.error(
+                    f"❌ [LIGHTER] SDK order book fetch failed: {api_error}"
+                )
+                import traceback
+                self.logger.debug(f"Traceback: {traceback.format_exc()}")
+                return {'bids': [], 'asks': []}
 
         except Exception as e:
             self.logger.error(f"❌ [LIGHTER] Error fetching order book depth for {contract_id}: {e}")
