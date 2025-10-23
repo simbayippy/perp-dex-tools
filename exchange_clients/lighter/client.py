@@ -1068,6 +1068,63 @@ class LighterClient(BaseExchangeClient):
             self.logger.error(f"Error getting detailed positions: {e}")
             return []
 
+    async def _get_cumulative_funding(
+        self,
+        market_id: int,
+        side: Optional[str] = None,
+    ) -> Optional[Decimal]:
+        """
+        Fetch cumulative funding fees for a position using Lighter's position funding API.
+        
+        Args:
+            market_id: The market ID for the position
+            side: Position side ('long' or 'short'), optional filter
+            
+        Returns:
+            Cumulative funding fees as Decimal, None if unavailable
+        """
+        if not hasattr(self, 'account_api') or self.account_api is None:
+            return None
+        
+        account_index = getattr(self.config, "account_index", None)
+        if account_index is None:
+            self.logger.debug("[LIGHTER] No account_index configured, cannot fetch funding")
+            return None
+        
+        try:
+            # Fetch position funding history
+            response = await self.account_api.position_funding(
+                account_index=account_index,
+                market_id=market_id,
+                limit=100,  # Get recent funding payments
+                side=side if side else 'all',
+            )
+            
+            if not response or not hasattr(response, 'position_fundings'):
+                return None
+            
+            fundings = response.position_fundings
+            if not fundings:
+                return None
+            
+            # Sum up all funding 'change' values to get cumulative funding
+            cumulative = Decimal("0")
+            for funding in fundings:
+                try:
+                    change = Decimal(str(funding.change))
+                    cumulative += change
+                except Exception as exc:
+                    self.logger.debug(f"[LIGHTER] Failed to parse funding change: {exc}")
+                    continue
+            
+            return cumulative if cumulative != Decimal("0") else None
+            
+        except Exception as exc:
+            self.logger.debug(
+                f"[LIGHTER] Error fetching funding for market_id={market_id}: {exc}"
+            )
+            return None
+
     async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
         """
         Retrieve detailed metrics for a specific symbol.
@@ -1121,6 +1178,17 @@ class LighterClient(BaseExchangeClient):
                     side = "long"
                 elif quantity < 0:
                     side = "short"
+            
+            # Fetch cumulative funding fees for this position
+            market_id = pos.get("market_id")
+            funding_accrued = None
+            if market_id is not None:
+                try:
+                    funding_accrued = await self._get_cumulative_funding(market_id, side)
+                except Exception as exc:
+                    self.logger.debug(
+                        f"[LIGHTER] Failed to fetch funding for {symbol} (market_id={market_id}): {exc}"
+                    )
 
             metadata: Dict[str, Any] = {
                 "market_id": pos.get("market_id"),
@@ -1136,7 +1204,7 @@ class LighterClient(BaseExchangeClient):
                 exposure_usd=exposure,
                 unrealized_pnl=unrealized,
                 realized_pnl=realized,
-                funding_accrued=None,
+                funding_accrued=funding_accrued,
                 margin_reserved=margin_reserved,
                 leverage=None,
                 liquidation_price=liquidation_price,
