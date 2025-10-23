@@ -522,7 +522,11 @@ class BackpackClient(BaseExchangeClient):
         price: Decimal,
         side: str,
     ) -> OrderResult:
-        """Place a post-only limit order on Backpack."""
+        """
+        Place a post-only limit order on Backpack.
+        
+        Automatically retries with adjusted prices if the order would immediately match.
+        """
         backpack_side = "Bid" if side.lower() == "buy" else "Ask"
 
         # round price as backpack always seems to instant fill
@@ -537,61 +541,156 @@ class BackpackClient(BaseExchangeClient):
             return OrderResult(success=False, error_message=message)
 
         quantity_str = self._format_decimal(quantized_quantity, getattr(self.config, "step_size", None))
-        payload_preview = {
-            "symbol": contract_id,
-            "side": backpack_side,
-            "orderType": OrderTypeEnum.LIMIT,
-            "quantity": quantity_str,
-            "price": str(rounded_price),
-            "post_only": True,
-            "time_in_force": TimeInForceEnum.GTC,
-        }
-        self.logger.debug(f"[BACKPACK] Executing limit order payload: {payload_preview}")
+        
+        # Get tick size for price adjustments
+        tick_size = getattr(self.config, "tick_size", Decimal("0.001"))
+        if not isinstance(tick_size, Decimal):
+            tick_size = Decimal(str(tick_size))
+        
+        # Retry up to 3 times with progressively adjusted prices
+        max_retries = 3
+        current_price = rounded_price
+        
+        for attempt in range(max_retries):
+            payload_preview = {
+                "symbol": contract_id,
+                "side": backpack_side,
+                "orderType": OrderTypeEnum.LIMIT,
+                "quantity": quantity_str,
+                "price": str(current_price),
+                "post_only": True,
+                "time_in_force": TimeInForceEnum.GTC,
+            }
+            
+            if attempt > 0:
+                self.logger.info(
+                    f"[BACKPACK] Retry {attempt}/{max_retries-1}: "
+                    f"Adjusting price from ${rounded_price} to ${current_price}"
+                )
+            else:
+                self.logger.debug(f"[BACKPACK] Executing limit order payload: {payload_preview}")
 
-        try:
-            result = self.account_client.execute_order(
-                symbol=contract_id,
-                side=backpack_side,
-                order_type=OrderTypeEnum.LIMIT,
-                quantity=quantity_str,
-                price=str(rounded_price),
-                post_only=True,
-                time_in_force=TimeInForceEnum.GTC,
-            )
-        except Exception as exc:
-            self.logger.error(f"[BACKPACK] Failed to place limit order: {exc}")
-            return OrderResult(success=False, error_message=str(exc))
+            try:
+                result = self.account_client.execute_order(
+                    symbol=contract_id,
+                    side=backpack_side,
+                    order_type=OrderTypeEnum.LIMIT,
+                    quantity=quantity_str,
+                    price=str(current_price),
+                    post_only=True,
+                    time_in_force=TimeInForceEnum.GTC,
+                )
+            except Exception as exc:
+                self.logger.error(f"[BACKPACK] Failed to place limit order: {exc}")
+                return OrderResult(success=False, error_message=str(exc))
 
-        if isinstance(result, dict) and result.get("code"):
-            self.logger.error(f"[BACKPACK] Limit order rejected: {result}")
-            return OrderResult(success=False, error_message=result.get("message", "Order rejected"))
+            # Check for rejection due to immediate matching
+            if isinstance(result, dict) and result.get("code"):
+                error_code = result.get("code", "")
+                error_msg = result.get("message", "").lower()
+                
+                # Detect "would immediately match" error
+                if (error_code == "INVALID_ORDER" and 
+                    "immediately match" in error_msg and 
+                    attempt < max_retries - 1):
+                    
+                    self.logger.warning(
+                        f"[BACKPACK] Order would immediately match at ${current_price}. "
+                        f"Adjusting price to be more maker-friendly..."
+                    )
+                    
+                    # Fetch latest BBO to ensure we're adjusting based on current market
+                    try:
+                        best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
+                        self.logger.debug(
+                            f"[BACKPACK] Latest BBO: bid=${best_bid}, ask=${best_ask}"
+                        )
+                    except Exception as exc:
+                        self.logger.warning(
+                            f"[BACKPACK] Failed to fetch latest BBO for retry: {exc}. "
+                            f"Using incremental adjustment."
+                        )
+                        best_bid = best_ask = None
+                    
+                    # Adjust price further away from best price
+                    # Each retry moves 1-2 ticks further to increase chance of success
+                    adjustment_ticks = Decimal(attempt + 1)
+                    
+                    if side.lower() == "buy":
+                        # Buy: reduce price (move down, away from best ask)
+                        if best_ask and best_ask > 0:
+                            # Use current best ask as reference point
+                            current_price = best_ask - (tick_size * adjustment_ticks)
+                        else:
+                            # Fallback: reduce from current price
+                            current_price = current_price - (tick_size * adjustment_ticks)
+                    else:
+                        # Sell: increase price (move up, away from best bid)
+                        if best_bid and best_bid > 0:
+                            # Use current best bid as reference point
+                            current_price = best_bid + (tick_size * adjustment_ticks)
+                        else:
+                            # Fallback: increase from current price
+                            current_price = current_price + (tick_size * adjustment_ticks)
+                    
+                    # Ensure price stays within max decimals
+                    current_price = self._enforce_max_decimals(current_price)
+                    
+                    # Sanity check: price must be positive
+                    if current_price <= 0:
+                        self.logger.error(
+                            f"[BACKPACK] Price adjustment resulted in invalid price: ${current_price}"
+                        )
+                        return OrderResult(
+                            success=False, 
+                            error_message="Price adjustment failed: price became non-positive"
+                        )
+                    
+                    # Continue to next retry attempt
+                    continue
+                
+                # Different error or max retries reached
+                self.logger.error(f"[BACKPACK] Limit order rejected: {result}")
+                return OrderResult(success=False, error_message=result.get("message", "Order rejected"))
 
-        if not result or "id" not in result:
-            return OrderResult(success=False, error_message="Limit order response missing order id")
+            # Order was accepted
+            if not result or "id" not in result:
+                return OrderResult(success=False, error_message="Limit order response missing order id")
 
-        order_id = str(result["id"])
+            order_id = str(result["id"])
+            
+            if attempt > 0:
+                self.logger.info(
+                    f"✅ [BACKPACK] Order accepted after {attempt} price adjustment(s) at ${current_price}"
+                )
 
-        await asyncio.sleep(0.05)
-        info = await self.get_order_info(order_id)
+            await asyncio.sleep(0.05)
+            info = await self.get_order_info(order_id)
 
-        if info:
+            if info:
+                return OrderResult(
+                    success=info.status not in {"Rejected", "Cancelled"},
+                    order_id=info.order_id,
+                    side=info.side,
+                    size=info.size,
+                    price=info.price,
+                    status=info.status,
+                    filled_size=info.filled_size,
+                )
+
             return OrderResult(
-                success=info.status not in {"Rejected", "Cancelled"},
-                order_id=info.order_id,
-                side=info.side,
-                size=info.size,
-                price=info.price,
-                status=info.status,
-                filled_size=info.filled_size,
+                success=True,
+                order_id=order_id,
+                side=side.lower(),
+                size=quantized_quantity,
+                price=current_price,
+                status="OPEN",
             )
-
+        
+        # Should not reach here, but just in case
         return OrderResult(
-            success=True,
-            order_id=order_id,
-            side=side.lower(),
-            size=quantized_quantity,
-            price=rounded_price,
-            status="OPEN",
+            success=False, 
+            error_message="Max retries exceeded for limit order placement"
         )
 
     async def place_market_order(
