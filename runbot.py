@@ -17,6 +17,7 @@ import sys
 import dotenv
 from decimal import Decimal
 from trading_bot import TradingBot, TradingConfig
+import os
 
 
 def parse_arguments():
@@ -38,6 +39,15 @@ def parse_arguments():
         type=str,
         default=".env",
         help="Path to the environment file with API credentials (default: .env).",
+    )
+    
+    parser.add_argument(
+        "--account",
+        "-a",
+        type=str,
+        default=None,
+        help="Account name to load credentials from database (e.g., 'acc1'). "
+             "If provided, credentials will be loaded from the database instead of env vars.",
     )
 
     return parser.parse_args()
@@ -87,6 +97,64 @@ def setup_logging(log_level: str):
     # Note: We keep the root logger at the requested level (INFO) so atomic_multi_order.py logs show up
 
 
+async def load_account_credentials(account_name: str) -> dict:
+    """
+    Load encrypted credentials for an account from the database.
+    
+    Args:
+        account_name: Name of the account to load credentials for
+        
+    Returns:
+        Dictionary mapping exchange names to their credentials
+        
+    Raises:
+        SystemExit: If credentials cannot be loaded
+    """
+    try:
+        from databases import Database
+        from database.credential_loader import DatabaseCredentialLoader
+        
+        # Get database URL from environment
+        database_url = os.getenv('DATABASE_URL')
+        
+        if not database_url:
+            print("Error: DATABASE_URL not set in environment")
+            print("Required for loading account credentials from database")
+            sys.exit(1)
+        
+        # Connect to database
+        db = Database(database_url)
+        await db.connect()
+        
+        try:
+            # Load credentials (encryption_key is read from env by the loader)
+            loader = DatabaseCredentialLoader(db)
+            credentials = await loader.load_account_credentials(account_name)
+            
+            if not credentials:
+                print(f"Error: No credentials found for account '{account_name}'")
+                print(f"\nAvailable accounts:")
+                print(f"  Run: python database/scripts/list_accounts.py")
+                sys.exit(1)
+            
+            print(f"✓ Loaded credentials for account: {account_name}")
+            print(f"  Exchanges: {', '.join(credentials.keys())}\n")
+            
+            return credentials
+        finally:
+            await db.disconnect()
+            
+    except ImportError as e:
+        print(f"Error: Failed to import database modules: {e}")
+        print("Ensure 'databases' and 'cryptography' are installed")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading credentials from database: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
 async def main():
     """Main entry point."""
     args = parse_arguments()
@@ -123,12 +191,24 @@ async def main():
     print(f"  Strategy: {strategy_name}")
     print(f"  Created: {loaded['metadata'].get('created_at', 'unknown')}\n")
 
-    # Load env
+    # Load env (for DATABASE_URL, ENCRYPTION_KEY, etc.)
     env_path = Path(args.env_file)
     if not env_path.exists():
         print(f"Env file not found: {env_path.resolve()}")
         sys.exit(1)
     dotenv.load_dotenv(args.env_file)
+
+    # Load account credentials from database if --account is provided
+    account_credentials = None
+    account_name = None
+    if args.account:
+        account_name = args.account
+        print(f"Loading credentials for account: {account_name}")
+        account_credentials = await load_account_credentials(account_name)
+    
+    # Store account info in strategy config for later use
+    strategy_config["_account_name"] = account_name
+    strategy_config["_account_credentials"] = account_credentials
 
     # Convert to TradingConfig
     config = _config_dict_to_trading_config(strategy_name, strategy_config)
@@ -142,9 +222,12 @@ async def main():
     print(f"  Strategy: {config.strategy}")
     print(f"  Exchange: {config.exchange}")
     print(f"  Ticker:   {config.ticker}")
+    if account_name:
+        print(f"  Account:  {account_name}")
     print("="*70 + "\n")
     
-    bot = TradingBot(config)
+    # Create bot with optional account credentials
+    bot = TradingBot(config, account_credentials=account_credentials)
     try:
         await bot.run()
     except Exception as e:
