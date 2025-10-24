@@ -205,6 +205,13 @@ class FundingArbConfig(BaseModel):
         description="Source config path (populated when loaded from YAML)"
     )
     
+    # Multi-account support
+    _account_name: Optional[str] = Field(
+        default=None,
+        alias="account_name",
+        description="Account name for multi-account support (populated from --account flag)"
+    )
+    
     # General settings
     exchange: str = Field(
         default="multi",

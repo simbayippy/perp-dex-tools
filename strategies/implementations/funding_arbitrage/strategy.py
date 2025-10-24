@@ -354,9 +354,12 @@ class FundingArbitrageStrategy(BaseStrategy):
             risk_config=risk_config,
             # Ticker for logging
             ticker=trading_config.ticker,
-            config_path=config_path
+            config_path=config_path,
+            # Multi-account support
+            account_name=strategy_params.get('_account_name')  # Using alias
             # Note: bridge_settings not implemented yet
         )
+        
         return funding_config
 
     # ========================================================================
