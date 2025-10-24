@@ -358,11 +358,18 @@ class AsterClient(BaseExchangeClient):
                     f"⚠️  [ASTER] WebSocket BBO invalid: bid={self.ws_manager.best_bid}, "
                     f"ask={self.ws_manager.best_ask}"
                 )
+        elif self.ws_manager:
+            # Log why WebSocket BBO is not available
+            self.logger.debug(
+                f"📊 [ASTER] WebSocket BBO not ready: bid={self.ws_manager.best_bid}, "
+                f"ask={self.ws_manager.best_ask}, running={getattr(self.ws_manager, 'running', False)}"
+            )
         
         # DRY: Fall back to REST API via order book depth (more reliable)
         self.logger.info(f"📞 [REST][ASTER] Using REST API fallback")
         try:
-            order_book = await self.get_order_book_depth(contract_id, levels=1)
+            # Aster requires minimum depth limit of 5 (Binance-compatible API)
+            order_book = await self.get_order_book_depth(contract_id, levels=5)
             
             if not order_book['bids'] or not order_book['asks']:
                 raise ValueError(f"Empty order book for {contract_id}")

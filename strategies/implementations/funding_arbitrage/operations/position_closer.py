@@ -332,9 +332,10 @@ class PositionCloser:
             snapshot_ready = False
             if hasattr(ws_manager, "snapshot_loaded"):
                 snapshot_ready = bool(ws_manager.snapshot_loaded)
-            if getattr(ws_manager, "best_bid", None) is not None:
-                snapshot_ready = True
-            if getattr(ws_manager, "best_ask", None) is not None:
+            # CRITICAL: Require BOTH bid and ask to be ready (not just one)
+            best_bid = getattr(ws_manager, "best_bid", None)
+            best_ask = getattr(ws_manager, "best_ask", None)
+            if best_bid is not None and best_ask is not None:
                 snapshot_ready = True
 
             if snapshot_ready:
