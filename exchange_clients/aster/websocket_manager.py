@@ -623,11 +623,6 @@ class AsterWebSocketManager(BaseWebSocketManager):
             }
             self.order_book_ready = True
             
-            if self.logger:
-                self.logger.debug(
-                    f"📚 [ASTER] Depth update: {len(bids)} bids, {len(asks)} asks"
-                )
-        
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error processing depth update: {e}")
