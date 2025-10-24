@@ -75,23 +75,91 @@ python database/scripts/seed_dexes.py
 
 ---
 
+### Account Management Scripts
+
+#### `add_account.py`
+Add a new trading account with encrypted credentials to the database.
+
+**Usage:**
+```bash
+# Interactive mode (recommended)
+python database/scripts/add_account.py --interactive
+
+# From .env file
+python database/scripts/add_account.py --from-env --account-name main_bot
+```
+
+**Features:**
+- Reads credentials from `.env` file (Lighter, Aster, Backpack)
+- Encrypts credentials using Fernet encryption
+- Stores encrypted credentials in database
+- Supports multiple exchanges per account
+- Idempotent - safe to run multiple times (updates existing credentials)
+
+**First Time Setup:**
+```bash
+# 1. Generate encryption key (only needed once)
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+# 2. Add to .env file
+echo "CREDENTIAL_ENCRYPTION_KEY=your_generated_key_here" >> .env
+
+# 3. Add your account
+python database/scripts/add_account.py --from-env --account-name main_bot
+```
+
+---
+
+#### `list_accounts.py`
+List all trading accounts and their configured exchanges.
+
+**Usage:**
+```bash
+# List all accounts (credentials hidden)
+python database/scripts/list_accounts.py
+
+# Show decrypted credentials (use carefully!)
+python database/scripts/list_accounts.py --show-credentials
+```
+
+**Features:**
+- Shows account details, metadata, and configured exchanges
+- Can decrypt and display credentials (with proper key)
+- Shows credential sharing relationships
+- Lists last usage timestamps
+
+---
+
 ## 🚀 Typical Setup Workflow
 
 ### First Time Setup
 
 ```bash
-# 1. Create .env file with DATABASE_URL
-cp env_example.txt .env
-# Edit .env with your database credentials
+# 1. Install required dependencies
+pip install cryptography  # For credential encryption
 
-# 2. Initialize database schema
+# 2. Create .env file with DATABASE_URL
+cp env_example.txt .env
+# Edit .env with your database credentials and exchange API keys
+
+# 3. Initialize database schema
 python database/scripts/init_db.py
 
-# 3. Seed initial DEX data
+# 4. Seed initial DEX data
 python database/scripts/seed_dexes.py
 
-# 4. Run all migrations
+# 5. Run all migrations
 python database/scripts/run_all_migrations.py
+
+# 6. Generate encryption key and add to .env
+python -c "from cryptography.fernet import Fernet; print('CREDENTIAL_ENCRYPTION_KEY=' + Fernet.generate_key().decode())"
+# Copy the output and add to your .env file
+
+# 7. Add your trading account
+python database/scripts/add_account.py --from-env --account-name main_bot
+
+# 8. Verify account was created
+python database/scripts/list_accounts.py
 ```
 
 ### Adding New Migrations
