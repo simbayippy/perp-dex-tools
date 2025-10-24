@@ -11,7 +11,7 @@ Excellent question! This is a crucial architectural decision. Let me analyze you
 
 **Your Requirements:**
 1. ✅ Multiple accounts running separate bots
-2. ✅ Each account has DEX-specific credentials
+2. ✅ Each account has exchange-specific credentials
 3. ✅ Flexibility for account sharing (e.g., one Backpack account for multiple strategies)
 4. ✅ Track which account opened which position
 5. ✅ Secure credential management
@@ -32,38 +32,38 @@ CREATE TABLE accounts (
     metadata JSONB  -- Flexible storage for account-specific settings
 );
 
--- DEX credentials per account
-CREATE TABLE account_dex_credentials (
+-- exchange credentials per account
+CREATE TABLE account_exchange_credentials (
     id UUID PRIMARY KEY,
     account_id UUID REFERENCES accounts(id),
-    dex_id INTEGER REFERENCES dexes(id),
+    exchange_id INTEGER REFERENCES dexes(id),
     
     -- Encrypted credentials
     api_key_encrypted TEXT,
     secret_key_encrypted TEXT,
-    additional_credentials_encrypted JSONB,  -- For DEX-specific extras
+    additional_credentials_encrypted JSONB,  -- For exchange-specific extras
     
-    -- DEX-specific identifiers
+    -- exchange-specific identifiers
     exchange_account_id VARCHAR(255),  -- Internal account ID on the exchange
-    subaccount_index INTEGER,  -- For DEXes with subaccounts
+    subaccount_index INTEGER,  -- For exchanges with subaccounts
     
     is_active BOOLEAN DEFAULT true,
     last_used TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
     
-    UNIQUE(account_id, dex_id, subaccount_index)
+    UNIQUE(account_id, exchange_id, subaccount_index)
 );
 
 -- Update strategy_positions to link to account
 ALTER TABLE strategy_positions 
 ADD COLUMN account_id UUID REFERENCES accounts(id);
 
--- For shared DEX accounts (your Backpack scenario)
-CREATE TABLE account_dex_sharing (
+-- For shared exchange accounts (your Backpack scenario)
+CREATE TABLE account_exchange_sharing (
     id UUID PRIMARY KEY,
     primary_account_id UUID REFERENCES accounts(id),
     shared_account_id UUID REFERENCES accounts(id),
-    dex_id INTEGER REFERENCES dexes(id),
+    exchange_id INTEGER REFERENCES dexes(id),
     sharing_type VARCHAR(50),  -- 'full', 'read_only', 'positions_only'
     created_at TIMESTAMP DEFAULT NOW()
 );
@@ -92,7 +92,7 @@ CREDENTIAL_ENCRYPTION_KEY=xxx  # One master key
 account_name: main_bot
 description: Primary funding arbitrage account
 
-dex_credentials:
+exchange_credentials:
   lighter:
     account_index: 0
     # Keys loaded from env or secrets manager
@@ -154,7 +154,7 @@ class MultiAccountPositionManager:
 
 ### **Phase 1: Database Schema** (Week 1)
 1. Create `accounts` table
-2. Create `account_dex_credentials` table
+2. Create `account_exchange_credentials` table
 3. Add `account_id` to `strategy_positions`
 4. Create migration scripts
 
@@ -174,8 +174,8 @@ class MultiAccountPositionManager:
 
 ## 🎯 Key Design Decisions
 
-### **Q: How to handle shared DEX accounts?**
-**A:** Use `account_dex_sharing` table. When account A needs Backpack access but doesn't have credentials, it can reference account B's Backpack credentials.
+### **Q: How to handle shared exchange accounts?**
+**A:** Use `account_exchange_sharing` table. When account A needs Backpack access but doesn't have credentials, it can reference account B's Backpack credentials.
 
 ### **Q: How to run multiple bots?**
 **A:** Each bot instance runs with:
@@ -190,7 +190,7 @@ python runbot.py --config config.yml --account test_bot
 ## 🚀 Benefits of This Approach
 
 1. **Scalability**: Add unlimited accounts without code changes
-2. **Flexibility**: Share DEX accounts when needed (Backpack KYC issue)
+2. **Flexibility**: Share exchange accounts when needed (Backpack KYC issue)
 3. **Security**: Centralized credential management with encryption
 4. **Auditability**: Track which account did what
 5. **Isolation**: Accounts can't interfere with each other
