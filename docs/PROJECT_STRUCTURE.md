@@ -429,8 +429,8 @@ uvicorn main:app --reload
 ```bash
 # From /perp-dex-tools/funding_rate_service
 docker-compose up -d  # Start PostgreSQL (or use local PostgreSQL)
-python scripts/init_db.py  # Initialize schema
-python scripts/seed_dexes.py  # Seed DEX data
+python database/scripts/init_db.py  # Initialize schema
+python database/scripts/seed_dexes.py  # Seed DEX data
 
 # Run strategy-specific migrations
 cd database/migrations

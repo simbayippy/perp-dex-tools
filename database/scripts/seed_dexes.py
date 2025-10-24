@@ -1,18 +1,40 @@
 #!/usr/bin/env python3
 """
 Seed initial DEX data into the database
+
+Usage:
+    python database/scripts/seed_dexes.py
 """
 
 import asyncio
 import sys
 from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add project root to sys.path
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from databases import Database
-from config import settings
-from funding_rate_service.utils.logger import logger
+
+try:
+    from funding_rate_service.config import settings
+    from funding_rate_service.utils.logger import logger
+except ImportError:
+    # Fallback if funding_rate_service not available
+    import os
+    from dotenv import load_dotenv
+    
+    load_dotenv()
+    
+    class Settings:
+        database_url = os.getenv('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/perp_dex')
+    
+    settings = Settings()
+    
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
 
 
 INITIAL_DEXES = [
@@ -115,18 +137,18 @@ async def seed_dexes():
                 'supports_websocket': True,  # All these DEXs support WebSocket
             })
             
-            logger.success(f"✓ Added DEX: {dex['display_name']}")
+            print(f"✅ Added DEX: {dex['display_name']}")
         
         # Show all DEXes
         dexes = await db.fetch_all("""
             SELECT id, name, display_name, maker_fee_percent, taker_fee_percent 
             FROM dexes ORDER BY id
         """)
-        logger.info("\nRegistered DEXes:")
+        print("\nRegistered DEXes:")
         for dex in dexes:
             maker_fee_pct = float(dex['maker_fee_percent']) * 100
             taker_fee_pct = float(dex['taker_fee_percent']) * 100
-            logger.info(
+            print(
                 f"  {dex['id']}: {dex['name']} ({dex['display_name']}) - "
                 f"Maker: {maker_fee_pct:+.3f}%, Taker: {taker_fee_pct:.3f}%"
             )

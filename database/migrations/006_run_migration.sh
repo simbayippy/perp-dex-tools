@@ -7,7 +7,7 @@ echo "=============================================="
 cd "$(dirname "$0")/../.."
 
 echo "Applying migration..."
-python scripts/run_migration.py database/migrations/006_add_multi_account_support.sql
+python database/scripts/run_migration.py database/migrations/006_add_multi_account_support.sql
 
 if [ $? -eq 0 ]; then
     echo ""
@@ -18,7 +18,7 @@ if [ $? -eq 0 ]; then
     echo "      INSERT INTO accounts (account_name, description) VALUES ('default', 'Default account');"
     echo ""
     echo "   2. (Optional) Test rollback:"
-    echo "      python scripts/run_migration.py database/migrations/006_add_multi_account_support_rollback.sql"
+    echo "      python database/scripts/run_migration.py database/migrations/006_add_multi_account_support_rollback.sql"
 else
     echo ""
     echo "❌ Migration failed! Check error messages above."

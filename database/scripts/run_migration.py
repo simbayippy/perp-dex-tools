@@ -3,23 +3,29 @@
 Run database migration
 
 Usage:
-    python scripts/run_migration.py <migration_file>
+    python database/scripts/run_migration.py <migration_file>
     
 Example:
-    python scripts/run_migration.py database/migrations/001_add_dex_symbols_updated_at.sql
+    python database/scripts/run_migration.py database/migrations/001_add_dex_symbols_updated_at.sql
 """
 
 import asyncio
 import sys
 from pathlib import Path
 
-# Add project root to sys.path so `funding_rate_service` resolves correctly
+# Add project root to sys.path so imports work correctly
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from database.connection import database
-from funding_rate_service.utils.logger import logger
+
+try:
+    from funding_rate_service.utils.logger import logger
+except ImportError:
+    # Fallback if funding_rate_service logger not available
+    import logging
+    logger = logging.getLogger(__name__)
 
 
 async def run_migration(migration_file: str):
@@ -64,10 +70,11 @@ async def run_migration(migration_file: str):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python scripts/run_migration.py <migration_file>")
+        print("Usage: python database/scripts/run_migration.py <migration_file>")
         print("\nExample:")
-        print("  python scripts/run_migration.py database/migrations/001_add_dex_symbols_updated_at.sql")
+        print("  python database/scripts/run_migration.py database/migrations/001_add_dex_symbols_updated_at.sql")
         sys.exit(1)
     
     migration_file = sys.argv[1]
     asyncio.run(run_migration(migration_file))
+

@@ -28,7 +28,7 @@ cd database/migrations
 
 # Option C: Run directly
 cd ../..
-python scripts/run_migration.py database/migrations/006_add_multi_account_support.sql
+python database/scripts/run_migration.py database/migrations/006_add_multi_account_support.sql
 ```
 
 ### 2. Create Your First Account
@@ -64,7 +64,7 @@ WHERE table_name = 'strategy_positions' AND column_name = 'account_id';
 ## 🔄 Rollback (if needed)
 
 ```bash
-python scripts/run_migration.py database/migrations/006_add_multi_account_support_rollback.sql
+python database/scripts/run_migration.py database/migrations/006_add_multi_account_support_rollback.sql
 ```
 
 ⚠️ **WARNING**: Rollback will:
