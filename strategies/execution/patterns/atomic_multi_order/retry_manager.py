@@ -97,6 +97,29 @@ class RetryManager:
                         logger.error(f"Retry order task failed for {ctx.spec.symbol}: {result}")
                         continue
                     apply_result_to_context(ctx, result)
+                
+                # Critical safety check: Detect imbalances after each retry attempt
+                total_long_usd = sum(
+                    getattr(ctx, "filled_usd", Decimal("0")) 
+                    for ctx in contexts 
+                    if getattr(ctx.spec, "side", "") == "buy"
+                )
+                total_short_usd = sum(
+                    getattr(ctx, "filled_usd", Decimal("0"))
+                    for ctx in contexts
+                    if getattr(ctx.spec, "side", "") == "sell"
+                )
+                imbalance = abs(total_long_usd - total_short_usd)
+                imbalance_tolerance = Decimal("10.00")  # Allow some imbalance during retries
+                
+                if imbalance > imbalance_tolerance:
+                    logger.warning(
+                        f"⚠️ Critical imbalance detected during retry attempt {attempt}: "
+                        f"longs=${total_long_usd:.2f}, shorts=${total_short_usd:.2f}, "
+                        f"imbalance=${imbalance:.2f}. Aborting retries for safety."
+                    )
+                    # Return False to indicate retry failure and let main executor handle rollback
+                    return False, attempts_used
 
             remaining = self._collect_deficits(contexts, policy)
             if not remaining:

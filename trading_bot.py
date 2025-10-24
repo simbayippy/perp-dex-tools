@@ -40,9 +40,24 @@ class TradingConfig:
 class TradingBot:
     """Modular Trading Bot - Main trading logic supporting multiple exchanges."""
 
-    def __init__(self, config: TradingConfig):
+    def __init__(self, config: TradingConfig, account_credentials: Optional[Dict[str, Dict[str, Any]]] = None):
+        """
+        Initialize Trading Bot.
+        
+        Args:
+            config: Trading configuration
+            account_credentials: Optional credentials dict mapping exchange names to credentials.
+                               If provided, credentials will be used instead of environment variables.
+        """
         self.config = config
+        self.account_credentials = account_credentials
         self.logger = get_logger("bot", config.strategy, context={"exchange": config.exchange, "ticker": config.ticker}, log_to_console=True)
+
+        # Log account info if credentials provided
+        if account_credentials:
+            account_name = config.strategy_params.get('_account_name', 'unknown')
+            self.logger.info(f"Using database credentials for account: {account_name}")
+            self.logger.info(f"Available exchanges: {list(account_credentials.keys())}")
 
         # Determine if strategy needs multiple exchanges
         multi_exchange_strategies = ['funding_arbitrage']
@@ -81,11 +96,12 @@ class TradingBot:
 
                 self.logger.info(f"Creating clients for exchanges: {exchange_list}")
 
-                # Create multiple exchange clients
+                # Create multiple exchange clients (with or without credentials)
                 self.exchange_clients = ExchangeFactory.create_multiple_exchanges(
                     exchange_names=exchange_list,
                     config=config,
                     primary_exchange=mandatory_exchange,
+                    account_credentials=account_credentials,  # Pass credentials to factory
                 )
 
                 if not self.exchange_clients:
@@ -99,9 +115,15 @@ class TradingBot:
                 )
             else:
                 # Single exchange mode (for grid strategy, etc.)
+                # Get credentials for this specific exchange
+                exchange_creds = None
+                if account_credentials and config.exchange in account_credentials:
+                    exchange_creds = account_credentials[config.exchange]
+                
                 self.exchange_client = ExchangeFactory.create_exchange(
                     config.exchange,
-                    config
+                    config,
+                    exchange_creds  # Pass credentials to factory
                 )
                 self.exchange_clients = None  # Not used for single-exchange strategies
                 

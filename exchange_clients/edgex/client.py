@@ -25,29 +25,47 @@ from helpers.unified_logger import get_exchange_logger
 class EdgeXClient(BaseExchangeClient):
     """EdgeX exchange client implementation."""
 
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize EdgeX client."""
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        account_id: Optional[str] = None,
+        stark_private_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        ws_url: Optional[str] = None,
+    ):
+        """
+        Initialize EdgeX client.
+        
+        Args:
+            config: Trading configuration dictionary
+            account_id: Optional account ID (falls back to env var)
+            stark_private_key: Optional Stark private key (falls back to env var)
+            base_url: Optional base URL (falls back to env var, default 'https://pro.edgex.exchange')
+            ws_url: Optional WebSocket URL (falls back to env var, default 'wss://quote.edgex.exchange')
+        """
+        # Set credentials BEFORE calling super().__init__() because it triggers _validate_config()
+        # Convert account_id to int since EdgeX SDK requires integer
+        account_id_raw = account_id or os.getenv('EDGEX_ACCOUNT_ID')
+        self.account_id = int(account_id_raw) if account_id_raw else None
+        self.stark_private_key = stark_private_key or os.getenv('EDGEX_STARK_PRIVATE_KEY')
+        self.base_url = base_url or os.getenv('EDGEX_BASE_URL', 'https://pro.edgex.exchange')
+        self.ws_url = ws_url or os.getenv('EDGEX_WS_URL', 'wss://quote.edgex.exchange')
+        
         super().__init__(config)
-
-        # EdgeX credentials from environment (validation happens in _validate_config)
-        self.account_id = os.getenv('EDGEX_ACCOUNT_ID')
-        self.stark_private_key = os.getenv('EDGEX_STARK_PRIVATE_KEY')
-        self.base_url = os.getenv('EDGEX_BASE_URL', 'https://pro.edgex.exchange')
-        self.ws_url = os.getenv('EDGEX_WS_URL', 'wss://quote.edgex.exchange')
 
         # Initialize EdgeX client using official SDK
         # Wrap in try-catch to convert SDK credential errors to MissingCredentialsError
         try:
             self.client = Client(
                 base_url=self.base_url,
-                account_id=int(self.account_id),
+                account_id=self.account_id,
                 stark_private_key=self.stark_private_key
             )
 
             # Initialize WebSocket manager using official SDK
             self.ws_manager = WebSocketManager(
                 base_url=self.ws_url,
-                account_id=int(self.account_id),
+                account_id=self.account_id,
                 stark_pri_key=self.stark_private_key
             )
         except Exception as e:
@@ -69,9 +87,9 @@ class EdgeXClient(BaseExchangeClient):
 
     def _validate_config(self) -> None:
         """Validate EdgeX configuration."""
-        # Use base validation helper (reduces code duplication)
-        validate_credentials('EDGEX_ACCOUNT_ID', os.getenv('EDGEX_ACCOUNT_ID'))
-        validate_credentials('EDGEX_STARK_PRIVATE_KEY', os.getenv('EDGEX_STARK_PRIVATE_KEY'))
+        # Validate the instance attributes (which may come from params or env)
+        validate_credentials('EDGEX_ACCOUNT_ID', self.account_id)
+        validate_credentials('EDGEX_STARK_PRIVATE_KEY', self.stark_private_key)
 
     # ---------------------------
     # Connection / Reconnect

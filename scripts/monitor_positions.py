@@ -41,8 +41,8 @@ from strategies.implementations.funding_arbitrage.position_monitor import (
 )
 
 try:
-    from funding_rate_service.database.connection import database
-    from funding_rate_service.database.repositories import FundingRateRepository
+    from database.connection import database
+    from database.repositories import FundingRateRepository
     FUNDING_DB_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional dependency during tests
     FUNDING_DB_AVAILABLE = False

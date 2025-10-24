@@ -10,7 +10,7 @@ from datetime import datetime
 
 from funding_rate_service.tasks.base_task import BaseTask
 from funding_rate_service.collection.orchestrator import CollectionOrchestrator
-from funding_rate_service.database.connection import database
+from database.connection import database
 from exchange_clients.lighter import LighterFundingAdapter
 from exchange_clients.grvt import GrvtFundingAdapter
 from exchange_clients.edgex import EdgeXFundingAdapter

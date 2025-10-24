@@ -30,7 +30,7 @@ from dashboard.models import (  # noqa: E402
     TimelineEvent,
 )
 from dashboard.viewer_utils import load_dashboard_state  # noqa: E402
-from funding_rate_service.database.connection import database  # noqa: E402
+from database.connection import database  # noqa: E402
 
 
 CONTROL_SERVER_HTTP = "http://127.0.0.1:8765"

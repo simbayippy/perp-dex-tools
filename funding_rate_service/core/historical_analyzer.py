@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 import statistics
 
-from funding_rate_service.database.connection import Database
+from database.connection import Database
 from funding_rate_service.core.mappers import DEXMapper, SymbolMapper
 from funding_rate_service.models.history import FundingRateHistory, FundingRateStats
 from funding_rate_service.utils.logger import logger

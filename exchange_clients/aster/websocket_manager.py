@@ -215,8 +215,26 @@ class AsterWebSocketManager(BaseWebSocketManager):
             # Start keepalive task
             self._keepalive_task = asyncio.create_task(self._start_keepalive_task())
             
-            # 📊 Note: Book ticker WebSocket is started on-demand via start_book_ticker(symbol)
-            # Don't start it here since we don't know which symbol to trade yet
+            # Start market data streams for the already-configured symbol
+            # (Similar to how Lighter subscribes to its market_index, Backpack starts tasks for its symbol)
+            ticker = getattr(self.config, 'ticker', None)
+            contract_id = getattr(self.config, 'contract_id', None)
+            
+            if contract_id and contract_id not in {'ALL', 'MULTI', 'MULTI_SYMBOL'}:
+                # Start streams for pre-configured symbol
+                if self.logger:
+                    self.logger.info(f"[ASTER] Starting market feeds for {contract_id}")
+                await self.start_book_ticker(contract_id)
+                self._current_depth_symbol = contract_id
+                self._depth_task = asyncio.create_task(self._connect_depth_stream(contract_id))
+            elif ticker and ticker not in {'ALL', 'MULTI', 'MULTI_SYMBOL'}:
+                # Fallback to ticker if contract_id not set
+                symbol = f"{ticker}USDT" if not ticker.endswith("USDT") else ticker
+                if self.logger:
+                    self.logger.info(f"[ASTER] Starting market feeds for {symbol}")
+                await self.start_book_ticker(symbol)
+                self._current_depth_symbol = symbol
+                self._depth_task = asyncio.create_task(self._connect_depth_stream(symbol))
 
             # Start listening for messages
             await self._listen()
@@ -326,10 +344,10 @@ class AsterWebSocketManager(BaseWebSocketManager):
 
     async def start_book_ticker(self, symbol: str):
         """
-        Start book ticker WebSocket for a specific symbol.
+        Connect to book ticker WebSocket and wait for first BBO.
         
-        This should be called AFTER identifying the opportunity symbol,
-        not during initial connection.
+        This properly awaits the initial connection and first message,
+        then starts a background task for continuous updates.
         
         Args:
             symbol: Normalized symbol (e.g., "MONUSDT", "SKYUSDT")
@@ -350,22 +368,109 @@ class AsterWebSocketManager(BaseWebSocketManager):
             except asyncio.CancelledError:
                 pass
         
-        # Start new book ticker task
+        # Reset BBO state before starting new stream
+        self.best_bid = None
+        self.best_ask = None
         self._current_book_ticker_symbol = symbol
-        self._book_ticker_task = asyncio.create_task(self._connect_book_ticker(symbol))
+        
+        # Connect and wait for first BBO message
+        stream_name = f"{symbol.lower()}@bookTicker"
+        book_ticker_url = f"{self.ws_url}/ws/{stream_name}"
         
         if self.logger:
-            self.logger.info(f"📊 Started book ticker WebSocket for {symbol}")
+            self.logger.info(f"📊 Connecting to Aster book ticker: {stream_name}")
+        
+        try:
+            # Connect to WebSocket
+            self._book_ticker_ws = await websockets.connect(book_ticker_url)
+            
+            if self.logger:
+                self.logger.info(f"✅ Connected to Aster book ticker for {symbol}")
+            
+            # Wait for first BBO message (up to 5 seconds)
+            try:
+                message = await asyncio.wait_for(self._book_ticker_ws.recv(), timeout=5.0)
+                data = json.loads(message)
+                await self._handle_book_ticker(data)
+                
+                if self.logger:
+                    self.logger.info(f"✅ Book ticker ready: bid={self.best_bid}, ask={self.best_ask}")
+            except asyncio.TimeoutError:
+                if self.logger:
+                    self.logger.warning(f"⏱️  No BBO message received within 5s")
+            
+            # Start background task to continue listening
+            self._book_ticker_task = asyncio.create_task(self._listen_book_ticker())
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Failed to connect to book ticker: {e}")
+            raise
+    
+    async def _listen_book_ticker(self):
+        """
+        Continuously listen for book ticker messages.
+        
+        This runs in a background task and processes all BBO updates.
+        Includes automatic reconnection logic.
+        """
+        reconnect_delay = 1
+        max_reconnect_delay = 30
+        
+        try:
+            while self.running:
+                try:
+                    # Listen for messages on the already-connected WebSocket
+                    async for message in self._book_ticker_ws:
+                        if not self.running:
+                            break
+                        
+                        try:
+                            data = json.loads(message)
+                            await self._handle_book_ticker(data)
+                        except json.JSONDecodeError as e:
+                            if self.logger:
+                                self.logger.error(f"Failed to parse book ticker message: {e}")
+                        except Exception as e:
+                            if self.logger:
+                                self.logger.error(f"Error handling book ticker: {e}")
+                
+                except websockets.exceptions.ConnectionClosed:
+                    if self.logger and self.running:
+                        self.logger.warning("Book ticker WebSocket closed, reconnecting...")
+                    
+                    # Reconnect
+                    if self.running and self._current_book_ticker_symbol:
+                        try:
+                            stream_name = f"{self._current_book_ticker_symbol.lower()}@bookTicker"
+                            book_ticker_url = f"{self.ws_url}/ws/{stream_name}"
+                            self._book_ticker_ws = await websockets.connect(book_ticker_url)
+                            reconnect_delay = 1  # Reset on successful reconnect
+                            if self.logger:
+                                self.logger.info(f"✅ Reconnected to book ticker")
+                        except Exception as e:
+                            if self.logger:
+                                self.logger.error(f"Reconnection failed: {e}")
+                
+                except Exception as e:
+                    if self.logger and self.running:
+                        self.logger.error(f"Book ticker WebSocket error: {e}")
+                
+                # Exponential backoff for reconnection
+                if self.running:
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
+        
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Fatal error in book ticker listener: {e}")
     
     async def _connect_book_ticker(self, symbol: str):
         """
-        Connect to book ticker stream for real-time BBO updates.
+        DEPRECATED: Old infinite-loop connection method.
         
-        Stream: <symbol>@bookTicker
-        Pushes any update to the best bid or ask's price or quantity in real-time.
-        
-        Args:
-            symbol: Symbol to subscribe to (e.g., "MONUSDT")
+        Kept for backwards compatibility but should not be used.
+        Use start_book_ticker() instead which properly awaits first message.
         """
         try:
             
@@ -460,7 +565,12 @@ class AsterWebSocketManager(BaseWebSocketManager):
                 self.logger.error(f"Error processing book ticker: {e}")
 
     async def prepare_market_feed(self, symbol: Optional[str]) -> None:
-        """Ensure the depth stream is aligned with the requested symbol."""
+        """
+        Ensure both book ticker and depth streams are aligned with the requested symbol.
+        
+        This is called by BaseExchangeClient.ensure_market_feed() to prepare
+        WebSocket streams for a symbol.
+        """
         if not symbol:
             return
 
@@ -471,6 +581,10 @@ class AsterWebSocketManager(BaseWebSocketManager):
             except Exception:
                 stream_symbol = symbol
 
+        # Start book ticker for BBO (if not already subscribed)
+        await self.start_book_ticker(stream_symbol)
+        
+        # Start depth stream for order book (if not already subscribed)
         if self._current_depth_symbol == stream_symbol and self._depth_task and not self._depth_task.done():
             if self.logger:
                 self.logger.debug(f"Already subscribed to depth stream for {stream_symbol}")
@@ -596,11 +710,6 @@ class AsterWebSocketManager(BaseWebSocketManager):
             }
             self.order_book_ready = True
             
-            if self.logger:
-                self.logger.debug(
-                    f"📚 [ASTER] Depth update: {len(bids)} bids, {len(asks)} asks"
-                )
-        
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error processing depth update: {e}")
@@ -622,6 +731,10 @@ class AsterWebSocketManager(BaseWebSocketManager):
             # Order book is already in standard format from depth stream
             bids = self.order_book.get('bids', [])
             asks = self.order_book.get('asks', [])
+            
+            # Validate we have data
+            if not bids or not asks:
+                return None
             
             # Apply level limiting if requested
             if levels is not None:

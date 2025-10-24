@@ -2,7 +2,7 @@
 Exchange factory for creating exchange clients dynamically.
 """
 
-from typing import Dict, Any, Type
+from typing import Dict, Any, Type, Optional
 from exchange_clients.base_client import BaseExchangeClient
 from exchange_clients.base_models import MissingCredentialsError
 
@@ -18,20 +18,74 @@ class ExchangeFactory:
         'lighter': 'exchange_clients.lighter.LighterClient',
         'grvt': 'exchange_clients.grvt.GrvtClient',
     }
+    
+    # Mapping of standardized credential keys to exchange-specific parameter names
+    _credential_mappings = {
+        'lighter': {
+            'private_key': 'api_key_private_key',
+            'account_index': 'account_index',
+            'api_key_index': 'api_key_index',
+        },
+        'aster': {
+            'api_key': 'api_key',
+            'secret_key': 'secret_key',
+        },
+        'backpack': {
+            'public_key': 'public_key',
+            'secret_key': 'secret_key',
+        },
+        'paradex': {
+            'l1_address': 'l1_address',
+            'l2_private_key_hex': 'l2_private_key_hex',
+            'l2_address': 'l2_address',
+            'environment': 'environment',
+        },
+        'grvt': {
+            'trading_account_id': 'trading_account_id',
+            'private_key': 'private_key',
+            'api_key': 'api_key',
+            'environment': 'environment',
+        },
+        'edgex': {
+            'account_id': 'account_id',
+            'stark_private_key': 'stark_private_key',
+            'base_url': 'base_url',
+            'ws_url': 'ws_url',
+        },
+    }
 
     @classmethod
-    def create_exchange(cls, exchange_name: str, config: Dict[str, Any]) -> BaseExchangeClient:
+    def create_exchange(
+        cls, 
+        exchange_name: str, 
+        config: Dict[str, Any],
+        credentials: Optional[Dict[str, Any]] = None
+    ) -> BaseExchangeClient:
         """Create an exchange client instance.
 
         Args:
             exchange_name: Name of the exchange (e.g., 'edgex')
             config: Configuration dictionary for the exchange
+            credentials: Optional credentials dictionary. If provided, these credentials
+                        will be passed to the exchange client. If not provided, the client
+                        will fall back to environment variables.
 
         Returns:
             Exchange client instance
 
         Raises:
             ValueError: If the exchange is not supported
+            
+        Example:
+            >>> # Legacy (env vars)
+            >>> client = ExchangeFactory.create_exchange('lighter', config)
+            
+            >>> # With credentials
+            >>> creds = {
+            ...     'api_key': '0x123...',
+            ...     'subaccount_index': 0
+            ... }
+            >>> client = ExchangeFactory.create_exchange('lighter', config, creds)
         """
         exchange_name = exchange_name.lower()
 
@@ -42,7 +96,20 @@ class ExchangeFactory:
         # Dynamically import the exchange class only when needed
         exchange_class_path = cls._registered_exchanges[exchange_name]
         exchange_class = cls._import_exchange_class(exchange_class_path)
-        return exchange_class(config)
+        
+        # Prepare credential parameters
+        credential_kwargs = {}
+        if credentials:
+            # Get the credential mapping for this exchange
+            mapping = cls._credential_mappings.get(exchange_name, {})
+            
+            # Map credential keys to exchange-specific parameter names
+            for cred_key, param_name in mapping.items():
+                if cred_key in credentials:
+                    credential_kwargs[param_name] = credentials[cred_key]
+        
+        # Create client with config and optional credentials
+        return exchange_class(config, **credential_kwargs)
 
     @classmethod
     def _import_exchange_class(cls, class_path: str) -> Type[BaseExchangeClient]:
@@ -76,7 +143,8 @@ class ExchangeFactory:
         exchange_names: list[str], 
         config: Dict[str, Any],
         primary_exchange: str = None,
-        skip_unavailable: bool = False
+        skip_unavailable: bool = False,
+        account_credentials: Optional[Dict[str, Dict[str, Any]]] = None
     ) -> Dict[str, BaseExchangeClient]:
         """
         Create multiple exchange client instances.
@@ -89,6 +157,8 @@ class ExchangeFactory:
             config: Base configuration dictionary (will be used for all exchanges)
             primary_exchange: Which exchange is the primary one (optional, defaults to first)
             skip_unavailable: If True, skip exchanges that fail to instantiate instead of raising error (default: False)
+            account_credentials: Optional dict mapping exchange names to their credentials
+                                e.g., {'lighter': {'api_key': '0x123...', 'subaccount_index': 0}}
         
         Returns:
             Dictionary mapping exchange names to client instances
@@ -98,12 +168,22 @@ class ExchangeFactory:
             ValueError: If any exchange is not supported (and skip_unavailable=False)
         
         Example:
+            >>> # Legacy (env vars)
             >>> clients = ExchangeFactory.create_multiple_exchanges(
             ...     exchange_names=['lighter', 'grvt'],
             ...     config={'ticker': 'BTC', 'quantity': 100}
             ... )
-            >>> lighter_client = clients['lighter']
-            >>> grvt_client = clients['grvt']
+            
+            >>> # With credentials from database
+            >>> creds = {
+            ...     'lighter': {'api_key': '0x123...', 'subaccount_index': 0},
+            ...     'aster': {'api_key': 'xxx', 'secret_key': 'yyy'}
+            ... }
+            >>> clients = ExchangeFactory.create_multiple_exchanges(
+            ...     exchange_names=['lighter', 'aster'],
+            ...     config={'ticker': 'BTC', 'quantity': 100},
+            ...     account_credentials=creds
+            ... )
         """
         if not exchange_names:
             raise ValueError("exchange_names list cannot be empty")
@@ -131,7 +211,12 @@ class ExchangeFactory:
                 exchange_config = config
             
             try:
-                client = cls.create_exchange(exchange_name, exchange_config)
+                # Get credentials for this exchange if provided
+                exchange_creds = None
+                if account_credentials and exchange_name in account_credentials:
+                    exchange_creds = account_credentials[exchange_name]
+                
+                client = cls.create_exchange(exchange_name, exchange_config, exchange_creds)
                 clients[exchange_name] = client
             except MissingCredentialsError as e:
                 # Skip exchanges with missing credentials (always, even if primary)

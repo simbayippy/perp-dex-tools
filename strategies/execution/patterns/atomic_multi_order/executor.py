@@ -366,6 +366,7 @@ class AtomicMultiOrderExecutor:
                     retry_success=retry_success,
                 )
 
+            # Critical fix: Check for dangerous imbalance and rollback if needed
             error_message = hedge_error or f"Partial fill: {len(filled_orders)}/{len(orders)}"
             if imbalance > imbalance_tolerance:
                 self.logger.error(
@@ -374,6 +375,37 @@ class AtomicMultiOrderExecutor:
                 )
                 imbalance_msg = f"imbalance {imbalance:.5f} USD"
                 error_message = f"{error_message}; {imbalance_msg}" if error_message else imbalance_msg
+                
+                # If we have a significant imbalance and rollback is enabled, close filled positions
+                if rollback_on_partial and filled_orders:
+                    self.logger.warning(
+                        f"⚠️ Critical imbalance ${imbalance:.2f} detected after retries exhausted. "
+                        f"Initiating rollback to close {len(filled_orders)} filled positions."
+                    )
+                    rollback_payload = [
+                        context_to_filled_dict(c)
+                        for c in contexts
+                        if c.filled_quantity > Decimal("0") and c.result
+                    ]
+                    rollback_cost = await self._rollback_filled_orders(rollback_payload)
+                    self.logger.warning(
+                        f"Rollback completed after imbalance detection; total cost ${rollback_cost:.4f}"
+                    )
+                    
+                    return AtomicExecutionResult(
+                        success=False,
+                        all_filled=False,
+                        filled_orders=[],  # Clear since we rolled back
+                        partial_fills=partial_fills,
+                        total_slippage_usd=Decimal("0"),
+                        execution_time_ms=exec_ms,
+                        error_message=f"Rolled back due to critical imbalance: {error_message}",
+                        rollback_performed=True,
+                        rollback_cost_usd=rollback_cost,
+                        residual_imbalance_usd=Decimal("0"),  # Should be 0 after rollback
+                        retry_attempts=retry_attempts,
+                        retry_success=retry_success,
+                    )
 
             return AtomicExecutionResult(
                 success=False,

@@ -40,7 +40,7 @@ from exchange_clients.edgex import EdgeXFundingAdapter
 from exchange_clients.backpack import BackpackFundingAdapter
 from exchange_clients.aster import AsterFundingAdapter
 from funding_rate_service.collection.orchestrator import CollectionOrchestrator
-from funding_rate_service.database.connection import database
+from database.connection import database
 from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
 from funding_rate_service.utils.logger import logger
 

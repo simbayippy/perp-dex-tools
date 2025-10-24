@@ -1,0 +1,67 @@
+# Multi-Account Example Template
+# Copy this file for each account: .env.acc1, .env.acc2, .env.acc3, etc.
+# Then run: ./database/scripts/setup_multiple_accounts.sh
+
+# ============================================================================
+# Database & Encryption (SAME for all accounts)
+# ============================================================================
+DATABASE_URL=postgresql://user:password@localhost:5432/perp_dex
+CREDENTIAL_ENCRYPTION_KEY=your_master_encryption_key_here
+
+# ============================================================================
+# Account-Specific Credentials (DIFFERENT for each account)
+# ============================================================================
+
+# Lighter Configuration (Required)
+# Get from: https://lighter.xyz
+API_KEY_PRIVATE_KEY=your_lighter_private_key_here
+LIGHTER_ACCOUNT_INDEX=123456  # ← CHANGE THIS for each account
+LIGHTER_API_KEY_INDEX=2
+
+# Aster Configuration (Required)  
+# Get from: https://asterdex.com
+ASTER_API_KEY=your_aster_api_key_here      # ← CHANGE THIS for each account
+ASTER_SECRET_KEY=your_aster_secret_key_here # ← CHANGE THIS for each account
+
+# Backpack Configuration (Required)
+# Get from: https://backpack.exchange → Settings → API Keys
+BACKPACK_PUBLIC_KEY=your_backpack_public_key_here # ← CHANGE THIS for each account
+BACKPACK_SECRET_KEY=your_backpack_secret_key_here # ← CHANGE THIS for each account
+
+# ============================================================================
+# Optional: Other Exchanges (can share or differ by account)
+# ============================================================================
+
+# EdgeX (Optional)
+EDGEX_ACCOUNT_ID=your_account_id_here
+EDGEX_STARK_PRIVATE_KEY=your_stark_private_key_here
+
+# Paradex (Optional)
+PARADEX_L1_ADDRESS=your_generated_l1_address_here
+PARADEX_L2_PRIVATE_KEY=your_generated_l2_private_key_here
+PARADEX_ENVIRONMENT=prod
+
+# GRVT (Optional)
+GRVT_TRADING_ACCOUNT_ID=your_trading_account_id_here
+GRVT_PRIVATE_KEY=your_private_key_here
+GRVT_API_KEY=your_api_key_here
+GRVT_ENVIRONMENT=prod
+
+# ============================================================================
+# Logging & Notifications (SAME or DIFFERENT)
+# ============================================================================
+
+# Account name for log files (optional, used by trading bot)
+ACCOUNT_NAME=acc1  # ← Change to acc2, acc3, etc. for each account
+
+# Notifications (can be same for all accounts or different)
+LARK_TOKEN=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+
+# Logging settings
+LOG_TO_CONSOLE=true
+LOG_TO_FILE=true
+LOG_FILE=trading_log.csv
+TIMEZONE=Asia/Shanghai
+

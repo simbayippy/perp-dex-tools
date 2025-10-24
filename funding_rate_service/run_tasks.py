@@ -25,8 +25,8 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "funding_rate_service"))
 
 from funding_rate_service.tasks.scheduler import TaskScheduler
-from funding_rate_service.database.connection import database
-from funding_rate_service.database.migration_manager import run_startup_migrations
+from database.connection import database
+from database.migration_manager import run_startup_migrations
 from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
 from funding_rate_service.utils.logger import logger
 

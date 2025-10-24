@@ -521,37 +521,12 @@ class PositionOpener:
 
         try:
             await exchange_client.ensure_market_feed(symbol)
-
-            ws_manager = exchange_client.ws_manager
-            if ws_manager:
-                await self._await_ws_snapshot(ws_manager)
+            # Note: ensure_market_feed now waits internally for WebSocket data to be ready
         except Exception as exc:  # pragma: no cover - defensive logging
             strategy.logger.log(
                 f"⚠️ [{exchange_client.get_exchange_name().upper()}] WebSocket prep error: {exc}",
                 "DEBUG",
             )
-
-    async def _await_ws_snapshot(self, ws_manager: Any, timeout: float = 1.0) -> None:
-        """Wait briefly for websocket feeds to populate best bid/ask data."""
-        if not getattr(ws_manager, "running", False):
-            return
-
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-
-        while loop.time() < deadline:
-            snapshot_ready = False
-
-            if hasattr(ws_manager, "snapshot_loaded"):
-                snapshot_ready = bool(ws_manager.snapshot_loaded)
-
-            if hasattr(ws_manager, "best_bid"):
-                snapshot_ready = snapshot_ready or ws_manager.best_bid is not None
-
-            if snapshot_ready:
-                return
-
-            await asyncio.sleep(0.05)
 
     def _build_new_position(
         self,

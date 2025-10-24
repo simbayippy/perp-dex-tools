@@ -50,8 +50,24 @@ def patch_paradex_http_client():
 class ParadexClient(BaseExchangeClient):
     """Simplified Paradex exchange client - L2 credentials only."""
 
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize Paradex client with L2 credentials only."""
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        l1_address: Optional[str] = None,
+        l2_private_key_hex: Optional[str] = None,
+        l2_address: Optional[str] = None,
+        environment: Optional[str] = None,
+    ):
+        """
+        Initialize Paradex client with L2 credentials.
+        
+        Args:
+            config: Trading configuration dictionary
+            l1_address: Optional Ethereum L1 address (falls back to env var)
+            l2_private_key_hex: Optional L2 private key in hex format (falls back to env var)
+            l2_address: Optional L2 address (falls back to env var)
+            environment: Optional environment name (falls back to env var, default 'prod')
+        """
         # Import paradex_py modules only when this class is instantiated
         from paradex_py import Paradex
         from paradex_py.environment import Environment, TESTNET, PROD
@@ -65,11 +81,11 @@ class ParadexClient(BaseExchangeClient):
         # Set config first
         self.config = config
 
-        # Paradex credentials from environment - L1 address + L2 private key
-        self.l1_address = os.getenv('PARADEX_L1_ADDRESS')
-        self.l2_private_key_hex = os.getenv('PARADEX_L2_PRIVATE_KEY')
-        self.l2_address = os.getenv('PARADEX_L2_ADDRESS')
-        self.environment = os.getenv('PARADEX_ENVIRONMENT', 'prod')
+        # Paradex credentials: use provided params or fall back to environment
+        self.l1_address = l1_address or os.getenv('PARADEX_L1_ADDRESS')
+        self.l2_private_key_hex = l2_private_key_hex or os.getenv('PARADEX_L2_PRIVATE_KEY')
+        self.l2_address = l2_address or os.getenv('PARADEX_L2_ADDRESS')
+        self.environment = environment or os.getenv('PARADEX_ENVIRONMENT', 'prod')
 
         # Validate that required credentials are provided
         if not self.l1_address:

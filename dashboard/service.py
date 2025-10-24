@@ -22,7 +22,7 @@ from dashboard.models import (
 from dashboard.state import dashboard_state
 from dashboard.event_bus import event_bus
 if TYPE_CHECKING:
-    from funding_rate_service.database.repositories import DashboardRepository
+    from database.repositories import DashboardRepository
 else:
     DashboardRepository = Any
 

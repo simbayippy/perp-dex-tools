@@ -19,7 +19,7 @@ from funding_rate_service.tasks.collection_task import CollectionTask
 from funding_rate_service.tasks.opportunity_task import OpportunityTask
 from funding_rate_service.tasks.cleanup_task import CleanupTask
 from funding_rate_service.tasks.scheduler import TaskScheduler
-from funding_rate_service.database.connection import database
+from database.connection import database
 from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
 from funding_rate_service.utils.logger import logger
 

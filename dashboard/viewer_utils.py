@@ -14,7 +14,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from dashboard.models import DashboardSnapshot, TimelineEvent
-from funding_rate_service.database.connection import database
+from database.connection import database
 
 
 def _row_to_dict(row) -> Optional[dict]:

@@ -11,7 +11,7 @@ from datetime import datetime
 from funding_rate_service.core.fee_calculator import FundingArbFeeCalculator
 from funding_rate_service.models.opportunity import ArbitrageOpportunity
 from funding_rate_service.models.filters import OpportunityFilter
-from funding_rate_service.database.connection import Database
+from database.connection import Database
 from funding_rate_service.core.mappers import DEXMapper, SymbolMapper
 from funding_rate_service.utils.logger import logger
 
