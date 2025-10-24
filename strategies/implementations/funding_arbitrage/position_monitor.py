@@ -36,6 +36,8 @@ class PositionMonitor:
         self._exchange_clients = exchange_clients
         self._logger = logger
         self._strategy_config = strategy_config
+        # Store account name for logging
+        self._account_name = getattr(position_manager, 'account_name', None)
 
     async def monitor(self) -> None:
         """Refresh open positions with latest funding rates and exchange data."""
@@ -43,7 +45,8 @@ class PositionMonitor:
         positions = await self._position_manager.get_open_positions()
 
         if not positions:
-            self._logger.log("No open positions to monitor", "DEBUG")
+            account_info = f" for account {self._account_name}" if self._account_name else ""
+            self._logger.log(f"No open positions to monitor{account_info}", "DEBUG")
             return
 
         exchange_snapshots = await self._fetch_exchange_position_snapshots(positions)
@@ -77,8 +80,9 @@ class PositionMonitor:
 
                 self._log_exchange_metrics(position)
             except Exception as exc:  # pragma: no cover - defensive logging
+                account_info = f" [Account: {self._account_name}]" if self._account_name else ""
                 self._logger.log(
-                    f"Error monitoring position {position.id}: {exc}",
+                    f"Error monitoring position {position.id}{account_info}: {exc}",
                     "ERROR",
                 )
 
@@ -268,8 +272,11 @@ class PositionMonitor:
                 f"{rate_display:>{headers[7][1]}}"
             )
 
+        # Add account info if available
+        account_info = f" [Account: {self._account_name}]" if self._account_name else ""
+        
         message_lines = [
-            f"Position {position.symbol} snapshot",
+            f"Position {position.symbol} snapshot{account_info}",
             self._compose_yield_summary(position),
             separator,
             header_line,

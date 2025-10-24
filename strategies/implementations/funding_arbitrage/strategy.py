@@ -162,7 +162,7 @@ class FundingArbitrageStrategy(BaseStrategy):
         from .position_manager import FundingArbPositionManager
         
         # Pass account_name for multi-account support
-        account_name = getattr(funding_config, '_account_name', None)
+        account_name = getattr(funding_config, 'account_name', None)
         self.position_manager = FundingArbPositionManager(account_name=account_name)
 
         # Tracking
@@ -354,9 +354,12 @@ class FundingArbitrageStrategy(BaseStrategy):
             risk_config=risk_config,
             # Ticker for logging
             ticker=trading_config.ticker,
-            config_path=config_path
+            config_path=config_path,
+            # Multi-account support
+            account_name=strategy_params.get('_account_name')
             # Note: bridge_settings not implemented yet
         )
+        
         return funding_config
 
     # ========================================================================

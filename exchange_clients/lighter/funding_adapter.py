@@ -36,7 +36,18 @@ class LighterFundingAdapter(BaseFundingAdapter):
     - Normalizes symbols from Lighter format to standard format
     - No authentication required (public endpoint)
     - Returns all available funding rates in one API call
+    
+    Open Interest Calculation:
+    - Lighter's API returns one-sided OI (sum of longs OR shorts) in base tokens
+    - In perpetual markets, total longs always equals total shorts
+    - UI displays "two-sided OI" = long OI + short OI = 2 × one-sided OI
+    - We convert to USD and apply the 2× multiplier to match UI representation
     """
+    
+    # Open Interest multiplier for two-sided calculation
+    # Lighter API returns one-sided OI (longs or shorts), but total OI
+    # shown in their UI is long + short (two-sided), hence × 2
+    OI_TWO_SIDED_MULTIPLIER = 2
     
     def __init__(
         self, 
@@ -192,15 +203,27 @@ class LighterFundingAdapter(BaseFundingAdapter):
                     # Normalize symbol
                     normalized_symbol = self.normalize_symbol(market.symbol)
                     
-                    # Extract volume and OI (both available in order_book_details)
+                    # Extract volume (already in USD)
                     volume_24h = Decimal(str(market.daily_quote_token_volume))
-                    open_interest = Decimal(str(market.open_interest))
+                    
+                    # Extract OI - THIS IS IN BASE TOKEN UNITS, NOT USD!
+                    # Need to multiply by current price to get USD value
+                    open_interest_base = Decimal(str(market.open_interest))
+                    last_trade_price = Decimal(str(market.last_trade_price))
+                    
+                    # Convert OI from base tokens to USD, then to two-sided total
+                    # Step 1: Convert base tokens to USD
+                    one_sided_oi_usd = open_interest_base * last_trade_price
+                    
+                    # Step 2: Convert to two-sided OI (matching Lighter UI definition)
+                    # In perps: total longs = total shorts, so two-sided = one-sided × 2
+                    open_interest_usd = one_sided_oi_usd * self.OI_TWO_SIDED_MULTIPLIER
                     
                     market_data[normalized_symbol] = {
                         "volume_24h": volume_24h,
-                        "open_interest": open_interest
+                        "open_interest": open_interest_usd
                     }
-                
+                    
                 except Exception as e:
                     continue
             
