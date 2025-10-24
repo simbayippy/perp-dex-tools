@@ -59,7 +59,7 @@ class CredentialDecryptor:
             return "[DECRYPT_ERROR]"
 
 
-async def list_accounts(show_credentials: bool = False):
+async def list_accounts(show_credentials: bool = False, show_full: bool = False):
     """List all accounts and their configurations"""
     
     print("\n" + "="*70)
@@ -140,14 +140,14 @@ async def list_accounts(show_credentials: bool = False):
                         print(f"         Credentials:")
                         if cred['api_key_encrypted']:
                             api_key = decryptor.decrypt(cred['api_key_encrypted'])
-                            # Mask most of the key for security
-                            if len(api_key) > 8:
+                            # Mask most of the key for security (unless show_full)
+                            if not show_full and len(api_key) > 8:
                                 api_key = api_key[:4] + "..." + api_key[-4:]
                             print(f"           API Key: {api_key}")
                         
                         if cred['secret_key_encrypted']:
                             secret = decryptor.decrypt(cred['secret_key_encrypted'])
-                            if len(secret) > 8:
+                            if not show_full and len(secret) > 8:
                                 secret = secret[:4] + "..." + secret[-4:]
                             print(f"           Secret: {secret}")
                         
@@ -157,7 +157,7 @@ async def list_accounts(show_credentials: bool = False):
                                 additional = json.loads(additional)
                             for key, encrypted_val in additional.items():
                                 val = decryptor.decrypt(encrypted_val)
-                                if len(val) > 8:
+                                if not show_full and len(val) > 8:
                                     val = val[:4] + "..." + val[-4:]
                                 print(f"           {key}: {val}")
             else:
@@ -196,11 +196,16 @@ async def list_accounts(show_credentials: bool = False):
 async def main():
     parser = argparse.ArgumentParser(description="List trading accounts")
     parser.add_argument('--show-credentials', action='store_true', 
-                       help='Show decrypted credentials (use carefully!)')
+                       help='Show decrypted credentials (masked)')
+    parser.add_argument('--show-full', action='store_true',
+                       help='Show FULL unmasked credentials (⚠️  use with extreme caution!)')
     
     args = parser.parse_args()
     
-    await list_accounts(show_credentials=args.show_credentials)
+    # If show_full is set, automatically enable show_credentials
+    show_creds = args.show_credentials or args.show_full
+    
+    await list_accounts(show_credentials=show_creds, show_full=args.show_full)
 
 
 if __name__ == "__main__":
