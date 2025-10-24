@@ -52,14 +52,15 @@ class LighterClient(BaseExchangeClient):
         self.api_key_private_key = api_key_private_key or os.getenv('API_KEY_PRIVATE_KEY')
         
         # Get indices: use params if provided, else env vars, else defaults
+        # Always convert to int since Lighter SDK requires integers for arithmetic
         if account_index is not None:
-            self.account_index = account_index
+            self.account_index = int(account_index)
         else:
             account_index_str = os.getenv('LIGHTER_ACCOUNT_INDEX', '0')
             self.account_index = int(account_index_str) if account_index_str else 0
         
         if api_key_index is not None:
-            self.api_key_index = api_key_index
+            self.api_key_index = int(api_key_index)
         else:
             api_key_index_str = os.getenv('LIGHTER_API_KEY_INDEX', '0')
             self.api_key_index = int(api_key_index_str) if api_key_index_str else 0

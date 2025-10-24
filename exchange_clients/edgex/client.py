@@ -44,7 +44,9 @@ class EdgeXClient(BaseExchangeClient):
             ws_url: Optional WebSocket URL (falls back to env var, default 'wss://quote.edgex.exchange')
         """
         # Set credentials BEFORE calling super().__init__() because it triggers _validate_config()
-        self.account_id = account_id or os.getenv('EDGEX_ACCOUNT_ID')
+        # Convert account_id to int since EdgeX SDK requires integer
+        account_id_raw = account_id or os.getenv('EDGEX_ACCOUNT_ID')
+        self.account_id = int(account_id_raw) if account_id_raw else None
         self.stark_private_key = stark_private_key or os.getenv('EDGEX_STARK_PRIVATE_KEY')
         self.base_url = base_url or os.getenv('EDGEX_BASE_URL', 'https://pro.edgex.exchange')
         self.ws_url = ws_url or os.getenv('EDGEX_WS_URL', 'wss://quote.edgex.exchange')
@@ -56,14 +58,14 @@ class EdgeXClient(BaseExchangeClient):
         try:
             self.client = Client(
                 base_url=self.base_url,
-                account_id=int(self.account_id),
+                account_id=self.account_id,
                 stark_private_key=self.stark_private_key
             )
 
             # Initialize WebSocket manager using official SDK
             self.ws_manager = WebSocketManager(
                 base_url=self.ws_url,
-                account_id=int(self.account_id),
+                account_id=self.account_id,
                 stark_pri_key=self.stark_private_key
             )
         except Exception as e:

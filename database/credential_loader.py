@@ -146,6 +146,7 @@ class DatabaseCredentialLoader:
                 aec.api_key_encrypted,
                 aec.secret_key_encrypted,
                 aec.additional_credentials_encrypted,
+                aec.subaccount_index,
                 aec.is_active
             FROM account_exchange_credentials aec
             JOIN dexes d ON aec.exchange_id = d.id
@@ -173,6 +174,10 @@ class DatabaseCredentialLoader:
             # Decrypt secret key if present
             if row['secret_key_encrypted']:
                 exchange_creds['secret_key'] = self.decryptor.decrypt(row['secret_key_encrypted'])
+            
+            # Include subaccount_index if present (keep as integer)
+            if row['subaccount_index'] is not None:
+                exchange_creds['subaccount_index'] = row['subaccount_index']
             
             # Decrypt additional credentials if present
             if row['additional_credentials_encrypted']:
