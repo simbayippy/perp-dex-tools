@@ -22,8 +22,8 @@ class ExchangeFactory:
     # Mapping of standardized credential keys to exchange-specific parameter names
     _credential_mappings = {
         'lighter': {
-            'api_key': 'api_key_private_key',
-            'subaccount_index': 'account_index',
+            'private_key': 'api_key_private_key',
+            'account_index': 'account_index',
             'api_key_index': 'api_key_index',
         },
         'aster': {

@@ -240,7 +240,7 @@ async def read_credentials_from_env() -> Dict[str, Dict]:
     
     if backpack_public and backpack_secret:
         credentials['backpack'] = {
-            'api_key': backpack_public,
+            'public_key': backpack_public,
             'secret_key': backpack_secret
         }
     
