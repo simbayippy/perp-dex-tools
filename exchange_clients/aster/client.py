@@ -416,9 +416,13 @@ class AsterClient(BaseExchangeClient):
         
         # 🔄 Priority 2: Fall back to REST API
         # Normalize symbol to Aster's format (e.g., "ZORA" → "ZORAUSDT")
-        normalized_symbol = self.normalize_symbol(contract_id)
-        
-        self.logger.debug(f"🔍 [ASTER] Symbol normalization: '{contract_id}' → '{normalized_symbol}'")
+        # But don't double-normalize if it already ends with USDT
+        if contract_id.upper().endswith("USDT"):
+            normalized_symbol = contract_id.upper()
+            self.logger.debug(f"🔍 [ASTER] Symbol already normalized: '{contract_id}'")
+        else:
+            normalized_symbol = self.normalize_symbol(contract_id)
+            self.logger.debug(f"🔍 [ASTER] Symbol normalization: '{contract_id}' → '{normalized_symbol}'")
         try:
             self.logger.info(
                 f"📞 [REST][ASTER] Fetching order book: symbol={normalized_symbol}, limit={levels}"
