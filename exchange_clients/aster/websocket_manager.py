@@ -554,11 +554,6 @@ class AsterWebSocketManager(BaseWebSocketManager):
                 self.best_bid = float(best_bid_str)
                 self.best_ask = float(best_ask_str)
                 
-                if self.logger:
-                    self.logger.debug(
-                        f"📊 [ASTER] Book ticker update: "
-                        f"bid={self.best_bid}, ask={self.best_ask}"
-                    )
         
         except Exception as e:
             if self.logger:
