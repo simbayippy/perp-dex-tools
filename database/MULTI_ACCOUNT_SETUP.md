@@ -141,10 +141,27 @@ Based on your `.env` file, here's what will be stored:
 
 ### Add Another Account
 
+**Option 1: Using Multiple .env Files (Recommended)**
+
 ```bash
-# Edit .env with new credentials for account2
+# 1. Create .env files for each account
+.env.acc1  # Your first account
+.env.acc2  # Your second account  
+.env.acc3  # Your third account
+
+# 2. Use the helper script to add all accounts
+chmod +x database/scripts/setup_multiple_accounts.sh
+./database/scripts/setup_multiple_accounts.sh
+```
+
+**Option 2: Manual Method**
+
+```bash
+# Update .env with new credentials for account2
+vim .env  # Change LIGHTER_ACCOUNT_INDEX, API keys, etc.
+
 # Then run:
-python database/scripts/add_account.py --from-env --account-name account2
+python database/scripts/add_account.py --from-env --account-name acc2
 ```
 
 ### Update Existing Credentials
