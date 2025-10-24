@@ -25,15 +25,31 @@ from helpers.unified_logger import get_exchange_logger
 class EdgeXClient(BaseExchangeClient):
     """EdgeX exchange client implementation."""
 
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize EdgeX client."""
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        account_id: Optional[str] = None,
+        stark_private_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        ws_url: Optional[str] = None,
+    ):
+        """
+        Initialize EdgeX client.
+        
+        Args:
+            config: Trading configuration dictionary
+            account_id: Optional account ID (falls back to env var)
+            stark_private_key: Optional Stark private key (falls back to env var)
+            base_url: Optional base URL (falls back to env var, default 'https://pro.edgex.exchange')
+            ws_url: Optional WebSocket URL (falls back to env var, default 'wss://quote.edgex.exchange')
+        """
         super().__init__(config)
 
-        # EdgeX credentials from environment (validation happens in _validate_config)
-        self.account_id = os.getenv('EDGEX_ACCOUNT_ID')
-        self.stark_private_key = os.getenv('EDGEX_STARK_PRIVATE_KEY')
-        self.base_url = os.getenv('EDGEX_BASE_URL', 'https://pro.edgex.exchange')
-        self.ws_url = os.getenv('EDGEX_WS_URL', 'wss://quote.edgex.exchange')
+        # EdgeX credentials: use provided params or fall back to environment
+        self.account_id = account_id or os.getenv('EDGEX_ACCOUNT_ID')
+        self.stark_private_key = stark_private_key or os.getenv('EDGEX_STARK_PRIVATE_KEY')
+        self.base_url = base_url or os.getenv('EDGEX_BASE_URL', 'https://pro.edgex.exchange')
+        self.ws_url = ws_url or os.getenv('EDGEX_WS_URL', 'wss://quote.edgex.exchange')
 
         # Initialize EdgeX client using official SDK
         # Wrap in try-catch to convert SDK credential errors to MissingCredentialsError
@@ -69,9 +85,9 @@ class EdgeXClient(BaseExchangeClient):
 
     def _validate_config(self) -> None:
         """Validate EdgeX configuration."""
-        # Use base validation helper (reduces code duplication)
-        validate_credentials('EDGEX_ACCOUNT_ID', os.getenv('EDGEX_ACCOUNT_ID'))
-        validate_credentials('EDGEX_STARK_PRIVATE_KEY', os.getenv('EDGEX_STARK_PRIVATE_KEY'))
+        # Validate the instance attributes (which may come from params or env)
+        validate_credentials('EDGEX_ACCOUNT_ID', self.account_id)
+        validate_credentials('EDGEX_STARK_PRIVATE_KEY', self.stark_private_key)
 
     # ---------------------------
     # Connection / Reconnect

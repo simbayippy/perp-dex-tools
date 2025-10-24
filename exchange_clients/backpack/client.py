@@ -35,14 +35,27 @@ class BackpackClient(BaseExchangeClient):
     # Default maximum decimal places (fallback if we can't infer from market data)
     MAX_PRICE_DECIMALS = 3
 
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize Backpack client."""
+    def __init__(
+        self, 
+        config: Dict[str, Any],
+        public_key: Optional[str] = None,
+        secret_key: Optional[str] = None,
+    ):
+        """
+        Initialize Backpack client.
+        
+        Args:
+            config: Trading configuration dictionary
+            public_key: Optional public key (falls back to env var)
+            secret_key: Optional secret key (falls back to env var)
+        """
         super().__init__(config)
 
         self.logger = get_exchange_logger("backpack", getattr(self.config, "ticker", "UNKNOWN"))
 
-        self.public_key = os.getenv("BACKPACK_PUBLIC_KEY")
-        self.secret_key = os.getenv("BACKPACK_SECRET_KEY")
+        # Backpack credentials: use provided params or fall back to environment
+        self.public_key = public_key or os.getenv("BACKPACK_PUBLIC_KEY")
+        self.secret_key = secret_key or os.getenv("BACKPACK_SECRET_KEY")
 
         self.ws_manager: Optional[BackpackWebSocketManager] = None
         self._order_update_handler: Optional[Callable[[Dict[str, Any]], None]] = None
@@ -67,8 +80,9 @@ class BackpackClient(BaseExchangeClient):
 
     def _validate_config(self) -> None:
         """Validate Backpack configuration."""
-        validate_credentials("BACKPACK_PUBLIC_KEY", os.getenv("BACKPACK_PUBLIC_KEY"))
-        validate_credentials("BACKPACK_SECRET_KEY", os.getenv("BACKPACK_SECRET_KEY"))
+        # Validate the instance attributes (which may come from params or env)
+        validate_credentials("BACKPACK_PUBLIC_KEY", self.public_key)
+        validate_credentials("BACKPACK_SECRET_KEY", self.secret_key)
 
     async def connect(self) -> None:
         """Connect to Backpack WebSocket for order updates."""

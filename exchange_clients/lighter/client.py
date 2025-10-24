@@ -32,20 +32,40 @@ from .websocket_manager import LighterWebSocketManager
 class LighterClient(BaseExchangeClient):
     """Lighter exchange client implementation."""
 
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize Lighter client."""
+    def __init__(
+        self, 
+        config: Dict[str, Any],
+        api_key_private_key: Optional[str] = None,
+        account_index: Optional[int] = None,
+        api_key_index: Optional[int] = None,
+    ):
+        """
+        Initialize Lighter client.
+        
+        Args:
+            config: Trading configuration dictionary
+            api_key_private_key: Optional API private key (falls back to env var)
+            account_index: Optional account index (falls back to env var, default 0)
+            api_key_index: Optional API key index (falls back to env var, default 0)
+        """
         super().__init__(config)
 
-        # Lighter credentials from environment (validation happens in _validate_config)
-        self.api_key_private_key = os.getenv('API_KEY_PRIVATE_KEY')
+        # Lighter credentials: use provided params or fall back to environment
+        self.api_key_private_key = api_key_private_key or os.getenv('API_KEY_PRIVATE_KEY')
         
-        # Get indices with defaults (will be validated in _validate_config)
-        account_index_str = os.getenv('LIGHTER_ACCOUNT_INDEX', '0')
-        api_key_index_str = os.getenv('LIGHTER_API_KEY_INDEX', '0')
+        # Get indices: use params if provided, else env vars, else defaults
+        if account_index is not None:
+            self.account_index = account_index
+        else:
+            account_index_str = os.getenv('LIGHTER_ACCOUNT_INDEX', '0')
+            self.account_index = int(account_index_str) if account_index_str else 0
         
-        # Only convert to int if not empty (to avoid errors before validation)
-        self.account_index = int(account_index_str) if account_index_str else 0
-        self.api_key_index = int(api_key_index_str) if api_key_index_str else 0
+        if api_key_index is not None:
+            self.api_key_index = api_key_index
+        else:
+            api_key_index_str = os.getenv('LIGHTER_API_KEY_INDEX', '0')
+            self.api_key_index = int(api_key_index_str) if api_key_index_str else 0
+        
         self.base_url = "https://mainnet.zklighter.elliot.ai"
 
         # Initialize logger
@@ -72,10 +92,10 @@ class LighterClient(BaseExchangeClient):
 
     def _validate_config(self) -> None:
         """Validate Lighter configuration."""
-        # Use base validation helper (reduces code duplication)
-        validate_credentials('API_KEY_PRIVATE_KEY', os.getenv('API_KEY_PRIVATE_KEY'))
+        # Validate the instance attributes (which may come from params or env)
+        validate_credentials('API_KEY_PRIVATE_KEY', self.api_key_private_key)
         
-        # Note: LIGHTER_ACCOUNT_INDEX and LIGHTER_API_KEY_INDEX have defaults of '0'
+        # Note: account_index and api_key_index have defaults of 0
         # which are valid values, so we don't need to validate them
 
     async def _get_market_id_for_symbol(self, symbol: str) -> Optional[int]:

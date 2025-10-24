@@ -26,15 +26,31 @@ from helpers.unified_logger import get_exchange_logger
 class GrvtClient(BaseExchangeClient):
     """GRVT exchange client implementation."""
 
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize GRVT client."""
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        trading_account_id: Optional[str] = None,
+        private_key: Optional[str] = None,
+        api_key: Optional[str] = None,
+        environment: Optional[str] = None,
+    ):
+        """
+        Initialize GRVT client.
+        
+        Args:
+            config: Trading configuration dictionary
+            trading_account_id: Optional trading account ID (falls back to env var)
+            private_key: Optional private key (falls back to env var)
+            api_key: Optional API key (falls back to env var)
+            environment: Optional environment name (falls back to env var, default 'prod')
+        """
         super().__init__(config)
 
-        # GRVT credentials from environment (validation happens in _validate_config)
-        self.trading_account_id = os.getenv('GRVT_TRADING_ACCOUNT_ID')
-        self.private_key = os.getenv('GRVT_PRIVATE_KEY')
-        self.api_key = os.getenv('GRVT_API_KEY')
-        self.environment = os.getenv('GRVT_ENVIRONMENT', 'prod')
+        # GRVT credentials: use provided params or fall back to environment
+        self.trading_account_id = trading_account_id or os.getenv('GRVT_TRADING_ACCOUNT_ID')
+        self.private_key = private_key or os.getenv('GRVT_PRIVATE_KEY')
+        self.api_key = api_key or os.getenv('GRVT_API_KEY')
+        self.environment = environment or os.getenv('GRVT_ENVIRONMENT', 'prod')
 
         # Convert environment string to proper enum
         env_map = {
@@ -79,10 +95,10 @@ class GrvtClient(BaseExchangeClient):
 
     def _validate_config(self) -> None:
         """Validate GRVT configuration."""
-        # Use base validation helper (reduces code duplication)
-        validate_credentials('GRVT_TRADING_ACCOUNT_ID', os.getenv('GRVT_TRADING_ACCOUNT_ID'))
-        validate_credentials('GRVT_PRIVATE_KEY', os.getenv('GRVT_PRIVATE_KEY'))
-        validate_credentials('GRVT_API_KEY', os.getenv('GRVT_API_KEY'))
+        # Validate the instance attributes (which may come from params or env)
+        validate_credentials('GRVT_TRADING_ACCOUNT_ID', self.trading_account_id)
+        validate_credentials('GRVT_PRIVATE_KEY', self.private_key)
+        validate_credentials('GRVT_API_KEY', self.api_key)
 
     async def connect(self) -> None:
         """Connect to GRVT WebSocket."""

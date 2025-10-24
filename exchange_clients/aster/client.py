@@ -31,13 +31,25 @@ from helpers.unified_logger import get_exchange_logger
 class AsterClient(BaseExchangeClient):
     """Aster exchange client implementation."""
 
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize Aster client."""
+    def __init__(
+        self, 
+        config: Dict[str, Any],
+        api_key: Optional[str] = None,
+        secret_key: Optional[str] = None,
+    ):
+        """
+        Initialize Aster client.
+        
+        Args:
+            config: Trading configuration dictionary
+            api_key: Optional API key (falls back to env var)
+            secret_key: Optional secret key (falls back to env var)
+        """
         super().__init__(config)
 
-        # Aster credentials from environment (validation happens in _validate_config)
-        self.api_key = os.getenv('ASTER_API_KEY')
-        self.secret_key = os.getenv('ASTER_SECRET_KEY')
+        # Aster credentials: use provided params or fall back to environment
+        self.api_key = api_key or os.getenv('ASTER_API_KEY')
+        self.secret_key = secret_key or os.getenv('ASTER_SECRET_KEY')
         self.base_url = 'https://fapi.asterdex.com'
 
         # Initialize logger early
@@ -48,9 +60,9 @@ class AsterClient(BaseExchangeClient):
 
     def _validate_config(self) -> None:
         """Validate Aster configuration."""
-        # Use base validation helper (reduces code duplication)
-        validate_credentials('ASTER_API_KEY', os.getenv('ASTER_API_KEY'))
-        validate_credentials('ASTER_SECRET_KEY', os.getenv('ASTER_SECRET_KEY'))
+        # Validate the instance attributes (which may come from params or env)
+        validate_credentials('ASTER_API_KEY', self.api_key)
+        validate_credentials('ASTER_SECRET_KEY', self.secret_key)
 
     def _generate_signature(self, params: Dict[str, Any]) -> str:
         """Generate HMAC SHA256 signature for Aster API authentication."""
