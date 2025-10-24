@@ -43,13 +43,13 @@ class EdgeXClient(BaseExchangeClient):
             base_url: Optional base URL (falls back to env var, default 'https://pro.edgex.exchange')
             ws_url: Optional WebSocket URL (falls back to env var, default 'wss://quote.edgex.exchange')
         """
-        super().__init__(config)
-
-        # EdgeX credentials: use provided params or fall back to environment
+        # Set credentials BEFORE calling super().__init__() because it triggers _validate_config()
         self.account_id = account_id or os.getenv('EDGEX_ACCOUNT_ID')
         self.stark_private_key = stark_private_key or os.getenv('EDGEX_STARK_PRIVATE_KEY')
         self.base_url = base_url or os.getenv('EDGEX_BASE_URL', 'https://pro.edgex.exchange')
         self.ws_url = ws_url or os.getenv('EDGEX_WS_URL', 'wss://quote.edgex.exchange')
+        
+        super().__init__(config)
 
         # Initialize EdgeX client using official SDK
         # Wrap in try-catch to convert SDK credential errors to MissingCredentialsError

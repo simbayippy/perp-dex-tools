@@ -49,13 +49,13 @@ class BackpackClient(BaseExchangeClient):
             public_key: Optional public key (falls back to env var)
             secret_key: Optional secret key (falls back to env var)
         """
+        # Set credentials BEFORE calling super().__init__() because it triggers _validate_config()
+        self.public_key = public_key or os.getenv("BACKPACK_PUBLIC_KEY")
+        self.secret_key = secret_key or os.getenv("BACKPACK_SECRET_KEY")
+        
         super().__init__(config)
 
         self.logger = get_exchange_logger("backpack", getattr(self.config, "ticker", "UNKNOWN"))
-
-        # Backpack credentials: use provided params or fall back to environment
-        self.public_key = public_key or os.getenv("BACKPACK_PUBLIC_KEY")
-        self.secret_key = secret_key or os.getenv("BACKPACK_SECRET_KEY")
 
         self.ws_manager: Optional[BackpackWebSocketManager] = None
         self._order_update_handler: Optional[Callable[[Dict[str, Any]], None]] = None

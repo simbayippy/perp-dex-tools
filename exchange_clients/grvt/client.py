@@ -44,9 +44,7 @@ class GrvtClient(BaseExchangeClient):
             api_key: Optional API key (falls back to env var)
             environment: Optional environment name (falls back to env var, default 'prod')
         """
-        super().__init__(config)
-
-        # GRVT credentials: use provided params or fall back to environment
+        # Set credentials BEFORE calling super().__init__() because it triggers _validate_config()
         self.trading_account_id = trading_account_id or os.getenv('GRVT_TRADING_ACCOUNT_ID')
         self.private_key = private_key or os.getenv('GRVT_PRIVATE_KEY')
         self.api_key = api_key or os.getenv('GRVT_API_KEY')
@@ -60,6 +58,8 @@ class GrvtClient(BaseExchangeClient):
             'dev': GrvtEnv.DEV
         }
         self.env = env_map.get(self.environment.lower(), GrvtEnv.PROD)
+        
+        super().__init__(config)
 
         # Initialize logger
         self.logger = get_exchange_logger("grvt", self.config.ticker)

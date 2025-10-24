@@ -48,9 +48,7 @@ class LighterClient(BaseExchangeClient):
             account_index: Optional account index (falls back to env var, default 0)
             api_key_index: Optional API key index (falls back to env var, default 0)
         """
-        super().__init__(config)
-
-        # Lighter credentials: use provided params or fall back to environment
+        # Set credentials BEFORE calling super().__init__() because it triggers _validate_config()
         self.api_key_private_key = api_key_private_key or os.getenv('API_KEY_PRIVATE_KEY')
         
         # Get indices: use params if provided, else env vars, else defaults
@@ -67,6 +65,8 @@ class LighterClient(BaseExchangeClient):
             self.api_key_index = int(api_key_index_str) if api_key_index_str else 0
         
         self.base_url = "https://mainnet.zklighter.elliot.ai"
+        
+        super().__init__(config)
 
         # Initialize logger
         self.logger = get_exchange_logger("lighter", self.config.ticker)

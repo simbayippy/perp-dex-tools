@@ -45,12 +45,12 @@ class AsterClient(BaseExchangeClient):
             api_key: Optional API key (falls back to env var)
             secret_key: Optional secret key (falls back to env var)
         """
-        super().__init__(config)
-
-        # Aster credentials: use provided params or fall back to environment
+        # Set credentials BEFORE calling super().__init__() because it triggers _validate_config()
         self.api_key = api_key or os.getenv('ASTER_API_KEY')
         self.secret_key = secret_key or os.getenv('ASTER_SECRET_KEY')
         self.base_url = 'https://fapi.asterdex.com'
+        
+        super().__init__(config)
 
         # Initialize logger early
         self.logger = get_exchange_logger("aster", self.config.ticker)
