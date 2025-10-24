@@ -98,16 +98,19 @@ class AccountManager:
             return existing['id']
         
         # Create account
-        account_id = await self.db.execute("""
+        metadata_json = json.dumps(metadata or {})
+        result = await self.db.fetch_one("""
             INSERT INTO accounts (account_name, description, wallet_address, metadata)
-            VALUES (:name, :description, :wallet, :metadata::jsonb)
+            VALUES (:name, :description, :wallet, CAST(:metadata AS jsonb))
             RETURNING id
         """, {
             "name": account_name,
             "description": description or f"Trading account: {account_name}",
             "wallet": wallet_address,
-            "metadata": json.dumps(metadata or {})
+            "metadata": metadata_json
         })
+        
+        account_id = result['id'] if result else None
         
         logger.info(f"✅ Created account '{account_name}' (id: {account_id})")
         return account_id
@@ -164,22 +167,24 @@ class AccountManager:
         
         if existing:
             # Update existing credentials
+            additional_json = json.dumps(additional_creds) if additional_creds else None
             await self.db.execute("""
                 UPDATE account_exchange_credentials
                 SET api_key_encrypted = :api_key,
                     secret_key_encrypted = :secret_key,
-                    additional_credentials_encrypted = :additional::jsonb,
+                    additional_credentials_encrypted = CAST(:additional AS jsonb),
                     updated_at = NOW()
                 WHERE id = :id
             """, {
                 "id": existing['id'],
                 "api_key": api_key_encrypted,
                 "secret_key": secret_key_encrypted,
-                "additional": json.dumps(additional_creds) if additional_creds else None
+                "additional": additional_json
             })
             logger.info(f"✅ Updated credentials for {exchange_name} (account_id: {account_id})")
         else:
             # Insert new credentials
+            additional_json = json.dumps(additional_creds) if additional_creds else None
             await self.db.execute("""
                 INSERT INTO account_exchange_credentials (
                     account_id, exchange_id, subaccount_index,
@@ -188,7 +193,7 @@ class AccountManager:
                 )
                 VALUES (
                     :account_id, :exchange_id, :subaccount,
-                    :api_key, :secret_key, :additional::jsonb
+                    :api_key, :secret_key, CAST(:additional AS jsonb)
                 )
             """, {
                 "account_id": account_id,
@@ -196,7 +201,7 @@ class AccountManager:
                 "subaccount": subaccount_index,
                 "api_key": api_key_encrypted,
                 "secret_key": secret_key_encrypted,
-                "additional": json.dumps(additional_creds) if additional_creds else None
+                "additional": additional_json
             })
             logger.info(f"✅ Added credentials for {exchange_name} (account_id: {account_id})")
         
