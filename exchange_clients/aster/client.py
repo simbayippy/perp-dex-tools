@@ -286,6 +286,7 @@ class AsterClient(BaseExchangeClient):
                     "raw_event": order_data,
                 }
                 self._order_update_handler(payload)
+
         except Exception as e:
             self.logger.error(f"Error handling WebSocket order update: {e}")
 
@@ -345,21 +346,39 @@ class AsterClient(BaseExchangeClient):
         
         Tries WebSocket book ticker first (real-time), falls back to REST API.
         """
-        # Efficient: Direct access to cached BBO from WebSocket
+        # Efficient: Direct access to cached BBO from WebSocket (same pattern as Lighter)
         if self.ws_manager and self.ws_manager.best_bid is not None and self.ws_manager.best_ask is not None:
-            self.logger.info(f"📡 [ASTER] Using real-time BBO from WebSocket")
-            return Decimal(str(self.ws_manager.best_bid)), Decimal(str(self.ws_manager.best_ask))
+            # Validate BBO at client level
+            if self.ws_manager.best_bid > 0 and self.ws_manager.best_ask > 0 and self.ws_manager.best_bid < self.ws_manager.best_ask:
+                self.logger.info(f"📡 [ASTER] Using real-time BBO from WebSocket")
+                return Decimal(str(self.ws_manager.best_bid)), Decimal(str(self.ws_manager.best_ask))
+            else:
+                # WebSocket has data but it's invalid
+                self.logger.warning(
+                    f"⚠️  [ASTER] WebSocket BBO invalid: bid={self.ws_manager.best_bid}, "
+                    f"ask={self.ws_manager.best_ask}"
+                )
         
-        # DRY: Fall back to REST API
+        # DRY: Fall back to REST API via order book depth (more reliable)
         self.logger.info(f"📞 [REST][ASTER] Using REST API fallback")
-        # Normalize symbol to Aster's format
-        normalized_symbol = self.normalize_symbol(contract_id)
-        result = await self._make_request('GET', '/fapi/v1/ticker/bookTicker', {'symbol': normalized_symbol})
-
-        best_bid = Decimal(result.get('bidPrice', 0))
-        best_ask = Decimal(result.get('askPrice', 0))
-
-        return best_bid, best_ask
+        try:
+            order_book = await self.get_order_book_depth(contract_id, levels=1)
+            
+            if not order_book['bids'] or not order_book['asks']:
+                raise ValueError(f"Empty order book for {contract_id}")
+            
+            best_bid = order_book['bids'][0]['price']
+            best_ask = order_book['asks'][0]['price']
+            
+            if best_bid <= 0 or best_ask <= 0:
+                raise ValueError(f"Invalid BBO prices: bid={best_bid}, ask={best_ask}")
+            
+            self.logger.info(f"✅ [ASTER] BBO: bid={best_bid}, ask={best_ask}")
+            return best_bid, best_ask
+            
+        except Exception as e:
+            self.logger.error(f"❌ [ASTER] Failed to get BBO prices for {contract_id}: {e}")
+            raise ValueError(f"Unable to fetch BBO prices for {contract_id}: {e}")
 
     async def get_order_book_depth(
         self, 
@@ -381,7 +400,7 @@ class AsterClient(BaseExchangeClient):
         # 🔴 Priority 1: Try WebSocket depth stream (100ms snapshots, zero latency)
         if self.ws_manager:
             ws_book = self.ws_manager.get_order_book(levels)
-            if ws_book:
+            if ws_book and ws_book.get('bids') and ws_book.get('asks'):
                 self.logger.info(
                     f"📡 [ASTER] Using real-time order book from WebSocket "
                     f"({len(ws_book['bids'])} bids, {len(ws_book['asks'])} asks)"
@@ -393,15 +412,13 @@ class AsterClient(BaseExchangeClient):
         normalized_symbol = self.normalize_symbol(contract_id)
         
         self.logger.debug(f"🔍 [ASTER] Symbol normalization: '{contract_id}' → '{normalized_symbol}'")
-        self.logger.debug(f"🔍 [ASTER] Attempting to fetch order book for symbol='{normalized_symbol}', limit={levels}")
         try:
             self.logger.info(
-                f"📊 [ASTER] Fetching order book: symbol={normalized_symbol}, limit={levels}"
+                f"📞 [REST][ASTER] Fetching order book: symbol={normalized_symbol}, limit={levels}"
             )
             
             # Call Aster API: GET /fapi/v1/depth
             # Note: Aster expects symbols with quote currency (e.g., "BTCUSDT", not "BTC")
-            self.logger.debug(f"📊 [ASTER] Calling API: GET /fapi/v1/depth?symbol={normalized_symbol}&limit={levels}")
             result = await self._make_request('GET', '/fapi/v1/depth', {
                 'symbol': normalized_symbol,
                 'limit': levels
@@ -412,10 +429,18 @@ class AsterClient(BaseExchangeClient):
             bids_raw = result.get('bids', [])
             asks_raw = result.get('asks', [])
             
+            if not bids_raw or not asks_raw:
+                self.logger.warning(
+                    f"⚠️  [ASTER] Order book for {normalized_symbol} is empty or incomplete "
+                    f"(bids={len(bids_raw)}, asks={len(asks_raw)})"
+                )
+                return {'bids': [], 'asks': []}
 
             # Convert to standardized format
             bids = [{'price': Decimal(bid[0]), 'size': Decimal(bid[1])} for bid in bids_raw]
             asks = [{'price': Decimal(ask[0]), 'size': Decimal(ask[1])} for ask in asks_raw]
+            
+            self.logger.debug(f"📚 [ASTER] Depth update: {len(bids)} bids, {len(asks)} asks")
 
             return {
                 'bids': bids,
@@ -423,9 +448,8 @@ class AsterClient(BaseExchangeClient):
             }
             
         except Exception as e:
-            self.logger.error(f"❌ [ASTER] ERROR fetching order book for '{contract_id}': {e}")
+            self.logger.error(f"❌ [ASTER] Error fetching order book for '{contract_id}': {e}")
             self.logger.error(f"   Hint: Aster expects symbols with quote currency (e.g., 'BTCUSDT' not 'BTC')")
-            self.logger.error(f"❌ [ASTER] Error fetching order book for {contract_id}: {e}")
             import traceback
             self.logger.debug(f"Traceback: {traceback.format_exc()}")
             # Return empty order book on error
@@ -602,9 +626,29 @@ class AsterClient(BaseExchangeClient):
                 f"📐 [ASTER] Rounded quantity: {quantity} → {rounded_quantity}"
             )
 
-            best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
+            # Fetch BBO with explicit error handling
+            try:
+                best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
+                self.logger.info(
+                    f"📊 [ASTER] Market order BBO check: bid={best_bid}, ask={best_ask}"
+                )
+            except Exception as bbo_error:
+                self.logger.error(
+                    f"❌ [ASTER] Failed to fetch BBO for market order: {bbo_error}"
+                )
+                return OrderResult(
+                    success=False, 
+                    error_message=f"Failed to fetch market prices: {bbo_error}"
+                )
+            
             if best_bid <= 0 or best_ask <= 0:
-                return OrderResult(success=False, error_message="Invalid bid/ask prices")
+                self.logger.error(
+                    f"❌ [ASTER] Invalid BBO prices for market order: bid={best_bid}, ask={best_ask}"
+                )
+                return OrderResult(
+                    success=False, 
+                    error_message=f"Invalid bid/ask prices: bid={best_bid}, ask={best_ask}"
+                )
 
             expected_price = best_ask if side.lower() == 'buy' else best_bid
 
@@ -616,7 +660,7 @@ class AsterClient(BaseExchangeClient):
                         f"[ASTER] Market order notional ${order_notional} below minimum ${min_notional}"
                     )
                     self.logger.error(message)
-                    raise ValueError(message)
+                    return OrderResult(success=False, error_message=message)
 
             # Place the market order
             order_data = {
@@ -626,8 +670,8 @@ class AsterClient(BaseExchangeClient):
                 'quantity': str(rounded_quantity)
             }
             
-            self.logger.debug(
-                f"📤 [ASTER] Placing market order with data: {order_data}"
+            self.logger.info(
+                f"📤 [ASTER] Placing market {side.upper()} order: {rounded_quantity} @ ~${expected_price}"
             )
 
             result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
@@ -644,6 +688,9 @@ class AsterClient(BaseExchangeClient):
                     order_status = order_info.status
 
             if order_status == 'FILLED':
+                self.logger.info(
+                    f"✅ [ASTER] Market order filled: {order_id}"
+                )
                 return OrderResult(
                     success=True,
                     order_id=order_id,
@@ -653,13 +700,18 @@ class AsterClient(BaseExchangeClient):
                     status='FILLED'
                 )
             else:
+                self.logger.error(
+                    f"❌ [ASTER] Market order not filled: status={order_status}"
+                )
                 return OrderResult(
                     success=False,
                     error_message=f'Market order failed with status: {order_status}'
                 )
                 
         except Exception as e:
-            self.logger.error(f"Error placing market order: {e}")
+            self.logger.error(f"❌ [ASTER] Error placing market order: {e}")
+            import traceback
+            self.logger.debug(f"Traceback: {traceback.format_exc()}")
             return OrderResult(success=False, error_message=str(e))
 
     async def cancel_order(self, order_id: str) -> OrderResult:

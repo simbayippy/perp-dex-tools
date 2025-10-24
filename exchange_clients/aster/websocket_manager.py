@@ -215,8 +215,26 @@ class AsterWebSocketManager(BaseWebSocketManager):
             # Start keepalive task
             self._keepalive_task = asyncio.create_task(self._start_keepalive_task())
             
-            # 📊 Note: Book ticker WebSocket is started on-demand via start_book_ticker(symbol)
-            # Don't start it here since we don't know which symbol to trade yet
+            # Start market data streams for the already-configured symbol
+            # (Similar to how Lighter subscribes to its market_index, Backpack starts tasks for its symbol)
+            ticker = getattr(self.config, 'ticker', None)
+            contract_id = getattr(self.config, 'contract_id', None)
+            
+            if contract_id and contract_id not in {'ALL', 'MULTI', 'MULTI_SYMBOL'}:
+                # Start streams for pre-configured symbol
+                if self.logger:
+                    self.logger.info(f"[ASTER] Starting market feeds for {contract_id}")
+                await self.start_book_ticker(contract_id)
+                self._current_depth_symbol = contract_id
+                self._depth_task = asyncio.create_task(self._connect_depth_stream(contract_id))
+            elif ticker and ticker not in {'ALL', 'MULTI', 'MULTI_SYMBOL'}:
+                # Fallback to ticker if contract_id not set
+                symbol = f"{ticker}USDT" if not ticker.endswith("USDT") else ticker
+                if self.logger:
+                    self.logger.info(f"[ASTER] Starting market feeds for {symbol}")
+                await self.start_book_ticker(symbol)
+                self._current_depth_symbol = symbol
+                self._depth_task = asyncio.create_task(self._connect_depth_stream(symbol))
 
             # Start listening for messages
             await self._listen()
@@ -460,7 +478,12 @@ class AsterWebSocketManager(BaseWebSocketManager):
                 self.logger.error(f"Error processing book ticker: {e}")
 
     async def prepare_market_feed(self, symbol: Optional[str]) -> None:
-        """Ensure the depth stream is aligned with the requested symbol."""
+        """
+        Ensure both book ticker and depth streams are aligned with the requested symbol.
+        
+        This is called by BaseExchangeClient.ensure_market_feed() to prepare
+        WebSocket streams for a symbol.
+        """
         if not symbol:
             return
 
@@ -471,6 +494,10 @@ class AsterWebSocketManager(BaseWebSocketManager):
             except Exception:
                 stream_symbol = symbol
 
+        # Start book ticker for BBO (if not already subscribed)
+        await self.start_book_ticker(stream_symbol)
+        
+        # Start depth stream for order book (if not already subscribed)
         if self._current_depth_symbol == stream_symbol and self._depth_task and not self._depth_task.done():
             if self.logger:
                 self.logger.debug(f"Already subscribed to depth stream for {stream_symbol}")
@@ -622,6 +649,10 @@ class AsterWebSocketManager(BaseWebSocketManager):
             # Order book is already in standard format from depth stream
             bids = self.order_book.get('bids', [])
             asks = self.order_book.get('asks', [])
+            
+            # Validate we have data
+            if not bids or not asks:
+                return None
             
             # Apply level limiting if requested
             if levels is not None:
