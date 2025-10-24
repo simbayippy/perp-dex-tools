@@ -60,11 +60,18 @@ class FundingArbPositionManager(BasePositionManager):
     - Rebalance state management
     """
     
-    def __init__(self):
-        """Initialize funding arbitrage position manager."""
+    def __init__(self, account_name: Optional[str] = None):
+        """Initialize funding arbitrage position manager.
+        
+        Args:
+            account_name: Optional account name for multi-account support.
+                         If provided, positions will be filtered by this account.
+        """
         super().__init__()
         self.logger = get_core_logger("funding_arb_position_manager")
         self._initialized = False
+        self.account_name = account_name
+        self.account_id: Optional[UUID] = None  # Loaded during initialize()
 
     def _prepare_metadata_for_storage(self, metadata: Optional[Dict[str, Any]]) -> Optional[str]:
         """Convert metadata dict into JSON-serializable string."""
@@ -117,14 +124,43 @@ class FundingArbPositionManager(BasePositionManager):
 
         await self._ensure_mappers_loaded()
         
+        # Load account_id if account_name is provided
+        if self.account_name:
+            await self._load_account_id()
+        
         # Count open positions for logging
         open_positions = await self.get_open_positions()
         
         self._initialized = True
-        self.logger.info(
-            f"Position manager initialized with {len(open_positions)} open positions"
-        )
+        log_msg = f"Position manager initialized with {len(open_positions)} open positions"
+        if self.account_name:
+            log_msg += f" (account: {self.account_name})"
+        self.logger.info(log_msg)
 
+    async def _load_account_id(self) -> None:
+        """Load account_id from database using account_name."""
+        if not self.account_name or not DATABASE_AVAILABLE:
+            return
+        
+        try:
+            row = await database.fetch_one(
+                "SELECT id FROM accounts WHERE account_name = :name AND is_active = TRUE",
+                {"name": self.account_name}
+            )
+            
+            if not row:
+                self.logger.warning(
+                    f"Account '{self.account_name}' not found or inactive in database. "
+                    f"Positions will not be filtered by account."
+                )
+                self.account_id = None
+            else:
+                self.account_id = row['id']
+                self.logger.info(f"Loaded account_id {self.account_id} for account '{self.account_name}'")
+        except Exception as exc:
+            self.logger.error(f"Failed to load account_id for '{self.account_name}': {exc}")
+            self.account_id = None
+    
     async def _ensure_mappers_loaded(self) -> None:
         """Ensure DEX and symbol mappers are populated from the database."""
         if not DATABASE_AVAILABLE:
@@ -202,11 +238,13 @@ class FundingArbPositionManager(BasePositionManager):
             INSERT INTO strategy_positions (
                 id, strategy_name, symbol_id, long_dex_id, short_dex_id,
                 size_usd, entry_long_rate, entry_short_rate, entry_divergence,
-                opened_at, status, cumulative_funding_usd, funding_payments_count
+                opened_at, status, cumulative_funding_usd, funding_payments_count,
+                account_id
             ) VALUES (
                 :id, :strategy_name, :symbol_id, :long_dex_id, :short_dex_id,
                 :size_usd, :entry_long_rate, :entry_short_rate, :entry_divergence,
-                :opened_at, :status, :cumulative_funding, :payment_count
+                :opened_at, :status, :cumulative_funding, :payment_count,
+                :account_id
             )
         """
         
@@ -223,7 +261,8 @@ class FundingArbPositionManager(BasePositionManager):
             "opened_at": position.opened_at,
             "status": position.status,
             "cumulative_funding": Decimal("0"),
-            "payment_count": 0
+            "payment_count": 0,
+            "account_id": self.account_id  # Include account_id for multi-account support
         })
         
         self.logger.info(
@@ -303,6 +342,8 @@ class FundingArbPositionManager(BasePositionManager):
         """
         Get all open positions from database.
         
+        If account_id is set, only returns positions for that account.
+        
         Returns:
             List of open FundingArbPosition instances
         """
@@ -335,7 +376,13 @@ class FundingArbPositionManager(BasePositionManager):
             WHERE p.status = 'open'
         """
         
-        rows = await database.fetch_all(query)
+        # Add account filter if account_id is set
+        values = {}
+        if self.account_id is not None:
+            query += " AND p.account_id = :account_id"
+            values["account_id"] = self.account_id
+        
+        rows = await database.fetch_all(query, values=values if values else None)
         
         positions = []
         for row in rows:
@@ -419,17 +466,22 @@ class FundingArbPositionManager(BasePositionManager):
               AND symbol_id = :symbol_id
               AND long_dex_id = :long_dex_id
               AND short_dex_id = :short_dex_id
-            LIMIT 1
         """
+        
+        values = {
+            "symbol_id": symbol_id,
+            "long_dex_id": long_dex_id,
+            "short_dex_id": short_dex_id,
+        }
+        
+        # Add account filter if account_id is set
+        if self.account_id is not None:
+            query += " AND account_id = :account_id"
+            values["account_id"] = self.account_id
+        
+        query += " LIMIT 1"
 
-        row = await database.fetch_one(
-            query,
-            values={
-                "symbol_id": symbol_id,
-                "long_dex_id": long_dex_id,
-                "short_dex_id": short_dex_id,
-            },
-        )
+        row = await database.fetch_one(query, values=values)
 
         if not row:
             return None
@@ -742,6 +794,8 @@ class FundingArbPositionManager(BasePositionManager):
         """
         Get all positions flagged for rebalancing.
         
+        If account_id is set, only returns positions for that account.
+        
         Returns:
             List of positions pending rebalance
         """
@@ -772,7 +826,13 @@ class FundingArbPositionManager(BasePositionManager):
             WHERE p.status = 'open' AND p.rebalance_pending = TRUE
         """
         
-        rows = await database.fetch_all(query)
+        # Add account filter if account_id is set
+        values = {}
+        if self.account_id is not None:
+            query += " AND p.account_id = :account_id"
+            values["account_id"] = self.account_id
+        
+        rows = await database.fetch_all(query, values=values if values else None)
         
         positions = []
         for row in rows:

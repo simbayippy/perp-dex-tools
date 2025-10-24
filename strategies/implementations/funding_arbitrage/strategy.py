@@ -161,7 +161,9 @@ class FundingArbitrageStrategy(BaseStrategy):
         # Compose what we need directly - no factory methods
         from .position_manager import FundingArbPositionManager
         
-        self.position_manager = FundingArbPositionManager()
+        # Pass account_name for multi-account support
+        account_name = getattr(funding_config, '_account_name', None)
+        self.position_manager = FundingArbPositionManager(account_name=account_name)
 
         # Tracking
         self.failed_symbols = set()  # Track symbols that failed validation (avoid retrying same cycle)
