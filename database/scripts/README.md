@@ -115,18 +115,26 @@ List all trading accounts and their configured exchanges.
 
 **Usage:**
 ```bash
-# List all accounts (credentials hidden)
+# List all accounts (credentials hidden - default)
 python database/scripts/list_accounts.py
 
-# Show decrypted credentials (use carefully!)
+# Show masked credentials (safe for screenshots: 2b4f...184f)
 python database/scripts/list_accounts.py --show-credentials
+
+# Show FULL unmasked credentials (⚠️  use with extreme caution!)
+python database/scripts/list_accounts.py --show-full
 ```
 
 **Features:**
 - Shows account details, metadata, and configured exchanges
-- Can decrypt and display credentials (with proper key)
+- Three security levels:
+  - **Default**: Hides all credentials
+  - **--show-credentials**: Shows masked credentials (first 4 + last 4 chars)
+  - **--show-full**: Shows complete unmasked credentials
 - Shows credential sharing relationships
 - Lists last usage timestamps
+
+**Security Note:** By default, credentials are NOT shown. You must explicitly use `--show-credentials` or `--show-full` to view them.
 
 ---
 

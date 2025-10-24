@@ -66,10 +66,17 @@ python database/scripts/add_account.py --from-env --account-name main_bot
 ### Step 4: Verify Setup
 
 ```bash
+# View accounts (credentials hidden by default)
 python database/scripts/list_accounts.py
+
+# OR view with masked credentials (safe)
+python database/scripts/list_accounts.py --show-credentials
+
+# OR view with FULL credentials (⚠️  careful!)
+python database/scripts/list_accounts.py --show-full
 ```
 
-**You should see:**
+**Default Output (no credentials shown):**
 ```
 📋 Trading Accounts
 ==================================================
@@ -81,6 +88,28 @@ python database/scripts/list_accounts.py
       ✅ Lighter Network (lighter)
       ✅ Aster (aster)
       ✅ Backpack (backpack)
+```
+
+**With `--show-full` (shows actual credentials):**
+```
+📋 Trading Accounts
+==================================================
+1. main_bot (✅ Active)
+   
+   🔐 Configured Exchanges (3):
+      ✅ Lighter Network (lighter)
+         Credentials:
+           private_key: 6b667477f152451640ba2285cd71511e
+           account_index: 213803
+           api_key_index: 2
+      ✅ Aster (aster)
+         Credentials:
+           API Key: 2b4cb053e2bb74ce3c5a0747337bc40679f0a184f
+           Secret: b6e690df5ab7f47df476c2b33a4b4cdeb50c94a25asab05f
+      ✅ Backpack (backpack)
+         Credentials:
+           API Key: 7pGXGgpJMI1j2SrLIQc/xZT+kICE=
+           Secret: SYqtA6BbEuAa8KmmcxKnIjwSLPCykFxeAk=
 ```
 
 ---
@@ -175,8 +204,13 @@ python database/scripts/add_account.py --from-env --account-name main_bot
 ### View Credentials (Decrypted)
 
 ```bash
-# ⚠️  Use carefully! This shows decrypted credentials
+# Option 1: Masked credentials (safe for sharing/screenshots)
 python database/scripts/list_accounts.py --show-credentials
+# Shows: 2b4f...184f
+
+# Option 2: Full credentials (⚠️  use carefully!)
+python database/scripts/list_accounts.py --show-full
+# Shows: 2b4fb053z4ce37c65a0747337bdc6440679f0a184f
 ```
 
 ---
