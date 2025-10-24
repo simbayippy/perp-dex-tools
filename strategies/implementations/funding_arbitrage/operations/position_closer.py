@@ -304,9 +304,7 @@ class PositionCloser:
         try:
             if should_prepare:
                 await client.ensure_market_feed(symbol)
-
-            if ws_manager and getattr(ws_manager, "running", False):
-                await self._await_ws_snapshot(ws_manager)
+                # Note: ensure_market_feed now waits for book ticker to be ready
         except Exception as exc:  # pragma: no cover - defensive logging
             self._strategy.logger.log(
                 f"⚠️ [{exchange_name}] WebSocket prep error during close: {exc}",
@@ -314,34 +312,6 @@ class PositionCloser:
             )
         else:
             self._ws_prepared[exchange_name] = symbol_key
-
-    async def _await_ws_snapshot(self, ws_manager: Any, timeout: float = 1.0) -> None:
-        """
-        Wait briefly for websocket managers to populate top-of-book data.
-        """
-        if not getattr(ws_manager, "running", False):
-            return
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-
-        deadline = loop.time() + timeout
-        while loop.time() < deadline:
-            snapshot_ready = False
-            if hasattr(ws_manager, "snapshot_loaded"):
-                snapshot_ready = bool(ws_manager.snapshot_loaded)
-            # CRITICAL: Require BOTH bid and ask to be ready (not just one)
-            best_bid = getattr(ws_manager, "best_bid", None)
-            best_ask = getattr(ws_manager, "best_ask", None)
-            if best_bid is not None and best_ask is not None:
-                snapshot_ready = True
-
-            if snapshot_ready:
-                return
-
-            await asyncio.sleep(0.05)
 
     def _detect_liquidation(
         self,

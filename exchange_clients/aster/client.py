@@ -360,7 +360,7 @@ class AsterClient(BaseExchangeClient):
                 )
         elif self.ws_manager:
             # Log why WebSocket BBO is not available
-            self.logger.debug(
+            self.logger.info(
                 f"📊 [ASTER] WebSocket BBO not ready: bid={self.ws_manager.best_bid}, "
                 f"ask={self.ws_manager.best_ask}, running={getattr(self.ws_manager, 'running', False)}"
             )

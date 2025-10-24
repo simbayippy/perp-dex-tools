@@ -1,7 +1,7 @@
 # 🏗️ System Architecture
 
-**Last Updated:** 2025-10-09  
-**Version:** 2.5  
+**Last Updated:** 2025-10-24  
+**Version:** 2.6  
 **Status:** Production Ready
 
 ---
@@ -12,6 +12,7 @@
 2. [3-Layer Architecture](#3-layer-architecture)
 3. [Data Flow](#data-flow)
 4. [Database Architecture](#database-architecture)
+   - [Multi-Account Credential Management](#multi-account-credential-management)
 5. [Multi-Exchange Support](#multi-exchange-support)
 6. [Atomic Execution Pattern](#atomic-execution-pattern)
 7. [Funding Rate Service Integration](#funding-rate-service-integration)
@@ -31,8 +32,10 @@ This is a **modular trading bot framework** designed for **multi-exchange perpet
 - **Performance**: Internal service calls (no HTTP overhead)
 - **Modularity**: Clear separation between strategy logic, execution, and exchange interfaces
 - **Reliability**: Database-backed state persistence
+- **Multi-Account Support**: Encrypted credential management for multiple trading accounts
+- **Account Isolation**: Position tracking scoped per account
 
-**Primary Use Case:** Funding rate arbitrage across multiple DEXes (Lighter, Backpack, EdgeX, GRVT, etc.)
+**Primary Use Case:** Funding rate arbitrage across multiple DEXes (Lighter, Backpack, EdgeX, GRVT, etc.) with support for multiple trading accounts running simultaneously.
 
 ---
 
@@ -126,31 +129,62 @@ The system follows a **strict 3-layer architecture** with clear separation of co
 
 ```
 1. USER STARTS BOT
-   python runbot.py --config configs/funding_arb.yml
+   python runbot.py --config configs/funding_arb.yml --account acc1
    
    ↓
 
-2. INITIALIZATION (trading_bot.py)
+2. CREDENTIAL LOADING (runbot.py)
    
-   a. Create exchange clients for all DEXes:
-      exchange_clients = {
-          "lighter": LighterClient(...),
-          "backpack": BackpackClient(...),
-          "edgex": EdgeXClient(...)
-      }
+   a. Check if --account flag provided:
+      if args.account:
+          account_credentials = await load_account_credentials("acc1")
+   
+   b. Load credentials from database:
+      loader = DatabaseCredentialLoader(database)
+      credentials = await loader.load_account_credentials("acc1")
+      
+      # Returns:
+      # {
+      #     "lighter": {"private_key": "0x...", "account_index": 0, ...},
+      #     "backpack": {"public_key": "abc...", "secret_key": "xyz..."},
+      #     "aster": {"api_key": "...", "secret_key": "..."}
+      # }
+   
+   c. Pass credentials to TradingBot:
+      bot = TradingBot(config, account_credentials=credentials)
+   
+   ↓
+
+3. INITIALIZATION (trading_bot.py)
+   
+   a. Create exchange clients with loaded credentials:
+      exchange_clients = ExchangeFactory.create_multiple_exchanges(
+          exchange_names=["lighter", "backpack", "edgex"],
+          config=config,
+          account_credentials=account_credentials  # ← From database
+      )
+      
+      # Each client receives its specific credentials:
+      # {
+      #     "lighter": LighterClient(api_key_private_key="0x..."),
+      #     "backpack": BackpackClient(public_key="abc...", secret_key="xyz..."),
+      #     "edgex": EdgeXClient(account_id=123, stark_private_key="...")
+      # }
    
    b. Create strategy with all clients:
       strategy = FundingArbitrageStrategy(
           config=config,
-          exchange_clients=exchange_clients  # ← All DEXes
+          exchange_clients=exchange_clients  # ← All DEXes with account credentials
       )
    
    c. Connect to all exchanges
-   d. Initialize strategy (connects to database)
+   d. Initialize strategy (connects to database, loads account_id):
+      await strategy.initialize()
+      # Position manager filters by account_id automatically
    
    ↓
 
-3. MAIN LOOP (trading_bot.py)
+4. MAIN LOOP (trading_bot.py)
    
    while True:
        await strategy.execute_cycle()
@@ -158,7 +192,7 @@ The system follows a **strict 3-layer architecture** with clear separation of co
    
    ↓
 
-4. STRATEGY EXECUTION CYCLE (Layer 3)
+5. STRATEGY EXECUTION CYCLE (Layer 3)
    
    PHASE 1: Monitor Positions
    ────────────────────────────
@@ -245,7 +279,7 @@ The system follows a **strict 3-layer architecture** with clear separation of co
    
    ↓
 
-5. OPENING POSITION - ATOMIC EXECUTION (Layer 3 → Layer 2)
+6. OPENING POSITION - ATOMIC EXECUTION (Layer 3 → Layer 2)
    
    Strategy calls AtomicMultiOrderExecutor:
    
@@ -270,7 +304,7 @@ The system follows a **strict 3-layer architecture** with clear separation of co
    
    ↓
 
-6. ATOMIC EXECUTOR FLOW (Layer 2)
+7. ATOMIC EXECUTOR FLOW (Layer 2)
    
    Step 1: Pre-flight checks
    ──────────────────────────
@@ -343,7 +377,7 @@ The system follows a **strict 3-layer architecture** with clear separation of co
    
    ↓
 
-7. ORDER EXECUTION (Layer 2 → Layer 1)
+8. ORDER EXECUTION (Layer 2 → Layer 1)
    
    For each order, OrderExecutor tries tiered execution:
    
@@ -388,7 +422,7 @@ The system follows a **strict 3-layer architecture** with clear separation of co
    
    ↓
 
-8. EXCHANGE CLIENT EXECUTION (Layer 1)
+9. EXCHANGE CLIENT EXECUTION (Layer 1)
    
    Lighter Client:
    ───────────────
@@ -413,7 +447,7 @@ The system follows a **strict 3-layer architecture** with clear separation of co
    
    ↓
 
-9. STRATEGY RECEIVES RESULT (Layer 3)
+10. STRATEGY RECEIVES RESULT (Layer 3)
    
    if result.all_filled:
        # ✅ SUCCESS - Create position record
@@ -434,8 +468,9 @@ The system follows a **strict 3-layer architecture** with clear separation of co
            total_fees_paid=entry_fees + slippage
        )
        
-       await position_manager.add_position(position)
+       await position_manager.create(position)
        # ↑ Saves to PostgreSQL strategy_positions table
+       # ↑ Automatically includes account_id for multi-account isolation
        
        logger.info(f"✅ Position opened: BTC ${1000}")
    
@@ -497,7 +532,49 @@ CREATE TABLE funding_rates (
 );
 
 -- ============================================================================
--- STRATEGY STATE TABLES (Migration 004)
+-- MULTI-ACCOUNT TABLES (Migration 006)
+-- ============================================================================
+
+-- Trading accounts
+CREATE TABLE accounts (
+    id UUID PRIMARY KEY,
+    account_name VARCHAR(255) UNIQUE NOT NULL,
+    wallet_address VARCHAR(255),
+    description TEXT,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT NOW(),
+    metadata JSONB
+);
+
+-- Exchange credentials (encrypted)
+CREATE TABLE account_exchange_credentials (
+    id UUID PRIMARY KEY,
+    account_id UUID REFERENCES accounts(id),
+    exchange_id INTEGER REFERENCES dexes(id),
+    api_key_encrypted TEXT,
+    secret_key_encrypted TEXT,
+    additional_credentials_encrypted JSONB,
+    exchange_account_id VARCHAR(255),
+    subaccount_index INTEGER,
+    is_active BOOLEAN DEFAULT true,
+    last_used TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(account_id, exchange_id, subaccount_index)
+);
+
+-- Cross-account credential sharing
+CREATE TABLE account_exchange_sharing (
+    id UUID PRIMARY KEY,
+    primary_account_id UUID REFERENCES accounts(id),
+    shared_account_id UUID REFERENCES accounts(id),
+    exchange_id INTEGER REFERENCES dexes(id),
+    sharing_type VARCHAR(50),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- ============================================================================
+-- STRATEGY STATE TABLES (Migration 004 + 006)
 -- ============================================================================
 
 -- Position tracking
@@ -529,6 +606,9 @@ CREATE TABLE strategy_positions (
     status VARCHAR(20) DEFAULT 'open',  -- open, closed, error
     exit_reason VARCHAR(100),
     closed_at TIMESTAMP,
+    
+    -- Multi-account support
+    account_id UUID REFERENCES accounts(id),
     
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
@@ -637,6 +717,82 @@ await position_manager.record_funding_payment(payment)
 # Query cumulative funding
 total_funding = await position_manager.get_cumulative_funding(position_id)
 ```
+
+#### **Multi-Account Credential Management**
+
+The system supports **multiple trading accounts** with **encrypted credential storage** in the database.
+
+**Adding an Account:**
+```bash
+# Add account from environment variables
+python database/scripts/add_account.py --from-env --account-name acc1
+
+# Add account interactively
+python database/scripts/add_account.py --account-name acc2 --interactive
+
+# View configured accounts
+python database/scripts/list_accounts.py --show-credentials
+```
+
+**Account-Aware Position Management:**
+```python
+# Position manager filters by account automatically
+position_manager = FundingArbPositionManager(account_name="acc1")
+await position_manager.initialize()
+
+# All operations are account-scoped
+await position_manager.create(position)  # Creates with account_id
+open_positions = await position_manager.get_open_positions()  # Only returns acc1's positions
+```
+
+**Running Bot with Specific Account:**
+```bash
+# Load credentials from database for acc1
+python runbot.py --config configs/funding_arb.yml --account acc1
+
+# Credentials are automatically:
+# 1. Loaded from database
+# 2. Decrypted using CREDENTIAL_ENCRYPTION_KEY
+# 3. Passed to exchange clients
+# 4. Used for all API calls
+```
+
+**Credential Flow:**
+```
+runbot.py --account acc1
+    │
+    ↓ 1. Load credentials
+database/credential_loader.py
+    │
+    ↓ 2. Query account_exchange_credentials
+PostgreSQL (encrypted credentials)
+    │
+    ↓ 3. Decrypt using Fernet
+CREDENTIAL_ENCRYPTION_KEY
+    │
+    ↓ 4. Pass to factory
+ExchangeFactory.create_multiple_exchanges(credentials={...})
+    │
+    ↓ 5. Initialize clients
+{
+    "lighter": LighterClient(api_key_private_key="..."),
+    "backpack": BackpackClient(public_key="...", secret_key="..."),
+    ...
+}
+```
+
+**Security Features:**
+- **Encryption at rest:** All credentials encrypted with Fernet (symmetric encryption)
+- **Key management:** `CREDENTIAL_ENCRYPTION_KEY` stored in `.env`, never committed
+- **Account isolation:** Each account's positions tracked separately by `account_id`
+- **Audit trail:** `last_used` timestamp tracks credential usage
+
+**Benefits:**
+- ✅ **Multiple accounts:** Run different strategies with different API keys
+- ✅ **Credential sharing:** Multiple accounts can share same exchange credentials
+- ✅ **Position isolation:** Positions never mix between accounts
+- ✅ **Secure storage:** No plaintext API keys in environment or config files
+- ✅ **Easy rotation:** Update credentials in database without changing configs
 
 ---
 
@@ -1084,7 +1240,7 @@ curl http://localhost:8000/api/v1/history/funding-rates/lighter/BTC?period=7d
 │                                                                      │
 │                         USER                                         │
 │                                                                      │
-│  Runs: python runbot.py --config configs/funding_arb.yml           │
+│  Runs: python runbot.py --config configs/funding_arb.yml --account acc1 │
 │                                                                      │
 └──────────────────────────────┬───────────────────────────────────────┘
                                │
@@ -1094,25 +1250,41 @@ curl http://localhost:8000/api/v1/history/funding-rates/lighter/BTC?period=7d
 │                                                                       │
 │  • Parses config file                                                │
 │  • Loads environment variables                                       │
-│  • Creates TradingBot instance                                       │
+│  • Loads account credentials from database (if --account provided)   │
+│  • Creates TradingBot instance with credentials                      │
 └──────────────────────────────┬────────────────────────────────────────┘
                                │
+                               │ If --account flag provided
+                               ↓
+┌──────────────────────────────────────────────────────────────────────┐
+│              DatabaseCredentialLoader                                 │
+│                                                                       │
+│  1. Connect to PostgreSQL                                            │
+│  2. Query account_exchange_credentials                               │
+│  3. Decrypt credentials using CREDENTIAL_ENCRYPTION_KEY              │
+│  4. Return credentials dict per exchange                             │
+└──────────────────────────────┬────────────────────────────────────────┘
+                               │
+                               │ Returns credentials
                                ↓
 ┌──────────────────────────────────────────────────────────────────────┐
 │                        TradingBot                                     │
 │                                                                       │
 │  Initialization:                                                      │
-│  1. Create exchange clients (ExchangeFactory)                        │
-│     ├─ LighterClient                                                 │
-│     ├─ BackpackClient                                                │
-│     └─ EdgeXClient                                                   │
+│  1. Create exchange clients with credentials (ExchangeFactory)       │
+│     ├─ LighterClient(api_key_private_key=<decrypted>)              │
+│     ├─ BackpackClient(public_key=<decrypted>, secret_key=<...>)    │
+│     └─ EdgeXClient(account_id=<...>, stark_private_key=<...>)       │
 │                                                                       │
 │  2. Create strategy (StrategyFactory)                                │
-│     └─ FundingArbitrageStrategy(exchange_clients)                   │
+│     └─ FundingArbitrageStrategy(exchange_clients, account_name)     │
+│                                                                       │
+│  3. Initialize strategy                                              │
+│     └─ Position manager loads account_id from account_name           │
 │                                                                       │
 │  Main Loop:                                                           │
 │  while True:                                                          │
-│      await strategy.execute_cycle()                                  │
+│      await strategy.execute_cycle()  # Account-scoped operations     │
 │      await asyncio.sleep(60)                                         │
 └──────────────────────────────┬────────────────────────────────────────┘
                                │
@@ -1623,8 +1795,10 @@ This architecture provides:
 - ✅ **Reliability** - Database-backed state persistence
 - ✅ **Modularity** - Clear separation of concerns (3 layers)
 - ✅ **Multi-DEX** - Simultaneous trading across multiple exchanges
+- ✅ **Multi-Account** - Encrypted credential management + account isolation
+- ✅ **Security** - Fernet encryption for sensitive credentials
 
-**Primary use case:** Delta-neutral funding rate arbitrage across perpetual DEX markets.
+**Primary use case:** Delta-neutral funding rate arbitrage across perpetual DEX markets with support for multiple trading accounts.
 
 ---
 
@@ -1633,10 +1807,13 @@ This architecture provides:
 - v2.0 (2025-08-20): Shared exchange library refactor
 - v2.1 (2025-09-10): Modular strategy architecture + Hummingbot patterns
 - v2.5 (2025-10-09): Multi-exchange support + Interactive config + This document
+- v2.6 (2025-10-24): Multi-account database architecture + Encrypted credential management
 
 **Next Steps:**
 - See `docs/QUICK_START.md` for getting started
 - See `docs/CLI_COMMANDS.md` for command reference
+- See `docs/MULTI_ACCOUNT_DB_ARCHITECTURE.md` for multi-account setup
+- See `database/MULTI_ACCOUNT_SETUP.md` for step-by-step account configuration
 - See `funding_rate_service/docs/API_ENDPOINTS.md` for API documentation
 - See `strategies/implementations/funding_arbitrage/` for strategy implementation
 ### Live Snapshot Cache

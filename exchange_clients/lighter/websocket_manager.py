@@ -446,9 +446,17 @@ class LighterWebSocketManager(BaseWebSocketManager):
                         self.update_order_book("asks", order_book.get("asks", []))
                         self.snapshot_loaded = True
                         self.order_book_ready = True
+                        
+                        # Extract BBO from the snapshot (not just updates)
+                        (best_bid_price, _), (best_ask_price, _) = self.get_best_levels(min_size_usd=0)
+                        if best_bid_price is not None:
+                            self.best_bid = best_bid_price
+                        if best_ask_price is not None:
+                            self.best_ask = best_ask_price
+                        
                         self._log(
                             f"[LIGHTER] Order book snapshot loaded with {len(self.order_book['bids'])} bids and "
-                            f"{len(self.order_book['asks'])} asks",
+                            f"{len(self.order_book['asks'])} asks (BBO: {self.best_bid}/{self.best_ask})",
                             "INFO",
                         )
 
