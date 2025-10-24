@@ -22,6 +22,7 @@ class PositionCloser:
     """Encapsulates exit-condition evaluation and close execution."""
 
     _ZERO_TOLERANCE = Decimal("0")
+    _IMBALANCE_THRESHOLD = Decimal("0.05")  # 5% maximum allowed difference
 
     def __init__(self, strategy: "FundingArbitrageStrategy") -> None:
         self._strategy = strategy
@@ -44,6 +45,15 @@ class PositionCloser:
                     f"Closed {position.symbol}: {liquidation_reason}", "WARNING"
                 )
                 actions.append(f"Closed {position.symbol}: {liquidation_reason}")
+                continue
+
+            imbalance_reason = self._detect_imbalance(position, snapshots)
+            if imbalance_reason is not None:
+                await self.close(position, imbalance_reason, live_snapshots=snapshots)
+                strategy.logger.log(
+                    f"Closed {position.symbol}: {imbalance_reason}", "WARNING"
+                )
+                actions.append(f"Closed {position.symbol}: {imbalance_reason}")
                 continue
 
             should_close, reason = await self._should_close(position, snapshots)
@@ -344,6 +354,79 @@ class PositionCloser:
             "WARNING",
         )
         return "LEG_LIQUIDATED"
+
+    def _detect_imbalance(
+        self,
+        position: "FundingArbPosition",
+        snapshots: Dict[str, Optional["ExchangePositionSnapshot"]],
+    ) -> Optional[str]:
+        """
+        Detect severe imbalance between legs (> 5% difference).
+        
+        Checks if one leg's quantity is significantly different from the other,
+        indicating a delta-neutral hedge has become unbalanced (e.g., 72 vs 1).
+        
+        Args:
+            position: Position to check
+            snapshots: Live snapshots from exchanges
+            
+        Returns:
+            "SEVERE_IMBALANCE" if imbalance detected, None otherwise
+        """
+        long_qty, short_qty = self._extract_leg_quantities(position, snapshots)
+        
+        # If we can't extract quantities, skip check (handled by _detect_liquidation)
+        if long_qty is None or short_qty is None:
+            return None
+        
+        # If either leg is zero, skip (handled by _detect_liquidation)
+        if long_qty <= self._ZERO_TOLERANCE or short_qty <= self._ZERO_TOLERANCE:
+            return None
+        
+        # Calculate percentage difference: (max - min) / max
+        min_qty = min(long_qty, short_qty)
+        max_qty = max(long_qty, short_qty)
+        diff_pct = (max_qty - min_qty) / max_qty
+        
+        if diff_pct > self._IMBALANCE_THRESHOLD:
+            self._strategy.logger.log(
+                f"⚠️ Severe imbalance detected for {position.symbol}: "
+                f"{position.long_dex}={long_qty} vs {position.short_dex}={short_qty} "
+                f"(diff={diff_pct*100:.1f}%, threshold={self._IMBALANCE_THRESHOLD*100:.1f}%)",
+                "WARNING",
+            )
+            return "SEVERE_IMBALANCE"
+        
+        return None
+
+    def _extract_leg_quantities(
+        self,
+        position: "FundingArbPosition",
+        snapshots: Dict[str, Optional["ExchangePositionSnapshot"]],
+    ) -> Tuple[Optional[Decimal], Optional[Decimal]]:
+        """
+        Extract absolute quantities for both legs from snapshots.
+        
+        Args:
+            position: Position being evaluated
+            snapshots: Exchange snapshots
+            
+        Returns:
+            Tuple of (long_qty, short_qty) or (None, None) if unavailable
+        """
+        long_snapshot = snapshots.get(position.long_dex)
+        short_snapshot = snapshots.get(position.short_dex)
+        
+        if not long_snapshot or not short_snapshot:
+            return None, None
+        
+        if long_snapshot.quantity is None or short_snapshot.quantity is None:
+            return None, None
+        
+        long_qty = long_snapshot.quantity.copy_abs()
+        short_qty = short_snapshot.quantity.copy_abs()
+        
+        return long_qty, short_qty
 
     @classmethod
     def _has_open_position(cls, snapshot: Optional["ExchangePositionSnapshot"]) -> bool:
