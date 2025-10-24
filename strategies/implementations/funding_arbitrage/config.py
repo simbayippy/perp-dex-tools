@@ -206,9 +206,8 @@ class FundingArbConfig(BaseModel):
     )
     
     # Multi-account support
-    _account_name: Optional[str] = Field(
+    account_name: Optional[str] = Field(
         default=None,
-        alias="account_name",
         description="Account name for multi-account support (populated from --account flag)"
     )
     
