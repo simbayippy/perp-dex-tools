@@ -536,6 +536,34 @@ class AsterClient(BaseExchangeClient):
             # Fallback to self.config.tick_size if cache miss
             tick_size = getattr(self.config, 'tick_size', None)
         
+        # If still no tick_size, fetch contract attributes to populate cache
+        if not tick_size:
+            self.logger.warning(
+                f"⚠️  [ASTER] tick_size not cached for {normalized_contract_id}, fetching contract attributes..."
+            )
+            try:
+                # Extract ticker from normalized_contract_id (e.g., "AVNTUSDT" -> "AVNT")
+                from exchange_clients.aster.common import normalize_symbol
+                ticker = normalize_symbol(normalized_contract_id)
+                
+                # Temporarily update config ticker to fetch the right contract
+                original_ticker = self.config.ticker
+                self.config.ticker = ticker
+                
+                # Fetch contract attributes (this will populate the cache)
+                await self.get_contract_attributes()
+                
+                # Restore original ticker
+                self.config.ticker = original_ticker
+                
+                # Try cache lookup again
+                tick_size = self._tick_size_cache.get(normalized_contract_id) or self._tick_size_cache.get(ticker.upper())
+                
+                if tick_size:
+                    self.logger.info(f"✅ [ASTER] Fetched tick_size for {normalized_contract_id}: {tick_size}")
+            except Exception as e:
+                self.logger.error(f"❌ [ASTER] Failed to fetch tick_size for {normalized_contract_id}: {e}")
+        
         if tick_size:
             # Use ROUND_DOWN to avoid price manipulation (never round up user's sell price)
             from decimal import ROUND_DOWN
