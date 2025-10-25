@@ -98,7 +98,7 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
         create_decimal_parameter(
             key="max_margin_usd",
             prompt="Maximum margin to allocate (USD)?",
-            min_value=Decimal("100"),
+            min_value=Decimal("10"),
             max_value=Decimal("1000000"),
             required=True,
             help_text="Caps how much account margin the grid strategy can consume",
