@@ -812,7 +812,8 @@ class GridStrategy(BaseStrategy):
             reference_price = (best_bid + best_ask) / 2
             
             tick = self.exchange_client.config.tick_size
-            offset = tick * 10  # keep a safe distance for post-only placement
+            offset_multiplier = getattr(self.config, "post_only_tick_multiplier", Decimal("2"))
+            offset = tick * offset_multiplier  # configurable distance for post-only placement
             if self.config.direction == 'buy':
                 # For buy, place a couple ticks below the ask to respect post-only
                 order_price = best_ask - offset

@@ -11,6 +11,7 @@ config:
   max_orders: 5
   max_margin_usd: !!float '80'
   max_position_size: 0.01
+  post_only_tick_multiplier: 4
   wait_time: 40
   stop_loss_enabled: true
   stop_loss_percentage: 2.5

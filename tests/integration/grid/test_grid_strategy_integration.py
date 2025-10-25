@@ -33,7 +33,7 @@ def patch_event_notifier(monkeypatch):
     events.clear()
 
 
-def make_config(direction: str = "buy") -> GridConfig:
+def make_config(direction: str = "buy", post_only_tick_multiplier: Decimal = Decimal("2")) -> GridConfig:
     return GridConfig(
         take_profit=Decimal("0.8"),
         grid_step=Decimal("0.2"),
@@ -49,6 +49,7 @@ def make_config(direction: str = "buy") -> GridConfig:
         stop_price=None,
         pause_price=None,
         boost_mode=False,
+        post_only_tick_multiplier=post_only_tick_multiplier,
     )
 
 

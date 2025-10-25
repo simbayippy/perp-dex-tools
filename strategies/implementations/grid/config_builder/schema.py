@@ -169,6 +169,15 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             ),
         ),
         create_decimal_parameter(
+            key="post_only_tick_multiplier",
+            prompt="Tick multiplier for post-only limit placement?",
+            default=Decimal("2"),
+            min_value=Decimal("1"),
+            max_value=Decimal("10"),
+            required=False,
+            help_text="How many ticks away from the top of book to anchor post-only orders",
+        ),
+        create_decimal_parameter(
             key="stop_price",
             prompt="Stop price (optional - close all if price crosses)?",
             default=None,
@@ -197,6 +206,7 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             "stop_loss_percentage",
             "position_timeout_minutes",
             "recovery_mode",
+            "post_only_tick_multiplier",
             "stop_price",
             "pause_price",
         ],
@@ -235,6 +245,7 @@ def create_default_grid_config() -> dict:
         "stop_loss_percentage": Decimal("2.0"),
         "position_timeout_minutes": 60,
         "recovery_mode": "ladder",
+        "post_only_tick_multiplier": Decimal("2"),
         "stop_price": None,
         "pause_price": None,
     }

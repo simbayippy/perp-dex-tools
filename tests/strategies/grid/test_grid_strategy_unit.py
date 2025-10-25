@@ -47,6 +47,7 @@ def make_config(
     direction: str = "buy",
     max_margin_usd: Decimal = Decimal("1000"),
     max_position_size: Decimal = Decimal("10"),
+    post_only_tick_multiplier: Decimal = Decimal("2"),
 ) -> GridConfig:
     return GridConfig(
         take_profit=Decimal("0.8"),
@@ -63,6 +64,7 @@ def make_config(
         stop_price=None,
         pause_price=None,
         boost_mode=False,
+        post_only_tick_multiplier=post_only_tick_multiplier,
     )
 
 

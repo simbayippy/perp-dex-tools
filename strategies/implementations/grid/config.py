@@ -85,6 +85,17 @@ class GridConfig(BaseModel):
         False,
         description="Use market orders for faster execution (more aggressive)"
     )
+    post_only_tick_multiplier: Decimal = Field(
+        Decimal('2'),
+        description="How many ticks away from top of book to place post-only orders",
+        ge=Decimal('1'),
+        le=Decimal('10')
+    )
+    order_margin_usd: Optional[Decimal] = Field(
+        None,
+        description="Optional: target initial margin (USD) per order",
+        ge=Decimal('0')
+    )
     
     @validator('direction')
     def validate_direction(cls, v):
