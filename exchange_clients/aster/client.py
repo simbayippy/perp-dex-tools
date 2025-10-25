@@ -507,6 +507,10 @@ class AsterClient(BaseExchangeClient):
         Returns:
             OrderResult with order details
         """
+        # Convert inputs to Decimal to avoid float arithmetic errors
+        price = Decimal(str(price))
+        quantity = Decimal(str(quantity))
+        
         # ✅ CRITICAL FIX: Normalize contract_id for Aster (handles multi-symbol trading)
         # If contract_id doesn't end with USDT, add it (e.g., "PROVE" → "PROVEUSDT")
         if not contract_id.upper().endswith("USDT"):
@@ -519,7 +523,7 @@ class AsterClient(BaseExchangeClient):
         self.logger.debug(f"Using contract_id for order: '{normalized_contract_id}'")
         
         # Round quantity to step size (e.g., 941.8750094 → 941.875 or 941 depending on stepSize)
-        rounded_quantity = self.round_to_step(Decimal(str(quantity)))
+        rounded_quantity = self.round_to_step(quantity)
         
         self.logger.debug(
             f"Rounded quantity: {quantity} → {rounded_quantity} "
@@ -669,6 +673,9 @@ class AsterClient(BaseExchangeClient):
             reduce_only: If True, order can only reduce existing position (bypasses min notional)
         """
         try:
+            # Convert inputs to Decimal to avoid float arithmetic errors
+            quantity = Decimal(str(quantity))
+            
             # Contract ID should already be in Aster format (e.g., "MONUSDT")
             # from get_contract_attributes(), so use it directly
             
@@ -681,7 +688,7 @@ class AsterClient(BaseExchangeClient):
                 return OrderResult(success=False, error_message=f'Invalid side: {side}')
 
             # Round quantity to step size
-            rounded_quantity = self.round_to_step(Decimal(str(quantity)))
+            rounded_quantity = self.round_to_step(quantity)
             
             self.logger.debug(
                 f"📐 [ASTER] Rounded quantity: {quantity} → {rounded_quantity}"
