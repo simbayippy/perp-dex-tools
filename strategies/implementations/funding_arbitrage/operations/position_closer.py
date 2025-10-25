@@ -757,6 +757,7 @@ class PositionCloser:
             execution_mode="limit_only",
             timeout_seconds=30.0,
             limit_price_offset_pct=limit_offset_pct,
+            reduce_only=True,  # ✅ Allows closing dust positions below min notional
         )
 
     def _resolve_limit_offset_pct(self) -> Optional[Decimal]:

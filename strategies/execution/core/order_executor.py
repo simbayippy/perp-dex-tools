@@ -125,7 +125,8 @@ class OrderExecutor:
         mode: ExecutionMode = ExecutionMode.LIMIT_WITH_FALLBACK,
         timeout_seconds: Optional[float] = None,
         limit_price_offset_pct: Optional[Decimal] = None,
-        cancel_event: Optional[asyncio.Event] = None
+        cancel_event: Optional[asyncio.Event] = None,
+        reduce_only: bool = False
     ) -> ExecutionResult:
         """
         Execute order with intelligent mode selection.
@@ -193,6 +194,7 @@ class OrderExecutor:
                     timeout,
                     offset_pct,
                     cancel_event,
+                    reduce_only,
                 )
             
             elif mode == ExecutionMode.LIMIT_WITH_FALLBACK:
@@ -206,6 +208,7 @@ class OrderExecutor:
                     timeout,
                     offset_pct,
                     cancel_event,
+                    reduce_only,
                 )
                 
                 if not result.filled:
@@ -259,7 +262,8 @@ class OrderExecutor:
         quantity: Optional[Decimal],
         timeout_seconds: float,
         price_offset_pct: Decimal,
-        cancel_event: Optional[asyncio.Event] = None
+        cancel_event: Optional[asyncio.Event] = None,
+        reduce_only: bool = False
     ) -> ExecutionResult:
         """
         Place limit order at favorable price, wait for fill.
@@ -307,7 +311,8 @@ class OrderExecutor:
                 contract_id=contract_id,
                 quantity=float(order_quantity),
                 price=float(limit_price),
-                side=side
+                side=side,
+                reduce_only=reduce_only
             )
             
             if not order_result.success:

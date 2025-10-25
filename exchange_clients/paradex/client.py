@@ -281,8 +281,14 @@ class ParadexClient(BaseExchangeClient):
             return OrderResult(success=False, error_message='No order ID in response')
         return order_result
 
-    async def place_post_only_order(self, contract_id: str, quantity: Decimal, price: Decimal,
-                                    side: str) -> OrderResult:
+    async def place_post_only_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        price: Decimal,
+        side: str,
+        reduce_only: bool = False
+    ) -> OrderResult:
         """Place a post only order with Paradex using official SDK."""
         from paradex_py.common.order import Order, OrderType, OrderSide, OrderStatus
 
@@ -315,6 +321,21 @@ class ParadexClient(BaseExchangeClient):
             raise Exception('Paradex Server Error: Order not processed after 10 seconds')
         else:
             return order_info
+
+    async def place_limit_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        price: Decimal,
+        side: str,
+        reduce_only: bool = False
+    ) -> OrderResult:
+        """
+        Alias for place_post_only_order to match base interface.
+        
+        Paradex only supports post-only orders for limit orders.
+        """
+        return await self.place_post_only_order(contract_id, quantity, price, side, reduce_only)
 
     async def cancel_order(self, order_id: str) -> OrderResult:
         """Cancel an order with Paradex using official SDK."""

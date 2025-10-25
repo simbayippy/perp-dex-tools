@@ -557,9 +557,24 @@ class LighterClient(BaseExchangeClient):
             # Return empty order book on error
             return {'bids': [], 'asks': []}
 
-    async def place_limit_order(self, contract_id: str, quantity: Decimal, price: Decimal,
-                                side: str) -> OrderResult:
-        """Place a post only order with Lighter using official SDK."""
+    async def place_limit_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        price: Decimal,
+        side: str,
+        reduce_only: bool = False
+    ) -> OrderResult:
+        """
+        Place a post only order with Lighter using official SDK.
+        
+        Args:
+            contract_id: Market identifier
+            quantity: Order quantity
+            price: Limit price
+            side: 'buy' or 'sell'
+            reduce_only: If True, order can only reduce existing position
+        """
         # Ensure client is initialized
         if self.lighter_client is None:
             await self._initialize_lighter_client()
@@ -588,7 +603,7 @@ class LighterClient(BaseExchangeClient):
             'is_ask': is_ask,
             'order_type': self.lighter_client.ORDER_TYPE_LIMIT,
             'time_in_force': self.lighter_client.ORDER_TIME_IN_FORCE_POST_ONLY,
-            'reduce_only': False,
+            'reduce_only': reduce_only,  # ✅ Use parameter (allows closing dust positions)
             'trigger_price': 0,
             'order_expiry': order_expiry_ms,
         }
@@ -610,18 +625,29 @@ class LighterClient(BaseExchangeClient):
         else:
             raw_payload = getattr(create_order, "__dict__", repr(create_order))
 
-        min_notional = getattr(self.config, "min_order_notional", None)
-        if min_notional is not None:
+        # 🛡️ DEFENSIVE CHECK: Min notional should already be validated in pre-flight checks
+        # ⚠️ SKIP for reduce_only orders (closing positions) - these may be below min notional
+        if not reduce_only:
+            min_notional = getattr(self.config, "min_order_notional", None)
+            if min_notional is not None:
+                notional = Decimal(quantity) * Decimal(price)
+                if notional < min_notional:
+                    self.logger.error(
+                        f"[LIGHTER] UNEXPECTED: Order notional ${notional} below minimum ${min_notional}. "
+                        f"This should have been caught in pre-flight checks!"
+                    )
+                    return OrderResult(
+                        success=False,
+                        order_id=str(client_order_index),
+                        error_message=f"Order notional below minimum ${min_notional}",
+                    )
+        else:
+            # Reduce-only order - allowed to be below min notional (closing dust positions)
             notional = Decimal(quantity) * Decimal(price)
-            if notional < min_notional:
-                self.logger.error(
-                    f"[LIGHTER] Order notional ${notional} below minimum ${min_notional}"
-                )
-                return OrderResult(
-                    success=False,
-                    order_id=str(client_order_index),
-                    error_message=f"Order notional below minimum ${min_notional}",
-                )
+            self.logger.debug(
+                f"[LIGHTER] Reduce-only order: ${notional:.2f} notional "
+                f"(min notional check skipped for position closing)"
+            )
 
         if error is not None:
             self.logger.error(f"❌ [LIGHTER] Order submission failed: {error}")
@@ -633,9 +659,21 @@ class LighterClient(BaseExchangeClient):
 
         return OrderResult(success=True, order_id=str(client_order_index))
 
-    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
+    async def place_market_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        side: str,
+        reduce_only: bool = False
+    ) -> OrderResult:
         """
         Place a market order with Lighter using official SDK.
+        
+        Args:
+            contract_id: Market identifier
+            quantity: Order quantity
+            side: 'buy' or 'sell'
+            reduce_only: If True, order can only reduce existing position
         
         Uses the dedicated create_market_order() method with avg_execution_price.
         """
@@ -697,7 +735,7 @@ class LighterClient(BaseExchangeClient):
                 base_amount=base_amount,
                 avg_execution_price=avg_execution_price_int,
                 is_ask=is_ask,
-                reduce_only=False  # Allow opening or closing positions
+                reduce_only=reduce_only  # ✅ Use parameter (allows closing dust positions)
             )
             
             if error is not None:
@@ -1096,17 +1134,130 @@ class LighterClient(BaseExchangeClient):
             self.logger.error(f"Error getting detailed positions: {e}")
             return []
 
+    async def _get_position_open_time(self, market_id: int, current_quantity: Decimal) -> Optional[int]:
+        """
+        Estimate when the current position was opened by analyzing recent trade history.
+        
+        Args:
+            market_id: The market ID for the position
+            current_quantity: Current position quantity (to correlate with trades)
+            
+        Returns:
+            Timestamp (seconds) when position was likely opened, or None if unknown
+        """
+        try:
+            # Generate auth token for API call
+            if not hasattr(self, 'lighter_client') or self.lighter_client is None:
+                return None
+            
+            auth_token, error = self.lighter_client.create_auth_token_with_expiry()
+            if error:
+                self.logger.debug(f"[LIGHTER] Error creating auth token for trade history: {error}")
+                return None
+            
+            account_index = getattr(self.config, "account_index", None)
+            if account_index is None:
+                return None
+            
+            # Fetch recent trades for this account and market using OrderApi
+            # ✅ Correct API: order_api.trades() with account_index filter
+            if not hasattr(self, 'order_api') or self.order_api is None:
+                self.logger.debug("[LIGHTER] OrderApi not available for trade history")
+                return None
+            
+            trades_response = await self.order_api.trades(
+                account_index=account_index,
+                market_id=market_id,
+                sort_by='timestamp',  # Sort by time
+                sort_dir='desc',  # Descending (newest first) 
+                limit=100,  # Last 100 trades should cover most position opens
+                auth=auth_token,
+                authorization=auth_token,
+                _request_timeout=10,
+            )
+            
+            if not trades_response or not hasattr(trades_response, 'trades'):
+                return None
+            
+            trades = trades_response.trades
+            if not trades:
+                return None
+            
+            # Reverse to get chronological order (oldest first)
+            trades = list(reversed(trades))
+            
+            # Track running position to find when current position started
+            running_qty = Decimal("0")
+            position_start_time = None
+            
+            for trade in trades:
+                try:
+                    # Lighter trades have: size, ask_account_id, bid_account_id, timestamp
+                    trade_size = Decimal(str(getattr(trade, 'size', '0')))
+                    ask_account_id = getattr(trade, 'ask_account_id', None)
+                    bid_account_id = getattr(trade, 'bid_account_id', None)
+                    
+                    # Determine if this account was on the ask (sell) or bid (buy) side
+                    # Note: account_id is different from account_index, but for tracking position
+                    # we need to check which side matches our account
+                    # Since we filtered by account_index in the API call, all trades belong to us
+                    # We need to check if we were the maker or taker, and which side
+                    
+                    # For position tracking: if bid_account_id matches our account, we bought (+)
+                    # if ask_account_id matches our account, we sold (-)
+                    # Since the API already filtered by account_index, we can infer from the IDs
+                    
+                    # Simplified: Check position_size_before fields to understand direction
+                    taker_size_before = Decimal(str(getattr(trade, 'taker_position_size_before', '0')))
+                    maker_size_before = Decimal(str(getattr(trade, 'maker_position_size_before', '0')))
+                    
+                    # If we have position data, use it to track running quantity
+                    # Otherwise, fall back to inferring from ask/bid account IDs
+                    # For now, use the simple heuristic: track cumulative trades
+                    # and detect position direction changes
+                    
+                    # Get timestamp (Lighter uses seconds for timestamp)
+                    trade_timestamp = getattr(trade, 'timestamp', None)
+                    
+                    # Since API filtered by account_index, we need to determine our side
+                    # Check is_maker_ask to understand the trade structure
+                    is_maker_ask = getattr(trade, 'is_maker_ask', False)
+                    
+                    # Determine trade direction for our account
+                    # Need more context - let's just track when position changes sign
+                    # by checking the taker/maker position_sign_changed fields
+                    taker_sign_changed = getattr(trade, 'taker_position_sign_changed', False)
+                    maker_sign_changed = getattr(trade, 'maker_position_sign_changed', False)
+                    
+                    # If position sign changed, this marks a new position
+                    if taker_sign_changed or maker_sign_changed:
+                        position_start_time = trade_timestamp
+                    
+                except Exception as exc:
+                    self.logger.debug(f"[LIGHTER] Error processing trade: {exc}")
+                    continue
+            
+            return position_start_time
+            
+        except Exception as exc:
+            self.logger.debug(
+                f"[LIGHTER] Failed to determine position open time for market_id={market_id}: {exc}"
+            )
+            return None
+
     async def _get_cumulative_funding(
         self,
         market_id: int,
         side: Optional[str] = None,
+        quantity: Optional[Decimal] = None,
     ) -> Optional[Decimal]:
         """
-        Fetch cumulative funding fees for a position using Lighter's position funding API.
+        Fetch cumulative funding fees for the CURRENT position only (not historical positions).
         
         Args:
             market_id: The market ID for the position
             side: Position side ('long' or 'short'), optional filter
+            quantity: Current position quantity (used to determine when position was opened)
             
         Returns:
             Cumulative funding fees as Decimal, None if unavailable
@@ -1133,6 +1284,15 @@ class LighterClient(BaseExchangeClient):
             self.logger.debug(f"[LIGHTER] Failed to create auth token: {exc}")
             return None
         
+        # Try to determine when the current position was opened
+        position_start_time = None
+        if quantity is not None and quantity != Decimal("0"):
+            position_start_time = await self._get_position_open_time(market_id, quantity)
+            if position_start_time:
+                self.logger.debug(
+                    f"[LIGHTER] Filtering funding to only after position opened at timestamp {position_start_time}"
+                )
+        
         try:
             # Fetch position funding history with authentication
             # Lighter requires BOTH auth (query param) and authorization (header) for main accounts
@@ -1151,17 +1311,28 @@ class LighterClient(BaseExchangeClient):
             
             fundings = response.position_fundings
             if not fundings:
-                return None
+                return Decimal("0")  # No funding yet for this position
             
-            # Sum up all funding 'change' values to get cumulative funding
+            # Sum up funding 'change' values for this position only
             cumulative = Decimal("0")
             for funding in fundings:
                 try:
+                    # If we have position start time, only count funding after position opened
+                    if position_start_time:
+                        funding_timestamp = getattr(funding, 'timestamp', None)
+                        if funding_timestamp and funding_timestamp < position_start_time:
+                            continue
+                    
                     change = Decimal(str(funding.change))
                     cumulative += change
                 except Exception as exc:
                     self.logger.debug(f"[LIGHTER] Failed to parse funding change: {exc}")
                     continue
+            
+            self.logger.debug(
+                f"[LIGHTER] Funding for current position (market_id={market_id}): ${cumulative:.4f} "
+                f"(from {len(fundings)} records{' after position opened' if position_start_time else ' (all history)'})"
+            )
             
             return cumulative if cumulative != Decimal("0") else None
             
@@ -1225,12 +1396,12 @@ class LighterClient(BaseExchangeClient):
                 elif quantity < 0:
                     side = "short"
             
-            # Fetch cumulative funding fees for this position
+            # Fetch cumulative funding fees for THIS SPECIFIC position (not all historical positions)
             market_id = pos.get("market_id")
             funding_accrued = None
             if market_id is not None:
                 try:
-                    funding_accrued = await self._get_cumulative_funding(market_id, side)
+                    funding_accrued = await self._get_cumulative_funding(market_id, side, quantity=quantity)
                 except Exception as exc:
                     self.logger.debug(
                         f"[LIGHTER] Failed to fetch funding for {symbol} (market_id={market_id}): {exc}"

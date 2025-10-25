@@ -258,7 +258,8 @@ class EdgeXClient(BaseExchangeClient):
         contract_id: str,
         quantity: Decimal,
         price: Decimal,
-        side: str
+        side: str,
+        reduce_only: bool = False
     ) -> OrderResult:
         """
         Place a limit order at a specific price on EdgeX.
@@ -343,7 +344,13 @@ class EdgeXClient(BaseExchangeClient):
         return self.round_to_tick(order_price)
 
 
-    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
+    async def place_market_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        side: str,
+        reduce_only: bool = False
+    ) -> OrderResult:
         """
         Place a market order on EdgeX (uses limit order without post_only to ensure fill).
         This acts as a true market order by using an aggressive limit price.

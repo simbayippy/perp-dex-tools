@@ -57,6 +57,10 @@ class AsterClient(BaseExchangeClient):
         self._order_update_handler = None
         self._latest_orders: Dict[str, OrderInfo] = {}
         self._min_order_notional: Dict[str, Decimal] = {}
+        
+        # Per-symbol tick size cache for multi-symbol trading
+        # Maps normalized_symbol -> tick_size (e.g., "STBL" -> Decimal("0.0001"))
+        self._tick_size_cache: Dict[str, Decimal] = {}
 
     def _validate_config(self) -> None:
         """Validate Aster configuration."""
@@ -486,48 +490,93 @@ class AsterClient(BaseExchangeClient):
         contract_id: str,
         quantity: Decimal,
         price: Decimal,
-        side: str
+        side: str,
+        reduce_only: bool = False
     ) -> OrderResult:
         """
         Place a limit order at a specific price on Aster.
         
         Args:
-            contract_id: Contract identifier
+            contract_id: Contract identifier (can be normalized symbol or full contract_id)
             quantity: Order quantity
             price: Limit price
             side: 'buy' or 'sell'
+            reduce_only: If True, order can only reduce existing position (bypasses min notional)
             
         Returns:
             OrderResult with order details
         """
-        # Contract ID should already be in Aster format (e.g., "MONUSDT")
-        # NO need to normalize again (would cause "MONUSDTUSDT")
+        # Convert inputs to Decimal to avoid float arithmetic errors
+        price = Decimal(str(price))
+        quantity = Decimal(str(quantity))
         
-        self.logger.debug(f"Using contract_id for order: '{contract_id}'")
+        # ✅ CRITICAL FIX: Normalize contract_id for Aster (handles multi-symbol trading)
+        # If contract_id doesn't end with USDT, add it (e.g., "PROVE" → "PROVEUSDT")
+        if not contract_id.upper().endswith("USDT"):
+            from exchange_clients.aster.common import get_aster_symbol_format
+            normalized_contract_id = get_aster_symbol_format(contract_id)
+            self.logger.debug(f"Normalized contract_id: '{contract_id}' → '{normalized_contract_id}'")
+        else:
+            normalized_contract_id = contract_id.upper()
+        
+        self.logger.debug(f"Using contract_id for order: '{normalized_contract_id}'")
         
         # Round quantity to step size (e.g., 941.8750094 → 941.875 or 941 depending on stepSize)
-        rounded_quantity = self.round_to_step(Decimal(str(quantity)))
+        rounded_quantity = self.round_to_step(quantity)
         
         self.logger.debug(
             f"Rounded quantity: {quantity} → {rounded_quantity} "
             f"(step_size={getattr(self.config, 'step_size', 'unknown')})"
         )
         
-        rounded_price = self.round_to_tick(price)
+        # Round price to tick_size precision to satisfy: (price - minPrice) % tickSize == 0
+        # Look up symbol-specific tick_size from cache (for multi-symbol trading)
+        tick_size = self._tick_size_cache.get(normalized_contract_id) or self._tick_size_cache.get(contract_id)
+        if not tick_size:
+            # Fallback to self.config.tick_size if cache miss
+            tick_size = getattr(self.config, 'tick_size', None)
+        
+        if tick_size:
+            # Use ROUND_DOWN to avoid price manipulation (never round up user's sell price)
+            from decimal import ROUND_DOWN
+            rounded_price = price.quantize(tick_size, rounding=ROUND_DOWN)
+            self.logger.debug(
+                f"Rounded price to tick_size: {price} → {rounded_price} "
+                f"(tick_size={tick_size}, symbol={normalized_contract_id})"
+            )
+        else:
+            # Fallback: no tick_size available, use price as-is and let exchange reject if invalid
+            rounded_price = price
+            self.logger.warning(
+                f"No tick_size available for {normalized_contract_id}, using price as-is: {rounded_price}"
+            )
 
-        min_notional = self.get_min_order_notional(contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
-        if min_notional is not None:
+        # 🛡️ DEFENSIVE CHECK: Min notional should already be validated in pre-flight checks
+        # This is a last-resort safety net to catch bugs where pre-flight was bypassed
+        # ⚠️ SKIP for reduce_only orders (closing positions) - these may be below min notional
+        if not reduce_only:
+            min_notional = self.get_min_order_notional(normalized_contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
+            if min_notional is not None:
+                order_notional = rounded_quantity * rounded_price
+                if order_notional < min_notional:
+                    # This should NEVER happen if pre-flight checks ran correctly
+                    message = (
+                        f"[ASTER] UNEXPECTED: Order notional ${order_notional} below minimum ${min_notional}. "
+                        f"This should have been caught in pre-flight checks!"
+                    )
+                    self.logger.error(message)
+                    raise ValueError(message)
+        else:
+            # Reduce-only order - allowed to be below min notional (closing dust positions)
             order_notional = rounded_quantity * rounded_price
-            if order_notional < min_notional:
-                message = (
-                    f"[ASTER] Order notional ${order_notional} below minimum ${min_notional}"
-                )
-                self.logger.error(message)
-                raise ValueError(message)
+            self.logger.debug(
+                f"[ASTER] Reduce-only order: ${order_notional:.2f} notional "
+                f"(min notional check skipped for position closing)"
+            )
 
         # Place limit order with post-only (GTX) for maker fees
         order_data = {
-            'symbol': contract_id,  # Already normalized (e.g., "MONUSDT")
+            'symbol': normalized_contract_id,  # Aster format (e.g., "PROVEUSDT")
             'side': side.upper(),
             'type': 'LIMIT',
             'quantity': str(rounded_quantity),
@@ -535,13 +584,17 @@ class AsterClient(BaseExchangeClient):
             'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
         }
         
+        # Add reduceOnly flag if this is a closing operation
+        if reduce_only:
+            order_data['reduceOnly'] = 'true'
+        
         self.logger.debug(f"Placing {side.upper()} limit order: {rounded_quantity} @ {rounded_price}")
 
         try:
             result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
         except Exception as e:
             self.logger.error(
-                f"Failed to place limit order for {contract_id} "
+                f"Failed to place limit order for {normalized_contract_id} "
                 f"({side.upper()}, qty={quantity}, price={price}): {e}"
             )
             raise
@@ -614,11 +667,26 @@ class AsterClient(BaseExchangeClient):
                 error_message=f'Unknown order status: {order_status_upper or order_status}'
             )
 
-    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
+    async def place_market_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        side: str,
+        reduce_only: bool = False
+    ) -> OrderResult:
         """
         Place a market order on Aster (true market order for immediate execution).
+        
+        Args:
+            contract_id: Contract identifier
+            quantity: Order quantity
+            side: 'buy' or 'sell'
+            reduce_only: If True, order can only reduce existing position (bypasses min notional)
         """
         try:
+            # Convert inputs to Decimal to avoid float arithmetic errors
+            quantity = Decimal(str(quantity))
+            
             # Contract ID should already be in Aster format (e.g., "MONUSDT")
             # from get_contract_attributes(), so use it directly
             
@@ -631,7 +699,7 @@ class AsterClient(BaseExchangeClient):
                 return OrderResult(success=False, error_message=f'Invalid side: {side}')
 
             # Round quantity to step size
-            rounded_quantity = self.round_to_step(Decimal(str(quantity)))
+            rounded_quantity = self.round_to_step(quantity)
             
             self.logger.debug(
                 f"📐 [ASTER] Rounded quantity: {quantity} → {rounded_quantity}"
@@ -663,15 +731,26 @@ class AsterClient(BaseExchangeClient):
 
             expected_price = best_ask if side.lower() == 'buy' else best_bid
 
-            min_notional = self.get_min_order_notional(contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
-            if min_notional is not None and expected_price > 0:
+            # 🛡️ DEFENSIVE CHECK: Min notional should already be validated in pre-flight checks
+            # ⚠️ SKIP for reduce_only orders (closing positions) - these may be below min notional
+            if not reduce_only:
+                min_notional = self.get_min_order_notional(contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
+                if min_notional is not None and expected_price > 0:
+                    order_notional = rounded_quantity * expected_price
+                    if order_notional < min_notional:
+                        message = (
+                            f"[ASTER] UNEXPECTED: Market order notional ${order_notional} below minimum ${min_notional}. "
+                            f"This should have been caught in pre-flight checks!"
+                        )
+                        self.logger.error(message)
+                        return OrderResult(success=False, error_message=message)
+            else:
+                # Reduce-only order - allowed to be below min notional (closing dust positions)
                 order_notional = rounded_quantity * expected_price
-                if order_notional < min_notional:
-                    message = (
-                        f"[ASTER] Market order notional ${order_notional} below minimum ${min_notional}"
-                    )
-                    self.logger.error(message)
-                    return OrderResult(success=False, error_message=message)
+                self.logger.debug(
+                    f"[ASTER] Reduce-only market order: ${order_notional:.2f} notional "
+                    f"(min notional check skipped for position closing)"
+                )
 
             # Place the market order
             order_data = {
@@ -680,6 +759,10 @@ class AsterClient(BaseExchangeClient):
                 'type': 'MARKET',
                 'quantity': str(rounded_quantity)
             }
+            
+            # Add reduceOnly flag if this is a closing operation
+            if reduce_only:
+                order_data['reduceOnly'] = 'true'
             
             self.logger.info(
                 f"📤 [ASTER] Placing market {side.upper()} order: {rounded_quantity} @ ~${expected_price}"
@@ -853,6 +936,146 @@ class AsterClient(BaseExchangeClient):
 
         return Decimal(0)
 
+    async def _get_position_open_time(self, symbol: str, current_quantity: Decimal) -> Optional[int]:
+        """
+        Estimate when the current position was opened by analyzing recent trade history.
+        
+        Args:
+            symbol: Trading symbol (e.g., "BTCUSDT")
+            current_quantity: Current position quantity (to correlate with trades)
+            
+        Returns:
+            Timestamp (milliseconds) when position was likely opened, or None if unknown
+        """
+        try:
+            # Fetch recent trades for this symbol
+            params = {
+                'symbol': symbol,
+                'limit': 100  # Last 100 trades should cover most position opens
+            }
+            
+            trades = await self._make_request('GET', '/fapi/v1/userTrades', params)
+            
+            if not isinstance(trades, list) or not trades:
+                return None
+            
+            # Trades are typically ordered newest first, so reverse to go chronologically
+            trades = list(reversed(trades))
+            
+            # Track running position to find when current position started
+            # We'll look for when position qty went from 0 (or different direction) to current qty
+            running_qty = Decimal("0")
+            position_start_time = None
+            
+            for trade in trades:
+                trade_qty = Decimal(str(trade.get('qty', '0')))
+                is_buyer = trade.get('buyer', False)
+                
+                # Adjust running quantity based on trade side
+                if is_buyer:
+                    running_qty += trade_qty
+                else:
+                    running_qty -= trade_qty
+                
+                trade_time = trade.get('time')
+                
+                # Check if this trade established a position in the same direction as current
+                prev_sign = 1 if running_qty - trade_qty > 0 else -1 if running_qty - trade_qty < 0 else 0
+                curr_sign = 1 if running_qty > 0 else -1 if running_qty < 0 else 0
+                
+                # Position direction changed or started from zero
+                if prev_sign != curr_sign and curr_sign != 0:
+                    position_start_time = trade_time
+            
+            return position_start_time
+            
+        except Exception as exc:
+            self.logger.debug(
+                f"[ASTER] Failed to determine position open time for {symbol}: {exc}"
+            )
+            return None
+
+    async def _get_cumulative_funding(self, symbol: str, quantity: Optional[Decimal] = None) -> Optional[Decimal]:
+        """
+        Fetch cumulative funding fees for the CURRENT position only (not historical positions).
+        
+        Args:
+            symbol: Trading symbol (e.g., "BTCUSDT", "ETHUSDT")
+            quantity: Current position quantity (used to determine when position was opened)
+            
+        Returns:
+            Cumulative funding fees as Decimal (negative means paid, positive means received), None if unavailable
+        """
+        try:
+            # Ensure symbol is in Aster format
+            formatted_symbol = symbol.upper()
+            if not formatted_symbol.endswith("USDT"):
+                formatted_symbol = get_aster_symbol_format(formatted_symbol)
+            
+            # Try to determine when the current position was opened
+            position_start_time = None
+            if quantity is not None and quantity != Decimal("0"):
+                position_start_time = await self._get_position_open_time(formatted_symbol, quantity)
+            
+            # Fetch income history filtered by FUNDING_FEE
+            params = {
+                'symbol': formatted_symbol,
+                'incomeType': 'FUNDING_FEE',
+                'limit': 100  # Get recent funding payments
+            }
+            
+            # If we know when position started, filter by startTime
+            if position_start_time:
+                params['startTime'] = position_start_time
+                self.logger.debug(
+                    f"[ASTER] Filtering funding to only after position opened at {position_start_time}"
+                )
+            
+            result = await self._make_request('GET', '/fapi/v1/income', params)
+            
+            if not isinstance(result, list):
+                self.logger.debug(
+                    f"[ASTER] Unexpected income history response format for {formatted_symbol}"
+                )
+                return None
+            
+            if not result:
+                # No funding history available - return 0 instead of None
+                # (indicates position with no funding paid/received yet)
+                return Decimal("0")
+            
+            # Sum up funding fee 'income' values for this position only
+            # Note: Negative values mean funding was PAID, positive means RECEIVED
+            cumulative = Decimal("0")
+            for record in result:
+                try:
+                    # If we have position start time, only count funding after position opened
+                    if position_start_time:
+                        record_time = record.get('time', 0)
+                        if record_time < position_start_time:
+                            continue
+                    
+                    income = Decimal(str(record.get('income', '0')))
+                    cumulative += income
+                except (InvalidOperation, TypeError, ValueError) as exc:
+                    self.logger.debug(
+                        f"[ASTER] Failed to parse funding income: {record.get('income')} ({exc})"
+                    )
+                    continue
+            
+            self.logger.debug(
+                f"[ASTER] Funding for current {formatted_symbol} position: ${cumulative:.4f} "
+                f"(from {len(result)} records{' after position opened' if position_start_time else ' (all history)'})"
+            )
+            
+            return cumulative
+            
+        except Exception as exc:
+            self.logger.debug(
+                f"[ASTER] Error fetching funding for {symbol}: {exc}"
+            )
+            return None
+
     async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
         """
         Return the current position snapshot for a symbol.
@@ -903,6 +1126,15 @@ class AsterClient(BaseExchangeClient):
                 metadata["notional"] = notional
 
             side = "long" if quantity > 0 else "short" if quantity < 0 else None
+            
+            # Fetch cumulative funding fees for THIS SPECIFIC position (not all historical positions)
+            funding_accrued = None
+            try:
+                funding_accrued = await self._get_cumulative_funding(formatted_symbol, quantity=quantity)
+            except Exception as exc:
+                self.logger.debug(
+                    f"[ASTER] Failed to fetch funding for {formatted_symbol}: {exc}"
+                )
 
             return ExchangePositionSnapshot(
                 symbol=formatted_symbol,
@@ -913,7 +1145,7 @@ class AsterClient(BaseExchangeClient):
                 exposure_usd=exposure,
                 unrealized_pnl=unrealized,
                 realized_pnl=None,
-                funding_accrued=None,
+                funding_accrued=funding_accrued,
                 margin_reserved=isolated_margin,
                 leverage=leverage,
                 liquidation_price=liquidation_price,
@@ -1368,7 +1600,11 @@ class AsterClient(BaseExchangeClient):
                         # Get tick size from filters
                         for filter_info in symbol_info.get('filters', []):
                             if filter_info.get('filterType') == 'PRICE_FILTER':
-                                self.config.tick_size = Decimal(filter_info['tickSize'].strip('0'))
+                                tick_size_value = Decimal(filter_info['tickSize'].strip('0'))
+                                self.config.tick_size = tick_size_value
+                                # Cache per-symbol for multi-symbol trading
+                                self._tick_size_cache[ticker.upper()] = tick_size_value
+                                self._tick_size_cache[contract_id_value] = tick_size_value
                                 break
 
                         # Get LOT_SIZE filter (quantity precision)
