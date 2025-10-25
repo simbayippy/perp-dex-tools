@@ -1134,17 +1134,103 @@ class LighterClient(BaseExchangeClient):
             self.logger.error(f"Error getting detailed positions: {e}")
             return []
 
+    async def _get_position_open_time(self, market_id: int, current_quantity: Decimal) -> Optional[int]:
+        """
+        Estimate when the current position was opened by analyzing recent trade history.
+        
+        Args:
+            market_id: The market ID for the position
+            current_quantity: Current position quantity (to correlate with trades)
+            
+        Returns:
+            Timestamp (seconds) when position was likely opened, or None if unknown
+        """
+        try:
+            # Generate auth token for API call
+            if not hasattr(self, 'lighter_client') or self.lighter_client is None:
+                return None
+            
+            auth_token, error = self.lighter_client.create_auth_token_with_expiry()
+            if error:
+                self.logger.debug(f"[LIGHTER] Error creating auth token for trade history: {error}")
+                return None
+            
+            account_index = getattr(self.config, "account_index", None)
+            if account_index is None:
+                return None
+            
+            # Fetch recent fills (executed trades) for this market
+            # Lighter's API: account_fills(account_index, market_id, limit)
+            fills_response = await self.account_api.account_fills(
+                account_index=account_index,
+                market_id=market_id,
+                limit=100,  # Last 100 fills should cover most position opens
+                auth=auth_token,
+                authorization=auth_token,
+                _request_timeout=10,
+            )
+            
+            if not fills_response or not hasattr(fills_response, 'fills'):
+                return None
+            
+            fills = fills_response.fills
+            if not fills:
+                return None
+            
+            # Fills are typically ordered newest first, so reverse to go chronologically
+            fills = list(reversed(fills))
+            
+            # Track running position to find when current position started
+            running_qty = Decimal("0")
+            position_start_time = None
+            
+            for fill in fills:
+                try:
+                    # Lighter fills have: size (base amount), is_buyer (side), timestamp
+                    fill_size = Decimal(str(getattr(fill, 'size', '0')))
+                    is_buyer = getattr(fill, 'is_buyer', False)
+                    
+                    # Adjust running quantity based on trade side
+                    if is_buyer:
+                        running_qty += fill_size
+                    else:
+                        running_qty -= fill_size
+                    
+                    # Get timestamp (Lighter uses seconds, not milliseconds)
+                    fill_timestamp = getattr(fill, 'timestamp', None)
+                    
+                    # Check if this trade established a position in the same direction as current
+                    prev_sign = 1 if running_qty - fill_size > 0 else -1 if running_qty - fill_size < 0 else 0
+                    curr_sign = 1 if running_qty > 0 else -1 if running_qty < 0 else 0
+                    
+                    # Position direction changed or started from zero
+                    if prev_sign != curr_sign and curr_sign != 0:
+                        position_start_time = fill_timestamp
+                except Exception as exc:
+                    self.logger.debug(f"[LIGHTER] Error processing fill: {exc}")
+                    continue
+            
+            return position_start_time
+            
+        except Exception as exc:
+            self.logger.debug(
+                f"[LIGHTER] Failed to determine position open time for market_id={market_id}: {exc}"
+            )
+            return None
+
     async def _get_cumulative_funding(
         self,
         market_id: int,
         side: Optional[str] = None,
+        quantity: Optional[Decimal] = None,
     ) -> Optional[Decimal]:
         """
-        Fetch cumulative funding fees for a position using Lighter's position funding API.
+        Fetch cumulative funding fees for the CURRENT position only (not historical positions).
         
         Args:
             market_id: The market ID for the position
             side: Position side ('long' or 'short'), optional filter
+            quantity: Current position quantity (used to determine when position was opened)
             
         Returns:
             Cumulative funding fees as Decimal, None if unavailable
@@ -1171,6 +1257,15 @@ class LighterClient(BaseExchangeClient):
             self.logger.debug(f"[LIGHTER] Failed to create auth token: {exc}")
             return None
         
+        # Try to determine when the current position was opened
+        position_start_time = None
+        if quantity is not None and quantity != Decimal("0"):
+            position_start_time = await self._get_position_open_time(market_id, quantity)
+            if position_start_time:
+                self.logger.debug(
+                    f"[LIGHTER] Filtering funding to only after position opened at timestamp {position_start_time}"
+                )
+        
         try:
             # Fetch position funding history with authentication
             # Lighter requires BOTH auth (query param) and authorization (header) for main accounts
@@ -1189,17 +1284,28 @@ class LighterClient(BaseExchangeClient):
             
             fundings = response.position_fundings
             if not fundings:
-                return None
+                return Decimal("0")  # No funding yet for this position
             
-            # Sum up all funding 'change' values to get cumulative funding
+            # Sum up funding 'change' values for this position only
             cumulative = Decimal("0")
             for funding in fundings:
                 try:
+                    # If we have position start time, only count funding after position opened
+                    if position_start_time:
+                        funding_timestamp = getattr(funding, 'timestamp', None)
+                        if funding_timestamp and funding_timestamp < position_start_time:
+                            continue
+                    
                     change = Decimal(str(funding.change))
                     cumulative += change
                 except Exception as exc:
                     self.logger.debug(f"[LIGHTER] Failed to parse funding change: {exc}")
                     continue
+            
+            self.logger.debug(
+                f"[LIGHTER] Funding for current position (market_id={market_id}): ${cumulative:.4f} "
+                f"(from {len(fundings)} records{' after position opened' if position_start_time else ' (all history)'})"
+            )
             
             return cumulative if cumulative != Decimal("0") else None
             
@@ -1263,12 +1369,12 @@ class LighterClient(BaseExchangeClient):
                 elif quantity < 0:
                     side = "short"
             
-            # Fetch cumulative funding fees for this position
+            # Fetch cumulative funding fees for THIS SPECIFIC position (not all historical positions)
             market_id = pos.get("market_id")
             funding_accrued = None
             if market_id is not None:
                 try:
-                    funding_accrued = await self._get_cumulative_funding(market_id, side)
+                    funding_accrued = await self._get_cumulative_funding(market_id, side, quantity=quantity)
                 except Exception as exc:
                     self.logger.debug(
                         f"[LIGHTER] Failed to fetch funding for {symbol} (market_id={market_id}): {exc}"
