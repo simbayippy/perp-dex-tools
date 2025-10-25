@@ -5,11 +5,11 @@ config:
   exchange: lighter
   ticker: BTC
   direction: buy
-  quantity: 0.0001
+  quantity: 0.00021
   take_profit: 0.008
   grid_step: 0.002
   max_orders: 5
-  max_margin_usd: !!float '20'
+  max_margin_usd: !!float '80'
   max_position_size: 0.01
   wait_time: 40
   stop_loss_enabled: true
