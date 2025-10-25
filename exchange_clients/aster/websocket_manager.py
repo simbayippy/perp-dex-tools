@@ -705,6 +705,14 @@ class AsterWebSocketManager(BaseWebSocketManager):
             }
             self.order_book_ready = True
             
+            # ✅ CRITICAL FIX: Extract BBO from depth stream (like Lighter does)
+            # This ensures best_bid/best_ask are ALWAYS fresh from snapshot stream
+            # even if book ticker stream hasn't received an event yet
+            if bids:
+                self.best_bid = float(bids[0]['price'])  # Already sorted, first is best
+            if asks:
+                self.best_ask = float(asks[0]['price'])  # Already sorted, first is best
+            
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error processing depth update: {e}")
