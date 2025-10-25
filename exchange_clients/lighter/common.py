@@ -10,45 +10,36 @@ from typing import Dict, Any
 
 
 # Special symbol mappings for Lighter
-# Maps normalized symbol → Lighter-specific base symbol
-# Used when Lighter uses different naming conventions (k-prefix for certain tokens)
-LIGHTER_SYMBOL_OVERRIDES = {
-    "FLOKI": "kFLOKI",  # Lighter uses kFLOKI-PERP instead of FLOKI-PERP
-    "TOSHI": "kTOSHI",  # Lighter uses kTOSHI-PERP
-    "BONK": "kBONK",    # Lighter uses kBONK-PERP
-    "PEPE": "kPEPE",    # Lighter uses kPEPE-PERP
-    "SHIB": "kSHIB",    # Lighter uses kSHIB-PERP
-    # Add more overrides as discovered:
-    # "EXAMPLE": "1000EXAMPLE",
-}
+# Maps normalized symbol → Lighter-specific base symbol  
+# Lighter uses "1000" prefix for low-priced tokens (same as Aster)
+LIGHTER_1000_PREFIX_SYMBOLS = {"FLOKI", "TOSHI", "BONK", "PEPE", "SHIB"}
 
-# Lighter's k-prefix tokens use 1000x multiplier
+# Lighter's 1000-prefix tokens use 1000x multiplier
 # For these tokens: 1 contract unit = 1000 actual tokens
-# Example: kTOSHI at $0.7655 means 1000 TOSHI tokens cost $0.7655
-# Note: TOSHI kept here since Lighter uses kTOSHI (k-prefix) even though Aster uses plain TOSHI
+# Example: 1000TOSHI at $0.7655 means 1000 TOSHI tokens cost $0.7655
 LIGHTER_MULTIPLIER_SYMBOLS = {"FLOKI", "TOSHI", "BONK", "PEPE", "SHIB"}
-LIGHTER_QUANTITY_MULTIPLIER = 1000  # k-prefix = 1000x
+LIGHTER_QUANTITY_MULTIPLIER = 1000  # 1000-prefix = 1000x
 
 
 def normalize_symbol(symbol: str) -> str:
     """
     Normalize Lighter symbol format to standard format
     
-    Lighter symbols typically follow patterns like:
-    - "BTC-PERP" -> "BTC"
-    - "ETH-PERP" -> "ETH"
-    - "1000PEPE-PERP" -> "PEPE" (some have multipliers)
-    - "kFLOKI-PERP" -> "FLOKI" (special prefix)
+    Lighter symbols follow patterns like:
+    - "BTC" -> "BTC"
+    - "ETH" -> "ETH"
+    - "1000PEPE" -> "PEPE" (1000-prefix for low-priced tokens)
+    - "1000TOSHI" -> "TOSHI"
     
     Args:
         symbol: Lighter-specific symbol format
         
     Returns:
-        Normalized symbol (e.g., "BTC")
+        Normalized symbol (e.g., "BTC", "TOSHI")
     """
     normalized = symbol.upper()
     
-    # Remove "-PERP" suffix
+    # Remove "-PERP" suffix if present
     normalized = normalized.replace('-PERP', '')
     
     # Remove other common perpetual suffixes
@@ -57,17 +48,11 @@ def normalize_symbol(symbol: str) -> str:
     normalized = normalized.replace('-USDT', '')
     normalized = normalized.replace('PERP', '')
     
-    # Handle multipliers (e.g., "1000PEPE" -> "PEPE")
+    # Handle 1000-prefix multipliers (e.g., "1000PEPE" -> "PEPE", "1000TOSHI" -> "TOSHI")
     match = re.match(r'^(\d+)([A-Z]+)$', normalized)
     if match:
         _, symbol_part = match.groups()
         normalized = symbol_part
-    
-    # Handle special prefixes (e.g., "kFLOKI" -> "FLOKI")
-    # Check reverse mapping from LIGHTER_SYMBOL_OVERRIDES
-    for standard_symbol, lighter_symbol in LIGHTER_SYMBOL_OVERRIDES.items():
-        if normalized.upper() == lighter_symbol.upper():
-            return standard_symbol
     
     # Clean up any remaining special characters
     normalized = normalized.strip('-_/')
@@ -79,23 +64,25 @@ def get_lighter_symbol_format(normalized_symbol: str) -> str:
     """
     Convert normalized symbol back to Lighter-specific format
     
-    Handles special cases like FLOKI -> kFLOKI-PERP
+    Lighter uses 1000-prefix for low-priced tokens:
+    - "TOSHI" -> "1000TOSHI"
+    - "FLOKI" -> "1000FLOKI"
+    - "BTC" -> "BTC"
     
     Args:
-        normalized_symbol: Normalized symbol (e.g., "BTC", "FLOKI")
+        normalized_symbol: Normalized symbol (e.g., "BTC", "TOSHI")
         
     Returns:
-        Lighter-specific format (e.g., "BTC-PERP", "kFLOKI-PERP")
+        Lighter-specific format (e.g., "BTC", "1000TOSHI")
     """
     symbol_upper = normalized_symbol.upper()
     
-    # Check for special symbol overrides
-    if symbol_upper in LIGHTER_SYMBOL_OVERRIDES:
-        lighter_base = LIGHTER_SYMBOL_OVERRIDES[symbol_upper]
-        return f"{lighter_base}-PERP"
+    # Check if this symbol uses 1000-prefix on Lighter
+    if symbol_upper in LIGHTER_1000_PREFIX_SYMBOLS:
+        return f"1000{symbol_upper}"
     
-    # Default: standard format
-    return f"{symbol_upper}-PERP"
+    # Default: return as-is (no suffix needed)
+    return symbol_upper
 
 
 def parse_order_response(raw_response: Dict[str, Any]) -> Dict[str, Any]:

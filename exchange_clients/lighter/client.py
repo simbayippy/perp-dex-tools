@@ -110,7 +110,7 @@ class LighterClient(BaseExchangeClient):
             Integer market_id, or None if not found
         """
         try:
-            # Convert normalized symbol to Lighter's format (e.g., "TOSHI" -> "kTOSHI-PERP")
+            # Convert normalized symbol to Lighter's format (e.g., "TOSHI" -> "1000TOSHI")
             from exchange_clients.lighter.common import get_lighter_symbol_format
             lighter_symbol = get_lighter_symbol_format(symbol)
             
@@ -122,7 +122,7 @@ class LighterClient(BaseExchangeClient):
             
             for market in order_books.order_books:
                 available_symbols.append(market.symbol)
-                # Try Lighter-specific format first (e.g., "kTOSHI-PERP")
+                # Try Lighter-specific format first (e.g., "1000TOSHI")
                 if market.symbol.upper() == lighter_symbol.upper():
                     return market.market_id
                 # Try exact match with original symbol
@@ -1043,7 +1043,7 @@ class LighterClient(BaseExchangeClient):
             self.logger.error("Ticker is empty")
             raise ValueError("Ticker is empty")
 
-        # Convert normalized ticker to Lighter's format (e.g., "TOSHI" -> "kTOSHI-PERP")
+        # Convert normalized ticker to Lighter's format (e.g., "TOSHI" -> "1000TOSHI")
         from exchange_clients.lighter.common import get_lighter_symbol_format
         lighter_symbol = get_lighter_symbol_format(ticker)
         
@@ -1061,7 +1061,7 @@ class LighterClient(BaseExchangeClient):
         
         for market in order_books.order_books:
             available_symbols.append(market.symbol)
-            # Try Lighter-specific format first (e.g., "kTOSHI-PERP")
+            # Try Lighter-specific format first (e.g., "1000TOSHI")
             if market.symbol.upper() == lighter_symbol.upper():
                 market_info = market
                 break
