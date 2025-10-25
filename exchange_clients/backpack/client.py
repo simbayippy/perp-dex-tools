@@ -1340,6 +1340,10 @@ class BackpackClient(BaseExchangeClient):
             raise ValueError(f"Failed to find Backpack contract for ticker {ticker}")
 
         self.config.contract_id = target_symbol
+        
+        # Cache contract_id for this symbol (multi-symbol trading support)
+        self._contract_id_cache[ticker.upper()] = target_symbol
+        
         self.config.tick_size = tick_size or Decimal("0.0001")
         if not getattr(self.config, "step_size", None):
             setattr(self.config, "step_size", Decimal("0.0001"))

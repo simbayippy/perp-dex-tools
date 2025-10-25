@@ -576,6 +576,10 @@ class EdgeXClient(BaseExchangeClient):
             raise ValueError("Failed to get contract ID for ticker")
 
         self.config.contract_id = current_contract.get('contractId')
+        
+        # Cache contract_id for this symbol (multi-symbol trading support)
+        self._contract_id_cache[ticker.upper()] = self.config.contract_id
+        
         min_quantity = Decimal(current_contract.get('minOrderSize'))
         if self.config.quantity < min_quantity:
             self.logger.error(f"Order quantity is less than min quantity: {self.config.quantity} < {min_quantity}")

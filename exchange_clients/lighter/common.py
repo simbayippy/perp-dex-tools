@@ -9,6 +9,20 @@ from decimal import Decimal
 from typing import Dict, Any
 
 
+# Special symbol mappings for Lighter
+# Maps normalized symbol → Lighter-specific base symbol
+# Used when Lighter uses different naming conventions (k-prefix for certain tokens)
+LIGHTER_SYMBOL_OVERRIDES = {
+    "FLOKI": "kFLOKI",  # Lighter uses kFLOKI-PERP instead of FLOKI-PERP
+    "TOSHI": "kTOSHI",  # Lighter uses kTOSHI-PERP
+    "BONK": "kBONK",    # Lighter uses kBONK-PERP
+    "PEPE": "kPEPE",    # Lighter uses kPEPE-PERP
+    "SHIB": "kSHIB",    # Lighter uses kSHIB-PERP
+    # Add more overrides as discovered:
+    # "EXAMPLE": "1000EXAMPLE",
+}
+
+
 def normalize_symbol(symbol: str) -> str:
     """
     Normalize Lighter symbol format to standard format
@@ -17,6 +31,7 @@ def normalize_symbol(symbol: str) -> str:
     - "BTC-PERP" -> "BTC"
     - "ETH-PERP" -> "ETH"
     - "1000PEPE-PERP" -> "PEPE" (some have multipliers)
+    - "kFLOKI-PERP" -> "FLOKI" (special prefix)
     
     Args:
         symbol: Lighter-specific symbol format
@@ -41,6 +56,12 @@ def normalize_symbol(symbol: str) -> str:
         _, symbol_part = match.groups()
         normalized = symbol_part
     
+    # Handle special prefixes (e.g., "kFLOKI" -> "FLOKI")
+    # Check reverse mapping from LIGHTER_SYMBOL_OVERRIDES
+    for standard_symbol, lighter_symbol in LIGHTER_SYMBOL_OVERRIDES.items():
+        if normalized.upper() == lighter_symbol.upper():
+            return standard_symbol
+    
     # Clean up any remaining special characters
     normalized = normalized.strip('-_/')
     
@@ -51,13 +72,23 @@ def get_lighter_symbol_format(normalized_symbol: str) -> str:
     """
     Convert normalized symbol back to Lighter-specific format
     
+    Handles special cases like FLOKI -> kFLOKI-PERP
+    
     Args:
-        normalized_symbol: Normalized symbol (e.g., "BTC")
+        normalized_symbol: Normalized symbol (e.g., "BTC", "FLOKI")
         
     Returns:
-        Lighter-specific format (e.g., "BTC-PERP")
+        Lighter-specific format (e.g., "BTC-PERP", "kFLOKI-PERP")
     """
-    return f"{normalized_symbol.upper()}-PERP"
+    symbol_upper = normalized_symbol.upper()
+    
+    # Check for special symbol overrides
+    if symbol_upper in LIGHTER_SYMBOL_OVERRIDES:
+        lighter_base = LIGHTER_SYMBOL_OVERRIDES[symbol_upper]
+        return f"{lighter_base}-PERP"
+    
+    # Default: standard format
+    return f"{symbol_upper}-PERP"
 
 
 def parse_order_response(raw_response: Dict[str, Any]) -> Dict[str, Any]:
