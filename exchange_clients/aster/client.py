@@ -510,7 +510,8 @@ class AsterClient(BaseExchangeClient):
         # ✅ CRITICAL FIX: Normalize contract_id for Aster (handles multi-symbol trading)
         # If contract_id doesn't end with USDT, add it (e.g., "PROVE" → "PROVEUSDT")
         if not contract_id.upper().endswith("USDT"):
-            normalized_contract_id = self.normalize_symbol(contract_id)
+            from exchange_clients.aster.common import get_aster_symbol_format
+            normalized_contract_id = get_aster_symbol_format(contract_id)
             self.logger.debug(f"Normalized contract_id: '{contract_id}' → '{normalized_contract_id}'")
         else:
             normalized_contract_id = contract_id.upper()
@@ -525,22 +526,15 @@ class AsterClient(BaseExchangeClient):
             f"(step_size={getattr(self.config, 'step_size', 'unknown')})"
         )
         
-        # ✅ CRITICAL FIX: Use cached tick_size if available, otherwise use sensible default
-        # For multi-symbol trading, don't fetch during order placement (adds latency)
-        tick_size = self._tick_size_cache.get(normalized_contract_id)
+        # ⚠️ PRICE PRECISION FIX: DO NOT round price - let Aster's API handle precision
+        # Previous quantize logic caused catastrophic rounding errors (e.g., $0.93 → $1.00)
+        # Aster's API will reject if precision is wrong, which is better than wrong prices
+        rounded_price = price
         
-        if tick_size is None:
-            # Not in cache - use a sensible default for most assets (0.0001 works for most)
-            # The proper solution is to call get_contract_attributes() before trading
-            tick_size = Decimal('0.0001')  # Works for most Aster symbols
-            self.logger.debug(
-                f"Using default tick_size for {normalized_contract_id}: {tick_size} "
-                f"(consider calling get_contract_attributes() first for exact value)"
-            )
-        
-        # Round price using the tick_size
-        from decimal import ROUND_HALF_UP
-        rounded_price = price.quantize(tick_size, rounding=ROUND_HALF_UP)
+        self.logger.debug(
+            f"Using price as-is: {rounded_price} "
+            f"(Aster API will handle precision)"
+        )
 
         # 🛡️ DEFENSIVE CHECK: Min notional should already be validated in pre-flight checks
         # This is a last-resort safety net to catch bugs where pre-flight was bypassed
