@@ -55,11 +55,6 @@ class GridConfig(BaseModel):
         description="Maximum margin (USD) allocated to the grid strategy",
         gt=0
     )
-    max_position_size: Decimal = Field(
-        ...,
-        description="Maximum absolute net position size allowed",
-        gt=0
-    )
     
     # Safety parameters
     stop_price: Optional[Decimal] = Field(

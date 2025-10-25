@@ -46,7 +46,6 @@ def make_config(
         max_orders=5,
         wait_time=5,
         max_margin_usd=Decimal("2000"),
-        max_position_size=Decimal("50"),
         stop_loss_enabled=True,
         stop_loss_percentage=Decimal("2"),
         position_timeout_minutes=60,

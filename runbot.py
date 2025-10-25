@@ -253,11 +253,7 @@ def _config_dict_to_trading_config(strategy_name: str, config_dict: dict) -> Tra
         ticker = config_dict.get("ticker", "BTC")
         quantity_raw = config_dict.get("quantity")
         if quantity_raw is None:
-            max_position = config_dict.get("max_position_size")
-            if max_position is not None:
-                quantity_raw = max_position
-            else:
-                quantity_raw = config_dict.get("order_notional_usd", Decimal("1"))
+            quantity_raw = config_dict.get("order_notional_usd", Decimal("1"))
         quantity = Decimal(str(quantity_raw))
         order_notional_raw = config_dict.get("order_notional_usd")
         order_notional_decimal = (

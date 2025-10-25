@@ -46,7 +46,6 @@ def make_config(
     *,
     direction: str = "buy",
     max_margin_usd: Decimal = Decimal("1000"),
-    max_position_size: Decimal = Decimal("10"),
     post_only_tick_multiplier: Decimal = Decimal("2"),
     order_notional_usd: Optional[Decimal] = None,
     target_leverage: Optional[Decimal] = None,
@@ -58,7 +57,6 @@ def make_config(
         max_orders=5,
         wait_time=5,
         max_margin_usd=max_margin_usd,
-        max_position_size=max_position_size,
         stop_loss_enabled=True,
         stop_loss_percentage=Decimal("2"),
         position_timeout_minutes=60,
@@ -226,40 +224,13 @@ async def test_check_risk_limits_allows_within_bounds(reset_grid_event_notifier)
 
 
 @pytest.mark.asyncio
-async def test_check_risk_limits_blocks_position_cap(reset_grid_event_notifier):
-    config = make_config(max_position_size=Decimal("10"))
-    exchange = DummyExchange()
-    strategy = GridStrategy(config=config, exchange_client=exchange)
-    events: List[Dict[str, Any]] = strategy.event_notifier.events  # type: ignore[attr-defined]
-
-    strategy.grid_state.last_known_position = Decimal("9")
-
-    ok, message = await strategy._check_risk_limits(
-        reference_price=Decimal("100"),
-        order_quantity=Decimal("2"),
-    )
-
-    assert ok is False
-    assert "Position cap" in message
-
-    assert events, "Expected an event for position cap breach"
-    position_event = events[-1]
-    assert position_event["event_type"] == "position_cap_hit"
-    assert position_event["payload"]["projected_position"] == pytest.approx(11.0)
-    assert position_event["payload"]["position_limit"] == pytest.approx(10.0)
-
-
-@pytest.mark.asyncio
 async def test_check_risk_limits_blocks_margin_cap(reset_grid_event_notifier):
     config = make_config(
         max_margin_usd=Decimal("1000"),
-        max_position_size=Decimal("100"),  # keep position well within cap so margin check triggers
     )
     exchange = DummyExchange()
     strategy = GridStrategy(config=config, exchange_client=exchange)
     events: List[Dict[str, Any]] = strategy.event_notifier.events  # type: ignore[attr-defined]
-
-    assert strategy.config.max_position_size == Decimal("100")
 
     strategy.grid_state.last_known_position = Decimal("0")
     strategy.grid_state.last_known_margin = Decimal("900")

@@ -88,7 +88,6 @@ class GridStrategy(BaseStrategy):
         self.logger.log(f"  - Max Orders: {config.max_orders}", "INFO")
         self.logger.log(f"  - Wait Time: {config.wait_time}s", "INFO")
         self.logger.log(f"  - Max Margin (USD): {config.max_margin_usd}", "INFO")
-        self.logger.log(f"  - Max Position Size: {config.max_position_size}", "INFO")
         self.logger.log(
             f"  - Stop Loss: {'enabled' if config.stop_loss_enabled else 'disabled'} "
             f"(threshold {config.stop_loss_percentage}%)",
@@ -430,27 +429,6 @@ class GridStrategy(BaseStrategy):
             except Exception:
                 current_position = Decimal("0")
             self.grid_state.last_known_position = current_position
-        
-        direction_multiplier = self._direction_multiplier()
-        projected_position = current_position + (direction_multiplier * order_quantity)
-        projected_abs = projected_position.copy_abs()
-        
-        if projected_abs > self.config.max_position_size:
-            message = (
-                f"Grid: Position cap reached "
-                f"({projected_abs} > {self.config.max_position_size}). Skipping new order."
-            )
-            self._log_event(
-                "position_cap_hit",
-                message,
-                level="WARNING",
-                projected_position=projected_abs,
-                position_limit=self.config.max_position_size,
-                current_position=current_position,
-                order_size=order_quantity,
-                order_notional_usd=order_quantity.copy_abs() * reference_price,
-            )
-            return False, message
         
         current_margin = self.grid_state.last_known_margin or Decimal("0")
         margin_ratio = self.grid_state.margin_ratio
@@ -1264,7 +1242,6 @@ class GridStrategy(BaseStrategy):
                 "cycle_state": self.grid_state.cycle_state.value,
                 "active_orders": len(self.grid_state.active_close_orders),
                 "position": float(position),
-                "position_limit": float(self.config.max_position_size),
                 "margin_used": float(self.grid_state.last_known_margin),
                 "margin_limit": float(self.config.max_margin_usd),
                 "margin_ratio": float(self.grid_state.margin_ratio) if self.grid_state.margin_ratio is not None else None,

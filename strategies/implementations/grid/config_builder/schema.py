@@ -115,14 +115,6 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             required=True,
             help_text="Caps how much account margin the grid strategy can consume",
         ),
-        create_decimal_parameter(
-            key="max_position_size",
-            prompt="Maximum net position size (base units)?",
-            min_value=Decimal("0.001"),
-            max_value=Decimal("1000000"),
-            required=True,
-            help_text="Upper bound on total open exposure in the traded asset (long or short)",
-        ),
         # ====================================================================
         # Timing Configuration
         # ====================================================================
@@ -211,7 +203,7 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
         "Exchange": ["exchange", "ticker"],
         "Grid Setup": ["direction", "order_notional_usd", "take_profit", "target_leverage"],
         "Grid Spacing": ["grid_step", "max_orders"],
-        "Capital & Limits": ["max_margin_usd", "max_position_size"],
+        "Capital & Limits": ["max_margin_usd"],
         "Execution": ["wait_time"],
         "Risk Management": [
             "stop_loss_enabled",
@@ -253,7 +245,6 @@ def create_default_grid_config() -> dict:
         "max_orders": 25,
         "wait_time": 10,
         "max_margin_usd": Decimal("5000"),
-        "max_position_size": Decimal("1000"),
         "stop_loss_enabled": True,
         "stop_loss_percentage": Decimal("2.0"),
         "position_timeout_minutes": 60,
