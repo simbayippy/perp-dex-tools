@@ -563,32 +563,84 @@ class AsterWebSocketManager(BaseWebSocketManager):
         """
         Ensure both book ticker and depth streams are aligned with the requested symbol.
         
-        This is called by BaseExchangeClient.ensure_market_feed() to prepare
-        WebSocket streams for a symbol.
+        Implementation follows the recommended pattern from BaseWebSocketManager:
+        1. Validate: Check if already on target market
+        2. Clear: Reset stale order book data
+        3. Switch: Cancel old streams, start new ones
+        4. Wait: Block until new data arrives
+        5. Update: Log completion
         """
         if not symbol:
             return
 
-        stream_symbol = symbol
-        if self._symbol_formatter:
-            try:
-                stream_symbol = self._symbol_formatter(symbol)
-            except Exception:
-                stream_symbol = symbol
-
-        # Start book ticker for BBO (if not already subscribed)
+        # Format symbol for Aster (e.g., "TOSHI" -> "TOSHIUSDT")
+        stream_symbol = self._format_symbol(symbol)
+        
+        # Start book ticker for BBO (handles its own switching logic)
         await self.start_book_ticker(stream_symbol)
         
-        # Start depth stream for order book (if not already subscribed)
-        if self._current_depth_symbol == stream_symbol and self._depth_task and not self._depth_task.done():
-            if self.logger:
-                self.logger.debug(f"Already subscribed to depth stream for {stream_symbol}")
+        # Check if depth stream switch is needed
+        if not self._should_switch_depth_stream(stream_symbol):
             return
         
-        # Cancel existing depth task if different symbol
+        # Perform the depth stream switch
+        old_symbol = self._current_depth_symbol
+        await self._switch_depth_stream(old_symbol, stream_symbol)
+        
+        # Wait for new data and log result
+        success = await self._wait_for_depth_ready(timeout=5.0)
+        self._log_depth_switch_result(old_symbol, stream_symbol, success)
+    
+    def _format_symbol(self, symbol: str) -> str:
+        """
+        Format symbol for Aster streams.
+        
+        Args:
+            symbol: Normalized symbol (e.g., "TOSHI")
+            
+        Returns:
+            Aster-formatted symbol (e.g., "TOSHIUSDT")
+        """
+        if self._symbol_formatter:
+            try:
+                return self._symbol_formatter(symbol)
+            except Exception:
+                return symbol
+        return symbol
+    
+    def _should_switch_depth_stream(self, target_symbol: str) -> bool:
+        """
+        Check if depth stream switch is needed.
+        
+        Args:
+            target_symbol: Target symbol to switch to
+            
+        Returns:
+            True if switch needed, False if already on target
+        """
+        if self._current_depth_symbol == target_symbol and self._depth_task and not self._depth_task.done():
+            if self.logger:
+                self.logger.debug(f"Already subscribed to depth stream for {target_symbol}")
+            return False
+        return True
+    
+    async def _switch_depth_stream(self, old_symbol: Optional[str], new_symbol: str) -> None:
+        """
+        Switch depth stream from old symbol to new symbol.
+        
+        Args:
+            old_symbol: Current symbol (or None if first time)
+            new_symbol: New symbol to switch to
+        """
+        # Cancel existing depth task if running
         if self._depth_task and not self._depth_task.done():
             if self.logger:
-                self.logger.info(f"Switching depth stream from {self._current_depth_symbol} to {stream_symbol}")
+                self.logger.info(f"Switching depth stream from {old_symbol} to {new_symbol}")
+            
+            # Clear stale order book data
+            self.order_book = {"bids": [], "asks": []}
+            self.order_book_ready = False
+            
             self._depth_task.cancel()
             try:
                 await self._depth_task
@@ -596,11 +648,47 @@ class AsterWebSocketManager(BaseWebSocketManager):
                 pass
         
         # Start new depth task
-        self._current_depth_symbol = stream_symbol
-        self._depth_task = asyncio.create_task(self._connect_depth_stream(stream_symbol))
+        self._current_depth_symbol = new_symbol
+        self._depth_task = asyncio.create_task(self._connect_depth_stream(new_symbol))
         
-        if self.logger:
-            self.logger.info(f"📚 Started order book depth stream for {stream_symbol}")
+        # Update config to keep it synchronized
+        self._update_market_config(new_symbol)
+    
+    async def _wait_for_depth_ready(self, timeout: float = 5.0) -> bool:
+        """
+        Wait for depth stream to become ready.
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            True if ready, False if timeout
+        """
+        start_time = asyncio.get_event_loop().time()
+        
+        while not self.order_book_ready and (asyncio.get_event_loop().time() - start_time) < timeout:
+            await asyncio.sleep(0.1)
+        
+        return self.order_book_ready
+    
+    def _log_depth_switch_result(
+        self, 
+        old_symbol: Optional[str], 
+        new_symbol: str, 
+        success: bool
+    ) -> None:
+        """Log the result of depth stream switch."""
+        if success:
+            if self.logger:
+                self.logger.info(
+                    f"📚 [ASTER] ✅ Depth stream ready for {new_symbol} "
+                    f"({len(self.order_book['bids'])} bids, {len(self.order_book['asks'])} asks)"
+                )
+        else:
+            if self.logger:
+                self.logger.warning(
+                    f"📚 [ASTER] ⚠️  Depth stream for {new_symbol} not ready yet (timeout after 5.0s)"
+                )
     
     async def _connect_depth_stream(self, symbol: str):
         """

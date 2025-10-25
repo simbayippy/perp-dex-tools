@@ -81,7 +81,7 @@ class AtomicRetryConfig(BaseModel):
         description="Maximum number of retry passes to attempt after the initial batch.",
     )
     per_attempt_timeout_seconds: float = Field(
-        default=15.0,
+        default=20.0,
         description="Timeout applied to each retry order (seconds).",
     )
     retry_delay_seconds: float = Field(
@@ -89,7 +89,7 @@ class AtomicRetryConfig(BaseModel):
         description="Delay between retry passes (seconds).",
     )
     max_retry_duration_seconds: float = Field(
-        default=30.0,
+        default=40.0,
         description="Maximum cumulative time spent retrying before falling back to hedge.",
     )
     min_retry_quantity: Decimal = Field(

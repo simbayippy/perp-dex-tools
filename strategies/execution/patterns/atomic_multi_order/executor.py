@@ -341,9 +341,48 @@ class AtomicMultiOrderExecutor:
                     if retry_success:
                         self.logger.info("✅ Retry attempts filled remaining deficits.")
                     else:
-                        self.logger.warning(
-                            "⚠️ Retry attempts exhausted; residual imbalance remains."
-                        )
+                        # Retry failed - check if imbalance is critical (using % threshold like position_closer)
+                        retry_long_usd = sum(ctx.filled_usd for ctx in contexts if ctx.spec.side == "buy")
+                        retry_short_usd = sum(ctx.filled_usd for ctx in contexts if ctx.spec.side == "sell")
+                        retry_imbalance_usd = abs(retry_long_usd - retry_short_usd)
+                        
+                        # Calculate imbalance as percentage: (max - min) / max
+                        # Same logic as position_closer._detect_imbalance
+                        critical_imbalance_pct = Decimal("0.05")  # 5% threshold
+                        min_usd = min(retry_long_usd, retry_short_usd)
+                        max_usd = max(retry_long_usd, retry_short_usd)
+                        
+                        imbalance_pct = Decimal("0")
+                        if max_usd > Decimal("0"):
+                            imbalance_pct = (max_usd - min_usd) / max_usd
+                        
+                        if imbalance_pct > critical_imbalance_pct:
+                            self.logger.warning(
+                                f"⚠️ CRITICAL IMBALANCE after retry failure: "
+                                f"longs=${retry_long_usd:.2f}, shorts=${retry_short_usd:.2f}, "
+                                f"imbalance=${retry_imbalance_usd:.2f} ({imbalance_pct*100:.1f}%). Triggering emergency rollback."
+                            )
+                            # Emergency rollback of all filled orders
+                            rollback_performed = True
+                            rollback_payload = [
+                                context_to_filled_dict(c)
+                                for c in contexts
+                                if c.filled_quantity > Decimal("0") and c.result
+                            ]
+                            rollback_cost = await self._rollback_filled_orders(rollback_payload)
+                            self.logger.warning(
+                                f"🛡️ Emergency rollback completed; cost=${rollback_cost:.4f}. "
+                                f"Prevented ${retry_imbalance_usd:.2f} ({imbalance_pct*100:.1f}%) directional exposure."
+                            )
+                            # Clear filled quantities to prevent position creation
+                            for ctx in contexts:
+                                ctx.filled_quantity = Decimal("0")
+                                ctx.filled_usd = Decimal("0")
+                        else:
+                            self.logger.warning(
+                                f"⚠️ Retry attempts exhausted; residual imbalance ${retry_imbalance_usd:.2f} "
+                                f"({imbalance_pct*100:.1f}%) within 5% tolerance."
+                            )
                     needs_retry = any(ctx.remaining_quantity > Decimal("0") for ctx in contexts)
 
 
@@ -383,11 +422,53 @@ class AtomicMultiOrderExecutor:
                 )
 
             if filled_orders and len(filled_orders) == len(orders):
-                if imbalance > imbalance_tolerance:
-                    self.logger.warning(
-                        f"Exposure imbalance detected after hedge: longs=${total_long_usd:.5f}, "
-                        f"shorts=${total_short_usd:.5f}"
+                # Check if imbalance is within acceptable bounds (using % threshold like position_closer)
+                critical_imbalance_pct = Decimal("0.05")  # 5% threshold
+                min_usd = min(total_long_usd, total_short_usd)
+                max_usd = max(total_long_usd, total_short_usd)
+                
+                final_imbalance_pct = Decimal("0")
+                if max_usd > Decimal("0"):
+                    final_imbalance_pct = (max_usd - min_usd) / max_usd
+                
+                if final_imbalance_pct > critical_imbalance_pct:
+                    self.logger.error(
+                        f"⚠️ CRITICAL IMBALANCE detected despite all orders filled: "
+                        f"longs=${total_long_usd:.2f}, shorts=${total_short_usd:.2f}, "
+                        f"imbalance=${imbalance:.2f} ({final_imbalance_pct*100:.1f}%). Triggering emergency rollback."
                     )
+                    # Emergency rollback of all filled orders
+                    rollback_payload = [
+                        context_to_filled_dict(c)
+                        for c in contexts
+                        if c.filled_quantity > Decimal("0") and c.result
+                    ]
+                    rollback_cost = await self._rollback_filled_orders(rollback_payload)
+                    self.logger.warning(
+                        f"🛡️ Emergency rollback completed; cost=${rollback_cost:.4f}. "
+                        f"Prevented ${imbalance:.2f} ({final_imbalance_pct*100:.1f}%) directional exposure."
+                    )
+                    return AtomicExecutionResult(
+                        success=False,
+                        all_filled=False,
+                        filled_orders=[],  # Clear since we rolled back
+                        partial_fills=[],
+                        total_slippage_usd=Decimal("0"),
+                        execution_time_ms=exec_ms,
+                        error_message=f"Rolled back due to critical imbalance: ${imbalance:.2f}",
+                        rollback_performed=True,
+                        rollback_cost_usd=rollback_cost,
+                        residual_imbalance_usd=Decimal("0"),
+                        retry_attempts=retry_attempts,
+                        retry_success=retry_success,
+                    )
+                elif imbalance > imbalance_tolerance:
+                    self.logger.warning(
+                        f"Minor imbalance detected after hedge: longs=${total_long_usd:.5f}, "
+                        f"shorts=${total_short_usd:.5f}, imbalance=${imbalance:.5f} "
+                        f"({final_imbalance_pct*100:.1f}% within 5% tolerance)"
+                    )
+                
                 return AtomicExecutionResult(
                     success=True,
                     all_filled=True,

@@ -81,33 +81,107 @@ class BackpackWebSocketManager(BaseWebSocketManager):
     # ------------------------------------------------------------------ #
 
     async def prepare_market_feed(self, symbol: Optional[str]) -> None:
-        """Ensure account and depth streams follow the requested symbol."""
+        """
+        Ensure account and depth streams follow the requested symbol.
+        
+        Implementation follows the recommended pattern from BaseWebSocketManager:
+        1. Validate: Check if already on target market
+        2. Clear: Reset stale order book data (via update_symbol)
+        3. Switch: Full disconnect/reconnect cycle
+        4. Wait: Block until new data arrives
+        5. Update: Log completion
+        """
         if not symbol:
             return
 
-        target_symbol = symbol
-        if self._symbol_formatter:
-            try:
-                target_symbol = self._symbol_formatter(symbol)
-            except Exception:
-                target_symbol = symbol
-
-        if target_symbol == self.symbol:
-            # Already aligned; make sure order book is marked ready.
+        # Format symbol for Backpack
+        target_symbol = self._format_symbol(symbol)
+        
+        # Check if already on target (Step 1)
+        if not self._should_switch_symbol(target_symbol):
+            # Already aligned; make sure order book is marked ready if needed
             if not self.order_book_ready and self.depth_fetcher:
                 await self.wait_for_order_book(timeout=2.0)
             return
-
+        
+        # Perform the switch (Steps 2 & 3)
+        await self._perform_symbol_switch(target_symbol)
+        
+        # Wait for ready and log result (Steps 4 & 5)
+        if self.depth_fetcher:
+            success = await self.wait_for_order_book(timeout=5.0)
+            self._log_switch_result(target_symbol, success)
+    
+    def _format_symbol(self, symbol: str) -> str:
+        """
+        Format symbol for Backpack streams.
+        
+        Args:
+            symbol: Normalized symbol
+            
+        Returns:
+            Backpack-formatted symbol
+        """
+        if self._symbol_formatter:
+            try:
+                return self._symbol_formatter(symbol)
+            except Exception:
+                return symbol
+        return symbol
+    
+    def _should_switch_symbol(self, target_symbol: str) -> bool:
+        """
+        Check if symbol switch is needed.
+        
+        Args:
+            target_symbol: Target symbol to switch to
+            
+        Returns:
+            True if switch needed, False if already on target
+        """
+        if target_symbol == self.symbol:
+            # Already aligned - no switch needed
+            return False
+        return True
+    
+    async def _perform_symbol_switch(self, new_symbol: str) -> None:
+        """
+        Execute symbol switch via full disconnect/reconnect cycle.
+        
+        This is Backpack's approach - unlike Lighter/Aster which switch subscriptions,
+        Backpack does a clean disconnect/reconnect for simpler state management.
+        
+        Args:
+            new_symbol: New symbol to switch to
+        """
         if self.logger:
-            self.logger.info(f"[BACKPACK] 🔄 Switching websocket streams to {target_symbol}")
+            self.logger.info(f"[BACKPACK] 🔄 Switching websocket streams to {new_symbol}")
 
-        self.update_symbol(target_symbol)
+        # Clear stale data and update symbol
+        self.update_symbol(new_symbol)
+        
+        # Update config to keep it synchronized
+        self._update_market_config(new_symbol)
 
+        # Full reconnection cycle
         if self.running:
             await self.disconnect()
             await self.connect()
-            if self.depth_fetcher:
-                await self.wait_for_order_book(timeout=2.0)
+    
+    def _log_switch_result(self, symbol: str, success: bool) -> None:
+        """Log the result of symbol switch operation."""
+        if success and self.logger:
+            bid_count = len(self.order_book.get("bids", []))
+            ask_count = len(self.order_book.get("asks", []))
+            self.logger.info(
+                f"[BACKPACK] ✅ Market switch complete for {symbol}: "
+                f"{bid_count} bids, {ask_count} asks | "
+                f"BBO: {self.best_bid}/{self.best_ask}"
+            )
+        elif not success and self.logger:
+            self.logger.warning(
+                f"[BACKPACK] ⚠️  Order book for {symbol} not ready after 5s timeout"
+            )
 
     async def wait_until_ready(self, timeout: float = 5.0) -> bool:
         """Wait until the account stream is ready."""
@@ -189,6 +263,13 @@ class BackpackWebSocketManager(BaseWebSocketManager):
         self.symbol = symbol
         self.order_book_ready = False
         self._depth_ready_event.clear()
+        
+        # ✅ CRITICAL: Clear cached order book data to prevent serving stale prices
+        self.best_bid = None
+        self.best_ask = None
+        self.order_book = {"bids": [], "asks": []}
+        self._order_levels = {"bids": {}, "asks": {}}
+        self._last_update_id = None
 
     def get_order_book(self, levels: Optional[int] = None) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
         """

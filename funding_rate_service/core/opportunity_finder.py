@@ -377,7 +377,7 @@ class OpportunityFinder:
                     return None
 
                 if filters.max_oi_usd is not None and target_oi > filters.max_oi_usd:
-                    logger.info(
+                    logger.debug(
                         f"[OPP] {symbol} skipped: required dex {required_dex_lower} OI {target_oi} exceeds cap {filters.max_oi_usd}"
                     )
                     return None

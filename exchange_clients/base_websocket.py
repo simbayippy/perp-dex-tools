@@ -45,7 +45,34 @@ class BaseWebSocketManager(ABC):
         or no-op when the feed is already aligned. The symbol is provided in the
         strategy's normalized format and implementers are responsible for any
         required conversion.
+        
+        Recommended implementation pattern:
+        1. Validate: Check if already on target market
+        2. Clear: Reset stale order book data
+        3. Switch: Unsubscribe old, subscribe new
+        4. Wait: Block until new data arrives
+        5. Update: Synchronize config state (contract_id, market_index, etc.)
         """
+    
+    def _update_market_config(self, market_identifier: Any) -> None:
+        """
+        Update config with new market identifier after successful market switch.
+        
+        This is a helper method that exchanges can use to keep config synchronized
+        with the active market. Exchanges should override this if they have
+        additional config fields to update.
+        
+        Args:
+            market_identifier: Exchange-specific market ID (int, str, etc.)
+        """
+        if hasattr(self, 'config'):
+            # Update common config fields that most exchanges use
+            if hasattr(self.config, 'contract_id'):
+                self.config.contract_id = market_identifier
+            if hasattr(self.config, 'market_index'):
+                self.config.market_index = market_identifier
+            if hasattr(self.config, 'market_id'):
+                self.config.market_id = market_identifier
 
     @abstractmethod
     def get_order_book(self, levels: Optional[int] = None) -> Optional[Any]:
