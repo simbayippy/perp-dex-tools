@@ -1393,8 +1393,10 @@ class LighterClient(BaseExchangeClient):
         normalized_symbol = self.normalize_symbol(symbol).upper()
 
         for pos in positions:
-            pos_symbol = (pos.get("symbol") or "").upper()
-            if pos_symbol != normalized_symbol:
+            # Normalize the position's symbol too (e.g., "1000TOSHI" -> "TOSHI")
+            pos_symbol_raw = pos.get("symbol") or ""
+            pos_symbol_normalized = self.normalize_symbol(pos_symbol_raw).upper()
+            if pos_symbol_normalized != normalized_symbol:
                 continue
  
             raw_quantity = pos.get("position") or Decimal("0")
