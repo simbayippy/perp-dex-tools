@@ -256,25 +256,23 @@ class LighterClient(BaseExchangeClient):
     
     def normalize_symbol(self, symbol: str) -> str:
         """
-        Convert normalized symbol to Lighter's expected format.
+        Normalize Lighter symbol to standard format.
         
-        Lighter accepts base asset format (e.g., "BTC", "ETH", "ZORA").
-        The market_id lookup handles both "BTC" and "BTC-PERP" formats.
+        Uses shared normalization logic that handles:
+        - "BTC" -> "BTC"
+        - "1000TOSHI" -> "TOSHI" (1000-prefix removal)
+        - "1000FLOKI" -> "FLOKI"
+        - "-PERP" suffix removal
         
         Args:
-            symbol: Normalized symbol (e.g., "BTC", "ETH", "ZORA")
+            symbol: Lighter symbol (e.g., "BTC", "1000TOSHI", "BTC-PERP")
             
         Returns:
-            Lighter-formatted symbol (base asset only, uppercase)
+            Normalized symbol (base asset only, uppercase)
         """
-        # Strip common quote currencies if present
-        symbol_upper = symbol.upper()
-        for suffix in ['USDT', 'USDC', '-PERP', 'PERP']:
-            if symbol_upper.endswith(suffix):
-                symbol_upper = symbol_upper[:-len(suffix)]
-        
-        # Clean up any trailing separators
-        return symbol_upper.strip('-_/')
+        # Use shared implementation from common.py which handles 1000-prefix
+        from exchange_clients.lighter.common import normalize_symbol as normalize_lighter_symbol
+        return normalize_lighter_symbol(symbol)
     
     def get_quantity_multiplier(self, symbol: str) -> int:
         """
@@ -1401,10 +1399,6 @@ class LighterClient(BaseExchangeClient):
             pos_symbol_raw = pos.get("symbol") or ""
             pos_symbol_normalized = self.normalize_symbol(pos_symbol_raw).upper()
             
-            self.logger.debug(
-                f"[LIGHTER] Checking position: raw='{pos_symbol_raw}' → normalized='{pos_symbol_normalized}' "
-                f"(looking for '{normalized_symbol}')"
-            )
             
             if pos_symbol_normalized != normalized_symbol:
                 continue
