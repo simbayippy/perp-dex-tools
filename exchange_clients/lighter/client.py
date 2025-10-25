@@ -268,6 +268,25 @@ class LighterClient(BaseExchangeClient):
         
         # Clean up any trailing separators
         return symbol_upper.strip('-_/')
+    
+    def get_quantity_multiplier(self, symbol: str) -> int:
+        """
+        Get the quantity multiplier for a symbol on Lighter.
+        
+        Lighter's k-prefix tokens (kTOSHI, kFLOKI, etc.) use a 1000x multiplier:
+        - 1 contract unit = 1000 actual tokens
+        - Price is per 1000 tokens
+        
+        Example: kTOSHI at $0.7655 means 1000 TOSHI tokens cost $0.7655
+        
+        Args:
+            symbol: Normalized symbol (e.g., "TOSHI", "BTC")
+            
+        Returns:
+            1000 for k-prefix tokens, 1 for others
+        """
+        from exchange_clients.lighter.common import get_quantity_multiplier
+        return get_quantity_multiplier(symbol)
 
     def _handle_websocket_order_update(self, order_data_list: List[Dict[str, Any]]):
         """Handle order updates from WebSocket."""

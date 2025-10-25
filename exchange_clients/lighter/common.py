@@ -22,6 +22,12 @@ LIGHTER_SYMBOL_OVERRIDES = {
     # "EXAMPLE": "1000EXAMPLE",
 }
 
+# Lighter's k-prefix tokens use 1000x multiplier
+# For these tokens: 1 contract unit = 1000 actual tokens
+# Example: kTOSHI at $0.7655 means 1000 TOSHI tokens cost $0.7655
+LIGHTER_MULTIPLIER_SYMBOLS = {"FLOKI", "TOSHI", "BONK", "PEPE", "SHIB"}
+LIGHTER_QUANTITY_MULTIPLIER = 1000  # k-prefix = 1000x
+
 
 def normalize_symbol(symbol: str) -> str:
     """
@@ -140,4 +146,22 @@ def format_lighter_error(error: Any) -> str:
         return error.message
     else:
         return str(error)
+
+
+def get_quantity_multiplier(normalized_symbol: str) -> int:
+    """
+    Get the quantity multiplier for a symbol on Lighter.
+    
+    Lighter's k-prefix tokens (kTOSHI, kFLOKI, etc.) represent bundles of 1000 tokens.
+    So 1 contract unit = 1000 actual tokens.
+    
+    Args:
+        normalized_symbol: Normalized symbol (e.g., "TOSHI", "BTC")
+        
+    Returns:
+        Multiplier (1000 for k-prefix tokens, 1 for others)
+    """
+    if normalized_symbol.upper() in LIGHTER_MULTIPLIER_SYMBOLS:
+        return LIGHTER_QUANTITY_MULTIPLIER
+    return 1
 

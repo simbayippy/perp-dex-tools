@@ -199,6 +199,25 @@ class AsterClient(BaseExchangeClient):
         # Use the common utility function
         return get_aster_symbol_format(symbol)
     
+    def get_quantity_multiplier(self, symbol: str) -> int:
+        """
+        Get the quantity multiplier for a symbol on Aster.
+        
+        Aster's 1000-prefix tokens (1000BONKUSDT, etc.) have a 1000x multiplier,
+        similar to Lighter's k-prefix tokens.
+        
+        The price shown is 1000x the actual token price.
+        Example: 1000BONKUSDT shows $0.01467, CoinGecko shows $0.00001467 (1000x)
+        
+        Args:
+            symbol: Normalized symbol (e.g., "TOSHI", "BTC")
+            
+        Returns:
+            1000 for 1000-prefix tokens, 1 for others
+        """
+        from exchange_clients.aster.common import get_quantity_multiplier
+        return get_quantity_multiplier(symbol)
+    
     def round_to_step(self, quantity: Decimal) -> Decimal:
         """
         Round quantity to the exchange's step size.
