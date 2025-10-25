@@ -540,12 +540,16 @@ class AsterClient(BaseExchangeClient):
         from decimal import ROUND_HALF_UP
         rounded_price = price.quantize(tick_size, rounding=ROUND_HALF_UP)
 
+        # 🛡️ DEFENSIVE CHECK: Min notional should already be validated in pre-flight checks
+        # This is a last-resort safety net to catch bugs where pre-flight was bypassed
         min_notional = self.get_min_order_notional(normalized_contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
         if min_notional is not None:
             order_notional = rounded_quantity * rounded_price
             if order_notional < min_notional:
+                # This should NEVER happen if pre-flight checks ran correctly
                 message = (
-                    f"[ASTER] Order notional ${order_notional} below minimum ${min_notional}"
+                    f"[ASTER] UNEXPECTED: Order notional ${order_notional} below minimum ${min_notional}. "
+                    f"This should have been caught in pre-flight checks!"
                 )
                 self.logger.error(message)
                 raise ValueError(message)

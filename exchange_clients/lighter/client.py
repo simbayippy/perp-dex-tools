@@ -615,7 +615,8 @@ class LighterClient(BaseExchangeClient):
             notional = Decimal(quantity) * Decimal(price)
             if notional < min_notional:
                 self.logger.error(
-                    f"[LIGHTER] Order notional ${notional} below minimum ${min_notional}"
+                    f"[LIGHTER] UNEXPECTED: Order notional ${notional} below minimum ${min_notional}"
+                    f"This should have been caught in pre-flight checks!"
                 )
                 return OrderResult(
                     success=False,
