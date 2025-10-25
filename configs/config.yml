@@ -11,7 +11,7 @@ config:
   max_total_exposure_usd: !!float '200'
   min_profit_rate: 0.0002283105022831050228310502283
   risk_strategy: combined
-  profit_erosion_threshold: 0.5
+  profit_erosion_threshold: 0.4
   max_position_age_hours: 168
   max_new_positions_per_cycle: 1
   limit_order_offset_pct: 0.0002
