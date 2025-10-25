@@ -671,7 +671,7 @@ class PositionCloser:
 
         for leg in legs:
             try:
-                spec = await self._build_order_spec(position.symbol, leg)
+                spec = await self._build_order_spec(position.symbol, leg, reason=reason)
             except Exception as exc:
                 strategy.logger.log(
                     f"[{leg['dex']}] Unable to prepare close order for {position.symbol}: {exc}",
@@ -754,6 +754,7 @@ class PositionCloser:
         self,
         symbol: str,
         leg: Dict[str, Any],
+        reason: str = "UNKNOWN",
     ) -> OrderSpec:
         leg["contract_id"] = await self._prepare_contract_context(
             leg["client"],
@@ -770,7 +771,21 @@ class PositionCloser:
 
         quantity = leg["quantity"]
         notional = quantity * price
-        limit_offset_pct = self._resolve_limit_offset_pct()
+        
+        # Use market orders for critical situations requiring immediate execution
+        # Use limit orders for normal exits to minimize slippage
+        critical_reasons = {
+            "SEVERE_IMBALANCE",
+            "LEG_LIQUIDATED", 
+            "LIQUIDATION_ASTER",
+            "LIQUIDATION_LIGHTER",
+            "LIQUIDATION_BACKPACK",
+            "LIQUIDATION_PARADEX",
+        }
+        
+        use_market = reason in critical_reasons
+        execution_mode = "market_only" if use_market else "limit_only"
+        limit_offset_pct = None if use_market else self._resolve_limit_offset_pct()
 
         return OrderSpec(
             exchange_client=leg["client"],
@@ -778,7 +793,7 @@ class PositionCloser:
             side=leg["side"],
             size_usd=notional,
             quantity=quantity,
-            execution_mode="limit_only",
+            execution_mode=execution_mode,
             timeout_seconds=30.0,
             limit_price_offset_pct=limit_offset_pct,
             reduce_only=True,  # ✅ Allows closing dust positions below min notional
