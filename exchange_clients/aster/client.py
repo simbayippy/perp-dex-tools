@@ -584,9 +584,11 @@ class AsterClient(BaseExchangeClient):
                 self.logger.error(f"❌ [ASTER] Failed to fetch tick_size for {normalized_contract_id}: {e}")
         
         if tick_size:
-            # Use ROUND_DOWN to avoid price manipulation (never round up user's sell price)
-            from decimal import ROUND_DOWN
-            rounded_price = price.quantize(tick_size, rounding=ROUND_DOWN)
+            # Round price to nearest tick_size increment
+            # Formula: price = round(price / tick_size) * tick_size
+            from decimal import ROUND_HALF_UP
+            price_in_ticks = (price / tick_size).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+            rounded_price = price_in_ticks * tick_size
             self.logger.debug(
                 f"Rounded price to tick_size: {price} → {rounded_price} "
                 f"(tick_size={tick_size}, symbol={normalized_contract_id})"
@@ -734,11 +736,17 @@ class AsterClient(BaseExchangeClient):
             # Convert inputs to Decimal to avoid float arithmetic errors
             quantity = Decimal(str(quantity))
             
-            # Contract ID should already be in Aster format (e.g., "MONUSDT")
-            # from get_contract_attributes(), so use it directly
+            # ✅ CRITICAL FIX: Normalize contract_id for Aster (handles multi-symbol trading)
+            # If contract_id doesn't end with USDT, add it (e.g., "MON" → "MONUSDT")
+            if not contract_id.upper().endswith("USDT"):
+                from exchange_clients.aster.common import get_aster_symbol_format
+                normalized_contract_id = get_aster_symbol_format(contract_id)
+                self.logger.debug(f"Normalized contract_id: '{contract_id}' → '{normalized_contract_id}'")
+            else:
+                normalized_contract_id = contract_id.upper()
             
             self.logger.debug(
-                f"🔍 [ASTER] Using contract_id for market order: '{contract_id}'"
+                f"🔍 [ASTER] Using contract_id for market order: '{normalized_contract_id}'"
             )
             
             # Validate side
@@ -754,7 +762,7 @@ class AsterClient(BaseExchangeClient):
 
             # Fetch BBO with explicit error handling
             try:
-                best_bid, best_ask = await self.fetch_bbo_prices(contract_id)
+                best_bid, best_ask = await self.fetch_bbo_prices(normalized_contract_id)
                 self.logger.info(
                     f"📊 [ASTER] Market order BBO check: bid={best_bid}, ask={best_ask}"
                 )
@@ -781,7 +789,7 @@ class AsterClient(BaseExchangeClient):
             # 🛡️ DEFENSIVE CHECK: Min notional should already be validated in pre-flight checks
             # ⚠️ SKIP for reduce_only orders (closing positions) - these may be below min notional
             if not reduce_only:
-                min_notional = self.get_min_order_notional(contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
+                min_notional = self.get_min_order_notional(normalized_contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
                 if min_notional is not None and expected_price > 0:
                     order_notional = rounded_quantity * expected_price
                     if order_notional < min_notional:
@@ -801,7 +809,7 @@ class AsterClient(BaseExchangeClient):
 
             # Place the market order
             order_data = {
-                'symbol': contract_id,  # Already normalized (e.g., "MONUSDT")
+                'symbol': normalized_contract_id,  # Aster format (e.g., "MONUSDT")
                 'side': side.upper(),
                 'type': 'MARKET',
                 'quantity': str(rounded_quantity)
