@@ -109,7 +109,7 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             min_value=Decimal("0.001"),
             max_value=Decimal("1000000"),
             required=True,
-            help_text="Upper bound on cumulative open position size across the grid",
+            help_text="Upper bound on total open exposure in the traded asset (long or short)",
         ),
         # ====================================================================
         # Timing Configuration
@@ -162,7 +162,11 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             choices=["aggressive", "ladder", "hedge", "none"],
             default="ladder",
             required=False,
-            help_text="Select how to unwind positions that fail to close normally",
+            help_text=(
+                "How to unwind stuck positions: aggressive=market exit,"
+                " ladder=staggered limit orders, hedge=offsetting market order,"
+                " none=manual management"
+            ),
         ),
         create_decimal_parameter(
             key="stop_price",
