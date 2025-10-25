@@ -58,15 +58,14 @@ class StrategyFactory:
         prepared_config = config
 
         if strategy_name == 'grid' and not hasattr(config, 'take_profit'):
-            params = getattr(config, 'strategy_params', {}) or {}
-            grid_config = GridConfig(**params)
+            raw_params = dict(getattr(config, 'strategy_params', {}) or {})
+            grid_fields = set(GridConfig.model_fields.keys())
+            grid_params = {key: value for key, value in raw_params.items() if key in grid_fields}
+            grid_config = GridConfig(**grid_params)
             merged = SimpleNamespace(**grid_config.model_dump())
-            # Carry over general trading context for logging/debugging
-            merged.exchange = getattr(config, 'exchange', None)
-            merged.ticker = getattr(config, 'ticker', None)
-            merged.contract_id = getattr(config, 'contract_id', None)
-            merged.quantity = getattr(config, 'quantity', None)
-            merged.tick_size = getattr(config, 'tick_size', None)
+            for attr in ('exchange', 'ticker', 'contract_id', 'quantity', 'tick_size'):
+                if hasattr(config, attr):
+                    setattr(merged, attr, getattr(config, attr))
             prepared_config = merged
         
         # Multi-exchange strategies receive exchange_clients dict
