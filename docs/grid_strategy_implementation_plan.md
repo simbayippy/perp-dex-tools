@@ -348,6 +348,7 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
 #### **Phase 3: Monitoring & Analytics (Priority 3)**
 **Timeline: Week 3**
 - [ ] Add structured logging for trade history (using unified_logger.py)
+- [ ] Stream structured grid events (written to `logs/grid_events.jsonl`) into alert channels (e.g., Telegram via `GRID_ALERT_TELEGRAM_TOKEN` / `GRID_ALERT_TELEGRAM_CHAT_ID`)
 - [ ] Create performance metrics calculation (from logs)
 - [ ] Build dashboard integration for live monitoring
 - [ ] Add log analysis tools for historical performance review
@@ -718,4 +719,3 @@ pause_price: null   # Pause trading price (optional)
 2. Begin Phase 1 implementation (core safety features)
 3. Test with small position sizes on testnet/mainnet
 4. Validate crash recovery by restarting bot and checking exchange state sync
-

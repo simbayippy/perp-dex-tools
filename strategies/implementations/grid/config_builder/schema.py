@@ -95,6 +95,22 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             help_text="Limit the number of open orders to manage risk",
             show_default_in_prompt=True,
         ),
+        create_decimal_parameter(
+            key="max_margin_usd",
+            prompt="Maximum margin to allocate (USD)?",
+            min_value=Decimal("100"),
+            max_value=Decimal("1000000"),
+            required=True,
+            help_text="Caps how much account margin the grid strategy can consume",
+        ),
+        create_decimal_parameter(
+            key="max_position_size",
+            prompt="Maximum net position size (base units)?",
+            min_value=Decimal("0.001"),
+            max_value=Decimal("1000000"),
+            required=True,
+            help_text="Upper bound on cumulative open position size across the grid",
+        ),
         # ====================================================================
         # Timing Configuration
         # ====================================================================
@@ -109,22 +125,44 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             help_text="How long to wait between placing new orders",
             show_default_in_prompt=True,
         ),
+        # ====================================================================
+        # Risk Management
+        # ====================================================================
         create_boolean_parameter(
-            key="random_timing",
-            prompt="Enable random timing variation?",
-            default=False,
+            key="stop_loss_enabled",
+            prompt="Enable per-position stop loss?",
+            default=True,
             required=False,
-            help_text="Add randomness to wait time to avoid predictable patterns",
+            help_text="Automatically place stop loss exits for individual positions",
         ),
-        # ====================================================================
-        # Advanced Features
-        # ====================================================================
-        create_boolean_parameter(
-            key="dynamic_profit",
-            prompt="Enable dynamic profit-taking?",
-            default=False,
+        create_decimal_parameter(
+            key="stop_loss_percentage",
+            prompt="Stop loss percentage (e.g., 2 = 2%)?",
+            default=Decimal("2.0"),
+            min_value=Decimal("0.5"),
+            max_value=Decimal("10"),
             required=False,
-            help_text="Adjust take profit based on market volatility",
+            help_text="Closes positions once loss exceeds this percentage threshold",
+        ),
+        ParameterSchema(
+            key="position_timeout_minutes",
+            prompt="Minutes before a position is considered stuck?",
+            param_type=ParameterType.INTEGER,
+            default=60,
+            min_value=5,
+            max_value=1440,
+            required=False,
+            help_text="After this time the recovery engine evaluates the position",
+            show_default_in_prompt=True,
+        ),
+        ParameterSchema(
+            key="recovery_mode",
+            prompt="Recovery mode for stuck positions?",
+            param_type=ParameterType.CHOICE,
+            choices=["aggressive", "ladder", "hedge", "none"],
+            default="ladder",
+            required=False,
+            help_text="Select how to unwind positions that fail to close normally",
         ),
         create_decimal_parameter(
             key="stop_price",
@@ -148,8 +186,16 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
         "Exchange": ["exchange", "ticker"],
         "Grid Setup": ["direction", "quantity", "take_profit"],
         "Grid Spacing": ["grid_step", "max_orders"],
-        "Timing": ["wait_time", "random_timing"],
-        "Advanced": ["dynamic_profit", "stop_price", "pause_price"],
+        "Capital & Limits": ["max_margin_usd", "max_position_size"],
+        "Execution": ["wait_time"],
+        "Risk Management": [
+            "stop_loss_enabled",
+            "stop_loss_percentage",
+            "position_timeout_minutes",
+            "recovery_mode",
+            "stop_price",
+            "pause_price",
+        ],
     },
 )
 
@@ -179,8 +225,12 @@ def create_default_grid_config() -> dict:
         "grid_step": Decimal("0.002"),
         "max_orders": 25,
         "wait_time": 10,
-        "random_timing": False,
-        "dynamic_profit": False,
+        "max_margin_usd": Decimal("5000"),
+        "max_position_size": Decimal("1000"),
+        "stop_loss_enabled": True,
+        "stop_loss_percentage": Decimal("2.0"),
+        "position_timeout_minutes": 60,
+        "recovery_mode": "ladder",
         "stop_price": None,
         "pause_price": None,
     }

@@ -234,8 +234,12 @@ def create_example_configs():
             "grid_step": Decimal("0.002"),
             "max_orders": 25,
             "wait_time": 10,
-            "random_timing": False,
-            "dynamic_profit": False,
+            "max_margin_usd": Decimal("5000"),
+            "max_position_size": Decimal("1000"),
+            "stop_loss_enabled": True,
+            "stop_loss_percentage": Decimal("2.0"),
+            "position_timeout_minutes": 60,
+            "recovery_mode": "ladder",
             "stop_price": None,
             "pause_price": None
         }

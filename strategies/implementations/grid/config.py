@@ -37,8 +37,18 @@ class GridConfig(BaseModel):
         description="Base cooldown time between orders in seconds",
         gt=0
     )
+    max_margin_usd: Decimal = Field(
+        ...,
+        description="Maximum margin (USD) allocated to the grid strategy",
+        gt=0
+    )
+    max_position_size: Decimal = Field(
+        ...,
+        description="Maximum absolute net position size allowed",
+        gt=0
+    )
     
-    # Optional safety parameters
+    # Safety parameters
     stop_price: Optional[Decimal] = Field(
         None,
         description="Stop price - strategy stops if price crosses this level",
@@ -49,31 +59,31 @@ class GridConfig(BaseModel):
         description="Pause price - strategy pauses temporarily if price crosses this level",
         gt=0
     )
+    stop_loss_enabled: bool = Field(
+        True,
+        description="Enable stop loss for individual grid positions"
+    )
+    stop_loss_percentage: Decimal = Field(
+        Decimal('2.0'),
+        description="Stop loss percentage to cap losses per position",
+        ge=Decimal('0.5'),
+        le=Decimal('10')
+    )
+    position_timeout_minutes: int = Field(
+        60,
+        description="Minutes before an open position is considered stuck",
+        ge=5,
+        le=1440
+    )
+    recovery_mode: str = Field(
+        "ladder",
+        description="Recovery approach when handling stuck positions"
+    )
     
     # Optional enhancement parameters
     boost_mode: bool = Field(
         False,
         description="Use market orders for faster execution (more aggressive)"
-    )
-    random_timing: bool = Field(
-        False,
-        description="Add random variation to wait times"
-    )
-    timing_range: Decimal = Field(
-        Decimal('0.5'),
-        description="Random timing variation range (e.g., 0.5 = ±50%)",
-        ge=0,
-        le=1
-    )
-    dynamic_profit: bool = Field(
-        False,
-        description="Add random variation to take profit levels"
-    )
-    profit_range: Decimal = Field(
-        Decimal('0.5'),
-        description="Dynamic profit variation range (e.g., 0.5 = ±50%)",
-        ge=0,
-        le=1
     )
     
     @validator('direction')
@@ -81,6 +91,14 @@ class GridConfig(BaseModel):
         """Validate direction is either 'buy' or 'sell'."""
         if v not in ['buy', 'sell']:
             raise ValueError("Direction must be 'buy' or 'sell'")
+        return v
+    
+    @validator('recovery_mode')
+    def validate_recovery_mode(cls, v):
+        """Validate recovery mode choice."""
+        allowed = {'aggressive', 'ladder', 'hedge', 'none'}
+        if v not in allowed:
+            raise ValueError(f"Recovery mode must be one of {', '.join(sorted(allowed))}")
         return v
     
     @validator('stop_price', 'pause_price')
@@ -94,4 +112,3 @@ class GridConfig(BaseModel):
         """Pydantic config."""
         validate_assignment = True
         extra = 'forbid'
-
