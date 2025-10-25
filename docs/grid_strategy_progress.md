@@ -7,6 +7,7 @@
 - Added stuck-position recovery pipeline: timeout detection plus aggressive, ladder, and hedge execution paths.
 - Layered structured logging for stop-loss triggers, margin caps, and recovery actions using `helpers/unified_logger`.
 - Added initial unit tests covering state serialization, risk limit guards, stop-loss enforcement, and recovery modes.
+- Added integration tests validating an end-to-end grid cycle and margin cap behavior.
 
 ## In Progress / Next Up
 - Design and implement unit/integration tests for grid strategy safeguards (risk gating, stop-loss, recovery, event logging).
