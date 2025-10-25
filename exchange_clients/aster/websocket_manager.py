@@ -589,6 +589,11 @@ class AsterWebSocketManager(BaseWebSocketManager):
         if self._depth_task and not self._depth_task.done():
             if self.logger:
                 self.logger.info(f"Switching depth stream from {self._current_depth_symbol} to {stream_symbol}")
+            
+            # ✅ CRITICAL: Reset order book when switching symbols to prevent stale data
+            self.order_book = {"bids": [], "asks": []}
+            self.order_book_ready = False
+            
             self._depth_task.cancel()
             try:
                 await self._depth_task
@@ -599,8 +604,26 @@ class AsterWebSocketManager(BaseWebSocketManager):
         self._current_depth_symbol = stream_symbol
         self._depth_task = asyncio.create_task(self._connect_depth_stream(stream_symbol))
         
-        if self.logger:
-            self.logger.info(f"📚 Started order book depth stream for {stream_symbol}")
+        # ✅ CRITICAL: Wait for new snapshot to arrive before returning
+        # This ensures liquidity checks don't see stale data from the old market
+        max_wait = 5.0  # 5 second timeout
+        start_time = asyncio.get_event_loop().time()
+        
+        while not self.order_book_ready and (asyncio.get_event_loop().time() - start_time) < max_wait:
+            await asyncio.sleep(0.1)
+        
+        if self.order_book_ready:
+            if self.logger:
+                self.logger.info(
+                    f"📚 [ASTER] ✅ Depth stream ready for {stream_symbol} "
+                    f"({len(self.order_book['bids'])} bids, {len(self.order_book['asks'])} asks)"
+                )
+        else:
+            if self.logger:
+                self.logger.warning(
+                    f"📚 [ASTER] ⚠️  Depth stream for {stream_symbol} not ready yet "
+                    f"(timeout after {max_wait}s)"
+                )
     
     async def _connect_depth_stream(self, symbol: str):
         """

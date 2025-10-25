@@ -215,6 +215,7 @@ class LighterClient(BaseExchangeClient):
             self.config.market_index = self.config.contract_id
             self.config.account_index = self.account_index
             self.config.lighter_client = self.lighter_client
+            self.config.api_client = self.api_client  # Pass api_client for market lookups
 
             # Initialize WebSocket manager (using custom implementation)
             self.ws_manager = LighterWebSocketManager(

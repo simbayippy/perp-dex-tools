@@ -173,16 +173,53 @@ class LighterWebSocketManager(BaseWebSocketManager):
         if symbol is None:
             return
 
-        market_id = getattr(self.config, "contract_id", None)
-        if market_id is None:
-            self._log(
-                f"[LIGHTER] No contract_id set on config; cannot align websocket for {symbol}",
-                "DEBUG",
-            )
-            return
-
+        # ✅ FIX: Look up fresh market_id for the new symbol instead of using cached config
+        # The cached self.config.contract_id might still point to the previous market!
         try:
-            target_market = int(market_id)
+            # Import here to avoid circular dependency
+            import lighter
+            from exchange_clients.lighter.common import get_lighter_symbol_format
+            
+            # Convert normalized symbol to Lighter's format (e.g., "PYTH" -> "PYTH", "TOSHI" -> "1000TOSHI")
+            lighter_symbol = get_lighter_symbol_format(symbol)
+            
+            # Query all markets to find the target market_id
+            if not hasattr(self.config, 'lighter_client') or self.config.lighter_client is None:
+                self._log(
+                    f"[LIGHTER] No lighter_client available; cannot look up market_id for {symbol}",
+                    "WARNING",
+                )
+                return
+            
+            # Use the cached api_client if available (shared with main client)
+            api_client = getattr(self.config, 'api_client', None)
+            if api_client is None:
+                self._log(
+                    f"[LIGHTER] No api_client available; cannot look up market_id for {symbol}",
+                    "WARNING",
+                )
+                return
+            
+            order_api = lighter.OrderApi(api_client)
+            order_books = await order_api.order_books()
+            
+            target_market = None
+            for market in order_books.order_books:
+                # Try Lighter-specific format first (e.g., "1000TOSHI")
+                if market.symbol.upper() == lighter_symbol.upper():
+                    target_market = market.market_id
+                    break
+                # Try exact match with original symbol
+                elif market.symbol.upper() == symbol.upper():
+                    target_market = market.market_id
+                    break
+            
+            if target_market is None:
+                self._log(
+                    f"[LIGHTER] Symbol '{symbol}' (as '{lighter_symbol}') not found in available markets",
+                    "WARNING",
+                )
+                return
 
             if not self.ws or not self.running:
                 self._log(f"Cannot switch market: WebSocket not connected", "WARNING")
@@ -193,6 +230,9 @@ class LighterWebSocketManager(BaseWebSocketManager):
                 return
             
             self._log(f"[LIGHTER] 🔄 Switching order book from market {self.market_index} to {target_market}", "INFO")
+            
+            # ✅ CRITICAL: Reset order book BEFORE unsubscribing to prevent serving stale data
+            await self.reset_order_book()
             
             # Unsubscribe from current market order book
             unsubscribe_msg = json.dumps({
@@ -210,8 +250,6 @@ class LighterWebSocketManager(BaseWebSocketManager):
             
             old_market_id = self.market_index
             self.market_index = target_market
-            
-            await self.reset_order_book()
             
             subscribe_msg = json.dumps({
                 "type": "subscribe",
@@ -238,9 +276,26 @@ class LighterWebSocketManager(BaseWebSocketManager):
                 account_sub_msg["auth"] = auth_token
             await self.ws.send(json.dumps(account_sub_msg))
             
-            self._log(f"[LIGHTER] ✅ Switched order book from market {old_market_id} to {target_market}", "INFO")
+            # ✅ CRITICAL: Wait for new snapshot to arrive before returning
+            # This ensures liquidity checks don't see stale data from the old market
+            max_wait = 5.0  # 5 second timeout
+            start_time = asyncio.get_event_loop().time()
             
-            await asyncio.sleep(0.5)
+            while not self.snapshot_loaded and (asyncio.get_event_loop().time() - start_time) < max_wait:
+                await asyncio.sleep(0.1)
+            
+            if self.snapshot_loaded:
+                self._log(
+                    f"[LIGHTER] ✅ Switched order book from market {old_market_id} to {target_market} "
+                    f"({len(self.order_book['bids'])} bids, {len(self.order_book['asks'])} asks)",
+                    "INFO"
+                )
+            else:
+                self._log(
+                    f"[LIGHTER] ⚠️  Switched to market {target_market} but snapshot not loaded yet "
+                    f"(timeout after {max_wait}s)",
+                    "WARNING"
+                )
         except Exception as exc:
             self._log(f"Error switching market: {exc}", "ERROR")
 

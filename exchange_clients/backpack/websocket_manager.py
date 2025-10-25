@@ -107,7 +107,20 @@ class BackpackWebSocketManager(BaseWebSocketManager):
             await self.disconnect()
             await self.connect()
             if self.depth_fetcher:
-                await self.wait_for_order_book(timeout=2.0)
+                # Wait for new order book snapshot to load
+                ready = await self.wait_for_order_book(timeout=5.0)
+                if ready and self.logger:
+                    bid_count = len(self.order_book.get("bids", []))
+                    ask_count = len(self.order_book.get("asks", []))
+                    self.logger.info(
+                        f"[BACKPACK] ✅ Market switch complete for {target_symbol}: "
+                        f"{bid_count} bids, {ask_count} asks | "
+                        f"BBO: {self.best_bid}/{self.best_ask}"
+                    )
+                elif not ready and self.logger:
+                    self.logger.warning(
+                        f"[BACKPACK] ⚠️  Order book for {target_symbol} not ready after 5s timeout"
+                    )
 
     async def wait_until_ready(self, timeout: float = 5.0) -> bool:
         """Wait until the account stream is ready."""
@@ -189,6 +202,13 @@ class BackpackWebSocketManager(BaseWebSocketManager):
         self.symbol = symbol
         self.order_book_ready = False
         self._depth_ready_event.clear()
+        
+        # ✅ CRITICAL: Clear cached order book data to prevent serving stale prices
+        self.best_bid = None
+        self.best_ask = None
+        self.order_book = {"bids": [], "asks": []}
+        self._order_levels = {"bids": {}, "asks": {}}
+        self._last_update_id = None
 
     def get_order_book(self, levels: Optional[int] = None) -> Optional[Dict[str, List[Dict[str, Decimal]]]]:
         """
