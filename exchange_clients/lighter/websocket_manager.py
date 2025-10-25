@@ -169,143 +169,224 @@ class LighterWebSocketManager(BaseWebSocketManager):
             return False
 
     async def prepare_market_feed(self, symbol: Optional[str]) -> None:
-        """Ensure the order book stream targets the requested symbol."""
+        """
+        Ensure the order book stream targets the requested symbol.
+        
+        Implementation follows the recommended pattern from BaseWebSocketManager:
+        1. Validate: Check if already on target market
+        2. Clear: Reset stale order book data
+        3. Switch: Unsubscribe old, subscribe new
+        4. Wait: Block until new data arrives
+        5. Update: Synchronize config state
+        """
         if symbol is None:
             return
 
-        # ✅ FIX: Look up fresh market_id for the new symbol instead of using cached config
-        # The cached self.config.contract_id might still point to the previous market!
         try:
-            # Import here to avoid circular dependency
-            import lighter
-            from exchange_clients.lighter.common import get_lighter_symbol_format
-            
-            # Convert normalized symbol to Lighter's format (e.g., "PYTH" -> "PYTH", "TOSHI" -> "1000TOSHI")
-            lighter_symbol = get_lighter_symbol_format(symbol)
-            
-            # Query all markets to find the target market_id
-            if not hasattr(self.config, 'lighter_client') or self.config.lighter_client is None:
-                self._log(
-                    f"[LIGHTER] No lighter_client available; cannot look up market_id for {symbol}",
-                    "WARNING",
-                )
-                return
-            
-            # Use the cached api_client if available (shared with main client)
-            api_client = getattr(self.config, 'api_client', None)
-            if api_client is None:
-                self._log(
-                    f"[LIGHTER] No api_client available; cannot look up market_id for {symbol}",
-                    "WARNING",
-                )
-                return
-            
-            order_api = lighter.OrderApi(api_client)
-            order_books = await order_api.order_books()
-            
-            target_market = None
-            for market in order_books.order_books:
-                # Try Lighter-specific format first (e.g., "1000TOSHI")
-                if market.symbol.upper() == lighter_symbol.upper():
-                    target_market = market.market_id
-                    break
-                # Try exact match with original symbol
-                elif market.symbol.upper() == symbol.upper():
-                    target_market = market.market_id
-                    break
-            
+            # Step 1: Lookup target market_id for the symbol
+            target_market = await self._lookup_market_id(symbol)
             if target_market is None:
-                self._log(
-                    f"[LIGHTER] Symbol '{symbol}' (as '{lighter_symbol}') not found in available markets",
-                    "WARNING",
-                )
-                return
-
-            if not self.ws or not self.running:
-                self._log(f"Cannot switch market: WebSocket not connected", "WARNING")
                 return
             
-            if self.market_index == target_market:
-                self._log(f"Already subscribed to market {target_market}", "DEBUG")
+            # Step 2: Validate if switch is needed
+            if not self._validate_market_switch_needed(target_market):
                 return
             
-            self._log(f"[LIGHTER] 🔄 Switching order book from market {self.market_index} to {target_market}", "INFO")
-            
-            # ✅ CRITICAL: Reset order book BEFORE unsubscribing to prevent serving stale data
-            await self.reset_order_book()
-            
-            # Unsubscribe from current market order book
-            unsubscribe_msg = json.dumps({
-                "type": "unsubscribe",
-                "channel": f"order_book/{self.market_index}"
-            })
-            await self.ws.send(unsubscribe_msg)
-
-            # Unsubscribe from current account orders channel
-            account_unsub_msg = json.dumps({
-                "type": "unsubscribe",
-                "channel": f"account_orders/{self.market_index}/{self.account_index}"
-            })
-            await self.ws.send(account_unsub_msg)
-            
+            # Step 3: Perform the market switch
             old_market_id = self.market_index
-            self.market_index = target_market
+            await self._perform_market_switch(old_market_id, target_market)
             
-            # ✅ CRITICAL: Update config.contract_id so order placement uses the new market!
-            # Without this, orders would still be sent to the old market despite WebSocket switch
-            if hasattr(self.config, 'contract_id'):
-                self.config.contract_id = target_market
-            if hasattr(self.config, 'market_index'):
-                self.config.market_index = target_market
+            # Step 4: Wait for new data to arrive
+            success = await self._wait_for_market_ready(timeout=5.0)
             
-            subscribe_msg = json.dumps({
-                "type": "subscribe",
-                "channel": f"order_book/{target_market}"
-            })
-            await self.ws.send(subscribe_msg)
-
-            auth_token = None
-            if self.lighter_client:
-                try:
-                    expiry = int(time.time() + 10 * 60)
-                    auth_token, err = self.lighter_client.create_auth_token_with_expiry(expiry)
-                    if err:
-                        self._log(f"Failed to create auth token for market switch: {err}", "WARNING")
-                except Exception as exc:
-                    self._log(f"Error creating auth token for market switch: {exc}", "ERROR")
-
-            # Subscribe to account orders for new market
-            account_sub_msg = {
-                "type": "subscribe",
-                "channel": f"account_orders/{target_market}/{self.account_index}",
-            }
-            if auth_token:
-                account_sub_msg["auth"] = auth_token
-            await self.ws.send(json.dumps(account_sub_msg))
+            # Step 5: Log result
+            self._log_market_switch_result(old_market_id, target_market, success)
             
-            # ✅ CRITICAL: Wait for new snapshot to arrive before returning
-            # This ensures liquidity checks don't see stale data from the old market
-            max_wait = 5.0  # 5 second timeout
-            start_time = asyncio.get_event_loop().time()
-            
-            while not self.snapshot_loaded and (asyncio.get_event_loop().time() - start_time) < max_wait:
-                await asyncio.sleep(0.1)
-            
-            if self.snapshot_loaded:
-                self._log(
-                    f"[LIGHTER] ✅ Switched order book from market {old_market_id} to {target_market} "
-                    f"({len(self.order_book['bids'])} bids, {len(self.order_book['asks'])} asks) | "
-                    f"config.contract_id updated to {target_market}",
-                    "INFO"
-                )
-            else:
-                self._log(
-                    f"[LIGHTER] ⚠️  Switched to market {target_market} but snapshot not loaded yet "
-                    f"(timeout after {max_wait}s)",
-                    "WARNING"
-                )
         except Exception as exc:
             self._log(f"Error switching market: {exc}", "ERROR")
+    
+    async def _lookup_market_id(self, symbol: str) -> Optional[int]:
+        """
+        Look up the market_id for a given symbol by querying available markets.
+        
+        Args:
+            symbol: Normalized symbol (e.g., "TOSHI", "PYTH")
+            
+        Returns:
+            Integer market_id, or None if not found
+        """
+        # Import here to avoid circular dependency
+        import lighter
+        from exchange_clients.lighter.common import get_lighter_symbol_format
+        
+        # Convert normalized symbol to Lighter's format (e.g., "TOSHI" -> "1000TOSHI")
+        lighter_symbol = get_lighter_symbol_format(symbol)
+        
+        # Validate dependencies
+        if not hasattr(self.config, 'lighter_client') or self.config.lighter_client is None:
+            self._log(
+                f"[LIGHTER] No lighter_client available; cannot look up market_id for {symbol}",
+                "WARNING",
+            )
+            return None
+        
+        api_client = getattr(self.config, 'api_client', None)
+        if api_client is None:
+            self._log(
+                f"[LIGHTER] No api_client available; cannot look up market_id for {symbol}",
+                "WARNING",
+            )
+            return None
+        
+        # Query available markets
+        order_api = lighter.OrderApi(api_client)
+        order_books = await order_api.order_books()
+        
+        # Find matching market
+        for market in order_books.order_books:
+            # Try Lighter-specific format first (e.g., "1000TOSHI")
+            if market.symbol.upper() == lighter_symbol.upper():
+                return market.market_id
+            # Try exact match with original symbol
+            elif market.symbol.upper() == symbol.upper():
+                return market.market_id
+        
+        # Not found
+        self._log(
+            f"[LIGHTER] Symbol '{symbol}' (as '{lighter_symbol}') not found in available markets",
+            "WARNING",
+        )
+        return None
+    
+    def _validate_market_switch_needed(self, target_market: int) -> bool:
+        """
+        Check if a market switch is actually needed.
+        
+        Args:
+            target_market: Target market_id
+            
+        Returns:
+            True if switch is needed, False if already on target
+        """
+        if not self.ws or not self.running:
+            self._log(f"Cannot switch market: WebSocket not connected", "WARNING")
+            return False
+        
+        if self.market_index == target_market:
+            self._log(f"Already subscribed to market {target_market}", "DEBUG")
+            return False
+        
+        return True
+    
+    async def _perform_market_switch(self, old_market_id: int, new_market_id: int) -> None:
+        """
+        Execute the market switch: unsubscribe old, subscribe new, update config.
+        
+        Args:
+            old_market_id: Current market_id to unsubscribe from
+            new_market_id: New market_id to subscribe to
+        """
+        self._log(
+            f"[LIGHTER] 🔄 Switching order book from market {old_market_id} to {new_market_id}",
+            "INFO"
+        )
+        
+        # Clear stale order book data
+        await self.reset_order_book()
+        
+        # Unsubscribe from old market
+        await self._unsubscribe_market(old_market_id)
+        
+        # Update internal state
+        self.market_index = new_market_id
+        
+        # Update config to keep it synchronized (critical for order placement!)
+        self._update_market_config(new_market_id)
+        
+        # Subscribe to new market
+        await self._subscribe_market(new_market_id)
+    
+    async def _unsubscribe_market(self, market_id: int) -> None:
+        """Unsubscribe from order book and account orders for a market."""
+        # Unsubscribe from order book
+        unsubscribe_msg = json.dumps({
+            "type": "unsubscribe",
+            "channel": f"order_book/{market_id}"
+        })
+        await self.ws.send(unsubscribe_msg)
+
+        # Unsubscribe from account orders
+        account_unsub_msg = json.dumps({
+            "type": "unsubscribe",
+            "channel": f"account_orders/{market_id}/{self.account_index}"
+        })
+        await self.ws.send(account_unsub_msg)
+    
+    async def _subscribe_market(self, market_id: int) -> None:
+        """Subscribe to order book and account orders for a market."""
+        # Subscribe to order book
+        subscribe_msg = json.dumps({
+            "type": "subscribe",
+            "channel": f"order_book/{market_id}"
+        })
+        await self.ws.send(subscribe_msg)
+
+        # Subscribe to account orders (with auth)
+        auth_token = None
+        if self.lighter_client:
+            try:
+                expiry = int(time.time() + 10 * 60)
+                auth_token, err = self.lighter_client.create_auth_token_with_expiry(expiry)
+                if err:
+                    self._log(f"Failed to create auth token for market switch: {err}", "WARNING")
+            except Exception as exc:
+                self._log(f"Error creating auth token for market switch: {exc}", "ERROR")
+
+        account_sub_msg = {
+            "type": "subscribe",
+            "channel": f"account_orders/{market_id}/{self.account_index}",
+        }
+        if auth_token:
+            account_sub_msg["auth"] = auth_token
+        await self.ws.send(json.dumps(account_sub_msg))
+    
+    async def _wait_for_market_ready(self, timeout: float = 5.0) -> bool:
+        """
+        Wait for new market data to arrive after switching.
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            True if snapshot loaded, False if timeout
+        """
+        start_time = asyncio.get_event_loop().time()
+        
+        while not self.snapshot_loaded and (asyncio.get_event_loop().time() - start_time) < timeout:
+            await asyncio.sleep(0.1)
+        
+        return self.snapshot_loaded
+    
+    def _log_market_switch_result(
+        self, 
+        old_market_id: int, 
+        new_market_id: int, 
+        success: bool
+    ) -> None:
+        """Log the result of a market switch operation."""
+        if success:
+            self._log(
+                f"[LIGHTER] ✅ Switched order book from market {old_market_id} to {new_market_id} "
+                f"({len(self.order_book['bids'])} bids, {len(self.order_book['asks'])} asks) | "
+                f"config.contract_id updated to {new_market_id}",
+                "INFO"
+            )
+        else:
+            self._log(
+                f"[LIGHTER] ⚠️  Switched to market {new_market_id} but snapshot not loaded yet "
+                f"(timeout after 5.0s)",
+                "WARNING"
+            )
 
     async def request_fresh_snapshot(self):
         """Request a fresh order book snapshot when we detect inconsistencies."""
