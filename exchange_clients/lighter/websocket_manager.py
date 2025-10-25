@@ -251,6 +251,13 @@ class LighterWebSocketManager(BaseWebSocketManager):
             old_market_id = self.market_index
             self.market_index = target_market
             
+            # ✅ CRITICAL: Update config.contract_id so order placement uses the new market!
+            # Without this, orders would still be sent to the old market despite WebSocket switch
+            if hasattr(self.config, 'contract_id'):
+                self.config.contract_id = target_market
+            if hasattr(self.config, 'market_index'):
+                self.config.market_index = target_market
+            
             subscribe_msg = json.dumps({
                 "type": "subscribe",
                 "channel": f"order_book/{target_market}"
@@ -287,7 +294,8 @@ class LighterWebSocketManager(BaseWebSocketManager):
             if self.snapshot_loaded:
                 self._log(
                     f"[LIGHTER] ✅ Switched order book from market {old_market_id} to {target_market} "
-                    f"({len(self.order_book['bids'])} bids, {len(self.order_book['asks'])} asks)",
+                    f"({len(self.order_book['bids'])} bids, {len(self.order_book['asks'])} asks) | "
+                    f"config.contract_id updated to {target_market}",
                     "INFO"
                 )
             else:
