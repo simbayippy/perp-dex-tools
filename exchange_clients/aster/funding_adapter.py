@@ -8,10 +8,13 @@ This adapter is read-only and focused solely on data collection.
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Dict, Optional
-import re
 
 from exchange_clients.base_funding_adapter import BaseFundingAdapter
 from exchange_clients.base_models import FundingRateSample
+from exchange_clients.aster.common import (
+    normalize_symbol as normalize_aster_symbol,
+    get_aster_symbol_format
+)
 from funding_rate_service.utils.logger import logger, clamp_external_logger_levels
 
 # Import Aster SDK
@@ -352,44 +355,23 @@ class AsterFundingAdapter(BaseFundingAdapter):
         """
         Normalize Aster symbol format to standard format
         
-        Aster symbols follow the pattern (confirmed from examples):
-        - "BTCUSDT" -> "BTC"  (similar to Binance format)
-        - "ETHUSDT" -> "ETH"
-        - "SOLUSDT" -> "SOL"
-        - "PEPEUSDT" -> "PEPE"
+        Uses shared logic from common.py which handles:
+        - "BTCUSDT" -> "BTC"
+        - "1000FLOKIUSDT" -> "FLOKI" (multipliers)
         
         Args:
             dex_symbol: Aster-specific symbol format
             
         Returns:
-            Normalized symbol (e.g., "BTC")
+            Normalized symbol (e.g., "BTC", "FLOKI")
         """
-        # Remove "USDT" suffix (Aster uses no separators, similar to Binance)
-        normalized = dex_symbol.upper()
-        
-        # Remove perpetual suffixes in order of specificity
-        normalized = normalized.replace('USDT', '')
-        normalized = normalized.replace('USDC', '')  # fallback
-        
-        # Handle any edge cases with multipliers (similar to other exchanges)
-        # Match pattern: starts with digits followed by letters
-        match = re.match(r'^(\d+)([A-Z]+)$', normalized)
-        if match:
-            multiplier, symbol = match.groups()
-            # logger.debug(
-            #     f"{self.dex_name}: Symbol has multiplier: {dex_symbol} -> "
-            #     f"{symbol} (multiplier: {multiplier})"
-            # )
-            normalized = symbol
-        
-        # Clean up any remaining special characters
-        normalized = normalized.strip('-_/')
-        
-        return normalized
+        return normalize_aster_symbol(dex_symbol)
     
     def get_dex_symbol_format(self, normalized_symbol: str) -> str:
         """
         Convert normalized symbol back to Aster-specific format
+        
+        Uses shared logic from common.py.
         
         Args:
             normalized_symbol: Normalized symbol (e.g., "BTC")
@@ -397,8 +379,7 @@ class AsterFundingAdapter(BaseFundingAdapter):
         Returns:
             Aster-specific format (e.g., "BTCUSDT")
         """
-        # Aster uses "{SYMBOL}USDT" format (no separators)
-        return f"{normalized_symbol.upper()}USDT"
+        return get_aster_symbol_format(normalized_symbol)
     
     async def close(self) -> None:
         """Close the API client"""

@@ -13,6 +13,10 @@ import asyncio
 
 from exchange_clients.base_funding_adapter import BaseFundingAdapter
 from exchange_clients.base_models import FundingRateSample
+from exchange_clients.backpack.common import (
+    normalize_symbol as normalize_backpack_symbol,
+    get_backpack_symbol_format
+)
 from funding_rate_service.utils.logger import logger
 
 
@@ -300,57 +304,33 @@ class BackpackFundingAdapter(BaseFundingAdapter):
         """
         Normalize Backpack symbol format to standard format
         
-        Backpack symbols follow the pattern (confirmed from examples):
-        - "BTC_USDC_PERP" -> "BTC"  (note: uses USDC, not USD)
-        - "ETH_USDC_PERP" -> "ETH"
-        - "SOL_USDC_PERP" -> "SOL"
-        - "kPEPE_USDC_PERP" -> "PEPE" (removes k prefix for 1000x tokens)
+        Uses shared logic from common.py which handles:
+        - "BTC_USDC_PERP" -> "BTC"
+        - "kPEPE_USDC_PERP" -> "PEPE" (removes k-prefix for 1000x tokens)
         
         Args:
             dex_symbol: Backpack-specific symbol format
             
         Returns:
-            Normalized symbol (e.g., "BTC")
+            Normalized symbol (e.g., "BTC", "PEPE")
         """
-        # Remove "_USDC_PERP" suffix
-        normalized = dex_symbol.upper()
-        normalized = normalized.replace('_USDC_PERP', '')
-        normalized = normalized.replace('_PERP', '')
-        normalized = normalized.replace('_USDC', '')
-        normalized = normalized.replace('_USD', '')  # fallback
-        
-        # Handle 1000x tokens (e.g., "kPEPE" -> "PEPE", "kSHIB" -> "SHIB")
-        if normalized.startswith('K') and len(normalized) > 1:
-            # Check if it's a known 1000x token pattern
-            base_symbol = normalized[1:]  # Remove 'k' prefix
-            if base_symbol in ['PEPE', 'SHIB', 'BONK']:  # Known 1000x tokens
-                # logger.debug(
-                #     f"{self.dex_name}: Converting 1000x token: {dex_symbol} -> "
-                #     f"{base_symbol} (removed k prefix)"
-                # )
-                normalized = base_symbol
-        
-        # Clean up any remaining special characters
-        normalized = normalized.strip('-_/')
-        
-        return normalized
+        return normalize_backpack_symbol(dex_symbol)
     
     def get_dex_symbol_format(self, normalized_symbol: str) -> str:
         """
         Convert normalized symbol back to Backpack-specific format
         
+        Uses shared logic from common.py which handles:
+        - "BTC" -> "BTC_USDC_PERP"
+        - "PEPE" -> "kPEPE_USDC_PERP" (adds k-prefix for 1000x tokens)
+        
         Args:
-            normalized_symbol: Normalized symbol (e.g., "BTC")
+            normalized_symbol: Normalized symbol (e.g., "BTC", "PEPE")
             
         Returns:
-            Backpack-specific format (e.g., "BTC_USDC_PERP")
+            Backpack-specific format (e.g., "BTC_USDC_PERP", "kPEPE_USDC_PERP")
         """
-        # Handle special cases for 1000x tokens
-        if normalized_symbol.upper() in ['PEPE', 'SHIB', 'BONK']:
-            return f"k{normalized_symbol.upper()}_USDC_PERP"
-        
-        # Standard format: {SYMBOL}_USDC_PERP
-        return f"{normalized_symbol.upper()}_USDC_PERP"
+        return get_backpack_symbol_format(normalized_symbol)
     
     async def close(self) -> None:
         """Close the HTTP session"""

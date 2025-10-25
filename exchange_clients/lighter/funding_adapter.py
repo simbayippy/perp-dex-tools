@@ -8,10 +8,13 @@ This is a read-only adapter (no trading) focused solely on data collection.
 from datetime import datetime, timezone
 from typing import Dict, Optional
 from decimal import Decimal
-import re
 
 from exchange_clients.base_funding_adapter import BaseFundingAdapter
 from exchange_clients.base_models import FundingRateSample
+from exchange_clients.lighter.common import (
+    normalize_symbol as normalize_lighter_symbol,
+    get_lighter_symbol_format
+)
 
 # Import Lighter SDK
 try:
@@ -236,55 +239,36 @@ class LighterFundingAdapter(BaseFundingAdapter):
         """
         Normalize Lighter symbol format to standard format
         
-        Lighter symbols typically follow patterns like:
+        Uses shared normalization logic from common.py which handles:
         - "BTC-PERP" -> "BTC"
-        - "ETH-PERP" -> "ETH"
-        - "SOL-PERP" -> "SOL"
-        - "PEPE-PERP" -> "PEPE"
-        - "1000PEPE-PERP" -> "PEPE" (some have multipliers)
+        - "kFLOKI-PERP" -> "FLOKI" (k-prefix)
+        - "kTOSHI-PERP" -> "TOSHI" (k-prefix)
+        - "1000PEPE-PERP" -> "PEPE" (multipliers)
         
         Args:
             dex_symbol: Lighter-specific symbol format
             
         Returns:
-            Normalized symbol (e.g., "BTC")
+            Normalized symbol (e.g., "BTC", "FLOKI", "TOSHI")
         """
-        # Remove common suffixes
-        normalized = dex_symbol.upper()
-        
-        # Remove "-PERP" suffix
-        normalized = normalized.replace('-PERP', '')
-        
-        # Remove other common perpetual suffixes
-        normalized = normalized.replace('-USD', '')
-        normalized = normalized.replace('-USDC', '')
-        normalized = normalized.replace('-USDT', '')
-        normalized = normalized.replace('PERP', '')
-        
-        # Handle multipliers (e.g., "1000PEPE" -> "PEPE")
-        # Match pattern: starts with digits followed by letters
-        match = re.match(r'^(\d+)([A-Z]+)$', normalized)
-        if match:
-            multiplier, symbol = match.groups()
-            normalized = symbol
-        
-        # Clean up any remaining special characters
-        normalized = normalized.strip('-_/')
-        
-        return normalized
+        return normalize_lighter_symbol(dex_symbol)
     
     def get_dex_symbol_format(self, normalized_symbol: str) -> str:
         """
         Convert normalized symbol back to Lighter-specific format
         
+        Uses shared logic from common.py which handles:
+        - "BTC" -> "BTC-PERP"
+        - "FLOKI" -> "kFLOKI-PERP" (k-prefix)
+        - "TOSHI" -> "kTOSHI-PERP" (k-prefix)
+        
         Args:
-            normalized_symbol: Normalized symbol (e.g., "BTC")
+            normalized_symbol: Normalized symbol (e.g., "BTC", "FLOKI", "TOSHI")
             
         Returns:
-            Lighter-specific format (e.g., "BTC-PERP")
+            Lighter-specific format (e.g., "BTC-PERP", "kFLOKI-PERP", "kTOSHI-PERP")
         """
-        # Lighter typically uses "{SYMBOL}-PERP" format
-        return f"{normalized_symbol.upper()}-PERP"
+        return get_lighter_symbol_format(normalized_symbol)
     
     async def close(self) -> None:
         """Close the API client"""
