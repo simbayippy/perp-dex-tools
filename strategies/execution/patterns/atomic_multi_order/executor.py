@@ -301,7 +301,29 @@ class AtomicMultiOrderExecutor:
             for ctx in contexts:
                 await reconcile_context_after_cancel(ctx, self.logger)
 
-            needs_retry = any(ctx.remaining_quantity > Decimal("0") for ctx in contexts)
+            # Check if retry is needed, but ignore tiny rounding dust
+            # (e.g., 0.2 remaining out of 1176 due to step_size rounding is not worth retrying)
+            RETRY_THRESHOLD_PCT = Decimal("0.01")  # 1% of planned quantity
+            
+            needs_retry = False
+            for ctx in contexts:
+                if ctx.remaining_quantity > Decimal("0"):
+                    # Calculate what % of the planned quantity is remaining
+                    planned_qty = ctx.spec.quantity or (ctx.spec.size_usd / Decimal("100"))  # rough estimate
+                    if planned_qty > Decimal("0"):
+                        remaining_pct = ctx.remaining_quantity / planned_qty
+                        if remaining_pct > RETRY_THRESHOLD_PCT:
+                            self.logger.debug(
+                                f"[{ctx.spec.exchange_client.get_exchange_name().upper()}] {ctx.spec.symbol}: "
+                                f"Significant remainder {ctx.remaining_quantity} ({remaining_pct*100:.1f}% of {planned_qty})"
+                            )
+                            needs_retry = True
+                        else:
+                            self.logger.debug(
+                                f"[{ctx.spec.exchange_client.get_exchange_name().upper()}] {ctx.spec.symbol}: "
+                                f"Ignoring rounding dust {ctx.remaining_quantity} ({remaining_pct*100:.2f}% of {planned_qty})"
+                            )
+            
             if needs_retry and retry_policy and retry_policy.max_attempts > 0:
                 self.logger.info("🔁 Initiating retry cycle for unmatched legs.")
                 retry_success, retry_attempts = await self._retry_manager.execute_retries(
