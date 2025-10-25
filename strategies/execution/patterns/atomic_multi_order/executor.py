@@ -47,6 +47,7 @@ class OrderSpec:
     execution_mode: str = "limit_only"
     timeout_seconds: float = 30.0
     limit_price_offset_pct: Optional[Decimal] = None
+    reduce_only: bool = False  # If True, can only close/reduce positions (bypasses min notional)
 
 
 @dataclass
@@ -486,6 +487,7 @@ class AtomicMultiOrderExecutor:
             timeout_seconds=spec.timeout_seconds,
             limit_price_offset_pct=spec.limit_price_offset_pct,
             cancel_event=cancel_event,
+            reduce_only=spec.reduce_only,
         )
 
         return execution_result_to_dict(spec, result)

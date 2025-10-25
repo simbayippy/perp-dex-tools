@@ -557,9 +557,24 @@ class LighterClient(BaseExchangeClient):
             # Return empty order book on error
             return {'bids': [], 'asks': []}
 
-    async def place_limit_order(self, contract_id: str, quantity: Decimal, price: Decimal,
-                                side: str) -> OrderResult:
-        """Place a post only order with Lighter using official SDK."""
+    async def place_limit_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        price: Decimal,
+        side: str,
+        reduce_only: bool = False
+    ) -> OrderResult:
+        """
+        Place a post only order with Lighter using official SDK.
+        
+        Args:
+            contract_id: Market identifier
+            quantity: Order quantity
+            price: Limit price
+            side: 'buy' or 'sell'
+            reduce_only: If True, order can only reduce existing position
+        """
         # Ensure client is initialized
         if self.lighter_client is None:
             await self._initialize_lighter_client()
@@ -588,7 +603,7 @@ class LighterClient(BaseExchangeClient):
             'is_ask': is_ask,
             'order_type': self.lighter_client.ORDER_TYPE_LIMIT,
             'time_in_force': self.lighter_client.ORDER_TIME_IN_FORCE_POST_ONLY,
-            'reduce_only': False,
+            'reduce_only': reduce_only,  # ✅ Use parameter (allows closing dust positions)
             'trigger_price': 0,
             'order_expiry': order_expiry_ms,
         }
@@ -610,19 +625,29 @@ class LighterClient(BaseExchangeClient):
         else:
             raw_payload = getattr(create_order, "__dict__", repr(create_order))
 
-        min_notional = getattr(self.config, "min_order_notional", None)
-        if min_notional is not None:
+        # 🛡️ DEFENSIVE CHECK: Min notional should already be validated in pre-flight checks
+        # ⚠️ SKIP for reduce_only orders (closing positions) - these may be below min notional
+        if not reduce_only:
+            min_notional = getattr(self.config, "min_order_notional", None)
+            if min_notional is not None:
+                notional = Decimal(quantity) * Decimal(price)
+                if notional < min_notional:
+                    self.logger.error(
+                        f"[LIGHTER] UNEXPECTED: Order notional ${notional} below minimum ${min_notional}. "
+                        f"This should have been caught in pre-flight checks!"
+                    )
+                    return OrderResult(
+                        success=False,
+                        order_id=str(client_order_index),
+                        error_message=f"Order notional below minimum ${min_notional}",
+                    )
+        else:
+            # Reduce-only order - allowed to be below min notional (closing dust positions)
             notional = Decimal(quantity) * Decimal(price)
-            if notional < min_notional:
-                self.logger.error(
-                    f"[LIGHTER] UNEXPECTED: Order notional ${notional} below minimum ${min_notional}"
-                    f"This should have been caught in pre-flight checks!"
-                )
-                return OrderResult(
-                    success=False,
-                    order_id=str(client_order_index),
-                    error_message=f"Order notional below minimum ${min_notional}",
-                )
+            self.logger.debug(
+                f"[LIGHTER] Reduce-only order: ${notional:.2f} notional "
+                f"(min notional check skipped for position closing)"
+            )
 
         if error is not None:
             self.logger.error(f"❌ [LIGHTER] Order submission failed: {error}")
@@ -634,9 +659,21 @@ class LighterClient(BaseExchangeClient):
 
         return OrderResult(success=True, order_id=str(client_order_index))
 
-    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
+    async def place_market_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        side: str,
+        reduce_only: bool = False
+    ) -> OrderResult:
         """
         Place a market order with Lighter using official SDK.
+        
+        Args:
+            contract_id: Market identifier
+            quantity: Order quantity
+            side: 'buy' or 'sell'
+            reduce_only: If True, order can only reduce existing position
         
         Uses the dedicated create_market_order() method with avg_execution_price.
         """
@@ -698,7 +735,7 @@ class LighterClient(BaseExchangeClient):
                 base_amount=base_amount,
                 avg_execution_price=avg_execution_price_int,
                 is_ask=is_ask,
-                reduce_only=False  # Allow opening or closing positions
+                reduce_only=reduce_only  # ✅ Use parameter (allows closing dust positions)
             )
             
             if error is not None:

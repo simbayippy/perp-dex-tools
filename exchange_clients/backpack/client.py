@@ -645,11 +645,20 @@ class BackpackClient(BaseExchangeClient):
         quantity: Decimal,
         price: Decimal,
         side: str,
+        reduce_only: bool = False
     ) -> OrderResult:
         """
         Place a post-only limit order on Backpack.
         
-        Automatically retries with adjusted prices if the order would immediately match.
+        Args:
+            contract_id: Contract identifier
+            quantity: Order quantity
+            price: Limit price
+            side: 'buy' or 'sell'
+            reduce_only: If True, order can only reduce existing position
+        
+        Note:
+            Automatically retries with adjusted prices if the order would immediately match.
         """
         backpack_side = "Bid" if side.lower() == "buy" else "Ask"
 
@@ -878,6 +887,7 @@ class BackpackClient(BaseExchangeClient):
         contract_id: str,
         quantity: Decimal,
         side: str,
+        reduce_only: bool = False
     ) -> OrderResult:
         """Place a market order for immediate execution."""
         backpack_side = "Bid" if side.lower() == "buy" else "Ask"

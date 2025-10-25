@@ -231,7 +231,8 @@ class GrvtClient(BaseExchangeClient):
         contract_id: str,
         quantity: Decimal,
         price: Decimal,
-        side: str
+        side: str,
+        reduce_only: bool = False
     ) -> OrderResult:
         """
         Place a limit order at a specific price on GRVT.
@@ -290,7 +291,13 @@ class GrvtClient(BaseExchangeClient):
             raise ValueError("Invalid direction")
 
 
-    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
+    async def place_market_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        side: str,
+        reduce_only: bool = False
+    ) -> OrderResult:
         """
         Place a market order on GRVT (uses limit order without post_only to ensure fill).
         This acts as a true market order by using an aggressive limit price.

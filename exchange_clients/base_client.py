@@ -284,7 +284,8 @@ class BaseExchangeClient(ABC):
         contract_id: str, 
         quantity: Decimal, 
         price: Decimal, 
-        side: str
+        side: str,
+        reduce_only: bool = False
     ) -> OrderResult:
         """
         Place a limit order at a specific price.
@@ -297,6 +298,7 @@ class BaseExchangeClient(ABC):
             quantity: Order size
             price: Limit price
             side: 'buy' or 'sell'
+            reduce_only: If True, order can only reduce existing position (allows closing dust positions below min notional)
             
         Returns:
             OrderResult with order details
@@ -305,6 +307,11 @@ class BaseExchangeClient(ABC):
             >>> result = await client.place_limit_order("BTC", Decimal("1.0"), Decimal("50000"), "buy")
             >>> if result.success:
             ...     print(f"Order placed: {result.order_id}")
+            
+        Note on reduce_only:
+            When True, this bypasses minimum notional checks and allows closing positions
+            that have fallen below the minimum order size (e.g., $4 position with $5 minimum).
+            Most exchanges allow reduce-only orders regardless of notional value.
         """
         pass
 
@@ -313,7 +320,8 @@ class BaseExchangeClient(ABC):
         self, 
         contract_id: str, 
         quantity: Decimal, 
-        side: str
+        side: str,
+        reduce_only: bool = False
     ) -> OrderResult:
         """
         Place a market order for immediate execution.
@@ -325,6 +333,7 @@ class BaseExchangeClient(ABC):
             contract_id: Contract/symbol identifier
             quantity: Order size
             side: 'buy' or 'sell'
+            reduce_only: If True, order can only reduce existing position (allows closing dust positions below min notional)
             
         Returns:
             OrderResult with order details

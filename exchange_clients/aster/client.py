@@ -491,7 +491,8 @@ class AsterClient(BaseExchangeClient):
         contract_id: str,
         quantity: Decimal,
         price: Decimal,
-        side: str
+        side: str,
+        reduce_only: bool = False
     ) -> OrderResult:
         """
         Place a limit order at a specific price on Aster.
@@ -501,6 +502,7 @@ class AsterClient(BaseExchangeClient):
             quantity: Order quantity
             price: Limit price
             side: 'buy' or 'sell'
+            reduce_only: If True, order can only reduce existing position (bypasses min notional)
             
         Returns:
             OrderResult with order details
@@ -542,17 +544,26 @@ class AsterClient(BaseExchangeClient):
 
         # 🛡️ DEFENSIVE CHECK: Min notional should already be validated in pre-flight checks
         # This is a last-resort safety net to catch bugs where pre-flight was bypassed
-        min_notional = self.get_min_order_notional(normalized_contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
-        if min_notional is not None:
+        # ⚠️ SKIP for reduce_only orders (closing positions) - these may be below min notional
+        if not reduce_only:
+            min_notional = self.get_min_order_notional(normalized_contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
+            if min_notional is not None:
+                order_notional = rounded_quantity * rounded_price
+                if order_notional < min_notional:
+                    # This should NEVER happen if pre-flight checks ran correctly
+                    message = (
+                        f"[ASTER] UNEXPECTED: Order notional ${order_notional} below minimum ${min_notional}. "
+                        f"This should have been caught in pre-flight checks!"
+                    )
+                    self.logger.error(message)
+                    raise ValueError(message)
+        else:
+            # Reduce-only order - allowed to be below min notional (closing dust positions)
             order_notional = rounded_quantity * rounded_price
-            if order_notional < min_notional:
-                # This should NEVER happen if pre-flight checks ran correctly
-                message = (
-                    f"[ASTER] UNEXPECTED: Order notional ${order_notional} below minimum ${min_notional}. "
-                    f"This should have been caught in pre-flight checks!"
-                )
-                self.logger.error(message)
-                raise ValueError(message)
+            self.logger.debug(
+                f"[ASTER] Reduce-only order: ${order_notional:.2f} notional "
+                f"(min notional check skipped for position closing)"
+            )
 
         # Place limit order with post-only (GTX) for maker fees
         order_data = {
@@ -563,6 +574,10 @@ class AsterClient(BaseExchangeClient):
             'price': str(rounded_price),
             'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
         }
+        
+        # Add reduceOnly flag if this is a closing operation
+        if reduce_only:
+            order_data['reduceOnly'] = 'true'
         
         self.logger.debug(f"Placing {side.upper()} limit order: {rounded_quantity} @ {rounded_price}")
 
@@ -643,9 +658,21 @@ class AsterClient(BaseExchangeClient):
                 error_message=f'Unknown order status: {order_status_upper or order_status}'
             )
 
-    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
+    async def place_market_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        side: str,
+        reduce_only: bool = False
+    ) -> OrderResult:
         """
         Place a market order on Aster (true market order for immediate execution).
+        
+        Args:
+            contract_id: Contract identifier
+            quantity: Order quantity
+            side: 'buy' or 'sell'
+            reduce_only: If True, order can only reduce existing position (bypasses min notional)
         """
         try:
             # Contract ID should already be in Aster format (e.g., "MONUSDT")
@@ -692,15 +719,26 @@ class AsterClient(BaseExchangeClient):
 
             expected_price = best_ask if side.lower() == 'buy' else best_bid
 
-            min_notional = self.get_min_order_notional(contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
-            if min_notional is not None and expected_price > 0:
+            # 🛡️ DEFENSIVE CHECK: Min notional should already be validated in pre-flight checks
+            # ⚠️ SKIP for reduce_only orders (closing positions) - these may be below min notional
+            if not reduce_only:
+                min_notional = self.get_min_order_notional(contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
+                if min_notional is not None and expected_price > 0:
+                    order_notional = rounded_quantity * expected_price
+                    if order_notional < min_notional:
+                        message = (
+                            f"[ASTER] UNEXPECTED: Market order notional ${order_notional} below minimum ${min_notional}. "
+                            f"This should have been caught in pre-flight checks!"
+                        )
+                        self.logger.error(message)
+                        return OrderResult(success=False, error_message=message)
+            else:
+                # Reduce-only order - allowed to be below min notional (closing dust positions)
                 order_notional = rounded_quantity * expected_price
-                if order_notional < min_notional:
-                    message = (
-                        f"[ASTER] Market order notional ${order_notional} below minimum ${min_notional}"
-                    )
-                    self.logger.error(message)
-                    return OrderResult(success=False, error_message=message)
+                self.logger.debug(
+                    f"[ASTER] Reduce-only market order: ${order_notional:.2f} notional "
+                    f"(min notional check skipped for position closing)"
+                )
 
             # Place the market order
             order_data = {
@@ -709,6 +747,10 @@ class AsterClient(BaseExchangeClient):
                 'type': 'MARKET',
                 'quantity': str(rounded_quantity)
             }
+            
+            # Add reduceOnly flag if this is a closing operation
+            if reduce_only:
+                order_data['reduceOnly'] = 'true'
             
             self.logger.info(
                 f"📤 [ASTER] Placing market {side.upper()} order: {rounded_quantity} @ ~${expected_price}"
