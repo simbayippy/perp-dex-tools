@@ -408,23 +408,58 @@ class PositionOpener:
             )
             return None
 
+        # Get quantity multipliers for each exchange
+        # e.g., Lighter 1000TOSHI has 1000x, Aster TOSHIUSDT has 1x
+        long_multiplier = Decimal(str(long_client.get_quantity_multiplier(symbol)))
+        short_multiplier = Decimal(str(short_client.get_quantity_multiplier(symbol)))
+
+        # Calculate quantities for each exchange based on target USD size
         raw_long_qty = adjusted_size / long_price
         raw_short_qty = adjusted_size / short_price
 
         rounded_long_qty = self._round_quantity(long_client, raw_long_qty)
         rounded_short_qty = self._round_quantity(short_client, raw_short_qty)
 
-        common_qty = min(rounded_long_qty, rounded_short_qty)
-        if common_qty <= Decimal("0"):
+        # If multipliers differ, we need to ensure we're trading the same # of actual tokens
+        # Example: Lighter 26 units of 1000TOSHI = 26,000 tokens
+        #          Aster needs 26,000 units of TOSHI = 26,000 tokens
+        if long_multiplier != short_multiplier:
+            # Convert both to actual token amounts
+            long_actual_tokens = rounded_long_qty * long_multiplier
+            short_actual_tokens = rounded_short_qty * short_multiplier
+            
+            # Take the minimum actual token amount
+            common_actual_tokens = min(long_actual_tokens, short_actual_tokens)
+            
+            # Convert back to exchange-specific units
+            final_long_qty = common_actual_tokens / long_multiplier
+            final_short_qty = common_actual_tokens / short_multiplier
+            
+            # Round again after conversion
+            final_long_qty = self._round_quantity(long_client, final_long_qty)
+            final_short_qty = self._round_quantity(short_client, final_short_qty)
+            
+            strategy.logger.log(
+                f"📊 [MULTIPLIER] {symbol}: long={final_long_qty} (×{long_multiplier}), "
+                f"short={final_short_qty} (×{short_multiplier}) = {common_actual_tokens} tokens",
+                "DEBUG",
+            )
+        else:
+            # Same multiplier, use traditional common_qty approach
+            common_qty = min(rounded_long_qty, rounded_short_qty)
+            final_long_qty = common_qty
+            final_short_qty = common_qty
+
+        if final_long_qty <= Decimal("0") or final_short_qty <= Decimal("0"):
             strategy.logger.log(
                 f"⛔ [SKIP] {symbol}: Unable to derive non-zero quantity after rounding "
-                f"(long={rounded_long_qty}, short={rounded_short_qty})",
+                f"(long={final_long_qty}, short={final_short_qty})",
                 "WARNING",
             )
             return None
 
-        long_notional = common_qty * long_price
-        short_notional = common_qty * short_price
+        long_notional = final_long_qty * long_price
+        short_notional = final_short_qty * short_price
 
         orders = [
             OrderSpec(
@@ -432,7 +467,7 @@ class PositionOpener:
                 symbol=symbol,
                 side="buy",
                 size_usd=long_notional,
-                quantity=common_qty,
+                quantity=final_long_qty,
                 execution_mode="limit_only",
                 timeout_seconds=30.0,
                 limit_price_offset_pct=limit_offset_pct,
@@ -442,7 +477,7 @@ class PositionOpener:
                 symbol=symbol,
                 side="sell",
                 size_usd=short_notional,
-                quantity=common_qty,
+                quantity=final_short_qty,
                 execution_mode="limit_only",
                 timeout_seconds=30.0,
                 limit_price_offset_pct=limit_offset_pct,
@@ -451,7 +486,7 @@ class PositionOpener:
 
         return OrderPlan(
             orders=orders,
-            quantity=common_qty,
+            quantity=final_long_qty,  # Store long qty as reference (in long exchange's units)
             long_notional=long_notional,
             short_notional=short_notional,
             long_price=long_price,
