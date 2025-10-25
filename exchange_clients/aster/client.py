@@ -199,6 +199,25 @@ class AsterClient(BaseExchangeClient):
         # Use the common utility function
         return get_aster_symbol_format(symbol)
     
+    def get_quantity_multiplier(self, symbol: str) -> int:
+        """
+        Get the quantity multiplier for a symbol on Aster.
+        
+        Aster's 1000-prefix tokens (1000BONKUSDT, etc.) have a 1000x multiplier,
+        similar to Lighter's k-prefix tokens.
+        
+        The price shown is 1000x the actual token price.
+        Example: 1000BONKUSDT shows $0.01467, CoinGecko shows $0.00001467 (1000x)
+        
+        Args:
+            symbol: Normalized symbol (e.g., "TOSHI", "BTC")
+            
+        Returns:
+            1000 for 1000-prefix tokens, 1 for others
+        """
+        from exchange_clients.aster.common import get_quantity_multiplier
+        return get_quantity_multiplier(symbol)
+    
     def round_to_step(self, quantity: Decimal) -> Decimal:
         """
         Round quantity to the exchange's step size.
@@ -535,6 +554,34 @@ class AsterClient(BaseExchangeClient):
         if not tick_size:
             # Fallback to self.config.tick_size if cache miss
             tick_size = getattr(self.config, 'tick_size', None)
+        
+        # If still no tick_size, fetch contract attributes to populate cache
+        if not tick_size:
+            self.logger.warning(
+                f"⚠️  [ASTER] tick_size not cached for {normalized_contract_id}, fetching contract attributes..."
+            )
+            try:
+                # Extract ticker from normalized_contract_id (e.g., "AVNTUSDT" -> "AVNT")
+                from exchange_clients.aster.common import normalize_symbol
+                ticker = normalize_symbol(normalized_contract_id)
+                
+                # Temporarily update config ticker to fetch the right contract
+                original_ticker = self.config.ticker
+                self.config.ticker = ticker
+                
+                # Fetch contract attributes (this will populate the cache)
+                await self.get_contract_attributes()
+                
+                # Restore original ticker
+                self.config.ticker = original_ticker
+                
+                # Try cache lookup again
+                tick_size = self._tick_size_cache.get(normalized_contract_id) or self._tick_size_cache.get(ticker.upper())
+                
+                if tick_size:
+                    self.logger.info(f"✅ [ASTER] Fetched tick_size for {normalized_contract_id}: {tick_size}")
+            except Exception as e:
+                self.logger.error(f"❌ [ASTER] Failed to fetch tick_size for {normalized_contract_id}: {e}")
         
         if tick_size:
             # Use ROUND_DOWN to avoid price manipulation (never round up user's sell price)

@@ -364,7 +364,11 @@ class PositionCloser:
         Detect severe imbalance between legs (> 5% difference).
         
         Checks if one leg's quantity is significantly different from the other,
-        indicating a delta-neutral hedge has become unbalanced (e.g., 72 vs 1).
+        indicating a delta-neutral hedge has become unbalanced (e.g., 72k tokens vs 1k tokens).
+        
+        Quantities are normalized to actual token amounts to handle exchange multipliers:
+        - Lighter 104 units (×1000) = 104,000 tokens
+        - Aster 104,000 units (×1) = 104,000 tokens
         
         Args:
             position: Position to check
@@ -373,25 +377,25 @@ class PositionCloser:
         Returns:
             "SEVERE_IMBALANCE" if imbalance detected, None otherwise
         """
-        long_qty, short_qty = self._extract_leg_quantities(position, snapshots)
+        long_tokens, short_tokens = self._extract_leg_quantities(position, snapshots)
         
         # If we can't extract quantities, skip check (handled by _detect_liquidation)
-        if long_qty is None or short_qty is None:
+        if long_tokens is None or short_tokens is None:
             return None
         
         # If either leg is zero, skip (handled by _detect_liquidation)
-        if long_qty <= self._ZERO_TOLERANCE or short_qty <= self._ZERO_TOLERANCE:
+        if long_tokens <= self._ZERO_TOLERANCE or short_tokens <= self._ZERO_TOLERANCE:
             return None
         
         # Calculate percentage difference: (max - min) / max
-        min_qty = min(long_qty, short_qty)
-        max_qty = max(long_qty, short_qty)
-        diff_pct = (max_qty - min_qty) / max_qty
+        min_tokens = min(long_tokens, short_tokens)
+        max_tokens = max(long_tokens, short_tokens)
+        diff_pct = (max_tokens - min_tokens) / max_tokens
         
         if diff_pct > self._IMBALANCE_THRESHOLD:
             self._strategy.logger.log(
                 f"⚠️ Severe imbalance detected for {position.symbol}: "
-                f"{position.long_dex}={long_qty} vs {position.short_dex}={short_qty} "
+                f"{position.long_dex}={long_tokens:.0f} tokens vs {position.short_dex}={short_tokens:.0f} tokens "
                 f"(diff={diff_pct*100:.1f}%, threshold={self._IMBALANCE_THRESHOLD*100:.1f}%)",
                 "WARNING",
             )
@@ -407,12 +411,16 @@ class PositionCloser:
         """
         Extract absolute quantities for both legs from snapshots.
         
+        Converts exchange-specific units to actual token amounts for accurate comparison.
+        Example: Lighter's 104 units (×1000 multiplier) = 104,000 tokens
+                 Aster's 104,000 units (×1 multiplier) = 104,000 tokens
+        
         Args:
             position: Position being evaluated
             snapshots: Exchange snapshots
             
         Returns:
-            Tuple of (long_qty, short_qty) or (None, None) if unavailable
+            Tuple of (long_actual_tokens, short_actual_tokens) or (None, None) if unavailable
         """
         long_snapshot = snapshots.get(position.long_dex)
         short_snapshot = snapshots.get(position.short_dex)
@@ -423,10 +431,26 @@ class PositionCloser:
         if long_snapshot.quantity is None or short_snapshot.quantity is None:
             return None, None
         
-        long_qty = long_snapshot.quantity.copy_abs()
-        short_qty = short_snapshot.quantity.copy_abs()
+        # Get exchange-specific quantities (in their own units)
+        long_qty_exchange = long_snapshot.quantity.copy_abs()
+        short_qty_exchange = short_snapshot.quantity.copy_abs()
         
-        return long_qty, short_qty
+        # Get the exchange clients and their quantity multipliers
+        long_client = self._strategy.exchange_clients.get(position.long_dex)
+        short_client = self._strategy.exchange_clients.get(position.short_dex)
+        
+        if not long_client or not short_client:
+            return None, None
+        
+        # Get multipliers (e.g., Lighter 1000TOSHI = 1000x, Aster TOSHI = 1x)
+        long_multiplier = Decimal(str(long_client.get_quantity_multiplier(position.symbol)))
+        short_multiplier = Decimal(str(short_client.get_quantity_multiplier(position.symbol)))
+        
+        # Convert to actual token amounts for fair comparison
+        long_actual_tokens = long_qty_exchange * long_multiplier
+        short_actual_tokens = short_qty_exchange * short_multiplier
+        
+        return long_actual_tokens, short_actual_tokens
 
     @classmethod
     def _has_open_position(cls, snapshot: Optional["ExchangePositionSnapshot"]) -> bool:
@@ -647,7 +671,7 @@ class PositionCloser:
 
         for leg in legs:
             try:
-                spec = await self._build_order_spec(position.symbol, leg)
+                spec = await self._build_order_spec(position.symbol, leg, reason=reason)
             except Exception as exc:
                 strategy.logger.log(
                     f"[{leg['dex']}] Unable to prepare close order for {position.symbol}: {exc}",
@@ -730,6 +754,7 @@ class PositionCloser:
         self,
         symbol: str,
         leg: Dict[str, Any],
+        reason: str = "UNKNOWN",
     ) -> OrderSpec:
         leg["contract_id"] = await self._prepare_contract_context(
             leg["client"],
@@ -746,7 +771,21 @@ class PositionCloser:
 
         quantity = leg["quantity"]
         notional = quantity * price
-        limit_offset_pct = self._resolve_limit_offset_pct()
+        
+        # Use market orders for critical situations requiring immediate execution
+        # Use limit orders for normal exits to minimize slippage
+        critical_reasons = {
+            "SEVERE_IMBALANCE",
+            "LEG_LIQUIDATED", 
+            "LIQUIDATION_ASTER",
+            "LIQUIDATION_LIGHTER",
+            "LIQUIDATION_BACKPACK",
+            "LIQUIDATION_PARADEX",
+        }
+        
+        use_market = reason in critical_reasons
+        execution_mode = "market_only" if use_market else "limit_only"
+        limit_offset_pct = None if use_market else self._resolve_limit_offset_pct()
 
         return OrderSpec(
             exchange_client=leg["client"],
@@ -754,7 +793,7 @@ class PositionCloser:
             side=leg["side"],
             size_usd=notional,
             quantity=quantity,
-            execution_mode="limit_only",
+            execution_mode=execution_mode,
             timeout_seconds=30.0,
             limit_price_offset_pct=limit_offset_pct,
             reduce_only=True,  # ✅ Allows closing dust positions below min notional

@@ -417,6 +417,26 @@ class BaseExchangeClient(ABC):
         
         # Final fallback: return symbol as-is (exchange will normalize it)
         return symbol
+    
+    def get_quantity_multiplier(self, symbol: str) -> int:
+        """
+        Get the quantity multiplier for a symbol on this exchange.
+        
+        Some exchanges use quantity multipliers where 1 contract unit represents
+        multiple tokens. For example:
+        - Lighter's kTOSHI: 1 unit = 1000 TOSHI tokens (multiplier=1000)
+        - Aster's TOSHI: 1 unit = 1 TOSHI token (multiplier=1, despite "1000TOSHIUSDT" name)
+        
+        This is critical for cross-exchange trading where the same USD amount needs
+        different quantities on different exchanges due to different unit definitions.
+        
+        Args:
+            symbol: Normalized symbol (e.g., "TOSHI", "BTC")
+            
+        Returns:
+            Quantity multiplier (default 1 for most exchanges)
+        """
+        return 1  # Default: no multiplier (1 unit = 1 token)
 
     @abstractmethod
     async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:

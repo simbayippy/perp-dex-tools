@@ -235,11 +235,25 @@ class AtomicMultiOrderExecutor:
                             trigger_qty = Decimal(str(trigger_qty))
                         trigger_qty = trigger_qty.copy_abs()
 
+                        # Account for quantity multipliers when matching across exchanges
+                        # Example: Lighter kTOSHI (84 units = 84k tokens) vs Aster TOSHI (84k units = 84k tokens)
+                        trigger_multiplier = trigger_ctx.spec.exchange_client.get_quantity_multiplier(trigger_ctx.spec.symbol)
+                        ctx_multiplier = ctx.spec.exchange_client.get_quantity_multiplier(ctx.spec.symbol)
+                        
+                        # Convert trigger quantity to "actual tokens" then to target exchange's units
+                        actual_tokens = trigger_qty * Decimal(str(trigger_multiplier))
+                        target_qty = actual_tokens / Decimal(str(ctx_multiplier))
+                        
+                        if trigger_multiplier != ctx_multiplier:
+                            self.logger.debug(
+                                f"📊 Multiplier adjustment for {ctx.spec.symbol}: "
+                                f"trigger_qty={trigger_qty} (×{trigger_multiplier}) → "
+                                f"target_qty={target_qty} (×{ctx_multiplier})"
+                            )
+
                         spec_qty = getattr(ctx.spec, "quantity", None)
                         if spec_qty is not None:
-                            target_qty = min(trigger_qty, Decimal(str(spec_qty)))
-                        else:
-                            target_qty = trigger_qty
+                            target_qty = min(target_qty, Decimal(str(spec_qty)))
 
                         if target_qty < Decimal("0"):
                             target_qty = Decimal("0")

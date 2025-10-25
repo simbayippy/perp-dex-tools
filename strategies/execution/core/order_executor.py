@@ -181,7 +181,7 @@ class OrderExecutor:
 
             if mode == ExecutionMode.MARKET_ONLY:
                 result = await self._execute_market(
-                    exchange_client, symbol, side, size_usd, quantity
+                    exchange_client, symbol, side, size_usd, quantity, reduce_only
                 )
             
             elif mode == ExecutionMode.LIMIT_ONLY:
@@ -217,7 +217,7 @@ class OrderExecutor:
                         f"Limit order timeout for {symbol}, falling back to market"
                     )
                     result = await self._execute_market(
-                        exchange_client, symbol, side, size_usd, quantity
+                        exchange_client, symbol, side, size_usd, quantity, reduce_only
                     )
                     result.execution_mode_used = "market_fallback"
             
@@ -517,10 +517,14 @@ class OrderExecutor:
         symbol: str,
         side: str,
         size_usd: Optional[Decimal],
-        quantity: Optional[Decimal]
+        quantity: Optional[Decimal],
+        reduce_only: bool = False
     ) -> ExecutionResult:
         """
         Execute market order immediately.
+        
+        Args:
+            reduce_only: If True, order can only reduce existing position (bypasses min notional)
         """
         try:
             # Get current price for quantity calculation & slippage tracking
@@ -552,7 +556,8 @@ class OrderExecutor:
             result = await exchange_client.place_market_order(
                 contract_id=contract_id,
                 quantity=float(order_quantity),
-                side=side
+                side=side,
+                reduce_only=reduce_only
             )
             
             if not result.success:

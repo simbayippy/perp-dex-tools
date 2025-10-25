@@ -18,4 +18,4 @@ config:
   limit_order_offset_pct: 0.0002
   check_interval_seconds: 60
   dry_run: false
-  max_oi_usd: !!float '4500000'
+  max_oi_usd: !!float '1500000'

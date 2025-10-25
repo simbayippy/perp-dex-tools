@@ -104,12 +104,16 @@ class LighterClient(BaseExchangeClient):
         Get Lighter market_id for a given symbol.
         
         Args:
-            symbol: Trading symbol (e.g., 'BTC', 'ETH', 'G')
+            symbol: Trading symbol (e.g., 'BTC', 'ETH', 'TOSHI')
             
         Returns:
             Integer market_id, or None if not found
         """
         try:
+            # Convert normalized symbol to Lighter's format (e.g., "TOSHI" -> "1000TOSHI")
+            from exchange_clients.lighter.common import get_lighter_symbol_format
+            lighter_symbol = get_lighter_symbol_format(symbol)
+            
             order_api = lighter.OrderApi(self.api_client)
             order_books = await order_api.order_books()
             
@@ -118,8 +122,11 @@ class LighterClient(BaseExchangeClient):
             
             for market in order_books.order_books:
                 available_symbols.append(market.symbol)
-                # Try exact match
-                if market.symbol == symbol:
+                # Try Lighter-specific format first (e.g., "1000TOSHI")
+                if market.symbol.upper() == lighter_symbol.upper():
+                    return market.market_id
+                # Try exact match with original symbol
+                elif market.symbol == symbol:
                     return market.market_id
                 # Try case-insensitive match
                 elif market.symbol.upper() == symbol.upper():
@@ -127,7 +134,7 @@ class LighterClient(BaseExchangeClient):
             
             # Symbol not found - provide helpful error message
             self.logger.warning(
-                f"❌ [LIGHTER] Symbol '{symbol}' NOT found in Lighter markets. "
+                f"❌ [LIGHTER] Symbol '{symbol}' (looking for '{lighter_symbol}') NOT found in Lighter markets. "
                 f"Available symbols: {', '.join(available_symbols[:10])}{'...' if len(available_symbols) > 10 else ''}"
             )
             return None
@@ -249,25 +256,42 @@ class LighterClient(BaseExchangeClient):
     
     def normalize_symbol(self, symbol: str) -> str:
         """
-        Convert normalized symbol to Lighter's expected format.
+        Normalize Lighter symbol to standard format.
         
-        Lighter accepts base asset format (e.g., "BTC", "ETH", "ZORA").
-        The market_id lookup handles both "BTC" and "BTC-PERP" formats.
+        Uses shared normalization logic that handles:
+        - "BTC" -> "BTC"
+        - "1000TOSHI" -> "TOSHI" (1000-prefix removal)
+        - "1000FLOKI" -> "FLOKI"
+        - "-PERP" suffix removal
         
         Args:
-            symbol: Normalized symbol (e.g., "BTC", "ETH", "ZORA")
+            symbol: Lighter symbol (e.g., "BTC", "1000TOSHI", "BTC-PERP")
             
         Returns:
-            Lighter-formatted symbol (base asset only, uppercase)
+            Normalized symbol (base asset only, uppercase)
         """
-        # Strip common quote currencies if present
-        symbol_upper = symbol.upper()
-        for suffix in ['USDT', 'USDC', '-PERP', 'PERP']:
-            if symbol_upper.endswith(suffix):
-                symbol_upper = symbol_upper[:-len(suffix)]
+        # Use shared implementation from common.py which handles 1000-prefix
+        from exchange_clients.lighter.common import normalize_symbol as normalize_lighter_symbol
+        return normalize_lighter_symbol(symbol)
+    
+    def get_quantity_multiplier(self, symbol: str) -> int:
+        """
+        Get the quantity multiplier for a symbol on Lighter.
         
-        # Clean up any trailing separators
-        return symbol_upper.strip('-_/')
+        Lighter's k-prefix tokens (kTOSHI, kFLOKI, etc.) use a 1000x multiplier:
+        - 1 contract unit = 1000 actual tokens
+        - Price is per 1000 tokens
+        
+        Example: kTOSHI at $0.7655 means 1000 TOSHI tokens cost $0.7655
+        
+        Args:
+            symbol: Normalized symbol (e.g., "TOSHI", "BTC")
+            
+        Returns:
+            1000 for k-prefix tokens, 1 for others
+        """
+        from exchange_clients.lighter.common import get_quantity_multiplier
+        return get_quantity_multiplier(symbol)
 
     def _handle_websocket_order_update(self, order_data_list: List[Dict[str, Any]]):
         """Handle order updates from WebSocket."""
@@ -1017,6 +1041,14 @@ class LighterClient(BaseExchangeClient):
             self.logger.error("Ticker is empty")
             raise ValueError("Ticker is empty")
 
+        # Convert normalized ticker to Lighter's format (e.g., "TOSHI" -> "1000TOSHI")
+        from exchange_clients.lighter.common import get_lighter_symbol_format
+        lighter_symbol = get_lighter_symbol_format(ticker)
+        
+        self.logger.debug(
+            f"[LIGHTER] Looking for ticker '{ticker}' as '{lighter_symbol}' in Lighter markets"
+        )
+        
         order_api = lighter.OrderApi(self.api_client)
         # Get all order books to find the market for our ticker
         order_books = await order_api.order_books()
@@ -1027,8 +1059,12 @@ class LighterClient(BaseExchangeClient):
         
         for market in order_books.order_books:
             available_symbols.append(market.symbol)
-            # Try exact match first
-            if market.symbol == ticker:
+            # Try Lighter-specific format first (e.g., "1000TOSHI")
+            if market.symbol.upper() == lighter_symbol.upper():
+                market_info = market
+                break
+            # Try exact match with original ticker
+            elif market.symbol == ticker:
                 market_info = market
                 break
             # Try case-insensitive match
@@ -1353,11 +1389,23 @@ class LighterClient(BaseExchangeClient):
             return None
 
         normalized_symbol = self.normalize_symbol(symbol).upper()
-
+        
+        self.logger.debug(
+            f"[LIGHTER] get_position_snapshot looking for normalized symbol: '{normalized_symbol}'"
+        )
+        
         for pos in positions:
-            pos_symbol = (pos.get("symbol") or "").upper()
-            if pos_symbol != normalized_symbol:
+            # Normalize the position's symbol too (e.g., "1000TOSHI" -> "TOSHI")
+            pos_symbol_raw = pos.get("symbol") or ""
+            pos_symbol_normalized = self.normalize_symbol(pos_symbol_raw).upper()
+            
+            
+            if pos_symbol_normalized != normalized_symbol:
                 continue
+            
+            self.logger.debug(
+                f"[LIGHTER] ✓ Found matching position for '{normalized_symbol}', building snapshot..."
+            )
  
             raw_quantity = pos.get("position") or Decimal("0")
             try:
@@ -1429,6 +1477,9 @@ class LighterClient(BaseExchangeClient):
                 metadata={k: v for k, v in metadata.items() if v is not None},
             )
 
+        self.logger.debug(
+            f"[LIGHTER] No position found for '{normalized_symbol}' after checking {len(positions)} positions"
+        )
         return None
 
     async def get_account_pnl(self) -> Optional[Decimal]:

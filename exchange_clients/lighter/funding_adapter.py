@@ -240,10 +240,10 @@ class LighterFundingAdapter(BaseFundingAdapter):
         Normalize Lighter symbol format to standard format
         
         Uses shared normalization logic from common.py which handles:
-        - "BTC-PERP" -> "BTC"
-        - "kFLOKI-PERP" -> "FLOKI" (k-prefix)
-        - "kTOSHI-PERP" -> "TOSHI" (k-prefix)
-        - "1000PEPE-PERP" -> "PEPE" (multipliers)
+        - "BTC" -> "BTC"
+        - "1000FLOKI" -> "FLOKI" (1000-prefix)
+        - "1000TOSHI" -> "TOSHI" (1000-prefix)
+        - "1000PEPE" -> "PEPE" (1000-prefix)
         
         Args:
             dex_symbol: Lighter-specific symbol format
@@ -258,15 +258,15 @@ class LighterFundingAdapter(BaseFundingAdapter):
         Convert normalized symbol back to Lighter-specific format
         
         Uses shared logic from common.py which handles:
-        - "BTC" -> "BTC-PERP"
-        - "FLOKI" -> "kFLOKI-PERP" (k-prefix)
-        - "TOSHI" -> "kTOSHI-PERP" (k-prefix)
+        - "BTC" -> "BTC"
+        - "FLOKI" -> "1000FLOKI" (1000-prefix)
+        - "TOSHI" -> "1000TOSHI" (1000-prefix)
         
         Args:
             normalized_symbol: Normalized symbol (e.g., "BTC", "FLOKI", "TOSHI")
             
         Returns:
-            Lighter-specific format (e.g., "BTC-PERP", "kFLOKI-PERP", "kTOSHI-PERP")
+            Lighter-specific format (e.g., "BTC", "1000FLOKI", "1000TOSHI")
         """
         return get_lighter_symbol_format(normalized_symbol)
     
