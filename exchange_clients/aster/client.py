@@ -58,9 +58,8 @@ class AsterClient(BaseExchangeClient):
         self._latest_orders: Dict[str, OrderInfo] = {}
         self._min_order_notional: Dict[str, Decimal] = {}
         
-        # Per-symbol tick size cache (fixes multi-symbol tick size bug)
-        # Maps normalized symbol or contract_id -> tick_size
-        # e.g., {"STBL": Decimal("0.0001"), "STBLUSDT": Decimal("0.0001")}
+        # Per-symbol tick size cache for multi-symbol trading
+        # Maps normalized_symbol -> tick_size (e.g., "STBL" -> Decimal("0.0001"))
         self._tick_size_cache: Dict[str, Decimal] = {}
 
     def _validate_config(self) -> None:
@@ -530,15 +529,27 @@ class AsterClient(BaseExchangeClient):
             f"(step_size={getattr(self.config, 'step_size', 'unknown')})"
         )
         
-        # ⚠️ PRICE PRECISION FIX: DO NOT round price - let Aster's API handle precision
-        # Previous quantize logic caused catastrophic rounding errors (e.g., $0.93 → $1.00)
-        # Aster's API will reject if precision is wrong, which is better than wrong prices
-        rounded_price = price
+        # Round price to tick_size precision to satisfy: (price - minPrice) % tickSize == 0
+        # Look up symbol-specific tick_size from cache (for multi-symbol trading)
+        tick_size = self._tick_size_cache.get(normalized_contract_id) or self._tick_size_cache.get(contract_id)
+        if not tick_size:
+            # Fallback to self.config.tick_size if cache miss
+            tick_size = getattr(self.config, 'tick_size', None)
         
-        self.logger.debug(
-            f"Using price as-is: {rounded_price} "
-            f"(Aster API will handle precision)"
-        )
+        if tick_size:
+            # Use ROUND_DOWN to avoid price manipulation (never round up user's sell price)
+            from decimal import ROUND_DOWN
+            rounded_price = price.quantize(tick_size, rounding=ROUND_DOWN)
+            self.logger.debug(
+                f"Rounded price to tick_size: {price} → {rounded_price} "
+                f"(tick_size={tick_size}, symbol={normalized_contract_id})"
+            )
+        else:
+            # Fallback: no tick_size available, use price as-is and let exchange reject if invalid
+            rounded_price = price
+            self.logger.warning(
+                f"No tick_size available for {normalized_contract_id}, using price as-is: {rounded_price}"
+            )
 
         # 🛡️ DEFENSIVE CHECK: Min notional should already be validated in pre-flight checks
         # This is a last-resort safety net to catch bugs where pre-flight was bypassed
@@ -1442,9 +1453,9 @@ class AsterClient(BaseExchangeClient):
                             if filter_info.get('filterType') == 'PRICE_FILTER':
                                 tick_size_value = Decimal(filter_info['tickSize'].strip('0'))
                                 self.config.tick_size = tick_size_value
-                                # Cache tick_size for this symbol (multi-symbol trading support)
-                                self._tick_size_cache[contract_id_value] = tick_size_value
+                                # Cache per-symbol for multi-symbol trading
                                 self._tick_size_cache[ticker.upper()] = tick_size_value
+                                self._tick_size_cache[contract_id_value] = tick_size_value
                                 break
 
                         # Get LOT_SIZE filter (quantity precision)
