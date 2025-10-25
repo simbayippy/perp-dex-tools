@@ -502,6 +502,9 @@ class GrvtClient(BaseExchangeClient):
 
                 self.config.contract_id = market.get('instrument', '')
                 self.config.tick_size = Decimal(market.get('tick_size', 0))
+                
+                # Cache contract_id for this symbol (multi-symbol trading support)
+                self._contract_id_cache[ticker.upper()] = self.config.contract_id
 
                 # Validate minimum quantity
                 min_size = Decimal(market.get('min_size', 0))

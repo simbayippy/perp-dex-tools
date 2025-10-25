@@ -498,6 +498,10 @@ class ParadexClient(BaseExchangeClient):
 
         # Set contract_id to market name (Paradex uses market names as identifiers)
         self.config.contract_id = symbol
+        
+        # Cache contract_id for this symbol (multi-symbol trading support)
+        self._contract_id_cache[ticker.upper()] = symbol
+        
         try:
             min_notional = Decimal(market.get('min_notional'))
         except Exception:

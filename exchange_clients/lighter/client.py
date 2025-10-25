@@ -1013,7 +1013,14 @@ class LighterClient(BaseExchangeClient):
         market_summary = await order_api.order_book_details(market_id=market_info.market_id)
         order_book_details = market_summary.order_book_details[0]
         # Set contract_id to market name (Lighter uses market IDs as identifiers)
-        self.config.contract_id = market_info.market_id
+        market_id_value = market_info.market_id
+        self.config.contract_id = market_id_value
+        
+        # Cache contract_id for this symbol (multi-symbol trading support)
+        # Use normalized symbol as key for consistency
+        normalized_ticker = self.normalize_symbol(ticker)
+        self._contract_id_cache[normalized_ticker.upper()] = str(market_id_value)
+        
         self.base_amount_multiplier = pow(10, market_info.supported_size_decimals)
         self.price_multiplier = pow(10, market_info.supported_price_decimals)
 

@@ -56,6 +56,11 @@ class BaseExchangeClient(ABC):
         self._validate_config()
         self._liquidation_dispatcher = LiquidationEventDispatcher()
         self.ws_manager: Optional["BaseWebSocketManager"] = None
+        
+        # Per-symbol contract ID cache (fixes multi-symbol trading bug)
+        # Maps normalized symbol -> exchange-specific contract_id
+        # e.g., {"STBL": "STBLUSDT", "MET": "METUSDT"}
+        self._contract_id_cache: Dict[str, str] = {}
 
     @abstractmethod
     def _validate_config(self) -> None:
@@ -375,12 +380,34 @@ class BaseExchangeClient(ABC):
     def resolve_contract_id(self, symbol: str) -> str:
         """
         Resolve the exchange-specific contract identifier for order placement.
-
-        Returns any cached `contract_id` on the client config, or falls back to
-        the provided symbol when no specialization exists.
+        
+        Uses per-symbol cache to handle multi-symbol trading correctly.
+        Falls back to config.contract_id if symbol matches current ticker,
+        otherwise returns the symbol as-is.
+        
+        Args:
+            symbol: Normalized symbol (e.g., "STBL", "MET")
+            
+        Returns:
+            Exchange-specific contract ID (e.g., "STBLUSDT", "METUSDT")
         """
-        contract_id = getattr(self.config, "contract_id", None)
-        return contract_id or symbol
+        symbol_upper = symbol.upper()
+        
+        # Check per-symbol cache first (handles multi-symbol trading)
+        if symbol_upper in self._contract_id_cache:
+            return self._contract_id_cache[symbol_upper]
+        
+        # Fallback: check if this matches current config ticker
+        current_ticker = getattr(self.config, "ticker", "").upper()
+        if current_ticker and symbol_upper == current_ticker:
+            contract_id = getattr(self.config, "contract_id", None)
+            if contract_id:
+                # Cache it for future use
+                self._contract_id_cache[symbol_upper] = contract_id
+                return contract_id
+        
+        # Final fallback: return symbol as-is (exchange will normalize it)
+        return symbol
 
     @abstractmethod
     async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:

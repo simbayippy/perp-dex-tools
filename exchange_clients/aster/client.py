@@ -979,13 +979,24 @@ class AsterClient(BaseExchangeClient):
         Endpoint: GET /fapi/v2/positionRisk
         
         Args:
-            symbol: Trading symbol (e.g., "ZORA")
+            symbol: Trading symbol (e.g., "ZORA", or full contract_id like "1000FLOKIUSDT")
             
         Returns:
             Current leverage multiplier (e.g., 10 for 10x), or None if unavailable
         """
         try:
-            normalized_symbol = f"{symbol}USDT"
+            # Use same normalization logic as set_account_leverage
+            if symbol.upper().endswith("USDT"):
+                normalized_symbol = symbol.upper()
+            elif hasattr(self.config, 'contract_id') and self.config.contract_id:
+                contract_id = self.config.contract_id.upper()
+                symbol_upper = symbol.upper()
+                if symbol_upper in contract_id and contract_id.endswith("USDT"):
+                    normalized_symbol = contract_id
+                else:
+                    normalized_symbol = f"{symbol_upper}USDT"
+            else:
+                normalized_symbol = f"{symbol.upper()}USDT"
             result = await self._make_request('GET', '/fapi/v2/positionRisk', {'symbol': normalized_symbol})
             
             if result and len(result) > 0:
@@ -1015,7 +1026,7 @@ class AsterClient(BaseExchangeClient):
         Endpoint: POST /fapi/v1/leverage
         
         Args:
-            symbol: Trading symbol (e.g., "ZORA")
+            symbol: Trading symbol (e.g., "ZORA", or full contract_id like "1000FLOKIUSDT")
             leverage: Target leverage (1 to 125)
             
         Returns:
@@ -1028,7 +1039,25 @@ class AsterClient(BaseExchangeClient):
                 )
                 return False
             
-            normalized_symbol = f"{symbol}USDT"
+            # Use contract_id if available (handles multipliers like 1000FLOKIUSDT)
+            # Otherwise construct from symbol
+            if symbol.upper().endswith("USDT"):
+                # Already in full format (e.g., "1000FLOKIUSDT", "BTCUSDT")
+                normalized_symbol = symbol.upper()
+            elif hasattr(self.config, 'contract_id') and self.config.contract_id:
+                # Use pre-fetched contract_id if available (most reliable)
+                # Check if contract_id contains our symbol (handles 1000FLOKIUSDT for FLOKI)
+                contract_id = self.config.contract_id.upper()
+                symbol_upper = symbol.upper()
+                # Match patterns: "FLOKIUSDT", "1000FLOKIUSDT", "kFLOKIUSDT" all contain "FLOKI"
+                if symbol_upper in contract_id and contract_id.endswith("USDT"):
+                    normalized_symbol = contract_id
+                else:
+                    # Fallback: construct from symbol
+                    normalized_symbol = f"{symbol_upper}USDT"
+            else:
+                # Fallback: simple concatenation
+                normalized_symbol = f"{symbol.upper()}USDT"
             
             self.logger.info(
                 f"[ASTER] Setting leverage for {symbol} to {leverage}x..."
@@ -1092,7 +1121,19 @@ class AsterClient(BaseExchangeClient):
             }
         """
         try:
-            normalized_symbol = f"{symbol}USDT"
+            # Use same normalization logic as set_account_leverage
+            if symbol.upper().endswith("USDT"):
+                normalized_symbol = symbol.upper()
+            elif hasattr(self.config, 'contract_id') and self.config.contract_id:
+                contract_id = self.config.contract_id.upper()
+                symbol_upper = symbol.upper()
+                if symbol_upper in contract_id and contract_id.endswith("USDT"):
+                    normalized_symbol = contract_id
+                else:
+                    normalized_symbol = f"{symbol_upper}USDT"
+            else:
+                normalized_symbol = f"{symbol.upper()}USDT"
+            
             leverage_info = {
                 'max_leverage': None,
                 'max_notional': None,
@@ -1318,7 +1359,11 @@ class AsterClient(BaseExchangeClient):
                     
                     # Only accept TRADING status
                     if symbol_status == 'TRADING':
-                        self.config.contract_id = symbol_info.get('symbol', '')
+                        contract_id_value = symbol_info.get('symbol', '')
+                        self.config.contract_id = contract_id_value
+                        
+                        # Cache contract_id for this symbol (multi-symbol trading support)
+                        self._contract_id_cache[ticker.upper()] = contract_id_value
 
                         # Get tick size from filters
                         for filter_info in symbol_info.get('filters', []):
