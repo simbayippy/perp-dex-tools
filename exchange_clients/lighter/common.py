@@ -25,6 +25,7 @@ LIGHTER_SYMBOL_OVERRIDES = {
 # Lighter's k-prefix tokens use 1000x multiplier
 # For these tokens: 1 contract unit = 1000 actual tokens
 # Example: kTOSHI at $0.7655 means 1000 TOSHI tokens cost $0.7655
+# Note: TOSHI kept here since Lighter uses kTOSHI (k-prefix) even though Aster uses plain TOSHI
 LIGHTER_MULTIPLIER_SYMBOLS = {"FLOKI", "TOSHI", "BONK", "PEPE", "SHIB"}
 LIGHTER_QUANTITY_MULTIPLIER = 1000  # k-prefix = 1000x
 

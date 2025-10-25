@@ -104,12 +104,16 @@ class LighterClient(BaseExchangeClient):
         Get Lighter market_id for a given symbol.
         
         Args:
-            symbol: Trading symbol (e.g., 'BTC', 'ETH', 'G')
+            symbol: Trading symbol (e.g., 'BTC', 'ETH', 'TOSHI')
             
         Returns:
             Integer market_id, or None if not found
         """
         try:
+            # Convert normalized symbol to Lighter's format (e.g., "TOSHI" -> "kTOSHI-PERP")
+            from exchange_clients.lighter.common import get_lighter_symbol_format
+            lighter_symbol = get_lighter_symbol_format(symbol)
+            
             order_api = lighter.OrderApi(self.api_client)
             order_books = await order_api.order_books()
             
@@ -118,8 +122,11 @@ class LighterClient(BaseExchangeClient):
             
             for market in order_books.order_books:
                 available_symbols.append(market.symbol)
-                # Try exact match
-                if market.symbol == symbol:
+                # Try Lighter-specific format first (e.g., "kTOSHI-PERP")
+                if market.symbol.upper() == lighter_symbol.upper():
+                    return market.market_id
+                # Try exact match with original symbol
+                elif market.symbol == symbol:
                     return market.market_id
                 # Try case-insensitive match
                 elif market.symbol.upper() == symbol.upper():
@@ -127,7 +134,7 @@ class LighterClient(BaseExchangeClient):
             
             # Symbol not found - provide helpful error message
             self.logger.warning(
-                f"❌ [LIGHTER] Symbol '{symbol}' NOT found in Lighter markets. "
+                f"❌ [LIGHTER] Symbol '{symbol}' (looking for '{lighter_symbol}') NOT found in Lighter markets. "
                 f"Available symbols: {', '.join(available_symbols[:10])}{'...' if len(available_symbols) > 10 else ''}"
             )
             return None
@@ -1036,6 +1043,14 @@ class LighterClient(BaseExchangeClient):
             self.logger.error("Ticker is empty")
             raise ValueError("Ticker is empty")
 
+        # Convert normalized ticker to Lighter's format (e.g., "TOSHI" -> "kTOSHI-PERP")
+        from exchange_clients.lighter.common import get_lighter_symbol_format
+        lighter_symbol = get_lighter_symbol_format(ticker)
+        
+        self.logger.debug(
+            f"[LIGHTER] Looking for ticker '{ticker}' as '{lighter_symbol}' in Lighter markets"
+        )
+        
         order_api = lighter.OrderApi(self.api_client)
         # Get all order books to find the market for our ticker
         order_books = await order_api.order_books()
@@ -1046,8 +1061,12 @@ class LighterClient(BaseExchangeClient):
         
         for market in order_books.order_books:
             available_symbols.append(market.symbol)
-            # Try exact match first
-            if market.symbol == ticker:
+            # Try Lighter-specific format first (e.g., "kTOSHI-PERP")
+            if market.symbol.upper() == lighter_symbol.upper():
+                market_info = market
+                break
+            # Try exact match with original ticker
+            elif market.symbol == ticker:
                 market_info = market
                 break
             # Try case-insensitive match
