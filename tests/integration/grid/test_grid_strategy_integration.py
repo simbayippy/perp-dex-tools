@@ -315,7 +315,6 @@ async def test_stop_loss_execution_triggers_market_exit(patch_event_notifier, mo
 @pytest.mark.asyncio
 async def test_recovery_ladder_executes_new_orders(patch_event_notifier, monkeypatch):
     config = make_config(direction="buy")
-    config.position_timeout_minutes = 1
     exchange = IntegrationExchange()
     strategy = GridStrategy(config=config, exchange_client=exchange)
 
@@ -361,7 +360,6 @@ async def test_recovery_ladder_executes_new_orders(patch_event_notifier, monkeyp
 async def test_recovery_hedge_executes_market_exit(patch_event_notifier, monkeypatch):
     config = make_config(direction="buy")
     config.recovery_mode = "hedge"
-    config.position_timeout_minutes = 1
     exchange = IntegrationExchange()
     strategy = GridStrategy(config=config, exchange_client=exchange)
 
