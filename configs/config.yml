@@ -10,7 +10,7 @@ config:
   target_exposure: !!float '80'
   max_positions: 1
   max_total_exposure_usd: !!float '200'
-  min_profit_rate: 0.00002283105022831050228310502283
+  min_profit_rate: 0.0002283105022831050228310502283
   risk_strategy: combined
   profit_erosion_threshold: 0.5
   max_position_age_hours: 168
@@ -18,4 +18,4 @@ config:
   limit_order_offset_pct: 0.0002
   check_interval_seconds: 60
   dry_run: false
-  max_oi_usd: !!float '1000000'
+  max_oi_usd: !!float '1500000'
