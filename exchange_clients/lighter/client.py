@@ -1169,7 +1169,7 @@ class LighterClient(BaseExchangeClient):
                 account_index=account_index,
                 market_id=market_id,
                 sort_by='timestamp',  # Sort by time
-                sort_dir='asc',  # Ascending (oldest first)
+                sort_dir='desc',  # Descending (newest first) 
                 limit=100,  # Last 100 trades should cover most position opens
                 auth=auth_token,
                 authorization=auth_token,
@@ -1182,6 +1182,9 @@ class LighterClient(BaseExchangeClient):
             trades = trades_response.trades
             if not trades:
                 return None
+            
+            # Reverse to get chronological order (oldest first)
+            trades = list(reversed(trades))
             
             # Track running position to find when current position started
             running_qty = Decimal("0")
