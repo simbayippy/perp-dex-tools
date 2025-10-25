@@ -59,7 +59,7 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
         create_decimal_parameter(
             key="quantity",
             prompt="Order quantity (per order)?",
-            min_value=Decimal("0.001"),
+            min_value=Decimal("0.0001"),
             max_value=Decimal("1000000"),
             required=True,
             help_text="The size of each grid order",
