@@ -15,3 +15,4 @@ textual>=0.44.0
 
 # Credential Encryption (Multi-Account Support)
 cryptography>=41.0.0
+databases>=0.6.0

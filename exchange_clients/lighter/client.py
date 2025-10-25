@@ -682,7 +682,19 @@ class LighterClient(BaseExchangeClient):
                 error_message=f"Order creation error: {error}",
             )
 
-        return OrderResult(success=True, order_id=str(client_order_index))
+        # Convert back to Decimal for logging/consumers
+        normalized_price = Decimal(order_params['price']) / self.price_multiplier
+        normalized_size = Decimal(order_params['base_amount']) / self.base_amount_multiplier
+
+        return OrderResult(
+            success=True,
+            order_id=str(client_order_index),
+            side=side,
+            size=normalized_size,
+            price=normalized_price,
+            status="OPEN",
+            filled_size=Decimal("0"),
+        )
 
     async def place_market_order(
         self,
