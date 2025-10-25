@@ -99,6 +99,7 @@ class RetryManager:
                     apply_result_to_context(ctx, result)
                 
                 # Critical safety check: Detect imbalances after each retry attempt
+                # Uses same % threshold as position_closer (5%)
                 total_long_usd = sum(
                     getattr(ctx, "filled_usd", Decimal("0")) 
                     for ctx in contexts 
@@ -109,14 +110,22 @@ class RetryManager:
                     for ctx in contexts
                     if getattr(ctx.spec, "side", "") == "sell"
                 )
-                imbalance = abs(total_long_usd - total_short_usd)
-                imbalance_tolerance = Decimal("10.00")  # Allow some imbalance during retries
+                imbalance_usd = abs(total_long_usd - total_short_usd)
                 
-                if imbalance > imbalance_tolerance:
+                # Calculate imbalance as percentage: (max - min) / max
+                critical_imbalance_pct = Decimal("0.05")  # 5% threshold
+                min_usd = min(total_long_usd, total_short_usd)
+                max_usd = max(total_long_usd, total_short_usd)
+                
+                imbalance_pct = Decimal("0")
+                if max_usd > Decimal("0"):
+                    imbalance_pct = (max_usd - min_usd) / max_usd
+                
+                if imbalance_pct > critical_imbalance_pct:
                     logger.warning(
                         f"⚠️ Critical imbalance detected during retry attempt {attempt}: "
                         f"longs=${total_long_usd:.2f}, shorts=${total_short_usd:.2f}, "
-                        f"imbalance=${imbalance:.2f}. Aborting retries for safety."
+                        f"imbalance=${imbalance_usd:.2f} ({imbalance_pct*100:.1f}%). Aborting retries for safety."
                     )
                     # Return False to indicate retry failure and let main executor handle rollback
                     return False, attempts_used
