@@ -1,4 +1,4 @@
-currently, facing a bug whereby when critical imbalance deteced, we are not setting the reduce_only parameter to skip the min notional
+facing a bug whereby when critical imbalance deteced, we are not setting the reduce_only parameter to skip the min notional
 logs as follows
 
 2025-10-25 12:17:02 | WARNING  | atomic_multi_order.retry_manager:execu...:116 | ⚠️ Critical imbalance detected during retry attempt 
