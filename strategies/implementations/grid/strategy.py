@@ -811,12 +811,16 @@ class GridStrategy(BaseStrategy):
             best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(contract_id)
             reference_price = (best_bid + best_ask) / 2
             
+            tick = self.exchange_client.config.tick_size
+            offset = tick * 2  # keep a safe distance for post-only placement
             if self.config.direction == 'buy':
-                # For buy, place below ask to fill quickly
-                order_price = best_ask - self.exchange_client.config.tick_size
+                # For buy, place a couple ticks below the ask to respect post-only
+                order_price = best_ask - offset
+                if order_price <= 0:
+                    order_price = tick
             else:  # sell
-                # For sell, place above bid to fill quickly
-                order_price = best_bid + self.exchange_client.config.tick_size
+                # For sell, place above the bid by a couple ticks
+                order_price = best_bid + offset
             
             order_price = self.exchange_client.round_to_tick(order_price)
             
