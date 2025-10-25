@@ -1391,13 +1391,27 @@ class LighterClient(BaseExchangeClient):
             return None
 
         normalized_symbol = self.normalize_symbol(symbol).upper()
-
+        
+        self.logger.debug(
+            f"[LIGHTER] get_position_snapshot looking for normalized symbol: '{normalized_symbol}'"
+        )
+        
         for pos in positions:
             # Normalize the position's symbol too (e.g., "1000TOSHI" -> "TOSHI")
             pos_symbol_raw = pos.get("symbol") or ""
             pos_symbol_normalized = self.normalize_symbol(pos_symbol_raw).upper()
+            
+            self.logger.debug(
+                f"[LIGHTER] Checking position: raw='{pos_symbol_raw}' → normalized='{pos_symbol_normalized}' "
+                f"(looking for '{normalized_symbol}')"
+            )
+            
             if pos_symbol_normalized != normalized_symbol:
                 continue
+            
+            self.logger.debug(
+                f"[LIGHTER] ✓ Found matching position for '{normalized_symbol}', building snapshot..."
+            )
  
             raw_quantity = pos.get("position") or Decimal("0")
             try:
@@ -1469,6 +1483,9 @@ class LighterClient(BaseExchangeClient):
                 metadata={k: v for k, v in metadata.items() if v is not None},
             )
 
+        self.logger.debug(
+            f"[LIGHTER] No position found for '{normalized_symbol}' after checking {len(positions)} positions"
+        )
         return None
 
     async def get_account_pnl(self) -> Optional[Decimal]:
