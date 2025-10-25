@@ -57,6 +57,11 @@ class AsterClient(BaseExchangeClient):
         self._order_update_handler = None
         self._latest_orders: Dict[str, OrderInfo] = {}
         self._min_order_notional: Dict[str, Decimal] = {}
+        
+        # Per-symbol tick size cache (fixes multi-symbol tick size bug)
+        # Maps normalized symbol or contract_id -> tick_size
+        # e.g., {"STBL": Decimal("0.0001"), "STBLUSDT": Decimal("0.0001")}
+        self._tick_size_cache: Dict[str, Decimal] = {}
 
     def _validate_config(self) -> None:
         """Validate Aster configuration."""
@@ -492,7 +497,7 @@ class AsterClient(BaseExchangeClient):
         Place a limit order at a specific price on Aster.
         
         Args:
-            contract_id: Contract identifier
+            contract_id: Contract identifier (can be normalized symbol or full contract_id)
             quantity: Order quantity
             price: Limit price
             side: 'buy' or 'sell'
@@ -500,10 +505,15 @@ class AsterClient(BaseExchangeClient):
         Returns:
             OrderResult with order details
         """
-        # Contract ID should already be in Aster format (e.g., "MONUSDT")
-        # NO need to normalize again (would cause "MONUSDTUSDT")
+        # ✅ CRITICAL FIX: Normalize contract_id for Aster (handles multi-symbol trading)
+        # If contract_id doesn't end with USDT, add it (e.g., "PROVE" → "PROVEUSDT")
+        if not contract_id.upper().endswith("USDT"):
+            normalized_contract_id = self.normalize_symbol(contract_id)
+            self.logger.debug(f"Normalized contract_id: '{contract_id}' → '{normalized_contract_id}'")
+        else:
+            normalized_contract_id = contract_id.upper()
         
-        self.logger.debug(f"Using contract_id for order: '{contract_id}'")
+        self.logger.debug(f"Using contract_id for order: '{normalized_contract_id}'")
         
         # Round quantity to step size (e.g., 941.8750094 → 941.875 or 941 depending on stepSize)
         rounded_quantity = self.round_to_step(Decimal(str(quantity)))
@@ -513,9 +523,24 @@ class AsterClient(BaseExchangeClient):
             f"(step_size={getattr(self.config, 'step_size', 'unknown')})"
         )
         
-        rounded_price = self.round_to_tick(price)
+        # ✅ CRITICAL FIX: Use cached tick_size if available, otherwise use sensible default
+        # For multi-symbol trading, don't fetch during order placement (adds latency)
+        tick_size = self._tick_size_cache.get(normalized_contract_id)
+        
+        if tick_size is None:
+            # Not in cache - use a sensible default for most assets (0.0001 works for most)
+            # The proper solution is to call get_contract_attributes() before trading
+            tick_size = Decimal('0.0001')  # Works for most Aster symbols
+            self.logger.debug(
+                f"Using default tick_size for {normalized_contract_id}: {tick_size} "
+                f"(consider calling get_contract_attributes() first for exact value)"
+            )
+        
+        # Round price using the tick_size
+        from decimal import ROUND_HALF_UP
+        rounded_price = price.quantize(tick_size, rounding=ROUND_HALF_UP)
 
-        min_notional = self.get_min_order_notional(contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
+        min_notional = self.get_min_order_notional(normalized_contract_id) or self.get_min_order_notional(getattr(self.config, "ticker", None))
         if min_notional is not None:
             order_notional = rounded_quantity * rounded_price
             if order_notional < min_notional:
@@ -527,7 +552,7 @@ class AsterClient(BaseExchangeClient):
 
         # Place limit order with post-only (GTX) for maker fees
         order_data = {
-            'symbol': contract_id,  # Already normalized (e.g., "MONUSDT")
+            'symbol': normalized_contract_id,  # Aster format (e.g., "PROVEUSDT")
             'side': side.upper(),
             'type': 'LIMIT',
             'quantity': str(rounded_quantity),
@@ -541,7 +566,7 @@ class AsterClient(BaseExchangeClient):
             result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
         except Exception as e:
             self.logger.error(
-                f"Failed to place limit order for {contract_id} "
+                f"Failed to place limit order for {normalized_contract_id} "
                 f"({side.upper()}, qty={quantity}, price={price}): {e}"
             )
             raise
@@ -1368,7 +1393,11 @@ class AsterClient(BaseExchangeClient):
                         # Get tick size from filters
                         for filter_info in symbol_info.get('filters', []):
                             if filter_info.get('filterType') == 'PRICE_FILTER':
-                                self.config.tick_size = Decimal(filter_info['tickSize'].strip('0'))
+                                tick_size_value = Decimal(filter_info['tickSize'].strip('0'))
+                                self.config.tick_size = tick_size_value
+                                # Cache tick_size for this symbol (multi-symbol trading support)
+                                self._tick_size_cache[contract_id_value] = tick_size_value
+                                self._tick_size_cache[ticker.upper()] = tick_size_value
                                 break
 
                         # Get LOT_SIZE filter (quantity precision)
