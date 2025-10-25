@@ -251,7 +251,22 @@ def _config_dict_to_trading_config(strategy_name: str, config_dict: dict) -> Tra
     if strategy_name == "grid":
         exchange = config_dict.get("exchange", "lighter")
         ticker = config_dict.get("ticker", "BTC")
-        quantity = config_dict.get("quantity", Decimal("100"))
+        quantity_raw = config_dict.get("quantity")
+        if quantity_raw is None:
+            max_position = config_dict.get("max_position_size")
+            if max_position is not None:
+                quantity_raw = max_position
+            else:
+                quantity_raw = config_dict.get("order_notional_usd", Decimal("1"))
+        quantity = Decimal(str(quantity_raw))
+        order_notional_raw = config_dict.get("order_notional_usd")
+        order_notional_decimal = (
+            Decimal(str(order_notional_raw)) if order_notional_raw is not None else None
+        )
+        target_leverage_raw = config_dict.get("target_leverage")
+        target_leverage_decimal = (
+            Decimal(str(target_leverage_raw)) if target_leverage_raw is not None else None
+        )
     elif strategy_name == "funding_arbitrage":
         mandatory_exchange = config_dict.get("mandatory_exchange") or config_dict.get("primary_exchange")
         if isinstance(mandatory_exchange, str) and mandatory_exchange.strip():
@@ -260,10 +275,14 @@ def _config_dict_to_trading_config(strategy_name: str, config_dict: dict) -> Tra
             exchange = "multi"
         ticker = "ALL"  # Funding arb scans all tickers (not limited to one)
         quantity = Decimal("1")  # Placeholder, not used
+        order_notional_decimal = None
+        target_leverage_decimal = None
     else:
         exchange = "lighter"
         ticker = "BTC"
         quantity = Decimal("100")
+        order_notional_decimal = None
+        target_leverage_decimal = None
     
     return TradingConfig(
         ticker=ticker.upper() if isinstance(ticker, str) else "BTC",
@@ -272,6 +291,8 @@ def _config_dict_to_trading_config(strategy_name: str, config_dict: dict) -> Tra
         quantity=quantity,
         exchange=exchange.lower(),
         strategy=strategy_name.lower(),
+        order_notional_usd=order_notional_decimal,
+        target_leverage=target_leverage_decimal,
         strategy_params=config_dict
     )
 

@@ -57,12 +57,15 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             help_text="BUY: Place buy orders (accumulate). SELL: Place sell orders (distribute)",
         ),
         create_decimal_parameter(
-            key="quantity",
-            prompt="Order quantity (per order)?",
-            min_value=Decimal("0.0001"),
+            key="order_notional_usd",
+            prompt="Target position notional per order (USD)?",
+            min_value=Decimal("1"),
             max_value=Decimal("1000000"),
             required=True,
-            help_text="The size of each grid order",
+            help_text=(
+                "Total exposure per grid order (USD). Example: 25 = ~$25 position value; "
+                "margin required equals notional ÷ applied leverage."
+            ),
         ),
         create_decimal_parameter(
             key="take_profit",
@@ -71,6 +74,15 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             max_value=Decimal("0.1"),
             required=True,
             help_text="How much profit to take on each trade. Higher = more profit but fewer fills",
+        ),
+        create_decimal_parameter(
+            key="target_leverage",
+            prompt="Desired leverage multiple (optional)?",
+            default=None,
+            min_value=Decimal("1"),
+            max_value=Decimal("1000"),
+            required=False,
+            help_text="Request leverage to use for the grid. We will clamp to the exchange maximum.",
         ),
         # ====================================================================
         # Grid Spacing
@@ -197,7 +209,7 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
     # Category grouping
     categories={
         "Exchange": ["exchange", "ticker"],
-        "Grid Setup": ["direction", "quantity", "take_profit"],
+        "Grid Setup": ["direction", "order_notional_usd", "take_profit", "target_leverage"],
         "Grid Spacing": ["grid_step", "max_orders"],
         "Capital & Limits": ["max_margin_usd", "max_position_size"],
         "Execution": ["wait_time"],
@@ -234,7 +246,8 @@ def create_default_grid_config() -> dict:
         "exchange": "lighter",
         "ticker": "BTC",
         "direction": "buy",
-        "quantity": Decimal("100"),
+        "order_notional_usd": Decimal("100"),
+        "target_leverage": Decimal("10"),
         "take_profit": Decimal("0.008"),
         "grid_step": Decimal("0.002"),
         "max_orders": 25,

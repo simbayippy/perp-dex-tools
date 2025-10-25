@@ -33,7 +33,12 @@ def patch_event_notifier(monkeypatch):
     events.clear()
 
 
-def make_config(direction: str = "buy", post_only_tick_multiplier: Decimal = Decimal("2")) -> GridConfig:
+def make_config(
+    direction: str = "buy",
+    post_only_tick_multiplier: Decimal = Decimal("2"),
+    order_notional_usd: Optional[Decimal] = None,
+    target_leverage: Optional[Decimal] = None,
+) -> GridConfig:
     return GridConfig(
         take_profit=Decimal("0.8"),
         grid_step=Decimal("0.2"),
@@ -50,6 +55,8 @@ def make_config(direction: str = "buy", post_only_tick_multiplier: Decimal = Dec
         pause_price=None,
         boost_mode=False,
         post_only_tick_multiplier=post_only_tick_multiplier,
+        order_notional_usd=order_notional_usd,
+        target_leverage=target_leverage,
     )
 
 
@@ -91,6 +98,9 @@ class IntegrationExchange:
     def round_to_tick(self, price: Decimal) -> Decimal:
         tick = self.config.tick_size
         return Decimal(price).quantize(tick, rounding=ROUND_HALF_UP)
+
+    def round_to_step(self, quantity: Decimal) -> Decimal:
+        return quantity
 
     async def get_position_snapshot(self, _symbol: str) -> Optional[ExchangePositionSnapshot]:
         if self.position_quantity == 0:

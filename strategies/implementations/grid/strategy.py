@@ -14,6 +14,7 @@ from .config import GridConfig
 from .models import GridState, GridOrder, GridCycleState, TrackedPosition
 from exchange_clients.base_models import ExchangePositionSnapshot
 from helpers.event_notifier import GridEventNotifier
+from strategies.execution.core.leverage_validator import LeverageValidator
 
 
 class GridStrategy(BaseStrategy):
@@ -66,11 +67,24 @@ class GridStrategy(BaseStrategy):
             exchange=str(exchange_name),
             ticker=str(ticker or "unknown"),
         )
+
+        self.order_notional_usd: Optional[Decimal] = getattr(config, "order_notional_usd", None)
+        self._requested_leverage: Optional[Decimal] = getattr(config, "target_leverage", None)
+        self._leverage_validator = LeverageValidator()
+        self._applied_leverage: Optional[Decimal] = None
+        self._max_symbol_leverage: Optional[Decimal] = None
+        self._fallback_margin_ratio: Optional[Decimal] = None
+        self._last_order_notional: Optional[Decimal] = None
         
         self.logger.log("Grid strategy initialized with parameters:", "INFO")
         self.logger.log(f"  - Take Profit: {config.take_profit}%", "INFO")
         self.logger.log(f"  - Grid Step: {config.grid_step}%", "INFO")
         self.logger.log(f"  - Direction: {config.direction}", "INFO")
+        if self.order_notional_usd is not None:
+            self.logger.log(f"  - Order Notional (USD): {self.order_notional_usd}", "INFO")
+        else:
+            qty_display = getattr(self.exchange_client.config, "quantity", None)
+            self.logger.log(f"  - Order Quantity (base): {qty_display}", "INFO")
         self.logger.log(f"  - Max Orders: {config.max_orders}", "INFO")
         self.logger.log(f"  - Wait Time: {config.wait_time}s", "INFO")
         self.logger.log(f"  - Max Margin (USD): {config.max_margin_usd}", "INFO")
@@ -80,6 +94,8 @@ class GridStrategy(BaseStrategy):
             f"(threshold {config.stop_loss_percentage}%)",
             "INFO",
         )
+        if self._requested_leverage is not None:
+            self.logger.log(f"  - Target Leverage: {self._requested_leverage}x", "INFO")
         self.logger.log(
             f"  - Position Timeout: {config.position_timeout_minutes} minutes",
             "INFO",
@@ -188,6 +204,70 @@ class GridStrategy(BaseStrategy):
             margin_used = abs_position * reference_price
         
         return margin_used, margin_ratio
+
+    async def _prepare_leverage_settings(self) -> None:
+        """Fetch leverage limits and apply requested leverage if provided."""
+        if not self.exchange_client:
+            return
+        
+        ticker = getattr(self.config, "ticker", None) or getattr(self.exchange_client.config, "ticker", None)
+        if not ticker:
+            return
+        
+        try:
+            leverage_info = await self._leverage_validator.get_leverage_info(self.exchange_client, ticker)
+            self._max_symbol_leverage = leverage_info.max_leverage
+            
+            if leverage_info.max_leverage is not None:
+                self.logger.log(
+                    f"  - Exchange max leverage for {ticker}: {leverage_info.max_leverage}x",
+                    "INFO",
+                )
+            
+            applied: Optional[Decimal] = None
+            if self._requested_leverage is not None:
+                applied = self._requested_leverage
+                if leverage_info.max_leverage is not None and applied > leverage_info.max_leverage:
+                    self.logger.log(
+                        f"Requested leverage {applied}x exceeds exchange maximum {leverage_info.max_leverage}x. "
+                        "Using the maximum allowed leverage instead.",
+                        "WARNING",
+                    )
+                    applied = leverage_info.max_leverage
+                
+                if applied and applied > 0 and hasattr(self.exchange_client, "set_account_leverage"):
+                    leverage_to_set = max(int(applied), 1)
+                    try:
+                        set_success = await self.exchange_client.set_account_leverage(ticker, leverage_to_set)
+                        if set_success:
+                            self.logger.log(
+                                f"Applied leverage {leverage_to_set}x on {self.exchange_client.get_exchange_name().upper()}.",
+                                "INFO",
+                            )
+                            applied = Decimal(leverage_to_set)
+                        else:
+                            self.logger.log(
+                                f"Failed to set leverage to {leverage_to_set}x on "
+                                f"{self.exchange_client.get_exchange_name().upper()}.",
+                                "WARNING",
+                            )
+                    except Exception as exc:
+                        self.logger.log(
+                            f"Error setting leverage on {self.exchange_client.get_exchange_name().upper()}: {exc}",
+                            "WARNING",
+                        )
+            
+            self._applied_leverage = applied
+            if self._applied_leverage and self._applied_leverage > 0:
+                self._fallback_margin_ratio = Decimal("1") / self._applied_leverage
+            else:
+                self._fallback_margin_ratio = None
+        
+        except Exception as exc:
+            self.logger.log(
+                f"Grid: Failed to prepare leverage settings for {ticker}: {exc}",
+                "WARNING",
+            )
     
     async def _prepare_risk_snapshot(
         self,
@@ -368,12 +448,16 @@ class GridStrategy(BaseStrategy):
                 position_limit=self.config.max_position_size,
                 current_position=current_position,
                 order_size=order_quantity,
+                order_notional_usd=order_quantity.copy_abs() * reference_price,
             )
             return False, message
         
         current_margin = self.grid_state.last_known_margin or Decimal("0")
         margin_ratio = self.grid_state.margin_ratio
-        required_margin = order_quantity.copy_abs() * reference_price
+        notional = order_quantity.copy_abs() * reference_price
+        required_margin = notional
+        if (margin_ratio is None or margin_ratio <= 0) and self._fallback_margin_ratio:
+            margin_ratio = self._fallback_margin_ratio
         if margin_ratio and margin_ratio > 0:
             required_margin *= margin_ratio
         
@@ -392,6 +476,7 @@ class GridStrategy(BaseStrategy):
                 projected_margin=projected_margin,
                 margin_limit=self.config.max_margin_usd,
                 required_margin=required_margin,
+                order_notional_usd=notional,
             )
             return False, message
         
@@ -672,9 +757,7 @@ class GridStrategy(BaseStrategy):
     
     async def _initialize_strategy(self):
         """Initialize strategy (called by base class)."""
-        # Load persisted state if available
-        # (In future, this would load from state_manager)
-        pass
+        await self._prepare_leverage_settings()
     
     async def should_execute(self) -> bool:
         """Determine if grid strategy should execute."""
@@ -792,24 +875,72 @@ class GridStrategy(BaseStrategy):
                 'message': f'Grid strategy error: {e}',
                 'wait_time': 5
             }
+
+    def _determine_order_quantity(self, reference_price: Decimal) -> Tuple[Decimal, Decimal]:
+        """
+        Calculate the per-order quantity based on configured notional or fallback quantity.
+
+        Returns:
+            Tuple of (quantity, applied_notional_usd)
+        """
+        if reference_price <= 0:
+            raise ValueError("Reference price must be positive to compute order quantity")
+        
+        if self.order_notional_usd is None:
+            raw_quantity = getattr(self.exchange_client.config, "quantity", None)
+            if raw_quantity is None:
+                raise ValueError("Exchange config missing 'quantity' for grid strategy")
+            quantity = Decimal(str(raw_quantity))
+            if quantity <= 0:
+                raise ValueError(f"Invalid order quantity: {quantity}")
+            applied_notional = quantity * reference_price
+            self._last_order_notional = applied_notional
+            return quantity, applied_notional
+        
+        target_notional = Decimal(str(self.order_notional_usd))
+        min_notional = getattr(self.exchange_client.config, "min_order_notional", None)
+        adjusted_notional = target_notional
+        
+        if min_notional is not None:
+            min_notional_dec = Decimal(str(min_notional))
+            if target_notional < min_notional_dec:
+                self.logger.log(
+                    f"Requested order notional ${float(target_notional):.2f} is below "
+                    f"exchange minimum ${float(min_notional_dec):.2f}. Using the minimum allowed.",
+                    "WARNING",
+                )
+                adjusted_notional = min_notional_dec
+        
+        quantity = adjusted_notional / reference_price
+        quantity = self.exchange_client.round_to_step(quantity)
+        if quantity <= 0:
+            raise ValueError(
+                "Computed order quantity rounded to zero. Increase `order_notional_usd` to satisfy exchange step size."
+            )
+        
+        applied_notional = quantity * reference_price
+        setattr(self.exchange_client.config, "quantity", quantity)
+        self._last_order_notional = applied_notional
+        return quantity, applied_notional
     
     async def _place_open_order(self) -> Dict[str, Any]:
         """Place an open order to enter a new grid level."""
         try:
-            # Place order using exchange client
-            raw_quantity = getattr(self.exchange_client.config, "quantity", None)
-            if raw_quantity is None:
-                raise ValueError("Exchange config missing 'quantity' for grid strategy")
-            
-            quantity = Decimal(str(raw_quantity))
-            if quantity <= 0:
-                raise ValueError(f"Invalid order quantity: {quantity}")
-            
             contract_id = self.exchange_client.config.contract_id
             
             # Get aggressive price (act like market order but with price protection)
             best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(contract_id)
             reference_price = (best_bid + best_ask) / 2
+            
+            try:
+                quantity, applied_notional = self._determine_order_quantity(reference_price)
+            except ValueError as exc:
+                self.logger.log(f"Grid: Unable to determine order size - {exc}", "WARNING")
+                return {
+                    'action': 'wait',
+                    'message': str(exc),
+                    'wait_time': max(1, float(self.config.wait_time))
+                }
             
             tick = self.exchange_client.config.tick_size
             offset_multiplier = getattr(self.config, "post_only_tick_multiplier", Decimal("2"))
@@ -850,7 +981,8 @@ class GridStrategy(BaseStrategy):
                     self.grid_state.filled_quantity = order_result.size
                 
                 self.logger.log(
-                    f"Grid: Placed {self.config.direction} order for {quantity} @ {order_result.price}",
+                    f"Grid: Placed {self.config.direction} order for {quantity} "
+                    f"(@ ~${float(applied_notional):.2f}) at {order_result.price}",
                     "INFO"
                 )
                 
@@ -860,6 +992,7 @@ class GridStrategy(BaseStrategy):
                     'side': self.config.direction,
                     'quantity': quantity,
                     'price': order_result.price,
+                    'notional_usd': applied_notional,
                     'status': order_result.status
                 }
             else:

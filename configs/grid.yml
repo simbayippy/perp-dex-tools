@@ -5,7 +5,8 @@ config:
   exchange: lighter
   ticker: BTC
   direction: buy
-  quantity: 0.00021
+  order_notional_usd: 25
+  target_leverage: 20
   take_profit: 0.008
   grid_step: 0.002
   max_orders: 5

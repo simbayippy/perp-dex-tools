@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import time
 
@@ -48,6 +48,8 @@ def make_config(
     max_margin_usd: Decimal = Decimal("1000"),
     max_position_size: Decimal = Decimal("10"),
     post_only_tick_multiplier: Decimal = Decimal("2"),
+    order_notional_usd: Optional[Decimal] = None,
+    target_leverage: Optional[Decimal] = None,
 ) -> GridConfig:
     return GridConfig(
         take_profit=Decimal("0.8"),
@@ -65,6 +67,8 @@ def make_config(
         pause_price=None,
         boost_mode=False,
         post_only_tick_multiplier=post_only_tick_multiplier,
+        order_notional_usd=order_notional_usd,
+        target_leverage=target_leverage,
     )
 
 
@@ -92,9 +96,14 @@ class DummyExchange:
         self.close_orders: List[Dict[str, Any]] = []
         self.cancelled_orders: List[str] = []
         self.next_market_success = True
+        self.best_bid = Decimal("100")
+        self.best_ask = Decimal("101")
 
     def get_exchange_name(self) -> str:
         return "dummy"
+
+    async def fetch_bbo_prices(self, _contract_id: str) -> Tuple[Decimal, Decimal]:
+        return self.best_bid, self.best_ask
 
     async def get_account_positions(self) -> Decimal:
         return Decimal("0")
@@ -131,6 +140,9 @@ class DummyExchange:
     def round_to_tick(self, price: Decimal) -> Decimal:
         tick = self.config.tick_size
         return Decimal(price).quantize(tick, rounding=ROUND_HALF_UP)
+
+    def round_to_step(self, quantity: Decimal) -> Decimal:
+        return quantity
 
 
 def make_snapshot(
@@ -266,6 +278,24 @@ async def test_check_risk_limits_blocks_margin_cap(reset_grid_event_notifier):
     assert margin_event["event_type"] == "margin_cap_hit"
     assert margin_event["payload"]["margin_limit"] == pytest.approx(1000.0)
     assert margin_event["payload"]["projected_margin"] > margin_event["payload"]["margin_limit"]
+
+
+@pytest.mark.asyncio
+async def test_place_open_order_uses_order_notional(reset_grid_event_notifier):
+    config = make_config(order_notional_usd=Decimal("50"))
+    exchange = DummyExchange()
+    exchange.config.quantity = Decimal("5")  # should be overwritten by notional sizing
+    exchange.best_bid = Decimal("100")
+    exchange.best_ask = Decimal("100")
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+
+    result = await strategy._place_open_order()
+
+    assert result["action"] == "order_placed"
+    expected_quantity = Decimal("50") / Decimal("100")
+    assert exchange.config.quantity == expected_quantity
+    assert result["quantity"] == expected_quantity
+    assert result["notional_usd"].quantize(Decimal("0.01")) == Decimal("50.00")
 
 
 @pytest.mark.asyncio

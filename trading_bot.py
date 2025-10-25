@@ -28,6 +28,8 @@ class TradingConfig:
     tick_size: Decimal
     exchange: str
     strategy: str
+    order_notional_usd: Optional[Decimal] = None
+    target_leverage: Optional[Decimal] = None
     
     # Strategy-specific parameters
     strategy_params: Dict[str, Any] = None
@@ -177,6 +179,10 @@ class TradingBot:
         if self.config.strategy not in multi_symbol_strategies:
             self.logger.info(f"Contract ID: {self.config.contract_id}")
         self.logger.info(f"Quantity: {self.config.quantity}")
+        if getattr(self.config, "order_notional_usd", None) is not None:
+            self.logger.info(f"Order Notional (USD): {self.config.order_notional_usd}")
+        if getattr(self.config, "target_leverage", None) is not None:
+            self.logger.info(f"Target Leverage: {self.config.target_leverage}x")
         self.logger.info(f"Exchange: {self.config.exchange}")
         self.logger.info(f"Strategy: {self.config.strategy}")
         

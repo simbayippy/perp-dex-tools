@@ -27,6 +27,19 @@ class GridConfig(BaseModel):
         ...,
         description="Trading direction: 'buy' (long) or 'sell' (short)"
     )
+    order_notional_usd: Optional[Decimal] = Field(
+        None,
+        description=(
+            "Target USD notional (total exposure) per grid entry before leverage. "
+            "Required margin equals notional divided by applied leverage."
+        ),
+        gt=0
+    )
+    target_leverage: Optional[Decimal] = Field(
+        None,
+        description="Desired leverage multiple; will be clamped by exchange limits",
+        gt=0
+    )
     max_orders: int = Field(
         ...,
         description="Maximum number of active orders",
@@ -117,6 +130,20 @@ class GridConfig(BaseModel):
         """Validate stop and pause prices make sense for the direction."""
         if v is not None and v <= 0:
             raise ValueError("Prices must be positive")
+        return v
+
+    @validator('order_notional_usd')
+    def validate_order_notional(cls, v):
+        """Ensure order notional, when provided, is positive."""
+        if v is not None and v <= 0:
+            raise ValueError("Order notional must be positive")
+        return v
+
+    @validator('target_leverage')
+    def validate_target_leverage(cls, v):
+        """Ensure leverage, when provided, is positive."""
+        if v is not None and v <= 0:
+            raise ValueError("Leverage must be positive")
         return v
     
     class Config:
