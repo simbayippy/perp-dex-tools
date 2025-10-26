@@ -7,7 +7,7 @@ import asyncio
 import time
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Callable, Awaitable
 
 from exchange_clients.base_client import BaseExchangeClient
 from exchange_clients.base_models import (
