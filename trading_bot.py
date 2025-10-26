@@ -121,13 +121,16 @@ class TradingBot:
                 exchange_creds = None
                 if account_credentials and config.exchange in account_credentials:
                     exchange_creds = account_credentials[config.exchange]
-                
+
                 self.exchange_client = ExchangeFactory.create_exchange(
                     config.exchange,
                     config,
-                    exchange_creds  # Pass credentials to factory
+                    exchange_creds,  # Pass credentials to factory
                 )
                 self.exchange_clients = None  # Not used for single-exchange strategies
+
+                if hasattr(self.exchange_client, "order_fill_callback"):
+                    self.exchange_client.order_fill_callback = self._handle_order_fill
                 
         except ValueError as e:
             raise ValueError(f"Failed to create exchange client: {e}")
@@ -218,6 +221,22 @@ class TradingBot:
             except Exception as e:
                 self.logger.error(f"Strategy execution error: {e}")
                 await asyncio.sleep(5)  # Wait longer on error
+
+    async def _handle_order_fill(
+        self,
+        order_id: str,
+        price: Decimal,
+        quantity: Decimal,
+        sequence: Optional[int],
+    ) -> None:
+        """Relay exchange fill notifications to the active strategy."""
+        try:
+            if hasattr(self.strategy, "notify_order_filled"):
+                price_dec = price if isinstance(price, Decimal) else Decimal(str(price))
+                qty_dec = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
+                self.strategy.notify_order_filled(price_dec, qty_dec)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self.logger.error(f"Failed to process order fill callback for {order_id}: {exc}")
 
     async def graceful_shutdown(self, reason: str = "Unknown"):
         """Perform graceful shutdown of the trading bot."""

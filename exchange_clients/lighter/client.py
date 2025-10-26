@@ -38,6 +38,7 @@ class LighterClient(BaseExchangeClient):
         api_key_private_key: Optional[str] = None,
         account_index: Optional[int] = None,
         api_key_index: Optional[int] = None,
+        order_fill_callback: Optional[Callable[[str, Decimal, Decimal, Optional[int]], Awaitable[None]]] = None,
     ):
         """
         Initialize Lighter client.
@@ -90,6 +91,7 @@ class LighterClient(BaseExchangeClient):
         self.current_order = None
         self._min_order_notional: Dict[str, Decimal] = {}
         self._latest_orders: Dict[str, OrderInfo] = {}
+        self.order_fill_callback = order_fill_callback
 
     def _validate_config(self) -> None:
         """Validate Lighter configuration."""
@@ -387,6 +389,20 @@ class LighterClient(BaseExchangeClient):
                 if server_order_index is not None:
                     self._latest_orders[str(server_order_index)] = current_order
 
+                if status == 'FILLED' and self.order_fill_callback:
+                    try:
+                        sequence = getattr(order_data, 'offset', None)
+                    except Exception:
+                        sequence = None
+                    asyncio.get_running_loop().create_task(
+                        self.order_fill_callback(
+                            order_id,
+                            price,
+                            filled_size,
+                            sequence,
+                        )
+                    )
+
     async def handle_liquidation_notification(self, notifications: List[Dict[str, Any]]) -> None:
         """Normalize liquidation notifications from the Lighter stream."""
         for notification in notifications:
@@ -530,8 +546,8 @@ class LighterClient(BaseExchangeClient):
             )
             
             # Use SDK to fetch order book
-            try:
-                order_api = lighter.OrderApi(self.api_client)
+        try:
+            order_api = lighter.OrderApi(self.api_client)
                 result = await order_api.order_book_orders(
                     market_id=market_id,
                     limit=levels,
