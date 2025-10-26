@@ -253,7 +253,7 @@ async def test_execute_strategy_respects_margin_cap(monkeypatch, patch_event_not
         strategy.grid_state.margin_ratio = Decimal("1")
         return Decimal("0"), None
 
-    monkeypatch.setattr(strategy, "_prepare_risk_snapshot", fake_prepare)
+    monkeypatch.setattr(strategy.risk_controller, "refresh_risk_snapshot", fake_prepare)
 
     # We still run should_execute to trigger state refresh
     should_trade = await strategy.should_execute()
@@ -355,7 +355,7 @@ async def test_recovery_ladder_executes_new_orders(patch_event_notifier, monkeyp
         )
     ]
 
-    await strategy._run_recovery_checks(current_price=Decimal("90"))
+    await strategy.recovery_operator.run_recovery_checks(current_price=Decimal("90"))
 
     assert "close-1" in exchange.cancelled_orders
     assert len(exchange.close_orders) == 3
@@ -400,7 +400,7 @@ async def test_recovery_hedge_executes_market_exit(patch_event_notifier, monkeyp
         )
     ]
 
-    await strategy._run_recovery_checks(current_price=Decimal("90"))
+    await strategy.recovery_operator.run_recovery_checks(current_price=Decimal("90"))
 
     assert exchange.market_orders
     assert exchange.market_orders[-1]["side"] == "sell"

@@ -213,7 +213,7 @@ async def test_check_risk_limits_allows_within_bounds(reset_grid_event_notifier)
     strategy = GridStrategy(config=config, exchange_client=exchange)
     events: List[Dict[str, Any]] = strategy.event_notifier.events  # type: ignore[attr-defined]
 
-    ok, message = await strategy._check_risk_limits(
+    ok, message = await strategy.risk_controller.check_order_limits(
         reference_price=Decimal("100"),
         order_quantity=Decimal("1"),
     )
@@ -236,7 +236,7 @@ async def test_check_risk_limits_blocks_margin_cap(reset_grid_event_notifier):
     strategy.grid_state.last_known_margin = Decimal("900")
     strategy.grid_state.margin_ratio = Decimal("1")
 
-    ok, message = await strategy._check_risk_limits(
+    ok, message = await strategy.risk_controller.check_order_limits(
         reference_price=Decimal("100"),
         order_quantity=Decimal("5"),
     )
@@ -260,7 +260,7 @@ async def test_place_open_order_uses_order_notional(reset_grid_event_notifier):
     exchange.best_ask = Decimal("100")
     strategy = GridStrategy(config=config, exchange_client=exchange)
 
-    result = await strategy._place_open_order()
+    result = await strategy.open_operator.place_open_order()
 
     assert result["action"] == "order_placed"
     expected_quantity = Decimal("50") / Decimal("100")
@@ -280,10 +280,11 @@ async def test_stop_loss_triggers_for_long(reset_grid_event_notifier):
     strategy.grid_state.last_stop_loss_trigger = 0
     strategy.grid_state.active_close_orders = []
 
-    triggered = await strategy._enforce_stop_loss(
+    triggered = await strategy.risk_controller.enforce_stop_loss(
         snapshot=snapshot,
         current_price=Decimal("97"),  # below 2% stop
         current_position=Decimal("1"),
+        close_position_fn=strategy.order_closer.market_close,
     )
 
     assert triggered is True
@@ -305,10 +306,11 @@ async def test_stop_loss_triggers_for_short(reset_grid_event_notifier):
     snapshot = make_snapshot(quantity=Decimal("-2"), entry_price=Decimal("100"))
     strategy.grid_state.active_close_orders = []
 
-    triggered = await strategy._enforce_stop_loss(
+    triggered = await strategy.risk_controller.enforce_stop_loss(
         snapshot=snapshot,
         current_price=Decimal("103"),  # above stop threshold for short
         current_position=Decimal("-2"),
+        close_position_fn=strategy.order_closer.market_close,
     )
 
     assert triggered is True
@@ -369,7 +371,7 @@ async def test_recover_position_aggressive(reset_grid_event_notifier):
 
     tracked = make_tracked_position(side="long", size=Decimal("3"))
 
-    result = await strategy._recover_position(tracked, current_price=Decimal("90"))
+    result = await strategy.recovery_operator._recover_position(tracked, current_price=Decimal("90"))
 
     assert result is True
     assert "close-1" in exchange.cancelled_orders
@@ -386,7 +388,7 @@ async def test_recover_position_ladder(reset_grid_event_notifier):
     events: List[Dict[str, Any]] = strategy.event_notifier.events  # type: ignore[attr-defined]
 
     tracked = make_tracked_position(side="long", size=Decimal("2"))
-    result = await strategy._recover_position(tracked, current_price=Decimal("90"))
+    result = await strategy.recovery_operator._recover_position(tracked, current_price=Decimal("90"))
 
     assert result is False
     assert len(exchange.close_orders) == 3
@@ -409,7 +411,7 @@ async def test_recover_position_hedge_success(reset_grid_event_notifier):
     strategy.grid_state.margin_ratio = Decimal("0.1")
 
     tracked = make_tracked_position(side="long", size=Decimal("4"))
-    result = await strategy._recover_position(tracked, current_price=Decimal("90"))
+    result = await strategy.recovery_operator._recover_position(tracked, current_price=Decimal("90"))
 
     assert result is True
     assert strategy.grid_state.last_known_position == Decimal("0")
@@ -429,7 +431,7 @@ async def test_recover_position_hedge_failure(reset_grid_event_notifier):
     events: List[Dict[str, Any]] = strategy.event_notifier.events  # type: ignore[attr-defined]
     exchange.next_market_success = False
     tracked = make_tracked_position(side="long", size=Decimal("2"))
-    result = await strategy._recover_position(tracked, current_price=Decimal("90"))
+    result = await strategy.recovery_operator._recover_position(tracked, current_price=Decimal("90"))
 
     assert result is False
     event_types = [evt["event_type"] for evt in events]
@@ -455,9 +457,9 @@ async def test_prepare_risk_snapshot_with_exchange_snapshot(reset_grid_event_not
         )
 
     monkeypatch.setattr(exchange, "get_account_positions", fake_positions)
-    monkeypatch.setattr(strategy, "_fetch_position_snapshot", fake_fetch_snapshot)
+    monkeypatch.setattr(strategy.risk_controller, "_fetch_position_snapshot", fake_fetch_snapshot)
 
-    position, snapshot = await strategy._prepare_risk_snapshot(reference_price=Decimal("110"))
+    position, snapshot = await strategy.risk_controller.refresh_risk_snapshot(reference_price=Decimal("110"))
 
     assert position == Decimal("5")
     assert snapshot is not None
@@ -478,9 +480,9 @@ async def test_prepare_risk_snapshot_handles_exceptions(reset_grid_event_notifie
         return None
 
     monkeypatch.setattr(exchange, "get_account_positions", fail_positions)
-    monkeypatch.setattr(strategy, "_fetch_position_snapshot", fake_snapshot)
+    monkeypatch.setattr(strategy.risk_controller, "_fetch_position_snapshot", fake_snapshot)
 
-    position, snapshot = await strategy._prepare_risk_snapshot(reference_price=Decimal("50"))
+    position, snapshot = await strategy.risk_controller.refresh_risk_snapshot(reference_price=Decimal("50"))
 
     assert position == Decimal("0")
     assert snapshot is None
@@ -577,9 +579,9 @@ async def test_run_recovery_checks_invokes_recovery(reset_grid_event_notifier, m
         calls.append(tp)
         return True
 
-    strategy._recover_position = fake_recover  # type: ignore[attr-defined]
+    strategy.recovery_operator._recover_position = fake_recover  # type: ignore[attr-defined]
 
-    await strategy._run_recovery_checks(current_price=Decimal("90"))
+    await strategy.recovery_operator.run_recovery_checks(current_price=Decimal("90"))
 
     assert calls == [tracked]
     assert strategy.grid_state.tracked_positions == []
@@ -607,9 +609,9 @@ async def test_run_recovery_checks_respects_cooldown(reset_grid_event_notifier, 
         tp.last_recovery_time = base_time  # simulate no resolution, set cooldown
         return False
 
-    strategy._recover_position = fake_recover  # type: ignore[attr-defined]
+    strategy.recovery_operator._recover_position = fake_recover  # type: ignore[attr-defined]
 
-    await strategy._run_recovery_checks(current_price=Decimal("80"))
+    await strategy.recovery_operator.run_recovery_checks(current_price=Decimal("80"))
 
     # still tracked due to failed recovery and active cooldown
     assert strategy.grid_state.tracked_positions
@@ -619,6 +621,6 @@ async def test_run_recovery_checks_respects_cooldown(reset_grid_event_notifier, 
     # Next call within cooldown window should skip recovery attempt
     monkeypatch.setattr(grid_strategy_module.time, "time", lambda: base_time + 2)
     events.clear()
-    await strategy._run_recovery_checks(current_price=Decimal("80"))
+    await strategy.recovery_operator.run_recovery_checks(current_price=Decimal("80"))
     cooldown_events = [evt["event_type"] for evt in events]
     assert "recovery_cooldown_active" in cooldown_events
