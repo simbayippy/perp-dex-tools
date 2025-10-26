@@ -142,7 +142,15 @@ class IntegrationExchange:
             filled_size=Decimal("0"),
         )
 
-    async def place_close_order(self, *, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
+    async def place_close_order(
+        self,
+        *,
+        contract_id: str,
+        quantity: Decimal,
+        price: Decimal,
+        side: str,
+        reduce_only: bool = False,
+    ) -> OrderResult:
         order_id = f"close-{len(self.close_orders) + 1}"
         entry = {
             "order_id": order_id,
@@ -150,6 +158,7 @@ class IntegrationExchange:
             "quantity": Decimal(str(quantity)),
             "price": Decimal(str(price)),
             "side": side,
+            "reduce_only": reduce_only,
         }
         self.close_orders.append(entry)
         self.active_close_order_infos = [

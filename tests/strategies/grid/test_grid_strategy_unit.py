@@ -119,13 +119,21 @@ class DummyExchange:
             self.next_market_success = True
             return DummyExchange._OrderResult(False, order_id, None, quantity, status="REJECTED", error_message="simulated failure")
 
-    async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str):
+    async def place_close_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        price: Decimal,
+        side: str,
+        reduce_only: bool = False,
+    ):
         order_id = f"close-{len(self.close_orders) + 1}"
         self.close_orders.append({
             "contract_id": contract_id,
             "quantity": quantity,
             "price": price,
             "side": side,
+            "reduce_only": reduce_only,
         })
         return DummyExchange._OrderResult(True, order_id, price, quantity, status="OPEN")
 

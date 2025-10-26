@@ -180,9 +180,9 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
         create_decimal_parameter(
             key="post_only_tick_multiplier",
             prompt="Tick multiplier for post-only limit placement?",
-            default=Decimal("2"),
+            default=Decimal("10"),
             min_value=Decimal("1"),
-            max_value=Decimal("10"),
+            max_value=Decimal("20"),
             required=False,
             help_text="How many ticks away from the top of book to anchor post-only orders",
         ),
