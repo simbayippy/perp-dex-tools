@@ -40,6 +40,7 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             key="ticker",
             prompt="Which trading pair? (e.g., BTC, ETH, HYPE)",
             param_type=ParameterType.STRING,
+            default="BTC",
             required=True,
             min_length=1,
             max_length=20,
@@ -69,13 +70,14 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
         ),
         create_decimal_parameter(
             key="take_profit",
-            prompt="Take profit percentage (e.g., 0.8 = 0.8%)?",
-            min_value=Decimal("0.1"),
-            max_value=Decimal("10"),
+            prompt="Take profit percentage (e.g., 0.08 = 0.08%)?",
+            default=Decimal("0.08"),
+            min_value=Decimal("0.001"),
+            max_value=Decimal("1"),
             required=True,
             help_text=(
-                "How much profit to take on each trade (0.1–10). Provide values as whole percentages "
-                "(0.8 = 0.8%, 1.5 = 1.5%). Higher = more profit but fewer fills."
+                "How much profit to take on each trade (0.001–1). Provide values as whole percentages "
+                "(0.08 = 0.08%, 0.15 = 0.15%). Higher = more profit but fewer fills."
             ),
         ),
         create_decimal_parameter(
