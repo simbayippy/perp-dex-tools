@@ -546,43 +546,37 @@ class LighterClient(BaseExchangeClient):
             )
             
             # Use SDK to fetch order book
-        try:
-            order_api = lighter.OrderApi(self.api_client)
+            try:
+                order_api = lighter.OrderApi(self.api_client)
                 result = await order_api.order_book_orders(
                     market_id=market_id,
                     limit=levels,
-                    _request_timeout=10
+                    _request_timeout=10,
                 )
-                
-                # Check if the API returned success
+
                 if result.code != 200:
                     self.logger.error(
                         f"❌ [LIGHTER] Order book API error: code={result.code}, message={result.message}"
                     )
                     return {'bids': [], 'asks': []}
-                
-                # Convert to standardized format
-                # SDK returns SimpleOrder objects with price and remaining_base_amount as strings
+
                 bids = [
                     {
-                        'price': Decimal(bid.price), 
-                        'size': Decimal(bid.remaining_base_amount)
-                    } 
+                        'price': Decimal(bid.price),
+                        'size': Decimal(bid.remaining_base_amount),
+                    }
                     for bid in result.bids
                 ]
                 asks = [
                     {
-                        'price': Decimal(ask.price), 
-                        'size': Decimal(ask.remaining_base_amount)
-                    } 
+                        'price': Decimal(ask.price),
+                        'size': Decimal(ask.remaining_base_amount),
+                    }
                     for ask in result.asks
                 ]
-                
-                return {
-                    'bids': bids,
-                    'asks': asks
-                }
-                
+
+                return {'bids': bids, 'asks': asks}
+
             except Exception as api_error:
                 self.logger.error(
                     f"❌ [LIGHTER] SDK order book fetch failed: {api_error}"

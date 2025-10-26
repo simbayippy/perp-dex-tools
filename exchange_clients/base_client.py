@@ -6,9 +6,13 @@ from abc import ABC, abstractmethod
 import asyncio
 import inspect
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING, Callable, Awaitable
 
 from exchange_clients.events import LiquidationEvent, LiquidationEventDispatcher
+
+
+# Type alias for optional order fill callback
+OrderFillCallback = Optional[Callable[[str, Decimal, Decimal, Optional[int]], Awaitable[None]]]
 
 if TYPE_CHECKING:
     from .base_websocket import BaseWebSocketManager
@@ -61,6 +65,7 @@ class BaseExchangeClient(ABC):
         # Maps normalized symbol -> exchange-specific contract_id
         # e.g., {"STBL": "STBLUSDT", "MET": "METUSDT"}
         self._contract_id_cache: Dict[str, str] = {}
+        self.order_fill_callback: OrderFillCallback = None
 
     @abstractmethod
     def _validate_config(self) -> None:
