@@ -79,6 +79,8 @@ class GridOrderCloser:
             self.grid_state.last_known_position = Decimal("0")
             self.grid_state.last_known_margin = Decimal("0")
             self.grid_state.margin_ratio = None
+            self.grid_state.pending_position_id = None
+            self.grid_state.filled_position_id = None
             return True
 
         error_message = getattr(order_result, "error_message", "unknown error")
@@ -97,6 +99,11 @@ class GridOrderCloser:
         """Handle a filled open order by placing corresponding close order."""
         if self.grid_state.filled_price and self.grid_state.filled_quantity:
             try:
+                position_id = (
+                    self.grid_state.filled_position_id
+                    or self.grid_state.pending_position_id
+                    or self.grid_state.allocate_position_id()
+                )
                 close_side = "sell" if self.config.direction == "buy" else "buy"
                 close_price = self._calculate_close_price(self.grid_state.filled_price)
 
@@ -123,6 +130,7 @@ class GridOrderCloser:
                     side = "long" if self.config.direction == "buy" else "short"
                     if position_size and order_result.status != "FILLED":
                         tracked_position = TrackedPosition(
+                            position_id=position_id,
                             entry_price=Decimal(str(entry_price)),
                             size=Decimal(str(position_size)),
                             side=side,
@@ -134,6 +142,7 @@ class GridOrderCloser:
                             "position_tracked",
                             "Grid: Tracking position for recovery monitoring",
                             level="INFO",
+                            position_id=position_id,
                             side=side,
                             size=position_size,
                             entry_price=entry_price,
@@ -144,36 +153,44 @@ class GridOrderCloser:
                     self.grid_state.cycle_state = GridCycleState.READY
                     self.grid_state.filled_price = None
                     self.grid_state.filled_quantity = None
+                    self.grid_state.filled_position_id = None
                     self.grid_state.pending_open_order_id = None
                     self.grid_state.pending_open_quantity = None
+                    self.grid_state.pending_position_id = None
                     self.grid_state.last_open_order_time = time.time()
 
                     self.logger.log(
-                        f"Grid: Placed close order at {close_price}",
+                        f"Grid: Placed close order at {close_price} for position {position_id}",
                         "INFO",
                     )
 
                     return {
                         "action": "order_placed",
                         "order_id": order_result.order_id,
+                        "position_id": position_id,
                         "side": close_side,
-                        "quantity": self.grid_state.filled_quantity,
+                        "quantity": position_size,
                         "price": close_price,
                         "wait_time": 1 if self.exchange_client.get_exchange_name() == "lighter" else 0,
                     }
 
-                self.logger.log(f"Grid: Failed to place close order: {order_result.error_message}", "ERROR")
+                self.logger.log(
+                    f"Grid: Failed to place close order for position {position_id}: {order_result.error_message}",
+                    "ERROR",
+                )
                 return {
                     "action": "error",
                     "message": order_result.error_message,
+                    "position_id": position_id,
                     "wait_time": 5,
                 }
 
             except Exception as exc:
-                self.logger.log(f"Error placing close order: {exc}", "ERROR")
+                self.logger.log(f"Error placing close order for position {position_id}: {exc}", "ERROR")
                 return {
                     "action": "error",
                     "message": str(exc),
+                    "position_id": position_id,
                     "wait_time": 5,
                 }
 
@@ -192,10 +209,13 @@ class GridOrderCloser:
         """
         self.grid_state.filled_price = filled_price
         self.grid_state.filled_quantity = filled_quantity
+        if self.grid_state.pending_position_id is None:
+            self.grid_state.pending_position_id = self.grid_state.allocate_position_id()
+        self.grid_state.filled_position_id = self.grid_state.pending_position_id
         self.grid_state.pending_open_order_id = None
         self.grid_state.pending_open_quantity = None
         self.logger.log(
-            f"Grid: Order filled at {filled_price} for {filled_quantity}",
+            f"Grid: Order filled at {filled_price} for {filled_quantity} (position {self.grid_state.filled_position_id})",
             "INFO",
         )
 

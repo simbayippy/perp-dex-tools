@@ -376,6 +376,8 @@ class GridStrategy(BaseStrategy):
         self.grid_state.pending_open_quantity = None
         self.grid_state.filled_price = None
         self.grid_state.filled_quantity = None
+        self.grid_state.filled_position_id = None
+        self.grid_state.pending_position_id = None
         self.grid_state.cycle_state = GridCycleState.READY
         self.grid_state.last_open_order_time = time.time()
         return True

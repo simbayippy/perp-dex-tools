@@ -341,6 +341,7 @@ async def test_recovery_ladder_executes_new_orders(patch_event_notifier, monkeyp
     monkeypatch.setattr(grid_strategy_module.time, "time", lambda: base_time)
 
     tracked = TrackedPosition(
+        position_id="grid-1",
         entry_price=Decimal("100"),
         size=Decimal("1"),
         side="long",
@@ -386,6 +387,7 @@ async def test_recovery_hedge_executes_market_exit(patch_event_notifier, monkeyp
     monkeypatch.setattr(grid_strategy_module.time, "time", lambda: base_time)
 
     tracked = TrackedPosition(
+        position_id="grid-2",
         entry_price=Decimal("100"),
         size=Decimal("2"),
         side="long",

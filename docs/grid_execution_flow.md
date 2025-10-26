@@ -64,8 +64,8 @@ sequenceDiagram
    * `_handle_order_fill` converts the values to `Decimal` and invokes `strategy.notify_order_filled(price, size)`.
 
 4. **Close order submission**  
-   * `GridStrategy.notify_order_filled` simply forwards to `GridOrderCloser.notify_order_filled`, which stores the fill price/size on the grid state.
-   * When the state machine runs again, `GridOrderCloser.handle_filled_order()` sees `filled_price` / `filled_quantity` populated and submits the paired close order (`place_close_order` or `place_market_order` if `boost_mode`).
+   * `GridStrategy.notify_order_filled` simply forwards to `GridOrderCloser.notify_order_filled`, which stores the fill price/size on the grid state and tags the fill with a sequential `position_id`.
+   * When the state machine runs again, `GridOrderCloser.handle_filled_order()` sees `filled_price` / `filled_quantity` populated and submits the paired close order (`place_close_order` or `place_market_order` if `boost_mode`), propagating the same `position_id` onto the tracked position for recovery and auditing.
    * After the close order is accepted, we clear the pending entry data, reset the cycle to `READY`, and the grid is free to place the next entry.
 
 ### Edge cases & recovery rules

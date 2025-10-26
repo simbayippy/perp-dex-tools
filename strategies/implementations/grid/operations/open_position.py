@@ -133,6 +133,8 @@ class GridOpenPositionOperator:
             )
 
             if order_result.success:
+                position_id = self.grid_state.allocate_position_id()
+                self.grid_state.pending_position_id = position_id
                 # Update state to waiting for fill
                 self.grid_state.cycle_state = GridCycleState.WAITING_FOR_FILL
 
@@ -140,6 +142,7 @@ class GridOpenPositionOperator:
                 if order_result.status == "FILLED":
                     self.grid_state.filled_price = order_result.price
                     self.grid_state.filled_quantity = order_result.size
+                    self.grid_state.filled_position_id = position_id
                     self.grid_state.pending_open_order_id = None
                     self.grid_state.pending_open_quantity = None
                 else:
@@ -148,13 +151,14 @@ class GridOpenPositionOperator:
 
                 self.logger.log(
                     f"Grid: Placed {self.config.direction} order for {quantity} "
-                    f"(@ ~${float(applied_notional):.2f}) at {order_result.price}",
+                    f"(@ ~${float(applied_notional):.2f}) at {order_result.price} (position {position_id})",
                     "INFO",
                 )
 
                 return {
                     "action": "order_placed",
                     "order_id": order_result.order_id,
+                    "position_id": position_id,
                     "side": self.config.direction,
                     "quantity": quantity,
                     "price": order_result.price,

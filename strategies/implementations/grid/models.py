@@ -48,6 +48,7 @@ class GridOrder:
 @dataclass
 class TrackedPosition:
     """Metadata for monitoring active grid positions."""
+    position_id: str
     entry_price: Decimal
     size: Decimal
     side: str  # 'long' or 'short'
@@ -60,6 +61,7 @@ class TrackedPosition:
     def to_dict(self) -> dict:
         """Serialize tracked position state."""
         return {
+            'position_id': self.position_id,
             'entry_price': float(self.entry_price),
             'size': float(self.size),
             'side': self.side,
@@ -74,6 +76,7 @@ class TrackedPosition:
     def from_dict(cls, data: dict) -> 'TrackedPosition':
         """Deserialize tracked position state."""
         return cls(
+            position_id=str(data.get('position_id', "")),
             entry_price=Decimal(str(data['entry_price'])),
             size=Decimal(str(data['size'])),
             side=data['side'],
@@ -94,13 +97,16 @@ class GridState:
     last_open_order_time: float = 0
     filled_price: Optional[Decimal] = None
     filled_quantity: Optional[Decimal] = None
+    filled_position_id: Optional[str] = None
     pending_open_order_id: Optional[str] = None
     pending_open_quantity: Optional[Decimal] = None
+    pending_position_id: Optional[str] = None
     last_known_position: Decimal = Decimal("0")
     last_known_margin: Decimal = Decimal("0")
     margin_ratio: Optional[Decimal] = None
     last_stop_loss_trigger: float = 0.0
     tracked_positions: List[TrackedPosition] = None
+    position_sequence: int = 0
     
     def __post_init__(self):
         """Initialize default values."""
@@ -118,13 +124,16 @@ class GridState:
             'last_open_order_time': self.last_open_order_time,
             'filled_price': float(self.filled_price) if self.filled_price else None,
             'filled_quantity': float(self.filled_quantity) if self.filled_quantity else None,
+            'filled_position_id': self.filled_position_id,
             'pending_open_order_id': self.pending_open_order_id,
             'pending_open_quantity': float(self.pending_open_quantity) if self.pending_open_quantity is not None else None,
+            'pending_position_id': self.pending_position_id,
             'last_known_position': float(self.last_known_position),
             'last_known_margin': float(self.last_known_margin),
             'margin_ratio': float(self.margin_ratio) if self.margin_ratio is not None else None,
             'last_stop_loss_trigger': self.last_stop_loss_trigger,
             'tracked_positions': [pos.to_dict() for pos in self.tracked_positions],
+            'position_sequence': self.position_sequence,
         }
     
     @classmethod
@@ -140,8 +149,10 @@ class GridState:
             last_open_order_time=data.get('last_open_order_time', 0),
             filled_price=Decimal(str(data['filled_price'])) if data.get('filled_price') else None,
             filled_quantity=Decimal(str(data['filled_quantity'])) if data.get('filled_quantity') else None,
+            filled_position_id=data.get('filled_position_id'),
             pending_open_order_id=data.get('pending_open_order_id'),
             pending_open_quantity=Decimal(str(data['pending_open_quantity'])) if data.get('pending_open_quantity') is not None else None,
+            pending_position_id=data.get('pending_position_id'),
             last_known_position=Decimal(str(data.get('last_known_position', 0))),
             last_known_margin=Decimal(str(data.get('last_known_margin', 0))),
             margin_ratio=Decimal(str(data['margin_ratio'])) if data.get('margin_ratio') is not None else None,
@@ -150,4 +161,10 @@ class GridState:
                 TrackedPosition.from_dict(pos)
                 for pos in data.get('tracked_positions', [])
             ],
+            position_sequence=int(data.get('position_sequence', 0)),
         )
+
+    def allocate_position_id(self) -> str:
+        """Generate a new sequential position identifier."""
+        self.position_sequence += 1
+        return f"grid-{self.position_sequence}"

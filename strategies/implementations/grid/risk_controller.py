@@ -260,6 +260,7 @@ class GridRiskController:
             if not symbol:
                 continue
             try:
+                # THIS IS PROBABLY PROBLAMATIC (or the position_closer) -> SPAMS GETTING POSITION SNAPSHOTS
                 snapshot = await self.exchange_client.get_position_snapshot(symbol)
                 if snapshot:
                     return snapshot

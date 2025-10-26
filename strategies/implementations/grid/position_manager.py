@@ -8,7 +8,7 @@ helpers for recovery workflows.
 
 from __future__ import annotations
 
-from typing import Iterable, List, Set
+from typing import Iterable, List, Optional, Set
 
 from .models import GridState, TrackedPosition
 
@@ -24,15 +24,26 @@ class GridPositionManager:
     # ------------------------------------------------------------------ #
     def track(self, tracked_position: TrackedPosition) -> None:
         """Register a position for monitoring."""
+        if not tracked_position.position_id:
+            tracked_position.position_id = self.next_position_id()
         self._state.tracked_positions.append(tracked_position)
 
     def extend(self, tracked_positions: Iterable[TrackedPosition]) -> None:
         """Bulk register positions."""
-        self._state.tracked_positions.extend(tracked_positions)
+        enriched: List[TrackedPosition] = []
+        for tracked in tracked_positions:
+            if not tracked.position_id:
+                tracked.position_id = self.next_position_id()
+            enriched.append(tracked)
+        self._state.tracked_positions.extend(enriched)
 
     def clear(self) -> None:
         """Remove all tracked positions."""
         self._state.tracked_positions = []
+
+    def next_position_id(self) -> str:
+        """Generate a new position identifier."""
+        return self._state.allocate_position_id()
 
     # ------------------------------------------------------------------ #
     # Query helpers
@@ -44,6 +55,13 @@ class GridPositionManager:
     def count(self) -> int:
         """Return the number of tracked positions."""
         return len(self._state.tracked_positions)
+
+    def get(self, position_id: str) -> Optional[TrackedPosition]:
+        """Lookup a tracked position by its identifier."""
+        for tracked in self._state.tracked_positions:
+            if tracked.position_id == position_id:
+                return tracked
+        return None
 
     # ------------------------------------------------------------------ #
     # Maintenance helpers

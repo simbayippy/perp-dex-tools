@@ -17,6 +17,7 @@ from strategies.implementations.grid.models import (
     GridState,
     TrackedPosition,
 )
+from strategies.implementations.grid.position_manager import GridPositionManager
 from strategies.implementations.grid import strategy as grid_strategy_module
 from strategies.implementations.grid.strategy import GridStrategy
 
@@ -181,6 +182,7 @@ def make_snapshot(
 def test_grid_state_round_trip_serialisation():
     order = GridOrder(order_id="abc123", price=Decimal("100"), size=Decimal("2"), side="sell")
     tracked = TrackedPosition(
+        position_id="grid-2",
         entry_price=Decimal("95"),
         size=Decimal("2"),
         side="long",
@@ -197,13 +199,16 @@ def test_grid_state_round_trip_serialisation():
         last_open_order_time=1234567000.0,
         filled_price=Decimal("90"),
         filled_quantity=Decimal("1.5"),
+        filled_position_id="grid-1",
         pending_open_order_id="open-abc",
         pending_open_quantity=Decimal("1.5"),
+        pending_position_id="grid-1",
         last_known_position=Decimal("5"),
         last_known_margin=Decimal("250"),
         margin_ratio=Decimal("0.1"),
         last_stop_loss_trigger=1234567888.0,
         tracked_positions=[tracked],
+        position_sequence=7,
     )
 
     rebuilt = GridState.from_dict(state.to_dict())
@@ -215,6 +220,9 @@ def test_grid_state_round_trip_serialisation():
     assert rebuilt.tracked_positions[0].hedged is True
     assert rebuilt.pending_open_order_id == "open-abc"
     assert rebuilt.pending_open_quantity == Decimal("1.5")
+    assert rebuilt.pending_position_id == "grid-1"
+    assert rebuilt.filled_position_id == "grid-1"
+    assert rebuilt.position_sequence == 7
     assert rebuilt.margin_ratio == Decimal("0.1")
 
 
@@ -291,13 +299,14 @@ async def test_close_order_price_scales_with_margin_ratio(reset_grid_event_notif
     strategy.grid_state.filled_price = Decimal("100")
     strategy.grid_state.filled_quantity = Decimal("1")
 
-    await strategy.order_closer.handle_filled_order()
+    result = await strategy.order_closer.handle_filled_order()
 
     assert exchange.close_orders, "Expected a close order to be placed"
     expected_price = Decimal("100") * (
         Decimal("1") + (config.take_profit / Decimal("100")) * Decimal("0.05")
     )
     assert exchange.close_orders[-1]["price"] == expected_price
+    assert result["position_id"].startswith("grid-")
 
 
 @pytest.mark.asyncio
@@ -310,7 +319,7 @@ async def test_close_order_price_uses_target_leverage_fallback(reset_grid_event_
     strategy.grid_state.filled_price = Decimal("200")
     strategy.grid_state.filled_quantity = Decimal("2")
 
-    await strategy.order_closer.handle_filled_order()
+    result = await strategy.order_closer.handle_filled_order()
 
     assert exchange.close_orders, "Expected a close order to be placed"
     leverage_ratio = Decimal("1") / Decimal("25")
@@ -318,6 +327,25 @@ async def test_close_order_price_uses_target_leverage_fallback(reset_grid_event_
         Decimal("1") - (config.take_profit / Decimal("100")) * leverage_ratio
     )
     assert exchange.close_orders[-1]["price"] == expected_price
+    assert result["position_id"].startswith("grid-")
+
+
+def test_position_manager_assigns_identifier(reset_grid_event_notifier):
+    state = GridState()
+    manager = GridPositionManager(state)
+    position = TrackedPosition(
+        position_id="",
+        entry_price=Decimal("100"),
+        size=Decimal("1"),
+        side="long",
+        open_time=time.time(),
+        close_order_ids=[],
+    )
+
+    manager.track(position)
+
+    assert position.position_id.startswith("grid-")
+    assert state.position_sequence == 1
 
 
 @pytest.mark.asyncio
@@ -398,7 +426,9 @@ async def test_stop_loss_disabled_no_action(reset_grid_event_notifier):
 
 
 def make_tracked_position(**overrides: Any) -> TrackedPosition:
+    position_id = overrides.pop("position_id", f"grid-{int(time.time() * 1000)}")
     defaults = dict(
+        position_id=position_id,
         entry_price=Decimal("100"),
         size=Decimal("2"),
         side="long",
