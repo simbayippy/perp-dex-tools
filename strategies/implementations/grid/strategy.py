@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from strategies.base_strategy import BaseStrategy
+from exchange_clients.market_data import PriceStream
 from .config import GridConfig
 from .models import GridCycleState, GridState
 from .operations import (
@@ -76,6 +77,14 @@ class GridStrategy(BaseStrategy):
         self.order_notional_usd: Optional[Decimal] = getattr(config, "order_notional_usd", None)
         target_leverage: Optional[Decimal] = getattr(config, "target_leverage", None)
 
+        stream_symbol = str(getattr(config, "ticker", getattr(exchange_client.config, "ticker", "")))
+        fetch_symbol = getattr(exchange_client.config, "contract_id", stream_symbol)
+        self.price_stream = PriceStream(
+            exchange_client=exchange_client,
+            stream_symbol=stream_symbol,
+            fetch_symbol=fetch_symbol,
+        )
+
         # Compose helper components
         self.position_manager = GridPositionManager(self.grid_state)
         self.risk_controller = GridRiskController(
@@ -100,6 +109,7 @@ class GridStrategy(BaseStrategy):
             grid_state=self.grid_state,
             logger=self.logger,
             risk_controller=self.risk_controller,
+            price_stream=self.price_stream,
             order_notional_usd=self.order_notional_usd,
         )
         self.recovery_operator = GridRecoveryOperator(
@@ -183,15 +193,24 @@ class GridStrategy(BaseStrategy):
     async def _initialize_strategy(self):
         """Initialize strategy (called by base class)."""
         await self.risk_controller.prepare_leverage_settings()
+        stream_symbol = getattr(self.config, "ticker", None)
+        if stream_symbol:
+            try:
+                await self.exchange_client.ensure_market_feed(stream_symbol)
+            except Exception as exc:
+                self.logger.log(
+                    f"Grid: Failed to align websocket market feed for {stream_symbol}: {exc}",
+                    "WARNING",
+                )
     
     async def should_execute(self) -> bool:
         """Determine if grid strategy should execute."""
         try:
             # Get current market data
-            best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(
-                self.exchange_client.config.contract_id
-            )
-            current_price = (best_bid + best_ask) / 2
+            bbo = await self.price_stream.latest()
+            best_bid = bbo.bid
+            best_ask = bbo.ask
+            current_price = (best_bid + best_ask) / Decimal("2")
             
             # Check stop price - critical safety check first
             if self.config.stop_price is not None:

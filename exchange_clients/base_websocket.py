@@ -8,7 +8,7 @@ implement so higher-level strategy code can interact with them uniformly.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 
 class BaseWebSocketManager(ABC):
@@ -23,6 +23,8 @@ class BaseWebSocketManager(ABC):
     def __init__(self) -> None:
         self.logger: Any = None
         self.running: bool = False
+        self._bbo_listeners: list[Callable[["BBOData"], Optional[Awaitable[None]]]] = []
+        self._latest_bbo: Optional["BBOData"] = None
 
     def set_logger(self, logger: Any) -> None:
         """Attach a logger instance (expects unified_logger-style interface)."""
@@ -87,3 +89,61 @@ class BaseWebSocketManager(ABC):
             Format: {'bids': [{'price': Decimal, 'size': Decimal}, ...], 
                      'asks': [{'price': Decimal, 'size': Decimal}, ...]}
         """
+        ...
+
+    # ------------------------------------------------------------------
+    # Best bid/ask streaming helpers
+    # ------------------------------------------------------------------
+
+    def register_bbo_listener(
+        self,
+        listener: Callable[["BBOData"], Optional[Awaitable[None]]],
+    ) -> None:
+        """Register a listener that will be invoked on every BBO update."""
+        if listener not in self._bbo_listeners:
+            self._bbo_listeners.append(listener)
+
+    def unregister_bbo_listener(
+        self,
+        listener: Callable[["BBOData"], Optional[Awaitable[None]]],
+    ) -> None:
+        """Remove a previously registered BBO listener."""
+        if listener in self._bbo_listeners:
+            self._bbo_listeners.remove(listener)
+
+    def get_latest_bbo(self) -> Optional["BBOData"]:
+        """Return the most recently cached BBO snapshot, if any."""
+        return self._latest_bbo
+
+    async def _notify_bbo_update(self, bbo: "BBOData") -> None:
+        """Store and fan-out a new BBO update to listeners."""
+        self._latest_bbo = bbo
+        for listener in list(self._bbo_listeners):
+            try:
+                result = listener(bbo)
+                if isinstance(result, Awaitable):
+                    await result
+            except Exception as exc:  # pragma: no cover - defensive logging
+                if self.logger and hasattr(self.logger, "log"):
+                    self.logger.log(f"BBO listener error: {exc}", "ERROR")
+
+
+class BBOData:
+    """Simple container for best bid/ask updates."""
+
+    __slots__ = ("symbol", "bid", "ask", "timestamp", "sequence")
+
+    def __init__(
+        self,
+        *,
+        symbol: str,
+        bid: Any,
+        ask: Any,
+        timestamp: float,
+        sequence: Optional[int] = None,
+    ) -> None:
+        self.symbol = symbol
+        self.bid = bid
+        self.ask = ask
+        self.timestamp = timestamp
+        self.sequence = sequence

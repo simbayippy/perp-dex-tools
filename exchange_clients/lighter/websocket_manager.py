@@ -17,7 +17,7 @@ import time
 from typing import Dict, Any, List, Optional, Tuple, Callable, Awaitable
 import websockets
 
-from exchange_clients.base_websocket import BaseWebSocketManager
+from exchange_clients.base_websocket import BaseWebSocketManager, BBOData
 
 
 class LighterWebSocketManager(BaseWebSocketManager):
@@ -597,6 +597,15 @@ class LighterWebSocketManager(BaseWebSocketManager):
                             self.best_bid = best_bid_price
                         if best_ask_price is not None:
                             self.best_ask = best_ask_price
+                        await self._notify_bbo_update(
+                            BBOData(
+                                symbol=str(getattr(self.config, "ticker", self.market_index)),
+                                bid=self.best_bid,
+                                ask=self.best_ask,
+                                timestamp=time.time(),
+                                sequence=self.order_book_offset,
+                            )
+                        )
                         
                         self._log(
                             f"[LIGHTER] Order book snapshot loaded with {len(self.order_book['bids'])} bids and "
@@ -631,6 +640,15 @@ class LighterWebSocketManager(BaseWebSocketManager):
                                 self.best_bid = best_bid_price
                             if best_ask_price is not None:
                                 self.best_ask = best_ask_price
+                            await self._notify_bbo_update(
+                                BBOData(
+                                    symbol=str(getattr(self.config, "ticker", self.market_index)),
+                                    bid=self.best_bid,
+                                    ask=self.best_ask,
+                                    timestamp=time.time(),
+                                    sequence=offset,
+                                )
+                            )
 
                     elif data.get("type") == "ping":
                         await self.ws.send(json.dumps({"type": "pong"}))

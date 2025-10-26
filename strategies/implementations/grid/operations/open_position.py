@@ -7,6 +7,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
 
+from exchange_clients.market_data import PriceStream
 from ..config import GridConfig
 from ..models import GridCycleState, GridState
 from ..risk_controller import GridRiskController
@@ -22,6 +23,7 @@ class GridOpenPositionOperator:
         grid_state: GridState,
         logger,
         risk_controller: GridRiskController,
+        price_stream: PriceStream,
         order_notional_usd: Optional[Decimal],
     ) -> None:
         self.config = config
@@ -29,6 +31,7 @@ class GridOpenPositionOperator:
         self.grid_state = grid_state
         self.logger = logger
         self.risk_controller = risk_controller
+        self.price_stream = price_stream
         self.order_notional_usd = order_notional_usd
 
         self._last_order_notional: Optional[Decimal] = None
@@ -85,9 +88,10 @@ class GridOpenPositionOperator:
         try:
             contract_id = self.exchange_client.config.contract_id
 
-            # Get aggressive price (act like market order but with price protection)
-            best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(contract_id)
-            reference_price = (best_bid + best_ask) / 2
+            bbo = await self.price_stream.latest()
+            best_bid = bbo.bid
+            best_ask = bbo.ask
+            reference_price = (best_bid + best_ask) / Decimal("2")
 
             try:
                 quantity, applied_notional = self._determine_order_quantity(reference_price)
