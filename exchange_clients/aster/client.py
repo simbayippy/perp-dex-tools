@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import urlencode
 import aiohttp
 
-from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_client import BaseExchangeClient, OrderFillCallback
 from exchange_clients.base_models import (
     OrderResult,
     OrderInfo,
@@ -36,6 +36,7 @@ class AsterClient(BaseExchangeClient):
         config: Dict[str, Any],
         api_key: Optional[str] = None,
         secret_key: Optional[str] = None,
+        order_fill_callback: OrderFillCallback = None,
     ):
         """
         Initialize Aster client.
@@ -51,6 +52,8 @@ class AsterClient(BaseExchangeClient):
         self.base_url = 'https://fapi.asterdex.com'
         
         super().__init__(config)
+        if order_fill_callback is not None:
+            self.order_fill_callback = order_fill_callback
 
         # Initialize logger early
         self.logger = get_exchange_logger("aster", self.config.ticker)
@@ -274,6 +277,9 @@ class AsterClient(BaseExchangeClient):
             if status == "OPEN" and filled and filled > Decimal("0"):
                 status = "PARTIALLY_FILLED"
 
+            previous = self._latest_orders.get(order_id)
+            prev_filled = previous.filled_size if previous else Decimal("0")
+
             info = OrderInfo(
                 order_id=order_id,
                 side=side or "",
@@ -309,6 +315,28 @@ class AsterClient(BaseExchangeClient):
                     "raw_event": order_data,
                 }
                 self._order_update_handler(payload)
+
+            if self.order_fill_callback and filled is not None and price is not None:
+                fill_increment = filled - prev_filled
+                if fill_increment > Decimal("0"):
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(
+                            self.order_fill_callback(
+                                order_id,
+                                price,
+                                fill_increment,
+                                order_data.get("u"),
+                            )
+                        )
+                    except RuntimeError:
+                        # No running loop; fallback to direct await
+                        await self.order_fill_callback(
+                            order_id,
+                            price,
+                            fill_increment,
+                            order_data.get("u"),
+                        )
 
         except Exception as e:
             self.logger.error(f"Error handling WebSocket order update: {e}")
