@@ -69,11 +69,14 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
         ),
         create_decimal_parameter(
             key="take_profit",
-            prompt="Take profit percentage (e.g., 0.008 = 0.8%)?",
+            prompt="Take profit percentage (e.g., 0.8 = 0.8%)?",
             min_value=Decimal("0.001"),
             max_value=Decimal("0.1"),
             required=True,
-            help_text="How much profit to take on each trade. Higher = more profit but fewer fills",
+            help_text=(
+                "How much profit to take on each trade. Provide values as whole percentages "
+                "(0.8 = 0.8%, 1.5 = 1.5%). Higher = more profit but fewer fills."
+            ),
         ),
         create_decimal_parameter(
             key="target_leverage",
