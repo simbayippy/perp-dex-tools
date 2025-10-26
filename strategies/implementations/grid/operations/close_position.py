@@ -200,17 +200,53 @@ class GridOrderCloser:
         )
 
     def _calculate_close_price(self, filled_price: Decimal) -> Decimal:
-        """Calculate the close price based on take-profit settings."""
-        take_profit_pct = self.config.take_profit
+        """Calculate the close price based on desired profit on position margin."""
+        multiplier = self.get_take_profit_multiplier()
+        return filled_price * multiplier
+
+    def get_take_profit_multiplier(self) -> Decimal:
+        """
+        Resolve the price multiplier required to achieve the configured take-profit
+        as a return on margin rather than as a raw price change.
+
+        For longs (direction == "buy") the multiplier is > 1.
+        For shorts (direction == "sell") the multiplier is < 1.
+        """
+        fraction = self._take_profit_fraction()
+        one = Decimal("1")
 
         if self.config.direction == "buy":
-            # Long position: sell higher
-            close_price = filled_price * (1 + take_profit_pct / 100)
-        else:
-            # Short position: buy back lower
-            close_price = filled_price * (1 - take_profit_pct / 100)
+            return one + fraction
 
-        return close_price
+        multiplier = one - fraction
+        return multiplier if multiplier > Decimal("0") else Decimal("0")
+
+    def _take_profit_fraction(self) -> Decimal:
+        """
+        Convert the configured take-profit percentage into a price delta fraction that
+        incorporates leverage by scaling with the effective margin ratio.
+        """
+        margin_ratio = self._resolve_margin_ratio()
+        take_profit_pct = self.config.take_profit
+        fraction = (take_profit_pct / Decimal("100")) * margin_ratio
+        return fraction if fraction > Decimal("0") else Decimal("0")
+
+    def _resolve_margin_ratio(self) -> Decimal:
+        """
+        Determine the margin ratio (margin / notional) to use when converting between
+        desired profit percentage and equivalent price movement.
+        """
+        margin_ratio = self.grid_state.margin_ratio
+        if margin_ratio is not None and margin_ratio > Decimal("0"):
+            return margin_ratio
+
+        target_leverage = getattr(self.config, "target_leverage", None)
+        if target_leverage:
+            leverage_value = Decimal(str(target_leverage))
+            if leverage_value > Decimal("0"):
+                return Decimal("1") / leverage_value
+
+        return Decimal("1")
 
     async def update_active_orders(self) -> None:
         """Update active close orders."""

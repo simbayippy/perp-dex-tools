@@ -274,6 +274,45 @@ async def test_place_open_order_uses_order_notional(reset_grid_event_notifier):
 
 
 @pytest.mark.asyncio
+async def test_close_order_price_scales_with_margin_ratio(reset_grid_event_notifier):
+    config = make_config(direction="buy")
+    exchange = DummyExchange()
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+
+    strategy.grid_state.margin_ratio = Decimal("0.05")  # 20x effective leverage
+    strategy.grid_state.filled_price = Decimal("100")
+    strategy.grid_state.filled_quantity = Decimal("1")
+
+    await strategy.order_closer.handle_filled_order()
+
+    assert exchange.close_orders, "Expected a close order to be placed"
+    expected_price = Decimal("100") * (
+        Decimal("1") + (config.take_profit / Decimal("100")) * Decimal("0.05")
+    )
+    assert exchange.close_orders[-1]["price"] == expected_price
+
+
+@pytest.mark.asyncio
+async def test_close_order_price_uses_target_leverage_fallback(reset_grid_event_notifier):
+    config = make_config(direction="sell", target_leverage=Decimal("25"))
+    exchange = DummyExchange()
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+
+    strategy.grid_state.margin_ratio = None
+    strategy.grid_state.filled_price = Decimal("200")
+    strategy.grid_state.filled_quantity = Decimal("2")
+
+    await strategy.order_closer.handle_filled_order()
+
+    assert exchange.close_orders, "Expected a close order to be placed"
+    leverage_ratio = Decimal("1") / Decimal("25")
+    expected_price = Decimal("200") * (
+        Decimal("1") - (config.take_profit / Decimal("100")) * leverage_ratio
+    )
+    assert exchange.close_orders[-1]["price"] == expected_price
+
+
+@pytest.mark.asyncio
 async def test_stop_loss_triggers_for_long(reset_grid_event_notifier):
     config = make_config(direction="buy")
     exchange = DummyExchange()

@@ -434,7 +434,8 @@ class GridStrategy(BaseStrategy):
                 next_close_price = next_close_order.price
                 
                 # Calculate new order close price
-                new_order_close_price = best_ask * (1 + self.config.take_profit / 100)
+                take_profit_multiplier = self.order_closer.get_take_profit_multiplier()
+                new_order_close_price = best_ask * take_profit_multiplier
                 
                 # Check if there's enough gap
                 return next_close_price / new_order_close_price > 1 + self.config.grid_step / 100
@@ -448,7 +449,8 @@ class GridStrategy(BaseStrategy):
                 next_close_price = next_close_order.price
                 
                 # Calculate new order close price
-                new_order_close_price = best_bid * (1 - self.config.take_profit / 100)
+                take_profit_multiplier = self.order_closer.get_take_profit_multiplier()
+                new_order_close_price = best_bid * take_profit_multiplier
                 
                 # Check if there's enough gap
                 return new_order_close_price / next_close_price > 1 + self.config.grid_step / 100
