@@ -108,12 +108,13 @@ class GridOrderCloser:
                         side=close_side,
                     )
                 else:
-                    # Normal mode: use limit order
-                    order_result = await self.exchange_client.place_close_order(
+                    # Normal mode: use limit order (reduce only so we do not add exposure)
+                    order_result = await self.exchange_client.place_limit_order(
                         contract_id=self.exchange_client.config.contract_id,
                         quantity=self.grid_state.filled_quantity,
                         price=close_price,
                         side=close_side,
+                        reduce_only=True,
                     )
 
                 if order_result.success:
