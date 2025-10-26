@@ -451,7 +451,7 @@ class LighterClient(BaseExchangeClient):
         """
         # Efficient: Direct access to cached BBO from WebSocket
         if self.ws_manager and self.ws_manager.best_bid is not None and self.ws_manager.best_ask is not None:
-            self.logger.info(f"📡 [LIGHTER] Using real-time BBO from WebSocket")
+            # self.logger.info(f"📡 [LIGHTER] Using real-time BBO from WebSocket")
             return Decimal(str(self.ws_manager.best_bid)), Decimal(str(self.ws_manager.best_ask))
         
         # DRY: Reuse existing orderbook logic for REST fallback

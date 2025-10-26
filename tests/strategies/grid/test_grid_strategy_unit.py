@@ -189,6 +189,8 @@ def test_grid_state_round_trip_serialisation():
         last_open_order_time=1234567000.0,
         filled_price=Decimal("90"),
         filled_quantity=Decimal("1.5"),
+        pending_open_order_id="open-abc",
+        pending_open_quantity=Decimal("1.5"),
         last_known_position=Decimal("5"),
         last_known_margin=Decimal("250"),
         margin_ratio=Decimal("0.1"),
@@ -203,6 +205,8 @@ def test_grid_state_round_trip_serialisation():
     assert rebuilt.filled_price == Decimal("90")
     assert rebuilt.tracked_positions[0].close_order_ids == ["close-1", "close-2"]
     assert rebuilt.tracked_positions[0].hedged is True
+    assert rebuilt.pending_open_order_id == "open-abc"
+    assert rebuilt.pending_open_quantity == Decimal("1.5")
     assert rebuilt.margin_ratio == Decimal("0.1")
 
 

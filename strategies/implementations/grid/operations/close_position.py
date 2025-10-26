@@ -143,6 +143,8 @@ class GridOrderCloser:
                     self.grid_state.cycle_state = GridCycleState.READY
                     self.grid_state.filled_price = None
                     self.grid_state.filled_quantity = None
+                    self.grid_state.pending_open_order_id = None
+                    self.grid_state.pending_open_quantity = None
                     self.grid_state.last_open_order_time = time.time()
 
                     self.logger.log(
@@ -189,6 +191,8 @@ class GridOrderCloser:
         """
         self.grid_state.filled_price = filled_price
         self.grid_state.filled_quantity = filled_quantity
+        self.grid_state.pending_open_order_id = None
+        self.grid_state.pending_open_quantity = None
         self.logger.log(
             f"Grid: Order filled at {filled_price} for {filled_quantity}",
             "INFO",

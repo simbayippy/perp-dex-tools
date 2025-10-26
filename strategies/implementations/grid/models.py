@@ -94,6 +94,8 @@ class GridState:
     last_open_order_time: float = 0
     filled_price: Optional[Decimal] = None
     filled_quantity: Optional[Decimal] = None
+    pending_open_order_id: Optional[str] = None
+    pending_open_quantity: Optional[Decimal] = None
     last_known_position: Decimal = Decimal("0")
     last_known_margin: Decimal = Decimal("0")
     margin_ratio: Optional[Decimal] = None
@@ -116,6 +118,8 @@ class GridState:
             'last_open_order_time': self.last_open_order_time,
             'filled_price': float(self.filled_price) if self.filled_price else None,
             'filled_quantity': float(self.filled_quantity) if self.filled_quantity else None,
+            'pending_open_order_id': self.pending_open_order_id,
+            'pending_open_quantity': float(self.pending_open_quantity) if self.pending_open_quantity is not None else None,
             'last_known_position': float(self.last_known_position),
             'last_known_margin': float(self.last_known_margin),
             'margin_ratio': float(self.margin_ratio) if self.margin_ratio is not None else None,
@@ -136,6 +140,8 @@ class GridState:
             last_open_order_time=data.get('last_open_order_time', 0),
             filled_price=Decimal(str(data['filled_price'])) if data.get('filled_price') else None,
             filled_quantity=Decimal(str(data['filled_quantity'])) if data.get('filled_quantity') else None,
+            pending_open_order_id=data.get('pending_open_order_id'),
+            pending_open_quantity=Decimal(str(data['pending_open_quantity'])) if data.get('pending_open_quantity') is not None else None,
             last_known_position=Decimal(str(data.get('last_known_position', 0))),
             last_known_margin=Decimal(str(data.get('last_known_margin', 0))),
             margin_ratio=Decimal(str(data['margin_ratio'])) if data.get('margin_ratio') is not None else None,

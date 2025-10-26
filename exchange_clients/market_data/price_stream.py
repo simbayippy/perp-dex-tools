@@ -40,7 +40,7 @@ class PriceStream:
         exchange_client: BaseExchangeClient,
         stream_symbol: str,
         fetch_symbol: Optional[str] = None,
-        max_staleness: float = 1.0,
+        max_staleness: float = 0.2,
     ) -> None:
         self._exchange = exchange_client
         self._stream_symbol = stream_symbol

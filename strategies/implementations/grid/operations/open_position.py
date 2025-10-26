@@ -140,6 +140,11 @@ class GridOpenPositionOperator:
                 if order_result.status == "FILLED":
                     self.grid_state.filled_price = order_result.price
                     self.grid_state.filled_quantity = order_result.size
+                    self.grid_state.pending_open_order_id = None
+                    self.grid_state.pending_open_quantity = None
+                else:
+                    self.grid_state.pending_open_order_id = order_result.order_id
+                    self.grid_state.pending_open_quantity = quantity
 
                 self.logger.log(
                     f"Grid: Placed {self.config.direction} order for {quantity} "

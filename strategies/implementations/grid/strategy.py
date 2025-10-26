@@ -299,7 +299,15 @@ class GridStrategy(BaseStrategy):
             
             # State 2: Waiting for fill, then place close order
             elif self.grid_state.cycle_state == GridCycleState.WAITING_FOR_FILL:
-                return await self.order_closer.handle_filled_order()
+                result = await self.order_closer.handle_filled_order()
+                if result.get("action") == "wait":
+                    if await self._recover_from_canceled_entry():
+                        return {
+                            "action": "wait",
+                            "message": "Grid: Entry order canceled; retrying",
+                            "wait_time": 0,
+                        }
+                return result
             
             else:
                 # Unknown state, reset
@@ -332,6 +340,45 @@ class GridStrategy(BaseStrategy):
         This is called by the trading bot after successful order execution.
         """
         self.order_closer.notify_order_filled(filled_price, filled_quantity)
+
+    async def _recover_from_canceled_entry(self) -> bool:
+        """Reset cycle if the pending entry order is no longer active."""
+        pending_id = self.grid_state.pending_open_order_id
+        if not pending_id:
+            return False
+
+        contract_id = getattr(self.exchange_client.config, "contract_id", None)
+        if not contract_id:
+            return False
+
+        try:
+            active_orders = await self.exchange_client.get_active_orders(contract_id)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self.logger.log(
+                f"Grid: Failed to fetch active orders while checking for canceled entry: {exc}",
+                "DEBUG",
+            )
+            return False
+
+        pending_str = str(pending_id)
+        for order in active_orders:
+            order_id = getattr(order, "order_id", None)
+            if order_id is not None and str(order_id) == pending_str:
+                return False
+
+        self._log_event(
+            "entry_order_canceled",
+            "Grid: Entry order canceled before fill; scheduling retry",
+            level="INFO",
+            order_id=pending_id,
+        )
+        self.grid_state.pending_open_order_id = None
+        self.grid_state.pending_open_quantity = None
+        self.grid_state.filled_price = None
+        self.grid_state.filled_quantity = None
+        self.grid_state.cycle_state = GridCycleState.READY
+        self.grid_state.last_open_order_time = time.time()
+        return True
 
     def _calculate_wait_time(self) -> float:
         """Calculate wait time between orders based on order density."""
