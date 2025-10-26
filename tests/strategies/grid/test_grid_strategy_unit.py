@@ -332,13 +332,13 @@ async def test_stop_loss_disabled_no_action(reset_grid_event_notifier):
     async def fake_close(*_args, **_kwargs):
         raise AssertionError("Stop loss should not execute when disabled")
 
-    strategy._close_position_market = fake_close  # type: ignore[attr-defined]
     snapshot = make_snapshot(quantity=Decimal("1"), entry_price=Decimal("100"))
 
-    triggered = await strategy._enforce_stop_loss(
+    triggered = await strategy.risk_controller.enforce_stop_loss(
         snapshot=snapshot,
         current_price=Decimal("90"),
         current_position=Decimal("1"),
+        close_position_fn=fake_close,
     )
 
     assert triggered is False
