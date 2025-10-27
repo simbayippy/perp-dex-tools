@@ -456,6 +456,66 @@ async def test_recovery_hedge_executes_market_exit(patch_event_notifier, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_timeout_triggers_aggressive_market_close(patch_event_notifier):
+    config = make_config(direction="buy")
+    config.recovery_mode = "aggressive"
+    config.position_timeout_minutes = 5
+
+    exchange = IntegrationExchange()
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+
+    assert await strategy.should_execute() is True
+    open_result = await strategy.execute_strategy()
+    assert open_result["action"] == "order_placed"
+    entry_price = exchange.limit_orders[0]["price"]
+    entry_size = exchange.limit_orders[0]["quantity"]
+
+    strategy.notify_order_filled(
+        entry_price,
+        entry_size,
+        order_id=open_result["order_id"],
+    )
+
+    close_result = await strategy.execute_strategy()
+    assert close_result["action"] == "order_placed"
+    close_order_id = close_result["order_id"]
+    close_price = close_result["price"]
+
+    tracked = strategy.grid_state.tracked_positions[0]
+    tracked.open_time -= (int(config.position_timeout_minutes) * 60 + 30)
+    tracked.close_order_ids = [close_order_id]
+    tracked.close_client_order_indices = [int(close_order_id)]
+
+    strategy.grid_state.active_close_orders = [
+        GridOrder(order_id=close_order_id, price=close_price, size=entry_size, side="sell")
+    ]
+    exchange.active_close_order_infos = [
+        OrderInfo(
+            order_id=close_order_id,
+            side="sell",
+            size=entry_size,
+            price=close_price,
+            status="OPEN",
+            filled_size=Decimal("0"),
+            remaining_size=entry_size,
+            cancel_reason="",
+        )
+    ]
+
+    # Enter loop; timeout should trigger aggressive recovery which market-closes the position
+    should_trade = await strategy.should_execute()
+    assert should_trade is False
+    assert exchange.market_orders
+    assert exchange.market_orders[-1]["side"] == "sell"
+    assert close_order_id in exchange.cancelled_orders
+    assert strategy.position_manager.get(tracked.position_id) is None
+
+    event_types = [evt["event_type"] for evt in patch_event_notifier]
+    assert "recovery_aggressive_start" in event_types
+    assert "stop_loss_executed" in event_types
+
+
+@pytest.mark.asyncio
 async def test_resume_updates_active_orders(monkeypatch, patch_event_notifier):
     config = make_config(direction="buy")
     exchange = IntegrationExchange()
