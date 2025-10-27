@@ -30,11 +30,15 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
         # ====================================================================
         # Exchange Configuration
         # ====================================================================
-        create_exchange_choice_parameter(
+        ParameterSchema(
             key="exchange",
             prompt="Which exchange to trade on?",
+            param_type=ParameterType.CHOICE,
+            choices=["lighter"],
+            default="lighter",
             required=True,
-            help_text="Grid strategy trades on a single exchange",
+            help_text="Grid currently supports the Lighter connector; other venues are pending.",
+            show_default_in_prompt=True,
         ),
         ParameterSchema(
             key="ticker",
