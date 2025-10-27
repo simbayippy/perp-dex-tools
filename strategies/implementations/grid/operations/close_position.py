@@ -202,7 +202,7 @@ class GridOrderCloser:
                     
                     # Log position entry completion with visual separator
                     self.logger.log(
-                        f"\n{'-'*80}\n✅ Position {position_id} ENTRY COMPLETE | Waiting for exit @ {close_price}\n{'-'*80}",
+                        f"\n{'-'*80}\n✅ Position {position_id} ENTRY COMPLETE | CLOSE ORDER PLACED | Waiting for exit @ {close_price}\n{'-'*80}",
                         "INFO",
                     )
 

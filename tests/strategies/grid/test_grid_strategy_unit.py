@@ -572,6 +572,27 @@ async def test_recover_from_canceled_entry_respects_server_id_mapping(reset_grid
 
 
 @pytest.mark.asyncio
+async def test_recover_from_canceled_entry_ignores_when_fill_detected(reset_grid_event_notifier):
+    config = make_config()
+    exchange = DummyExchange()
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+
+    strategy.grid_state.pending_open_order_id = "222"
+    strategy.grid_state.pending_position_id = "grid-2"
+    strategy.grid_state.filled_client_order_index = 222
+    strategy.grid_state.filled_quantity = Decimal("0.5")
+
+    async def fake_active_orders(_contract_id: str):
+        return []
+
+    exchange.get_active_orders = fake_active_orders  # type: ignore[assignment]
+
+    result = await strategy._recover_from_canceled_entry()
+
+    assert result is False
+
+
+@pytest.mark.asyncio
 async def test_recover_position_aggressive(reset_grid_event_notifier):
     config = make_config()
     config.recovery_mode = "aggressive"

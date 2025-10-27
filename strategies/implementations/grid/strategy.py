@@ -386,6 +386,13 @@ class GridStrategy(BaseStrategy):
             if order_id is not None and str(order_id) in candidate_ids:
                 return False
 
+        # If a fill arrived while we were checking, do not treat the entry as canceled.
+        if (
+            self.grid_state.filled_client_order_index is not None
+            or self.grid_state.filled_quantity is not None
+        ):
+            return False
+
         position_id = self.grid_state.pending_position_id or self.grid_state.filled_position_id
         message = "Grid: Entry order canceled before fill; scheduling retry"
         context = {
