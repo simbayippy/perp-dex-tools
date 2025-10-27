@@ -74,7 +74,7 @@ class GridConfig(BaseModel):
     stop_loss_percentage: Decimal = Field(
         Decimal('2.0'),
         description="Stop loss percentage of margin (PnL) to cap losses per position",
-        ge=Decimal('0.5'),
+        ge=Decimal('0.05'),
         le=Decimal('10')
     )
     position_timeout_minutes: int = Field(

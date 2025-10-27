@@ -155,7 +155,7 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             key="stop_loss_percentage",
             prompt="Stop loss percentage (e.g., 2 = 2%)?",
             default=Decimal("2.0"),
-            min_value=Decimal("0.5"),
+            min_value=Decimal("0.05"),
             max_value=Decimal("10"),
             required=False,
             help_text=(

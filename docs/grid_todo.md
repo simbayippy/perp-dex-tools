@@ -2,8 +2,9 @@
 
 - [ ] Port deterministic client/server order-id mapping to **Aster** and ensure
       `_recover_from_canceled_entry()` can translate ids the way it does for Lighter.
-- [ ] Add post-only close retry logic and fallback exit handling to **Backpack**
-      (currently only Lighter has the built-in repost/market close workflow).
+- [ ] Verify Aster/Backpack connectors surface an accurate position snapshot so
+      the new `close_order_missing_retracked` guard can hand canceled closes back
+      to the retry loop instead of dropping exposure.
 - [ ] Run live or simulated fills on Aster/Backpack to confirm websocket
       fill callbacks carry the client id and that the strategy realigns tracked
       positions correctly.

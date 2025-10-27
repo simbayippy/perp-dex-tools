@@ -1,0 +1,23 @@
+strategy: grid
+created_at: '2025-10-25T18:45:11.943410'
+version: '1.0'
+config:
+  exchange: lighter
+  ticker: BTC
+  direction: buy
+  order_notional_usd: 300
+  target_leverage: 20
+  take_profit: 0.03
+  grid_step: 0.0005
+  max_orders: 5
+  max_margin_usd: !!float '40'
+  post_only_tick_multiplier: 10
+  wait_time: 20
+  stop_loss_enabled: true
+  stop_loss_percentage: 0.12
+  position_timeout_minutes: 1
+  recovery_mode: aggressive
+  stop_price: null
+  pause_price: null
+  max_oi_usd: null
+  scan_exchanges: []

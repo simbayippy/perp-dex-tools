@@ -25,10 +25,12 @@ hiccups or post-only cancels.
    (`reduce_only` limit by default, market if boost mode is enabled).
 4. **Exit tracking**  
    Accepted exit orders reset the state machine to `READY` so the next entry can
-   launch immediately. Each loop prunes finished positions before calling
-   `GridOrderCloser.ensure_close_orders()`, which watches for post-only cancels and
-   automatically reposts with a wider tick offset. After three failed attempts it
-   executes a targeted market close, leaving other tracked exits untouched.
+   launch immediately. Each loop prunes genuinely finished positions then checks
+   the live position snapshot; if exposure still exists but the close order
+   vanished (post-only cancel, REST desync, etc.), the recovery pass re-tracks the
+   position and hands it back to `GridOrderCloser.ensure_close_orders()` so the
+   retry/market-fallback engine can run. After three failed attempts it executes a
+   targeted market close, leaving other tracked exits untouched.
 
 ### Deterministic Order Mapping
 
@@ -47,10 +49,12 @@ hiccups or post-only cancels.
 - **Post-only entry retry** – If the pending entry disappears before it fills,
   the loop logs the event and returns to `READY`. When a fill arrives the guard
   in `_recover_from_canceled_entry()` cancels the retry path.
-- **Close order retry** – Exit orders cancelled for price-crossing are reposted
-  with deterministic `close-retry-{n}` keys and a progressively wider buffer.
-  After the fixed retry budget, the closer falls back to a market exit scoped
-  to the affected position, keeping other tracked exits alive.
+- **Close order retry** – Exit orders cancelled for price-crossing are re-queued
+  if exposure still shows on the latest account snapshot, then reposted with
+  deterministic `close-retry-{n}` keys and a progressively wider buffer. After
+  the fixed retry budget, the closer falls back to a market exit scoped to the
+  affected position, keeping other tracked exits alive. The recovery loop emits
+  `close_order_missing_retracked` when it performs this hand-off.
 - **Entry timeout** – Pending entry limits share the same `position_timeout_minutes`
   budget; if an entry sits too long the bot cancels it and resets for a new
   attempt.
