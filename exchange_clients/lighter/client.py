@@ -1191,6 +1191,7 @@ class LighterClient(BaseExchangeClient):
     async def _refresh_positions_via_rest(self) -> None:
         """Refresh cached positions via REST as a fallback."""
         try:
+            self.logger.debug("[LIGHTER] Refreshing positions via REST fallback")
             positions = await self._get_detailed_positions()
         except Exception as exc:
             self.logger.warning(f"[LIGHTER] Failed to refresh positions via REST: {exc}")
