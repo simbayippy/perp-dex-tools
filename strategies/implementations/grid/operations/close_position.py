@@ -294,7 +294,7 @@ class GridOrderCloser:
         best_ask: Optional[Decimal],
     ) -> None:
         """Repost cancelled close orders when they violate the post-only rule."""
-        if self.position_manager.count() == 0 or current_position == 0:
+        if self.position_manager.count() == 0:
             return
 
         active_ids = {order.order_id for order in self.grid_state.active_close_orders}

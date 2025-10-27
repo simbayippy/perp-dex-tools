@@ -93,6 +93,7 @@ class DummyExchange:
     def __init__(self):
         self.config = DummyExchangeConfig()
         self.market_orders: List[Dict[str, Any]] = []
+        self.limit_orders: List[Dict[str, Any]] = []
         self.close_orders: List[Dict[str, Any]] = []
         self.cancelled_orders: List[str] = []
         self.next_market_success = True
@@ -578,6 +579,34 @@ async def test_ensure_close_orders_reposts_cancelled_order(reset_grid_event_noti
     assert tracked.close_client_order_indices[-1] == placed["client_order_id"]
     assert any(order.order_id == str(placed["client_order_id"]) for order in strategy.grid_state.active_close_orders)
 
+
+
+
+@pytest.mark.asyncio
+async def test_ensure_close_orders_runs_when_snapshot_zero(reset_grid_event_notifier):
+    config = make_config()
+    exchange = DummyExchange()
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+
+    tracked = make_tracked_position(
+        side="long",
+        size=Decimal("1"),
+        close_order_ids=["open-close"],
+        close_client_order_indices=[999],
+        last_post_only_retry=0.0,
+    )
+    strategy.position_manager.clear()
+    strategy.position_manager.track(tracked)
+    strategy.grid_state.active_close_orders = []
+
+    await strategy.order_closer.ensure_close_orders(
+        current_position=Decimal("0"),
+        best_bid=Decimal("100"),
+        best_ask=Decimal("101"),
+    )
+
+    assert exchange.close_orders, "Expected close order to be re-posted even if snapshot shows zero position"
+    assert tracked.close_order_ids
 
 @pytest.mark.asyncio
 async def test_ensure_close_orders_market_fallback(reset_grid_event_notifier, monkeypatch):
