@@ -371,13 +371,23 @@ class GridStrategy(BaseStrategy):
             return False
 
         pending_str = str(pending_id)
+        candidate_ids = {pending_str}
+        resolver = getattr(self.exchange_client, "resolve_client_order_id", None)
+        if callable(resolver):
+            try:
+                resolved_id = resolver(pending_str)
+            except Exception:  # pragma: no cover - defensive
+                resolved_id = None
+            if resolved_id is not None:
+                candidate_ids.add(str(resolved_id))
+
         for order in active_orders:
             order_id = getattr(order, "order_id", None)
-            if order_id is not None and str(order_id) == pending_str:
+            if order_id is not None and str(order_id) in candidate_ids:
                 return False
 
         position_id = self.grid_state.pending_position_id or self.grid_state.filled_position_id
-        message = "Grid: Entry order canceled before fill; scheduling retry (likely post-only rejection)"
+        message = "Grid: Entry order canceled before fill; scheduling retry"
         context = {
             "order_id": pending_id,
         }
@@ -394,7 +404,7 @@ class GridStrategy(BaseStrategy):
         # Log position attempt failure with clear separator
         if position_id:
             self.logger.log(
-                f"\n{'='*80}\n❌ POSITION {position_id} CANCELED | Entry order rejected (post-only violation)\n{'='*80}\n",
+                f"\n{'='*80}\n❌ POSITION {position_id} CANCELED | Entry order removed before fill\n{'='*80}\n",
                 "INFO",
             )
         

@@ -95,6 +95,7 @@ class LighterClient(BaseExchangeClient):
         self._positions_lock = asyncio.Lock()
         self._positions_ready = asyncio.Event()
         self._raw_positions: Dict[str, Dict[str, Any]] = {}
+        self._client_to_server_order_index: Dict[str, str] = {}
 
     def _validate_config(self) -> None:
         """Validate Lighter configuration."""
@@ -312,6 +313,9 @@ class LighterClient(BaseExchangeClient):
             if market_index is None or client_order_index is None:
                 continue
 
+            if server_order_index is not None:
+                self._client_to_server_order_index[str(client_order_index)] = str(server_order_index)
+
             if str(market_index) != str(self.config.contract_id):
                 self.logger.info(
                     f"[LIGHTER] Ignoring order update for market {market_index} "
@@ -338,6 +342,7 @@ class LighterClient(BaseExchangeClient):
                     continue
                 elif status in ['FILLED', 'CANCELED']:
                     del self.orders_cache[order_id]
+                    self._client_to_server_order_index.pop(order_id, None)
                 else:
                     self.orders_cache[order_id]['status'] = status
                     self.orders_cache[order_id]['filled_size'] = filled_size
@@ -843,16 +848,29 @@ class LighterClient(BaseExchangeClient):
 
         return order_price
 
+    def resolve_client_order_id(self, client_order_id: str) -> Optional[str]:
+        """Resolve a client order index to the server-side order index, if known."""
+        return self._client_to_server_order_index.get(str(client_order_id))
+
     async def cancel_order(self, order_id: str) -> OrderResult:
         """Cancel an order with Lighter."""
         # Ensure client is initialized
         if self.lighter_client is None:
             await self._initialize_lighter_client()
 
+        # Map client order indices to server order indices if available
+        order_key = str(order_id)
+        server_index = self._client_to_server_order_index.get(order_key, order_key)
+
+        try:
+            order_index_int = int(server_index)
+        except (TypeError, ValueError):
+            return OrderResult(success=False, error_message=f"Invalid order id: {order_id}")
+
         # Cancel order using official SDK
         cancel_order, tx_hash, error = await self.lighter_client.cancel_order(
             market_index=self.config.contract_id,
-            order_index=int(order_id)  # Assuming order_id is the order index
+            order_index=order_index_int
         )
 
         if error is not None:
@@ -1202,22 +1220,51 @@ class LighterClient(BaseExchangeClient):
         # Filter orders for the specific market
         contract_orders = []
         for order in order_list:
+            market_idx = getattr(order, "market_id", None)
+            if market_idx is None:
+                market_idx = getattr(order, "market_index", None)
+            if market_idx is not None and str(market_idx) != str(contract_id):
+                continue
+
+            client_idx = getattr(order, "client_order_index", None)
+            server_idx = getattr(order, "order_index", None)
+            order_id = None
+            if client_idx not in (None, 0):
+                order_id = str(client_idx)
+                if server_idx is not None:
+                    self._client_to_server_order_index[order_id] = str(server_idx)
+            elif server_idx is not None:
+                server_id_str = str(server_idx)
+                # Attempt to reuse an existing client index mapped to this server index
+                for client_key, mapped_server in self._client_to_server_order_index.items():
+                    if mapped_server == server_id_str:
+                        order_id = client_key
+                        break
+                else:
+                    order_id = server_id_str
+
+            if order_id is None:
+                continue
+
             # Convert Lighter Order to OrderInfo
             side = "sell" if order.is_ask else "buy"
-            size = Decimal(order.initial_base_amount)
-            price = Decimal(order.price)
+            size = Decimal(str(order.initial_base_amount))
+            remaining = Decimal(str(order.remaining_base_amount))
+            price = Decimal(str(order.price))
+            filled = Decimal(str(order.filled_base_amount))
 
-            # Only include orders with remaining size > 0
-            if size > 0:
-                contract_orders.append(OrderInfo(
-                    order_id=str(order.order_index),
-                    side=side,
-                    size=Decimal(order.remaining_base_amount),  # FIXME: This is wrong. Should be size
-                    price=price,
-                    status=order.status.upper(),
-                    filled_size=Decimal(order.filled_base_amount),
-                    remaining_size=Decimal(order.remaining_base_amount)
-                ))
+            if size <= 0:
+                continue
+
+            contract_orders.append(OrderInfo(
+                order_id=order_id,
+                side=side,
+                size=size,
+                price=price,
+                status=str(order.status).upper(),
+                filled_size=filled,
+                remaining_size=remaining,
+            ))
 
         return contract_orders
 

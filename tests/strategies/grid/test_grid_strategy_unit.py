@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import time
 
-from exchange_clients.base_models import ExchangePositionSnapshot
+from exchange_clients.base_models import ExchangePositionSnapshot, OrderInfo
 
 import pytest
 
@@ -98,6 +98,7 @@ class DummyExchange:
         self.next_market_success = True
         self.best_bid = Decimal("100")
         self.best_ask = Decimal("101")
+        self.client_to_server_ids: Dict[str, str] = {}
 
     def get_exchange_name(self) -> str:
         return "dummy"
@@ -162,6 +163,9 @@ class DummyExchange:
 
     def round_to_step(self, quantity: Decimal) -> Decimal:
         return quantity
+
+    def resolve_client_order_id(self, client_order_id: str) -> Optional[str]:
+        return self.client_to_server_ids.get(str(client_order_id))
 
 
 def make_snapshot(
@@ -535,6 +539,36 @@ async def test_ensure_close_orders_market_fallback(reset_grid_event_notifier, mo
 
     assert "args" in calls
     assert calls["args"][0] == Decimal("1")
+
+
+@pytest.mark.asyncio
+async def test_recover_from_canceled_entry_respects_server_id_mapping(reset_grid_event_notifier):
+    config = make_config()
+    exchange = DummyExchange()
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+
+    strategy.grid_state.pending_open_order_id = "111"
+    strategy.grid_state.pending_position_id = "grid-1"
+    exchange.client_to_server_ids["111"] = "999"
+
+    async def fake_active_orders(_contract_id: str):
+        return [
+            OrderInfo(
+                order_id="999",
+                side="buy",
+                size=Decimal("1"),
+                price=Decimal("100"),
+                status="OPEN",
+                filled_size=Decimal("0"),
+                remaining_size=Decimal("1"),
+            )
+        ]
+
+    exchange.get_active_orders = fake_active_orders  # type: ignore[assignment]
+
+    result = await strategy._recover_from_canceled_entry()
+
+    assert result is False
 
 
 @pytest.mark.asyncio
