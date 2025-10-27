@@ -100,33 +100,32 @@ class UnifiedLogger:
                     function_name = record.get("function", "")
                     line_number = record.get("line", 0)
                     
-                    # Build the immutable suffix (function:line) - never truncate this
-                    line_part = f":{line_number}"
-                    function_part = f":{function_name}{line_part}" if function_name else line_part
-                    
                     max_width = 55
-                    suffix_len = len(function_part)
                     
-                    # Calculate how much space we have for the module path
-                    available = max_width - suffix_len
+                    # Build the immutable suffix: function:line (NEVER truncate this)
+                    if function_name:
+                        suffix = f":{function_name}:{line_number}"
+                    else:
+                        suffix = f":{line_number}"
                     
-                    # If suffix alone exceeds max_width, truncate the module completely
-                    if available < 5:
+                    suffix_len = len(suffix)
+                    
+                    # Calculate available space for module path
+                    available_for_module = max_width - suffix_len
+                    
+                    # Truncate module path to fit (function:line is sacred)
+                    if available_for_module <= 3:
+                        # Very long function name - use minimal module indicator
                         module_display = "..."
                     else:
-                        module_display = _truncate_module_path(module_name, available)
+                        # Truncate module path intelligently to fit available space
+                        module_display = _truncate_module_path(module_name, available_for_module)
                     
-                    # Build the full source location
-                    source_location = f"{module_display}{function_part}"
+                    # Build final source location: module + function:line
+                    source_location = f"{module_display}{suffix}"
                     
-                    # CRITICAL: Enforce strict max_width by truncating if needed
-                    if len(source_location) > max_width:
-                        # Truncate from the module part only, keep function:line intact
-                        overflow = len(source_location) - max_width
-                        module_display = module_display[:-(overflow + 3)] + "..."
-                        source_location = f"{module_display}{function_part}"
-                    
-                    # Right-align to exactly max_width characters
+                    # Right-align to EXACTLY max_width characters
+                    # This ensures ALL log messages start at the same column
                     record["extra"]["short_name"] = f"{source_location:>{max_width}}"
                     return True
                 
