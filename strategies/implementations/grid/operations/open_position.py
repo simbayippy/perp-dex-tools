@@ -11,6 +11,7 @@ from exchange_clients.market_data import PriceStream
 from ..config import GridConfig
 from ..models import GridCycleState, GridState
 from ..risk_controller import GridRiskController
+from ..utils import client_order_index_from_position
 
 
 class GridOpenPositionOperator:
@@ -125,16 +126,21 @@ class GridOpenPositionOperator:
                     "wait_time": max(1, float(self.config.wait_time)),
                 }
 
+            position_id = self.grid_state.allocate_position_id()
+            entry_client_index = client_order_index_from_position(position_id, "entry")
+
             order_result = await self.exchange_client.place_limit_order(
                 contract_id=contract_id,
                 quantity=quantity,
                 price=order_price,
                 side=self.config.direction,
+                client_order_id=entry_client_index,
             )
 
             if order_result.success:
-                position_id = self.grid_state.allocate_position_id()
                 self.grid_state.pending_position_id = position_id
+                self.grid_state.pending_client_order_index = entry_client_index
+                self.grid_state.order_index_to_position_id[entry_client_index] = position_id
                 
                 # Log separator for new position
                 self.logger.log(
@@ -150,6 +156,7 @@ class GridOpenPositionOperator:
                     self.grid_state.filled_price = order_result.price
                     self.grid_state.filled_quantity = order_result.size
                     self.grid_state.filled_position_id = position_id
+                    self.grid_state.filled_client_order_index = entry_client_index
                     self.grid_state.pending_open_order_id = None
                     self.grid_state.pending_open_quantity = None
                 else:

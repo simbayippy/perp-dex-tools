@@ -604,7 +604,8 @@ class LighterClient(BaseExchangeClient):
         quantity: Decimal,
         price: Decimal,
         side: str,
-        reduce_only: bool = False
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
     ) -> OrderResult:
         """
         Place a post only order with Lighter using official SDK.
@@ -628,8 +629,11 @@ class LighterClient(BaseExchangeClient):
         else:
             raise Exception(f"Invalid side: {side}")
 
-        # Generate unique client order index
-        client_order_index = int(time.time() * 1000) % 1000000  # Simple unique ID
+        # Generate client order index (allow caller override)
+        if client_order_id is not None:
+            client_order_index = int(client_order_id)
+        else:
+            client_order_index = int(time.time() * 1000) % 1000000  # Simple unique ID
         self.current_order_client_id = client_order_index
 
         expiry_seconds = getattr(self.config, "order_expiry_seconds", 3600)
@@ -717,7 +721,8 @@ class LighterClient(BaseExchangeClient):
         contract_id: str,
         quantity: Decimal,
         side: str,
-        reduce_only: bool = False
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None
     ) -> OrderResult:
         """
         Place a market order with Lighter using official SDK.
@@ -743,8 +748,11 @@ class LighterClient(BaseExchangeClient):
             else:
                 raise Exception(f"Invalid side: {side}")
 
-            # Generate unique client order index
-            client_order_index = int(time.time() * 1000) % 1000000
+            if client_order_id is not None:
+                client_order_index = int(client_order_id)
+            else:
+                client_order_index = int(time.time() * 1000) % 1000000
+            self.current_order_client_id = client_order_index
 
             # Get current market price for worst acceptable execution price
             # (this is the slippage tolerance for market orders)

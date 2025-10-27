@@ -538,7 +538,8 @@ class AsterClient(BaseExchangeClient):
         quantity: Decimal,
         price: Decimal,
         side: str,
-        reduce_only: bool = False
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
     ) -> OrderResult:
         """
         Place a limit order at a specific price on Aster.
@@ -660,10 +661,12 @@ class AsterClient(BaseExchangeClient):
             'price': str(rounded_price),
             'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
         }
-        
+
         # Add reduceOnly flag if this is a closing operation
         if reduce_only:
             order_data['reduceOnly'] = 'true'
+        if client_order_id is not None:
+            order_data['newClientOrderId'] = str(client_order_id)
         
         self.logger.debug(f"Placing {side.upper()} limit order: {rounded_quantity} @ {rounded_price}")
 
@@ -749,7 +752,8 @@ class AsterClient(BaseExchangeClient):
         contract_id: str,
         quantity: Decimal,
         side: str,
-        reduce_only: bool = False
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
     ) -> OrderResult:
         """
         Place a market order on Aster (true market order for immediate execution).
@@ -846,6 +850,8 @@ class AsterClient(BaseExchangeClient):
             # Add reduceOnly flag if this is a closing operation
             if reduce_only:
                 order_data['reduceOnly'] = 'true'
+            if client_order_id is not None:
+                order_data['newClientOrderId'] = str(client_order_id)
             
             self.logger.info(
                 f"📤 [ASTER] Placing market {side.upper()} order: {rounded_quantity} @ ~${expected_price}"

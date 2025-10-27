@@ -672,7 +672,8 @@ class BackpackClient(BaseExchangeClient):
         quantity: Decimal,
         price: Decimal,
         side: str,
-        reduce_only: bool = False
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
     ) -> OrderResult:
         """
         Place a post-only limit order on Backpack.
@@ -733,6 +734,8 @@ class BackpackClient(BaseExchangeClient):
                 "post_only": True,
                 "time_in_force": TimeInForceEnum.GTC,
             }
+            if client_order_id is not None:
+                payload_preview["client_order_id"] = str(client_order_id)
             
             if attempt > 0:
                 self.logger.info(
@@ -914,7 +917,8 @@ class BackpackClient(BaseExchangeClient):
         contract_id: str,
         quantity: Decimal,
         side: str,
-        reduce_only: bool = False
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
     ) -> OrderResult:
         """Place a market order for immediate execution."""
         backpack_side = "Bid" if side.lower() == "buy" else "Ask"
@@ -949,6 +953,8 @@ class BackpackClient(BaseExchangeClient):
                 "orderType": OrderTypeEnum.MARKET,
                 "quantity": quantity_str,
             }
+            if client_order_id is not None:
+                payload_preview["client_order_id"] = str(client_order_id)
             
             if attempt > 0:
                 self.logger.info(f"[BACKPACK] Market order retry {attempt}: quantity={quantity_str}")

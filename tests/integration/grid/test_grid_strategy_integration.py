@@ -122,14 +122,25 @@ class IntegrationExchange:
             metadata={},
         )
 
-    async def place_limit_order(self, *, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
-        order_id = f"open-{len(self.limit_orders) + 1}"
+    async def place_limit_order(
+        self,
+        *,
+        contract_id: str,
+        quantity: Decimal,
+        price: Decimal,
+        side: str,
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
+    ) -> OrderResult:
+        order_id = str(client_order_id) if client_order_id is not None else f"open-{len(self.limit_orders) + 1}"
         entry = {
             "order_id": order_id,
             "contract_id": contract_id,
             "quantity": Decimal(str(quantity)),
             "price": Decimal(str(price)),
             "side": side,
+            "reduce_only": reduce_only,
+            "client_order_id": client_order_id,
         }
         self.limit_orders.append(entry)
         return OrderResult(
@@ -150,8 +161,9 @@ class IntegrationExchange:
         price: Decimal,
         side: str,
         reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
     ) -> OrderResult:
-        order_id = f"close-{len(self.close_orders) + 1}"
+        order_id = str(client_order_id) if client_order_id is not None else f"close-{len(self.close_orders) + 1}"
         entry = {
             "order_id": order_id,
             "contract_id": contract_id,
@@ -159,6 +171,7 @@ class IntegrationExchange:
             "price": Decimal(str(price)),
             "side": side,
             "reduce_only": reduce_only,
+            "client_order_id": client_order_id,
         }
         self.close_orders.append(entry)
         self.active_close_order_infos = [
@@ -183,14 +196,24 @@ class IntegrationExchange:
             filled_size=Decimal("0"),
         )
 
-    async def place_market_order(self, *, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
-        order_id = f"market-{len(self.market_orders) + 1}"
+    async def place_market_order(
+        self,
+        *,
+        contract_id: str,
+        quantity: Decimal,
+        side: str,
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
+    ) -> OrderResult:
+        order_id = str(client_order_id) if client_order_id is not None else f"market-{len(self.market_orders) + 1}"
         self.market_orders.append(
             {
                 "order_id": order_id,
                 "contract_id": contract_id,
                 "quantity": Decimal(str(quantity)),
                 "side": side,
+                "reduce_only": reduce_only,
+                "client_order_id": client_order_id,
             }
         )
         if self.next_market_success:

@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 from ..config import GridConfig
 from ..models import GridCycleState, GridOrder, GridState, TrackedPosition
 from ..position_manager import GridPositionManager
+from ..utils import client_order_index_from_position
 
 
 class GridOrderCloser:
@@ -81,6 +82,9 @@ class GridOrderCloser:
             self.grid_state.margin_ratio = None
             self.grid_state.pending_position_id = None
             self.grid_state.filled_position_id = None
+            self.grid_state.pending_client_order_index = None
+            self.grid_state.filled_client_order_index = None
+            self.grid_state.order_index_to_position_id.clear()
             return True
 
         error_message = getattr(order_result, "error_message", "unknown error")
@@ -102,10 +106,26 @@ class GridOrderCloser:
                 position_id = (
                     self.grid_state.filled_position_id
                     or self.grid_state.pending_position_id
-                    or self.grid_state.allocate_position_id()
                 )
+                entry_client_index = (
+                    self.grid_state.filled_client_order_index
+                    or self.grid_state.pending_client_order_index
+                )
+                if entry_client_index is None:
+                    for idx, mapped_id in self.grid_state.order_index_to_position_id.items():
+                        if mapped_id == position_id:
+                            entry_client_index = idx
+                            break
+                if position_id is None and entry_client_index is not None:
+                    position_id = self.grid_state.order_index_to_position_id.get(entry_client_index)
+                if position_id is None:
+                    position_id = self.grid_state.allocate_position_id()
+                if entry_client_index is None:
+                    entry_client_index = client_order_index_from_position(position_id, "entry")
+                self.grid_state.order_index_to_position_id.setdefault(entry_client_index, position_id)
                 close_side = "sell" if self.config.direction == "buy" else "buy"
                 close_price = self._calculate_close_price(self.grid_state.filled_price)
+                close_client_index = client_order_index_from_position(position_id, "close")
 
                 if self.config.boost_mode:
                     # Boost mode: use market order for faster execution
@@ -113,6 +133,7 @@ class GridOrderCloser:
                         contract_id=self.exchange_client.config.contract_id,
                         quantity=self.grid_state.filled_quantity,
                         side=close_side,
+                        client_order_id=close_client_index,
                     )
                 else:
                     # Normal mode: use limit order (reduce only so we do not add exposure)
@@ -122,6 +143,7 @@ class GridOrderCloser:
                         price=close_price,
                         side=close_side,
                         reduce_only=True,
+                        client_order_id=close_client_index,
                     )
 
                 if order_result.success:
@@ -136,6 +158,8 @@ class GridOrderCloser:
                             side=side,
                             open_time=time.time(),
                             close_order_ids=[order_result.order_id] if order_result.order_id else [],
+                            entry_client_order_index=entry_client_index,
+                            close_client_order_indices=[close_client_index],
                         )
                         self.position_manager.track(tracked_position)
                         self._log_event(
@@ -147,6 +171,7 @@ class GridOrderCloser:
                             size=position_size,
                             entry_price=entry_price,
                             close_order_ids=tracked_position.close_order_ids,
+                            close_client_order_indices=tracked_position.close_client_order_indices,
                         )
 
                     # Reset state for next cycle
@@ -154,9 +179,13 @@ class GridOrderCloser:
                     self.grid_state.filled_price = None
                     self.grid_state.filled_quantity = None
                     self.grid_state.filled_position_id = None
+                    self.grid_state.filled_client_order_index = None
                     self.grid_state.pending_open_order_id = None
                     self.grid_state.pending_open_quantity = None
                     self.grid_state.pending_position_id = None
+                    if entry_client_index is not None:
+                        self.grid_state.order_index_to_position_id.pop(entry_client_index, None)
+                    self.grid_state.pending_client_order_index = None
                     self.grid_state.last_open_order_time = time.time()
 
                     self.logger.log(
@@ -204,20 +233,83 @@ class GridOrderCloser:
         return {
             "action": "wait",
             "message": "Grid: Waiting for open order to fill",
-            "wait_time": 0.5,
+                    "wait_time": 0.5,
         }
 
-    def notify_order_filled(self, filled_price: Decimal, filled_quantity: Decimal) -> None:
+    def notify_order_filled(
+        self,
+        filled_price: Decimal,
+        filled_quantity: Decimal,
+        order_id: Optional[str] = None,
+    ) -> None:
         """
         Notify strategy that an order was filled.
 
         This is called by the trading bot after successful order execution.
         """
+        client_index: Optional[int] = None
+        if order_id is not None:
+            try:
+                client_index = int(str(order_id))
+            except (TypeError, ValueError):
+                client_index = None
+
+        mapped_position_id: Optional[str] = None
+        if client_index is not None:
+            mapped_position_id = self.grid_state.order_index_to_position_id.get(client_index)
+
+        expected_index = self.grid_state.pending_client_order_index
+        if (
+            expected_index is None
+            and self.grid_state.pending_position_id is None
+            and (
+                client_index is None
+                or client_index not in self.grid_state.order_index_to_position_id
+            )
+        ):
+            self.logger.log(
+                "Grid: Ignoring fill for order outside pending context",
+                "DEBUG",
+                order_id=order_id,
+            )
+            return
+
+        if (
+            expected_index is not None
+            and client_index is not None
+            and expected_index != client_index
+        ):
+            if mapped_position_id:
+                self.logger.log(
+                    "Grid: Fill for non-pending order detected; realigning state",
+                    "WARNING",
+                    expected_order_index=expected_index,
+                    received_order_index=client_index,
+                    position_id=mapped_position_id,
+                )
+                self.grid_state.pending_position_id = mapped_position_id
+                self.grid_state.pending_client_order_index = client_index
+            else:
+                self.logger.log(
+                    "Grid: Ignoring unexpected fill for unknown order index",
+                    "WARNING",
+                    order_id=order_id,
+                    expected_order_index=expected_index,
+                )
+                return
+
         self.grid_state.filled_price = filled_price
         self.grid_state.filled_quantity = filled_quantity
         if self.grid_state.pending_position_id is None:
             self.grid_state.pending_position_id = self.grid_state.allocate_position_id()
         self.grid_state.filled_position_id = self.grid_state.pending_position_id
+        if client_index is not None:
+            self.grid_state.filled_client_order_index = client_index
+            self.grid_state.pending_client_order_index = client_index
+            if mapped_position_id is None and self.grid_state.pending_position_id:
+                self.grid_state.order_index_to_position_id[client_index] = self.grid_state.pending_position_id
+        elif self.grid_state.pending_client_order_index is not None:
+            self.grid_state.filled_client_order_index = self.grid_state.pending_client_order_index
         self.grid_state.pending_open_order_id = None
         self.grid_state.pending_open_quantity = None
         self.logger.log(

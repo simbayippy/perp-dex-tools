@@ -234,7 +234,7 @@ class TradingBot:
             if hasattr(self.strategy, "notify_order_filled"):
                 price_dec = price if isinstance(price, Decimal) else Decimal(str(price))
                 qty_dec = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
-                self.strategy.notify_order_filled(price_dec, qty_dec)
+                self.strategy.notify_order_filled(price_dec, qty_dec, order_id=order_id)
         except Exception as exc:  # pragma: no cover - defensive logging
             self.logger.error(f"Failed to process order fill callback for {order_id}: {exc}")
 

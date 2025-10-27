@@ -333,13 +333,18 @@ class GridStrategy(BaseStrategy):
                 'wait_time': 5
             }
 
-    def notify_order_filled(self, filled_price: Decimal, filled_quantity: Decimal) -> None:
+    def notify_order_filled(
+        self,
+        filled_price: Decimal,
+        filled_quantity: Decimal,
+        order_id: Optional[str] = None,
+    ) -> None:
         """
         Notify strategy that an order was filled.
 
         This is called by the trading bot after successful order execution.
         """
-        self.order_closer.notify_order_filled(filled_price, filled_quantity)
+        self.order_closer.notify_order_filled(filled_price, filled_quantity, order_id=order_id)
 
     async def _recover_from_canceled_entry(self) -> bool:
         """Reset cycle if the pending entry order is no longer active."""
@@ -393,7 +398,11 @@ class GridStrategy(BaseStrategy):
         self.grid_state.filled_price = None
         self.grid_state.filled_quantity = None
         self.grid_state.filled_position_id = None
+        self.grid_state.filled_client_order_index = None
         self.grid_state.pending_position_id = None
+        if self.grid_state.pending_client_order_index is not None:
+            self.grid_state.order_index_to_position_id.pop(self.grid_state.pending_client_order_index, None)
+        self.grid_state.pending_client_order_index = None
         self.grid_state.cycle_state = GridCycleState.READY
         self.grid_state.last_open_order_time = time.time()
         return True

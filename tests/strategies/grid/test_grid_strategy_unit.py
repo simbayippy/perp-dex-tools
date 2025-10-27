@@ -107,12 +107,21 @@ class DummyExchange:
     async def get_account_positions(self) -> Decimal:
         return Decimal("0")
 
-    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str):
-        order_id = f"market-{len(self.market_orders) + 1}"
+    async def place_market_order(
+        self,
+        contract_id: str,
+        quantity: Decimal,
+        side: str,
+        client_order_id: Optional[int] = None,
+        reduce_only: bool = False,
+    ):
+        order_id = str(client_order_id) if client_order_id is not None else f"market-{len(self.market_orders) + 1}"
         self.market_orders.append({
             "contract_id": contract_id,
             "quantity": quantity,
             "side": side,
+            "client_order_id": client_order_id,
+            "reduce_only": reduce_only,
         })
         if self.next_market_success:
             return DummyExchange._OrderResult(True, order_id, None, quantity, status="FILLED")
@@ -127,14 +136,16 @@ class DummyExchange:
         price: Decimal,
         side: str,
         reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
     ):
-        order_id = f"close-{len(self.close_orders) + 1}"
+        order_id = str(client_order_id) if client_order_id is not None else f"close-{len(self.close_orders) + 1}"
         self.close_orders.append({
             "contract_id": contract_id,
             "quantity": quantity,
             "price": price,
             "side": side,
             "reduce_only": reduce_only,
+            "client_order_id": client_order_id,
         })
         return DummyExchange._OrderResult(True, order_id, price, quantity, status="OPEN")
 
@@ -191,6 +202,8 @@ def test_grid_state_round_trip_serialisation():
         recovery_attempts=1,
         hedged=True,
         last_recovery_time=1234567999.0,
+        entry_client_order_index=111,
+        close_client_order_indices=[222, 333],
     )
     state = GridState(
         cycle_state=GridCycleState.WAITING_FOR_FILL,
@@ -200,15 +213,18 @@ def test_grid_state_round_trip_serialisation():
         filled_price=Decimal("90"),
         filled_quantity=Decimal("1.5"),
         filled_position_id="grid-1",
+        filled_client_order_index=111,
         pending_open_order_id="open-abc",
         pending_open_quantity=Decimal("1.5"),
         pending_position_id="grid-1",
+        pending_client_order_index=111,
         last_known_position=Decimal("5"),
         last_known_margin=Decimal("250"),
         margin_ratio=Decimal("0.1"),
         last_stop_loss_trigger=1234567888.0,
         tracked_positions=[tracked],
         position_sequence=7,
+        order_index_to_position_id={111: "grid-1"},
     )
 
     rebuilt = GridState.from_dict(state.to_dict())
@@ -218,12 +234,17 @@ def test_grid_state_round_trip_serialisation():
     assert rebuilt.filled_price == Decimal("90")
     assert rebuilt.tracked_positions[0].close_order_ids == ["close-1", "close-2"]
     assert rebuilt.tracked_positions[0].hedged is True
+    assert rebuilt.tracked_positions[0].entry_client_order_index == 111
+    assert rebuilt.tracked_positions[0].close_client_order_indices == [222, 333]
     assert rebuilt.pending_open_order_id == "open-abc"
     assert rebuilt.pending_open_quantity == Decimal("1.5")
     assert rebuilt.pending_position_id == "grid-1"
     assert rebuilt.filled_position_id == "grid-1"
+    assert rebuilt.filled_client_order_index == 111
+    assert rebuilt.pending_client_order_index == 111
     assert rebuilt.position_sequence == 7
     assert rebuilt.margin_ratio == Decimal("0.1")
+    assert rebuilt.order_index_to_position_id == {111: "grid-1"}
 
 
 @pytest.mark.asyncio
@@ -437,6 +458,8 @@ def make_tracked_position(**overrides: Any) -> TrackedPosition:
         recovery_attempts=0,
         hedged=False,
         last_recovery_time=0.0,
+        entry_client_order_index=321,
+        close_client_order_indices=[654],
     )
     defaults.update(overrides)
     return TrackedPosition(**defaults)

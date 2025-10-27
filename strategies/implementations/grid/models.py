@@ -5,7 +5,7 @@ Data structures specific to the grid trading strategy.
 """
 
 from decimal import Decimal
-from typing import Optional, List
+from typing import Optional, List, Dict
 from dataclasses import dataclass
 from enum import Enum
 
@@ -57,6 +57,12 @@ class TrackedPosition:
     recovery_attempts: int = 0
     hedged: bool = False
     last_recovery_time: float = 0.0
+    entry_client_order_index: Optional[int] = None
+    close_client_order_indices: List[int] = None
+
+    def __post_init__(self):
+        if self.close_client_order_indices is None:
+            self.close_client_order_indices = []
     
     def to_dict(self) -> dict:
         """Serialize tracked position state."""
@@ -70,6 +76,8 @@ class TrackedPosition:
             'recovery_attempts': self.recovery_attempts,
             'hedged': self.hedged,
             'last_recovery_time': self.last_recovery_time,
+            'entry_client_order_index': self.entry_client_order_index,
+            'close_client_order_indices': list(self.close_client_order_indices or []),
         }
     
     @classmethod
@@ -85,6 +93,14 @@ class TrackedPosition:
             recovery_attempts=int(data.get('recovery_attempts', 0)),
             hedged=bool(data.get('hedged', False)),
             last_recovery_time=float(data.get('last_recovery_time', 0.0)),
+            entry_client_order_index=(
+                int(data['entry_client_order_index'])
+                if data.get('entry_client_order_index') is not None
+                else None
+            ),
+            close_client_order_indices=[
+                int(idx) for idx in data.get('close_client_order_indices', [])
+            ] if data.get('close_client_order_indices') is not None else [],
         )
 
 
@@ -98,15 +114,18 @@ class GridState:
     filled_price: Optional[Decimal] = None
     filled_quantity: Optional[Decimal] = None
     filled_position_id: Optional[str] = None
+    filled_client_order_index: Optional[int] = None
     pending_open_order_id: Optional[str] = None
     pending_open_quantity: Optional[Decimal] = None
     pending_position_id: Optional[str] = None
+    pending_client_order_index: Optional[int] = None
     last_known_position: Decimal = Decimal("0")
     last_known_margin: Decimal = Decimal("0")
     margin_ratio: Optional[Decimal] = None
     last_stop_loss_trigger: float = 0.0
     tracked_positions: List[TrackedPosition] = None
     position_sequence: int = 0
+    order_index_to_position_id: Dict[int, str] = None
     
     def __post_init__(self):
         """Initialize default values."""
@@ -114,6 +133,8 @@ class GridState:
             self.active_close_orders = []
         if self.tracked_positions is None:
             self.tracked_positions = []
+        if self.order_index_to_position_id is None:
+            self.order_index_to_position_id = {}
     
     def to_dict(self) -> dict:
         """Convert to dictionary for persistence."""
@@ -125,15 +146,20 @@ class GridState:
             'filled_price': float(self.filled_price) if self.filled_price else None,
             'filled_quantity': float(self.filled_quantity) if self.filled_quantity else None,
             'filled_position_id': self.filled_position_id,
+            'filled_client_order_index': self.filled_client_order_index,
             'pending_open_order_id': self.pending_open_order_id,
             'pending_open_quantity': float(self.pending_open_quantity) if self.pending_open_quantity is not None else None,
             'pending_position_id': self.pending_position_id,
+            'pending_client_order_index': self.pending_client_order_index,
             'last_known_position': float(self.last_known_position),
             'last_known_margin': float(self.last_known_margin),
             'margin_ratio': float(self.margin_ratio) if self.margin_ratio is not None else None,
             'last_stop_loss_trigger': self.last_stop_loss_trigger,
             'tracked_positions': [pos.to_dict() for pos in self.tracked_positions],
             'position_sequence': self.position_sequence,
+            'order_index_to_position_id': {
+                str(key): value for key, value in self.order_index_to_position_id.items()
+            },
         }
     
     @classmethod
@@ -150,9 +176,19 @@ class GridState:
             filled_price=Decimal(str(data['filled_price'])) if data.get('filled_price') else None,
             filled_quantity=Decimal(str(data['filled_quantity'])) if data.get('filled_quantity') else None,
             filled_position_id=data.get('filled_position_id'),
+            filled_client_order_index=(
+                int(data['filled_client_order_index'])
+                if data.get('filled_client_order_index') is not None
+                else None
+            ),
             pending_open_order_id=data.get('pending_open_order_id'),
             pending_open_quantity=Decimal(str(data['pending_open_quantity'])) if data.get('pending_open_quantity') is not None else None,
             pending_position_id=data.get('pending_position_id'),
+            pending_client_order_index=(
+                int(data['pending_client_order_index'])
+                if data.get('pending_client_order_index') is not None
+                else None
+            ),
             last_known_position=Decimal(str(data.get('last_known_position', 0))),
             last_known_margin=Decimal(str(data.get('last_known_margin', 0))),
             margin_ratio=Decimal(str(data['margin_ratio'])) if data.get('margin_ratio') is not None else None,
@@ -162,6 +198,10 @@ class GridState:
                 for pos in data.get('tracked_positions', [])
             ],
             position_sequence=int(data.get('position_sequence', 0)),
+            order_index_to_position_id={
+                int(key): value
+                for key, value in (data.get('order_index_to_position_id') or {}).items()
+            },
         )
 
     def allocate_position_id(self) -> str:
