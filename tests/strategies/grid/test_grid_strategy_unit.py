@@ -131,7 +131,10 @@ class DummyExchange:
             self.next_market_success = True
             return DummyExchange._OrderResult(False, order_id, None, quantity, status="REJECTED", error_message="simulated failure")
 
-    async def place_close_order(
+    async def cancel_order(self, order_id: str):
+        self.cancelled_orders.append(order_id)
+
+    async def place_limit_order(
         self,
         contract_id: str,
         quantity: Decimal,
@@ -140,22 +143,24 @@ class DummyExchange:
         reduce_only: bool = False,
         client_order_id: Optional[int] = None,
     ):
-        order_id = str(client_order_id) if client_order_id is not None else f"close-{len(self.close_orders) + 1}"
-        self.close_orders.append({
+        if reduce_only:
+            order_id = str(client_order_id) if client_order_id is not None else f"close-{len(self.close_orders) + 1}"
+        else:
+            order_id = str(client_order_id) if client_order_id is not None else f"open-{len(self.limit_orders) + 1}"
+        entry = {
             "contract_id": contract_id,
             "quantity": quantity,
             "price": price,
             "side": side,
             "reduce_only": reduce_only,
             "client_order_id": client_order_id,
-        })
+            "order_id": order_id,
+        }
+        if reduce_only:
+            self.close_orders.append(entry)
+        else:
+            self.limit_orders.append(entry)
         return DummyExchange._OrderResult(True, order_id, price, quantity, status="OPEN")
-
-    async def cancel_order(self, order_id: str):
-        self.cancelled_orders.append(order_id)
-
-    async def place_limit_order(self, *args, **kwargs):  # for completeness
-        return await self.place_close_order(*args, **kwargs)
 
     def round_to_tick(self, price: Decimal) -> Decimal:
         tick = self.config.tick_size
@@ -166,6 +171,10 @@ class DummyExchange:
 
     def resolve_client_order_id(self, client_order_id: str) -> Optional[str]:
         return self.client_to_server_ids.get(str(client_order_id))
+
+
+class LimitOnlyExchange(DummyExchange):
+    pass
 
 
 def make_snapshot(
@@ -676,6 +685,25 @@ async def test_recover_position_ladder(reset_grid_event_notifier):
     assert result is False
     assert len(exchange.close_orders) == 3
     assert tracked.close_order_ids  # updated ladder order ids
+    event_types = [evt["event_type"] for evt in events]
+    assert "recovery_ladder_start" in event_types
+    assert "recovery_ladder_orders_active" in event_types
+
+
+@pytest.mark.asyncio
+async def test_recover_position_ladder_without_close_api(reset_grid_event_notifier):
+    config = make_config()
+    config.recovery_mode = "ladder"
+    exchange = LimitOnlyExchange()
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+    events: List[Dict[str, Any]] = strategy.event_notifier.events  # type: ignore[attr-defined]
+
+    tracked = make_tracked_position(side="long", size=Decimal("2"))
+    result = await strategy.recovery_operator._recover_position(tracked, current_price=Decimal("90"))
+
+    assert result is False
+    assert len(exchange.close_orders) == 3
+    assert tracked.close_order_ids
     event_types = [evt["event_type"] for evt in events]
     assert "recovery_ladder_start" in event_types
     assert "recovery_ladder_orders_active" in event_types

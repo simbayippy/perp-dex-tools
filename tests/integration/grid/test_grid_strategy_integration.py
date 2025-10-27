@@ -132,7 +132,10 @@ class IntegrationExchange:
         reduce_only: bool = False,
         client_order_id: Optional[int] = None,
     ) -> OrderResult:
-        order_id = str(client_order_id) if client_order_id is not None else f"open-{len(self.limit_orders) + 1}"
+        if reduce_only:
+            order_id = str(client_order_id) if client_order_id is not None else f"close-{len(self.close_orders) + 1}"
+        else:
+            order_id = str(client_order_id) if client_order_id is not None else f"open-{len(self.limit_orders) + 1}"
         entry = {
             "order_id": order_id,
             "contract_id": contract_id,
@@ -142,50 +145,22 @@ class IntegrationExchange:
             "reduce_only": reduce_only,
             "client_order_id": client_order_id,
         }
-        self.limit_orders.append(entry)
-        return OrderResult(
-            success=True,
-            order_id=order_id,
-            side=side,
-            size=Decimal(str(quantity)),
-            price=Decimal(str(price)),
-            status="OPEN",
-            filled_size=Decimal("0"),
-        )
-
-    async def place_close_order(
-        self,
-        *,
-        contract_id: str,
-        quantity: Decimal,
-        price: Decimal,
-        side: str,
-        reduce_only: bool = False,
-        client_order_id: Optional[int] = None,
-    ) -> OrderResult:
-        order_id = str(client_order_id) if client_order_id is not None else f"close-{len(self.close_orders) + 1}"
-        entry = {
-            "order_id": order_id,
-            "contract_id": contract_id,
-            "quantity": Decimal(str(quantity)),
-            "price": Decimal(str(price)),
-            "side": side,
-            "reduce_only": reduce_only,
-            "client_order_id": client_order_id,
-        }
-        self.close_orders.append(entry)
-        self.active_close_order_infos = [
-            OrderInfo(
-                order_id=order_id,
-                side=side,
-                size=Decimal(str(quantity)),
-                price=Decimal(str(price)),
-                status="OPEN",
-                filled_size=Decimal("0"),
-                remaining_size=Decimal(str(quantity)),
-                cancel_reason="",
+        if reduce_only:
+            self.close_orders.append(entry)
+            self.active_close_order_infos.append(
+                OrderInfo(
+                    order_id=order_id,
+                    side=side,
+                    size=Decimal(str(quantity)),
+                    price=Decimal(str(price)),
+                    status="OPEN",
+                    filled_size=Decimal("0"),
+                    remaining_size=Decimal(str(quantity)),
+                    cancel_reason="",
+                )
             )
-        ]
+        else:
+            self.limit_orders.append(entry)
         return OrderResult(
             success=True,
             order_id=order_id,

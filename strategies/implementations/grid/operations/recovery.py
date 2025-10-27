@@ -9,9 +9,10 @@ from decimal import Decimal
 from typing import List
 
 from ..config import GridConfig
-from ..models import GridState, TrackedPosition
+from ..models import GridState, TrackedPosition, GridOrder
 from ..position_manager import GridPositionManager
 from .close_position import GridOrderCloser
+from ..utils import client_order_index_from_position
 
 
 class GridRecoveryOperator:
@@ -219,6 +220,18 @@ class GridRecoveryOperator:
         order_side = "sell" if tracked.side == "long" else "buy"
         ladder_order_ids: List[str] = []
 
+        previous_order_ids = set(tracked.close_order_ids or [])
+        if previous_order_ids:
+            self.grid_state.active_close_orders = [
+                order
+                for order in self.grid_state.active_close_orders
+                if order.order_id not in previous_order_ids
+            ]
+        for idx in tracked.close_client_order_indices or []:
+            self.grid_state.order_index_to_position_id.pop(idx, None)
+        tracked.close_client_order_indices = []
+        tracked.close_order_ids = []
+
         for pct in increments:
             if tracked.side == "long":
                 target_price = current_price * (Decimal("1") + pct)
@@ -226,12 +239,18 @@ class GridRecoveryOperator:
                 target_price = current_price * (Decimal("1") - pct)
 
             target_price = self.exchange_client.round_to_tick(target_price)
+            client_order_index = client_order_index_from_position(
+                tracked.position_id,
+                f"ladder-{order_side}-{int(pct * Decimal('1000'))}",
+            )
             try:
-                result = await self.exchange_client.place_close_order(
+                result = await self.exchange_client.place_limit_order(
                     contract_id=contract_id,
                     quantity=tracked.size,
                     price=target_price,
                     side=order_side,
+                    reduce_only=True,
+                    client_order_id=client_order_index,
                 )
             except Exception as exc:
                 self._log_event(
@@ -245,8 +264,17 @@ class GridRecoveryOperator:
                 )
                 continue
 
-            if getattr(result, "success", False) and result.order_id:
-                ladder_order_ids.append(result.order_id)
+            if getattr(result, "success", False):
+                order_id = getattr(result, "order_id", None) or str(client_order_index)
+                ladder_order_ids.append(order_id)
+                tracked.close_order_ids.append(order_id)
+                tracked.close_client_order_indices.append(client_order_index)
+                self.grid_state.order_index_to_position_id[client_order_index] = tracked.position_id
+
+                order_price = getattr(result, "price", None) or target_price
+                self.grid_state.active_close_orders.append(
+                    GridOrder(order_id=order_id, price=order_price, size=tracked.size, side=order_side)
+                )
                 self._log_event(
                     "recovery_ladder_order_submitted",
                     "Grid: Submitted ladder recovery order",
@@ -254,7 +282,7 @@ class GridRecoveryOperator:
                     side=order_side,
                     price=target_price,
                     size=tracked.size,
-                    order_id=result.order_id,
+                    order_id=order_id,
                 )
             else:
                 self._log_event(
