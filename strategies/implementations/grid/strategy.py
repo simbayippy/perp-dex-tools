@@ -366,11 +366,19 @@ class GridStrategy(BaseStrategy):
             if order_id is not None and str(order_id) == pending_str:
                 return False
 
+        position_id = self.grid_state.pending_position_id or self.grid_state.filled_position_id
+        message = "Grid: Entry order canceled before fill; scheduling retry (likely post-only rejection)"
+        context = {
+            "order_id": pending_id,
+        }
+        if position_id:
+            context["position_id"] = position_id
+
         self._log_event(
             "entry_order_canceled",
-            "Grid: Entry order canceled before fill; scheduling retry",
+            message,
             level="INFO",
-            order_id=pending_id,
+            **context,
         )
         self.grid_state.pending_open_order_id = None
         self.grid_state.pending_open_quantity = None
