@@ -20,7 +20,7 @@ class GridConfig(BaseModel):
     )
     grid_step: Decimal = Field(
         ...,
-        description="Distance between grid levels as percentage",
+        description="Distance between grid levels as a direct percentage (1 = 1%)",
         gt=0
     )
     direction: str = Field(
@@ -79,7 +79,9 @@ class GridConfig(BaseModel):
     )
     position_timeout_minutes: int = Field(
         60,
-        description="Minutes before an open position is considered stuck",
+        description=(
+            "Minutes before an unfilled entry limit is cancelled or an open position triggers recovery"
+        ),
         ge=1,
         le=1440
     )

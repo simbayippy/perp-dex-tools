@@ -4,6 +4,7 @@ Open-position orchestration for the grid strategy.
 
 from __future__ import annotations
 
+import time
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
 
@@ -150,6 +151,7 @@ class GridOpenPositionOperator:
                 
                 # Update state to waiting for fill
                 self.grid_state.cycle_state = GridCycleState.WAITING_FOR_FILL
+                self.grid_state.pending_open_order_time = time.time()
 
                 # Record filled price and quantity from result
                 if order_result.status == "FILLED":
@@ -159,6 +161,7 @@ class GridOpenPositionOperator:
                     self.grid_state.filled_client_order_index = entry_client_index
                     self.grid_state.pending_open_order_id = None
                     self.grid_state.pending_open_quantity = None
+                    self.grid_state.pending_open_order_time = None
                 else:
                     self.grid_state.pending_open_order_id = order_result.order_id
                     self.grid_state.pending_open_quantity = quantity

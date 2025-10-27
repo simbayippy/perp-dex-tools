@@ -123,6 +123,7 @@ class GridState:
     filled_client_order_index: Optional[int] = None
     pending_open_order_id: Optional[str] = None
     pending_open_quantity: Optional[Decimal] = None
+    pending_open_order_time: Optional[float] = None
     pending_position_id: Optional[str] = None
     pending_client_order_index: Optional[int] = None
     last_known_position: Decimal = Decimal("0")
@@ -155,6 +156,7 @@ class GridState:
             'filled_client_order_index': self.filled_client_order_index,
             'pending_open_order_id': self.pending_open_order_id,
             'pending_open_quantity': float(self.pending_open_quantity) if self.pending_open_quantity is not None else None,
+            'pending_open_order_time': self.pending_open_order_time,
             'pending_position_id': self.pending_position_id,
             'pending_client_order_index': self.pending_client_order_index,
             'last_known_position': float(self.last_known_position),
@@ -189,6 +191,7 @@ class GridState:
             ),
             pending_open_order_id=data.get('pending_open_order_id'),
             pending_open_quantity=Decimal(str(data['pending_open_quantity'])) if data.get('pending_open_quantity') is not None else None,
+            pending_open_order_time=data.get('pending_open_order_time'),
             pending_position_id=data.get('pending_position_id'),
             pending_client_order_index=(
                 int(data['pending_client_order_index'])

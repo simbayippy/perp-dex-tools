@@ -63,7 +63,7 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
         ),
         create_decimal_parameter(
             key="order_notional_usd",
-            prompt="Target position notional per order (USD)?",
+            prompt="Target position exposure per order (USD)?",
             min_value=Decimal("1"),
             max_value=Decimal("1000000"),
             required=True,
@@ -98,12 +98,15 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
         # ====================================================================
         create_decimal_parameter(
             key="grid_step",
-            prompt="Grid step (minimum distance between orders, e.g., 0.002 = 0.2%)?",
+            prompt="Grid step (minimum distance between orders, e.g., 0.2 = 0.2%)?",
             default=Decimal("0.002"),
             min_value=Decimal("0.0001"),
             max_value=Decimal("0.1"),
             required=False,
-            help_text="Minimum price distance between grid orders. Lower = denser grid",
+            help_text=(
+                "Minimum price gap between adjacent grid exits expressed as a direct percentage." \
+                " Example: 0.2 = 0.2%, 1 = 1%. Default 0.002 = 0.002% for very tight spacing."
+            ),
         ),
         ParameterSchema(
             key="max_orders",
@@ -165,7 +168,11 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             min_value=1,
             max_value=1440,
             required=False,
-            help_text="After this time the recovery engine evaluates the position",
+            help_text=(
+                "If a post-only entry stays unfilled past this window it will be cancelled,"
+                " and any filled position that remains open beyond the same window will trigger"
+                " the configured recovery action."
+            ),
             show_default_in_prompt=True,
         ),
         ParameterSchema(

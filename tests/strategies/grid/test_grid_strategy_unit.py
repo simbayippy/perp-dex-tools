@@ -228,6 +228,7 @@ def test_grid_state_round_trip_serialisation():
         filled_client_order_index=111,
         pending_open_order_id="open-abc",
         pending_open_quantity=Decimal("1.5"),
+        pending_open_order_time=1234567990.0,
         pending_position_id="grid-1",
         pending_client_order_index=111,
         last_known_position=Decimal("5"),
@@ -251,6 +252,7 @@ def test_grid_state_round_trip_serialisation():
     assert rebuilt.tracked_positions[0].post_only_retry_count == 2
     assert rebuilt.pending_open_order_id == "open-abc"
     assert rebuilt.pending_open_quantity == Decimal("1.5")
+    assert rebuilt.pending_open_order_time == 1234567990.0
     assert rebuilt.pending_position_id == "grid-1"
     assert rebuilt.filled_position_id == "grid-1"
     assert rebuilt.filled_client_order_index == 111
@@ -665,6 +667,36 @@ async def test_recover_position_aggressive(reset_grid_event_notifier):
     assert "close-1" in exchange.cancelled_orders
     event_types = [evt["event_type"] for evt in events]
     assert "recovery_aggressive_start" in event_types
+
+
+@pytest.mark.asyncio
+async def test_pending_entry_timeout_cancel(reset_grid_event_notifier, monkeypatch):
+    config = make_config()
+    config.position_timeout_minutes = 1
+    exchange = DummyExchange()
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+    events: List[Dict[str, Any]] = strategy.event_notifier.events  # type: ignore[attr-defined]
+
+    strategy.grid_state.pending_open_order_id = "open-1"
+    strategy.grid_state.pending_open_quantity = Decimal("1")
+    strategy.grid_state.pending_open_order_time = 0.0
+    strategy.grid_state.pending_position_id = "grid-1"
+    strategy.grid_state.pending_client_order_index = 101
+    strategy.grid_state.order_index_to_position_id[101] = "grid-1"
+
+    async def fake_active_orders(_contract_id: str):
+        return []
+
+    exchange.get_active_orders = fake_active_orders  # type: ignore[assignment]
+    monkeypatch.setattr(grid_strategy_module.time, "time", lambda: 120.0)
+
+    result = await strategy._recover_from_canceled_entry()
+
+    assert result is True
+    assert "open-1" in exchange.cancelled_orders
+    assert strategy.grid_state.pending_open_order_id is None
+    event_types = [evt["event_type"] for evt in events]
+    assert "entry_order_timeout" in event_types
 
 
 @pytest.mark.asyncio

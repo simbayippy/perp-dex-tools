@@ -232,6 +232,7 @@ class GridOrderCloser:
                     self.grid_state.filled_client_order_index = None
                     self.grid_state.pending_open_order_id = None
                     self.grid_state.pending_open_quantity = None
+                    self.grid_state.pending_open_order_time = None
                     self.grid_state.pending_position_id = None
                     if entry_client_index is not None:
                         self.grid_state.order_index_to_position_id.pop(entry_client_index, None)

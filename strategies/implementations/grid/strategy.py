@@ -356,6 +356,40 @@ class GridStrategy(BaseStrategy):
         pending_id = self.grid_state.pending_open_order_id
         if not pending_id:
             return False
+        
+        timeout_minutes = getattr(self.config, "position_timeout_minutes", None)
+        pending_placed_at = self.grid_state.pending_open_order_time
+        if (
+            timeout_minutes
+            and timeout_minutes > 0
+            and pending_placed_at is not None
+            and time.time() - pending_placed_at >= timeout_minutes * 60
+        ):
+            position_id = self.grid_state.pending_position_id or self.grid_state.filled_position_id
+            self._log_event(
+                "entry_order_timeout",
+                (
+                    f"Grid: Pending entry order {pending_id} exceeded timeout "
+                    f"({timeout_minutes} min); canceling and retrying."
+                ),
+                level="WARNING",
+                order_id=pending_id,
+                position_id=position_id,
+                timeout_minutes=timeout_minutes,
+            )
+            try:
+                await self.exchange_client.cancel_order(str(pending_id))
+            except Exception as exc:
+                self._log_event(
+                    "entry_order_timeout_cancel_failed",
+                    f"Grid: Cancel attempt for timed-out entry {pending_id} failed: {exc}",
+                    level="ERROR",
+                    order_id=pending_id,
+                    position_id=position_id,
+                    error=str(exc),
+                )
+            self._reset_pending_entry_state()
+            return True
 
         contract_id = getattr(self.exchange_client.config, "contract_id", None)
         if not contract_id:
@@ -415,19 +449,25 @@ class GridStrategy(BaseStrategy):
                 "INFO",
             )
         
+        self._reset_pending_entry_state()
+        return True
+    
+    def _reset_pending_entry_state(self) -> None:
+        """Clear all state related to a pending entry order and resume READY cycle."""
+        pending_idx = self.grid_state.pending_client_order_index
+        if pending_idx is not None:
+            self.grid_state.order_index_to_position_id.pop(pending_idx, None)
         self.grid_state.pending_open_order_id = None
         self.grid_state.pending_open_quantity = None
+        self.grid_state.pending_open_order_time = None
+        self.grid_state.pending_position_id = None
+        self.grid_state.pending_client_order_index = None
         self.grid_state.filled_price = None
         self.grid_state.filled_quantity = None
         self.grid_state.filled_position_id = None
         self.grid_state.filled_client_order_index = None
-        self.grid_state.pending_position_id = None
-        if self.grid_state.pending_client_order_index is not None:
-            self.grid_state.order_index_to_position_id.pop(self.grid_state.pending_client_order_index, None)
-        self.grid_state.pending_client_order_index = None
         self.grid_state.cycle_state = GridCycleState.READY
         self.grid_state.last_open_order_time = time.time()
-        return True
 
     def _calculate_wait_time(self) -> float:
         """Calculate wait time between orders based on order density."""
