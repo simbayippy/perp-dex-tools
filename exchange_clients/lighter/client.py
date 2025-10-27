@@ -92,6 +92,9 @@ class LighterClient(BaseExchangeClient):
         self._min_order_notional: Dict[str, Decimal] = {}
         self._latest_orders: Dict[str, OrderInfo] = {}
         self.order_fill_callback = order_fill_callback
+        self._positions_lock = asyncio.Lock()
+        self._positions_ready = asyncio.Event()
+        self._raw_positions: Dict[str, Dict[str, Any]] = {}
 
     def _validate_config(self) -> None:
         """Validate Lighter configuration."""
@@ -224,6 +227,7 @@ class LighterClient(BaseExchangeClient):
                 config=self.config,
                 order_update_callback=self._handle_websocket_order_update,
                 liquidation_callback=self.handle_liquidation_notification,
+                positions_callback=self._handle_positions_stream_update,
             )
 
             # Set logger for WebSocket manager
@@ -231,6 +235,8 @@ class LighterClient(BaseExchangeClient):
 
             # Await WebSocket connection (real-time price updates and order tracking)
             await self.ws_manager.connect()
+            # Seed initial position snapshot via REST as a fallback until stream data arrives
+            await self._refresh_positions_via_rest()
 
         except Exception as e:
             self.logger.error(f"Error connecting to Lighter: {e}")
@@ -975,6 +981,183 @@ class LighterClient(BaseExchangeClient):
             self.logger.debug(f"Traceback: {traceback.format_exc()}")
             return None
 
+    async def _handle_positions_stream_update(self, payload: Dict[str, Any]) -> None:
+        """Process account positions update received from websocket stream."""
+        positions_map = payload.get("positions") or {}
+        if not isinstance(positions_map, dict):
+            return
+
+        updates: Dict[str, Dict[str, Any]] = {}
+
+        for market_idx, raw_position in positions_map.items():
+            if raw_position is None:
+                continue
+
+            position_dict = dict(raw_position)
+            market_id = position_dict.get("market_id")
+            if market_id is None:
+                try:
+                    market_id = int(market_idx)
+                    position_dict["market_id"] = market_id
+                except (TypeError, ValueError):
+                    position_dict["market_id"] = market_idx
+
+            symbol_raw = position_dict.get("symbol")
+            if not symbol_raw:
+                if market_id == getattr(self.config, "contract_id", None):
+                    symbol_raw = getattr(self.config, "ticker", None)
+            if not symbol_raw:
+                symbol_raw = str(market_idx)
+
+            position_dict["symbol"] = symbol_raw
+            normalized_symbol = self.normalize_symbol(str(symbol_raw)).upper()
+            updates[normalized_symbol] = position_dict
+
+        async with self._positions_lock:
+            self._raw_positions = updates
+            self._positions_ready.set()
+
+    def _decimal_or_none(self, value: Any) -> Optional[Decimal]:
+        """Convert raw numeric values to Decimal when possible."""
+        if value is None:
+            return None
+        if isinstance(value, Decimal):
+            return value
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+
+    def _build_snapshot_from_raw(self, normalized_symbol: str, raw: Dict[str, Any]) -> Optional[ExchangePositionSnapshot]:
+        """Construct an ExchangePositionSnapshot from cached raw position data."""
+        if raw is None:
+            return None
+
+        raw_quantity = raw.get("position") or raw.get("quantity") or Decimal("0")
+        try:
+            quantity = Decimal(raw_quantity)
+        except Exception:
+            quantity = self._decimal_or_none(raw_quantity) or Decimal("0")
+
+        sign_indicator = raw.get("sign")
+        if isinstance(sign_indicator, int) and sign_indicator != 0:
+            quantity = quantity.copy_abs() * (Decimal(1) if sign_indicator > 0 else Decimal(-1))
+
+        entry_price = self._decimal_or_none(raw.get("avg_entry_price"))
+        exposure = self._decimal_or_none(raw.get("position_value"))
+        if exposure is not None:
+            exposure = exposure.copy_abs()
+
+        mark_price = self._decimal_or_none(raw.get("mark_price"))
+        if mark_price is None and exposure is not None and quantity != 0:
+            mark_price = exposure / quantity.copy_abs()
+
+        unrealized = self._decimal_or_none(raw.get("unrealized_pnl"))
+        realized = self._decimal_or_none(raw.get("realized_pnl"))
+        margin_reserved = self._decimal_or_none(raw.get("allocated_margin"))
+        liquidation_price = self._decimal_or_none(raw.get("liquidation_price"))
+
+        side: Optional[str] = None
+        if isinstance(sign_indicator, int):
+            if sign_indicator > 0:
+                side = "long"
+            elif sign_indicator < 0:
+                side = "short"
+        if side is None:
+            if quantity > 0:
+                side = "long"
+            elif quantity < 0:
+                side = "short"
+
+        snapshot = ExchangePositionSnapshot(
+            symbol=normalized_symbol,
+            quantity=quantity,
+            side=side,
+            entry_price=entry_price,
+            mark_price=mark_price,
+            exposure_usd=exposure,
+            unrealized_pnl=unrealized,
+            realized_pnl=realized,
+            funding_accrued=self._decimal_or_none(raw.get("funding_accrued")),
+            margin_reserved=margin_reserved,
+            leverage=None,
+            liquidation_price=liquidation_price,
+            timestamp=datetime.now(timezone.utc),
+            metadata={
+                "market_id": raw.get("market_id"),
+                "raw_sign": raw.get("sign"),
+            },
+        )
+
+        return snapshot
+
+    async def _snapshot_from_cache(self, normalized_symbol: str) -> Optional[ExchangePositionSnapshot]:
+        """Retrieve a cached snapshot if available, optionally enriching with funding data."""
+        async with self._positions_lock:
+            raw = self._raw_positions.get(normalized_symbol)
+            needs_funding = False
+            if raw is not None:
+                needs_funding = raw.get("funding_accrued") is None
+
+        if raw is None:
+            return None
+
+        snapshot = self._build_snapshot_from_raw(normalized_symbol, raw)
+        if snapshot is None:
+            return None
+
+        if (
+            needs_funding
+            and snapshot.side
+            and snapshot.quantity != 0
+            and raw.get("market_id") is not None
+        ):
+            try:
+                funding = await self._get_cumulative_funding(
+                    raw.get("market_id"),
+                    snapshot.side,
+                    quantity=snapshot.quantity,
+                )
+            except Exception as exc:
+                self.logger.debug(f"[LIGHTER] Funding lookup failed for {normalized_symbol}: {exc}")
+                funding = None
+
+            snapshot.funding_accrued = funding
+            if funding is not None:
+                async with self._positions_lock:
+                    cached = self._raw_positions.get(normalized_symbol)
+                    if cached is not None:
+                        cached["funding_accrued"] = funding
+        else:
+            snapshot.funding_accrued = snapshot.funding_accrued or self._decimal_or_none(raw.get("funding_accrued"))
+
+        return snapshot
+
+    async def _refresh_positions_via_rest(self) -> None:
+        """Refresh cached positions via REST as a fallback."""
+        try:
+            positions = await self._get_detailed_positions()
+        except Exception as exc:
+            self.logger.warning(f"[LIGHTER] Failed to refresh positions via REST: {exc}")
+            return
+
+        updates: Dict[str, Dict[str, Any]] = {}
+        for pos in positions:
+            if pos is None:
+                continue
+            position_dict = dict(pos)
+            symbol_raw = position_dict.get("symbol") or getattr(self.config, "ticker", None)
+            if not symbol_raw and position_dict.get("market_id") is not None:
+                symbol_raw = str(position_dict["market_id"])
+            if not symbol_raw:
+                continue
+            normalized_symbol = self.normalize_symbol(str(symbol_raw)).upper()
+            updates[normalized_symbol] = position_dict
+
+        async with self._positions_lock:
+            self._raw_positions = updates
+            self._positions_ready.set()
+
     @query_retry(reraise=True)
     async def _fetch_orders_with_retry(self) -> List[Dict[str, Any]]:
         """Get orders using official SDK."""
@@ -1402,120 +1585,43 @@ class LighterClient(BaseExchangeClient):
             return None
 
     async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
-        """
-        Retrieve detailed metrics for a specific symbol.
-        """
-        try:
-            positions = await self._get_detailed_positions()
-        except Exception as exc:
-            self.logger.warning(f"[LIGHTER] Failed to fetch positions for snapshot: {exc}")
-            return None
-
+        """Return the latest cached position snapshot for a symbol, falling back to REST if required."""
         normalized_symbol = self.normalize_symbol(symbol).upper()
-        
-        self.logger.debug(
-            f"[LIGHTER] get_position_snapshot looking for normalized symbol: '{normalized_symbol}'"
-        )
-        
-        for pos in positions:
-            # Normalize the position's symbol too (e.g., "1000TOSHI" -> "TOSHI")
-            pos_symbol_raw = pos.get("symbol") or ""
-            pos_symbol_normalized = self.normalize_symbol(pos_symbol_raw).upper()
-            
-            
-            if pos_symbol_normalized != normalized_symbol:
-                continue
-            
-            self.logger.debug(
-                f"[LIGHTER] ✓ Found matching position for '{normalized_symbol}', building snapshot..."
-            )
- 
-            raw_quantity = pos.get("position") or Decimal("0")
-            try:
-                quantity = Decimal(raw_quantity)
-            except Exception:
-                quantity = Decimal(str(raw_quantity))
 
-            sign_indicator = pos.get("sign")
-            if isinstance(sign_indicator, int) and sign_indicator != 0:
-                quantity = quantity.copy_abs() * (Decimal(1) if sign_indicator > 0 else Decimal(-1))
+        snapshot = await self._snapshot_from_cache(normalized_symbol)
+        if snapshot:
+            return snapshot
 
-            quantity = Decimal(quantity)
-            entry_price: Optional[Decimal] = pos.get("avg_entry_price")
-            exposure: Optional[Decimal] = pos.get("position_value")
-            if exposure is not None:
-                exposure = exposure.copy_abs()
+        try:
+            await asyncio.wait_for(self._positions_ready.wait(), timeout=1.0)
+        except asyncio.TimeoutError:
+            pass
 
-            mark_price: Optional[Decimal] = None
-            if exposure is not None and quantity != 0:
-                mark_price = exposure / quantity.copy_abs()
+        snapshot = await self._snapshot_from_cache(normalized_symbol)
+        if snapshot:
+            return snapshot
 
-            unrealized: Optional[Decimal] = pos.get("unrealized_pnl")
-            realized: Optional[Decimal] = pos.get("realized_pnl")
-            margin_reserved: Optional[Decimal] = pos.get("allocated_margin")
-            liquidation_price: Optional[Decimal] = pos.get("liquidation_price")
-
-            side = None
-            if isinstance(sign_indicator, int):
-                if sign_indicator > 0:
-                    side = "long"
-                elif sign_indicator < 0:
-                    side = "short"
-            if side is None:
-                if quantity > 0:
-                    side = "long"
-                elif quantity < 0:
-                    side = "short"
-            
-            # Fetch cumulative funding fees for THIS SPECIFIC position (not all historical positions)
-            market_id = pos.get("market_id")
-            funding_accrued = None
-            if market_id is not None:
-                try:
-                    funding_accrued = await self._get_cumulative_funding(market_id, side, quantity=quantity)
-                except Exception as exc:
-                    self.logger.debug(
-                        f"[LIGHTER] Failed to fetch funding for {symbol} (market_id={market_id}): {exc}"
-                    )
-
-            metadata: Dict[str, Any] = {
-                "market_id": pos.get("market_id"),
-                "raw_sign": pos.get("sign"),
-            }
-
-            return ExchangePositionSnapshot(
-                symbol=normalized_symbol,
-                quantity=quantity,
-                side=side if isinstance(side, str) else None,
-                entry_price=entry_price,
-                mark_price=mark_price,
-                exposure_usd=exposure,
-                unrealized_pnl=unrealized,
-                realized_pnl=realized,
-                funding_accrued=funding_accrued,
-                margin_reserved=margin_reserved,
-                leverage=None,
-                liquidation_price=liquidation_price,
-                timestamp=datetime.now(timezone.utc),
-                metadata={k: v for k, v in metadata.items() if v is not None},
-            )
-
-        self.logger.debug(
-            f"[LIGHTER] No position found for '{normalized_symbol}' after checking {len(positions)} positions"
-        )
-        return None
+        await self._refresh_positions_via_rest()
+        return await self._snapshot_from_cache(normalized_symbol)
 
     async def get_account_pnl(self) -> Optional[Decimal]:
         """Get account P&L using Lighter SDK."""
-        try:
-            positions = await self._get_detailed_positions()
-            total_pnl = Decimal('0')
-            for pos in positions:
-                total_pnl += pos['unrealized_pnl']
-            return total_pnl
-        except Exception as e:
-            self.logger.error(f"Error getting account P&L: {e}")
-            return None
+        async with self._positions_lock:
+            raw_positions = list(self._raw_positions.values())
+
+        if not raw_positions:
+            await self._refresh_positions_via_rest()
+            async with self._positions_lock:
+                raw_positions = list(self._raw_positions.values())
+
+        total_pnl = Decimal("0")
+        for raw in raw_positions:
+            unrealized = raw.get("unrealized_pnl")
+            value = self._decimal_or_none(unrealized)
+            if value is not None:
+                total_pnl += value
+
+        return total_pnl
     
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
         """
