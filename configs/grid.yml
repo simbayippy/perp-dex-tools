@@ -10,12 +10,12 @@ config:
   take_profit: 0.08
   grid_step: 0.002
   max_orders: 5
-  max_margin_usd: !!float '80'
+  max_margin_usd: !!float '40'
   post_only_tick_multiplier: 10
   wait_time: 40
   stop_loss_enabled: true
   stop_loss_percentage: 2.5
-  position_timeout_minutes: 10
+  position_timeout_minutes: 2
   recovery_mode: ladder
   stop_price: null
   pause_price: null

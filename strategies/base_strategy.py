@@ -176,6 +176,9 @@ class BaseStrategy(ABC):
     async def cleanup(self):
         """Cleanup strategy resources."""
         self.logger.log(f"Strategy '{self.get_strategy_name()}' cleanup completed", "INFO")
+        # CRITICAL: Flush logs to ensure all buffered/enqueued logs are written
+        if hasattr(self.logger, 'flush'):
+            self.logger.flush()
     
     # Helper methods for common operations
     

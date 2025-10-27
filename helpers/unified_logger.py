@@ -178,7 +178,8 @@ class UnifiedLogger:
                 backtrace=False,
                 diagnose=False,
                 enqueue=True,  # ← Add this for thread-safe async writes
-                buffering=1    # ← Add this for line-buffered mode
+                buffering=1,   # ← Add this for line-buffered mode
+                catch=True     # ← Catch handler errors to prevent silent failures
             )
             _logger._perp_dex_history_setup = True
 
@@ -206,8 +207,9 @@ class UnifiedLogger:
                 filter=ensure_component_session,
                 backtrace=False,
                 diagnose=False,
-                enqueue=True,  # ← Add this
-                buffering=1    # ← Add this
+                enqueue=True,  # ← Add this for thread-safe async writes
+                buffering=1,   # ← Add this for line-buffered mode
+                catch=True     # ← Catch handler errors to prevent silent failures
             )
             _logger._perp_dex_session_setup = True
         
@@ -290,6 +292,49 @@ class UnifiedLogger:
             log_to_console=True,  # Inherit from current setup
             log_level=self.log_level
         )
+    
+    def flush(self):
+        """
+        Explicitly flush all log handlers to disk.
+        
+        This is critical for ensuring buffered/enqueued logs are written
+        before the process exits, especially in async contexts.
+        """
+        try:
+            # Force a log message through to trigger queue processing
+            self._logger.opt(depth=1).debug("LOG_FLUSH_MARKER")
+            
+            # Small delay to allow enqueued messages to be processed
+            import time
+            time.sleep(0.05)  # 50ms should be enough for queue flush
+            
+            # Flush stdout/stderr
+            import sys
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            # Silent failure - don't break on flush errors
+            pass
+    
+    @staticmethod
+    def flush_all_handlers():
+        """
+        Global flush of all loguru handlers.
+        
+        Call this before process exit to ensure all buffered logs are written.
+        """
+        try:
+            import sys
+            import time
+            
+            # Give enqueued logs time to process
+            time.sleep(0.1)
+            
+            # Flush system streams
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
 
 
 def get_logger(
