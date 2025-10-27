@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import time
 from decimal import Decimal
-from typing import List
+from typing import List, Optional
 
 from ..config import GridConfig
 from ..models import GridState, TrackedPosition
@@ -35,7 +35,11 @@ class GridRecoveryOperator:
         self.position_manager = position_manager
         self.order_closer = order_closer
 
-    async def run_recovery_checks(self, current_price: Decimal) -> None:
+    async def run_recovery_checks(
+        self,
+        current_price: Decimal,
+        current_position: Optional[Decimal] = None,
+    ) -> None:
         """Identify and recover positions that have been open longer than allowed."""
         if self.config.recovery_mode == "none":
             return
@@ -52,12 +56,55 @@ class GridRecoveryOperator:
         }
         
         pruned_positions = self.position_manager.prune_by_active_orders(active_ids)
-        
+
+        def _signed_size(tp: TrackedPosition) -> Decimal:
+            return tp.size if tp.side == "long" else -tp.size
+
+        retracked_positions: List[TrackedPosition] = []
+        actual_position = (
+            current_position
+            if current_position is not None
+            else self.grid_state.last_known_position
+        )
+        zero = Decimal("0")
+
+        if pruned_positions and actual_position is not None:
+            remaining_signed = sum(_signed_size(pos) for pos in self.position_manager.all())
+            delta = actual_position - remaining_signed
+
+            if delta != zero:
+                pending = list(pruned_positions)
+                for position in list(pending):
+                    signed = _signed_size(position)
+                    if signed == zero:
+                        continue
+                    same_direction = (delta > zero and signed > zero) or (delta < zero and signed < zero)
+                    if same_direction:
+                        self.position_manager.track(position)
+                        retracked_positions.append(position)
+                        pruned_positions.remove(position)
+                        remaining_signed += signed
+                        delta = actual_position - remaining_signed
+                        self._log_event(
+                            "close_order_missing_retracked",
+                            (
+                                "Grid: Close order missing while exposure persists; "
+                                "re-queueing for post-only retry."
+                            ),
+                            level="WARNING",
+                            position_id=position.position_id,
+                            side=position.side,
+                            size=position.size,
+                            remaining_position=actual_position,
+                        )
+                        if delta == zero:
+                            break
+
         # Log completed positions with exit details
         for position in pruned_positions:
             # Find the exit price from the close order that was placed
             exit_price = None
-            for close_order_id in position.close_order_ids:
+            for close_order_id in position.close_order_ids or []:
                 if close_order_id in close_order_prices:
                     exit_price = close_order_prices[close_order_id]
                     break
@@ -76,6 +123,8 @@ class GridRecoveryOperator:
                 "INFO",
             )
 
+        retry_ids = {pos.position_id for pos in retracked_positions}
+
         if self.position_manager.count() == 0:
             return
 
@@ -84,7 +133,12 @@ class GridRecoveryOperator:
         remaining: List[TrackedPosition] = []
 
         for tracked in self.position_manager.all():
-            still_active = any(order_id in active_ids for order_id in tracked.close_order_ids)
+            close_ids = tracked.close_order_ids or []
+            still_active = any(order_id in active_ids for order_id in close_ids)
+            if tracked.position_id in retry_ids:
+                remaining.append(tracked)
+                continue
+
             if not still_active:
                 continue
 

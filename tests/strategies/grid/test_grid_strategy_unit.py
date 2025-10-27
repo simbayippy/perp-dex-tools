@@ -514,7 +514,7 @@ async def test_pause_price_pauses_entries_but_runs_maintenance(reset_grid_event_
     async def fake_update_active_orders():
         flags["update_called"] = True
 
-    async def fake_recovery(current_price: Decimal):
+    async def fake_recovery(current_price: Decimal, current_position: Optional[Decimal] = None):
         flags["recovery_called"] = True
 
     strategy.order_closer.update_active_orders = fake_update_active_orders  # type: ignore[assignment]
@@ -951,6 +951,36 @@ async def test_meet_grid_step_condition_sell(reset_grid_event_notifier):
     strategy.grid_state.active_close_orders[0] = make_grid_order("close", Decimal("99.2"), Decimal("1"), side="buy")
     result_false = await strategy._meet_grid_step_condition(best_bid, best_ask)
     assert result_false is False
+
+
+@pytest.mark.asyncio
+async def test_run_recovery_checks_retracks_missing_close(reset_grid_event_notifier):
+    config = make_config()
+    exchange = DummyExchange()
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+
+    tracked = make_tracked_position(
+        side="long",
+        size=Decimal("1"),
+        close_order_ids=["close-missing"],
+        open_time=time.time(),
+    )
+    strategy.position_manager.clear()
+    strategy.position_manager.track(tracked)
+    strategy.grid_state.active_close_orders = []
+    strategy.grid_state.last_known_position = Decimal("1")
+
+    events: List[Dict[str, Any]] = strategy.event_notifier.events  # type: ignore[attr-defined]
+
+    await strategy.recovery_operator.run_recovery_checks(
+        current_price=Decimal("100"),
+        current_position=Decimal("1"),
+    )
+
+    assert strategy.position_manager.count() == 1, "Tracked position should be restored for close retry"
+    assert strategy.position_manager.get(tracked.position_id) is not None
+    event_types = [evt["event_type"] for evt in events]
+    assert "close_order_missing_retracked" in event_types
 
 
 @pytest.mark.asyncio
