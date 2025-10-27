@@ -239,7 +239,7 @@ def create_example_configs():
             "stop_loss_enabled": True,
             "stop_loss_percentage": Decimal("2.0"),
             "position_timeout_minutes": 60,
-            "recovery_mode": "ladder",
+            "recovery_mode": "aggressive",
             "stop_price": None,
             "pause_price": None
         }

@@ -172,13 +172,12 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             key="recovery_mode",
             prompt="Recovery mode for stuck positions?",
             param_type=ParameterType.CHOICE,
-            choices=["aggressive", "ladder", "hedge", "none"],
-            default="ladder",
+            choices=["aggressive", "hedge", "none"],
+            default="aggressive",
             required=False,
             help_text=(
-                "How to unwind stuck positions: aggressive=market exit,"
-                " ladder=staggered limit orders, hedge=offsetting market order,"
-                " none=manual management"
+                "How to unwind stuck positions: aggressive=immediate market exit,"
+                " hedge=neutralize via opposing market order, none=leave exposed"
             ),
         ),
         create_decimal_parameter(
@@ -257,7 +256,7 @@ def create_default_grid_config() -> dict:
         "stop_loss_enabled": True,
         "stop_loss_percentage": Decimal("2.0"),
         "position_timeout_minutes": 60,
-        "recovery_mode": "ladder",
+        "recovery_mode": "aggressive",
         "post_only_tick_multiplier": Decimal("2"),
         "stop_price": None,
         "pause_price": None,

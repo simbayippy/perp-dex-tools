@@ -62,7 +62,7 @@ def make_config(
         stop_loss_enabled=True,
         stop_loss_percentage=Decimal("2"),
         position_timeout_minutes=60,
-        recovery_mode="ladder",
+        recovery_mode="aggressive",
         stop_price=None,
         pause_price=None,
         boost_mode=False,
@@ -171,10 +171,6 @@ class DummyExchange:
 
     def resolve_client_order_id(self, client_order_id: str) -> Optional[str]:
         return self.client_to_server_ids.get(str(client_order_id))
-
-
-class LimitOnlyExchange(DummyExchange):
-    pass
 
 
 def make_snapshot(
@@ -669,44 +665,6 @@ async def test_recover_position_aggressive(reset_grid_event_notifier):
     assert "close-1" in exchange.cancelled_orders
     event_types = [evt["event_type"] for evt in events]
     assert "recovery_aggressive_start" in event_types
-
-
-@pytest.mark.asyncio
-async def test_recover_position_ladder(reset_grid_event_notifier):
-    config = make_config()
-    config.recovery_mode = "ladder"
-    exchange = DummyExchange()
-    strategy = GridStrategy(config=config, exchange_client=exchange)
-    events: List[Dict[str, Any]] = strategy.event_notifier.events  # type: ignore[attr-defined]
-
-    tracked = make_tracked_position(side="long", size=Decimal("2"))
-    result = await strategy.recovery_operator._recover_position(tracked, current_price=Decimal("90"))
-
-    assert result is False
-    assert len(exchange.close_orders) == 3
-    assert tracked.close_order_ids  # updated ladder order ids
-    event_types = [evt["event_type"] for evt in events]
-    assert "recovery_ladder_start" in event_types
-    assert "recovery_ladder_orders_active" in event_types
-
-
-@pytest.mark.asyncio
-async def test_recover_position_ladder_without_close_api(reset_grid_event_notifier):
-    config = make_config()
-    config.recovery_mode = "ladder"
-    exchange = LimitOnlyExchange()
-    strategy = GridStrategy(config=config, exchange_client=exchange)
-    events: List[Dict[str, Any]] = strategy.event_notifier.events  # type: ignore[attr-defined]
-
-    tracked = make_tracked_position(side="long", size=Decimal("2"))
-    result = await strategy.recovery_operator._recover_position(tracked, current_price=Decimal("90"))
-
-    assert result is False
-    assert len(exchange.close_orders) == 3
-    assert tracked.close_order_ids
-    event_types = [evt["event_type"] for evt in events]
-    assert "recovery_ladder_start" in event_types
-    assert "recovery_ladder_orders_active" in event_types
 
 
 @pytest.mark.asyncio

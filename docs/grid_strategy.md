@@ -51,8 +51,9 @@ hiccups or post-only cancels.
   with deterministic `close-retry-{n}` keys and a progressively wider buffer.
   After the fixed retry budget, the closer falls back to a market exit scoped
   to the affected position, keeping other tracked exits alive.
-- **Recovery modes** – The existing ladder/hedge/aggressive modes remain in
-  place for time-based recovery of stuck exits.
+- **Recovery modes** – Time-based recovery now supports `aggressive`
+  (market exit), `hedge` (neutralize via opposing market order), or `none`
+  (manual intervention).
 
 ### Exchange Support
 

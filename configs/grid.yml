@@ -16,7 +16,7 @@ config:
   stop_loss_enabled: true
   stop_loss_percentage: 2.5
   position_timeout_minutes: 2
-  recovery_mode: ladder
+  recovery_mode: aggressive
   stop_price: null
   pause_price: null
   max_oi_usd: null

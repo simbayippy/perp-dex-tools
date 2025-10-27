@@ -9,10 +9,9 @@ from decimal import Decimal
 from typing import List
 
 from ..config import GridConfig
-from ..models import GridState, TrackedPosition, GridOrder
+from ..models import GridState, TrackedPosition
 from ..position_manager import GridPositionManager
 from .close_position import GridOrderCloser
-from ..utils import client_order_index_from_position
 
 
 class GridRecoveryOperator:
@@ -155,20 +154,6 @@ class GridRecoveryOperator:
             )
             return success
 
-        if mode == "ladder":
-            await self._cancel_orders(tracked.close_order_ids)
-            self._log_event(
-                "recovery_ladder_start",
-                "Grid: Executing ladder recovery with staggered limit orders",
-                level="WARNING",
-                side=tracked.side,
-                size=tracked.size,
-            )
-            ladder_order_ids = await self._place_ladder_orders(tracked, current_price)
-            if ladder_order_ids:
-                tracked.close_order_ids = ladder_order_ids
-            return False
-
         if mode == "hedge":
             await self._cancel_orders(tracked.close_order_ids)
             self._log_event(
@@ -203,117 +188,6 @@ class GridRecoveryOperator:
                     order_id=order_id,
                     error=str(exc),
                 )
-
-    async def _place_ladder_orders(
-        self,
-        tracked: TrackedPosition,
-        current_price: Decimal,
-    ) -> List[str]:
-        """Place multiple staggered limit orders to unwind a stuck position."""
-        contract_id = self.exchange_client.config.contract_id
-        increments = [
-            Decimal("0.015"),
-            Decimal("0.03"),
-            Decimal("0.045"),
-        ]
-
-        order_side = "sell" if tracked.side == "long" else "buy"
-        ladder_order_ids: List[str] = []
-
-        previous_order_ids = set(tracked.close_order_ids or [])
-        if previous_order_ids:
-            self.grid_state.active_close_orders = [
-                order
-                for order in self.grid_state.active_close_orders
-                if order.order_id not in previous_order_ids
-            ]
-        for idx in tracked.close_client_order_indices or []:
-            self.grid_state.order_index_to_position_id.pop(idx, None)
-        tracked.close_client_order_indices = []
-        tracked.close_order_ids = []
-
-        for pct in increments:
-            if tracked.side == "long":
-                target_price = current_price * (Decimal("1") + pct)
-            else:
-                target_price = current_price * (Decimal("1") - pct)
-
-            target_price = self.exchange_client.round_to_tick(target_price)
-            client_order_index = client_order_index_from_position(
-                tracked.position_id,
-                f"ladder-{order_side}-{int(pct * Decimal('1000'))}",
-            )
-            try:
-                result = await self.exchange_client.place_limit_order(
-                    contract_id=contract_id,
-                    quantity=tracked.size,
-                    price=target_price,
-                    side=order_side,
-                    reduce_only=True,
-                    client_order_id=client_order_index,
-                )
-            except Exception as exc:
-                self._log_event(
-                    "recovery_ladder_order_error",
-                    f"Grid: Ladder order placement failed ({order_side} @ {target_price}): {exc}",
-                    level="ERROR",
-                    side=order_side,
-                    price=target_price,
-                    size=tracked.size,
-                    error=str(exc),
-                )
-                continue
-
-            if getattr(result, "success", False):
-                order_id = getattr(result, "order_id", None) or str(client_order_index)
-                ladder_order_ids.append(order_id)
-                tracked.close_order_ids.append(order_id)
-                tracked.close_client_order_indices.append(client_order_index)
-                self.grid_state.order_index_to_position_id[client_order_index] = tracked.position_id
-
-                order_price = getattr(result, "price", None) or target_price
-                self.grid_state.active_close_orders.append(
-                    GridOrder(order_id=order_id, price=order_price, size=tracked.size, side=order_side)
-                )
-                self._log_event(
-                    "recovery_ladder_order_submitted",
-                    "Grid: Submitted ladder recovery order",
-                    level="WARNING",
-                    side=order_side,
-                    price=target_price,
-                    size=tracked.size,
-                    order_id=order_id,
-                )
-            else:
-                self._log_event(
-                    "recovery_ladder_order_rejected",
-                    "Grid: Ladder recovery order was rejected or missing order ID",
-                    level="ERROR",
-                    side=order_side,
-                    price=target_price,
-                    size=tracked.size,
-                    order_id=getattr(result, "order_id", None),
-                    error=getattr(result, "error_message", None),
-                )
-
-        if ladder_order_ids:
-            self._log_event(
-                "recovery_ladder_orders_active",
-                f"Grid: Placed {len(ladder_order_ids)} ladder recovery orders ({order_side})",
-                level="WARNING",
-                side=order_side,
-                order_ids=ladder_order_ids,
-            )
-        else:
-            self._log_event(
-                "recovery_ladder_failed",
-                "Grid: Failed to place ladder recovery orders; will retry later.",
-                level="ERROR",
-                side=order_side,
-                size=tracked.size,
-            )
-
-        return ladder_order_ids
 
     async def _place_hedge_order(self, tracked: TrackedPosition) -> bool:
         """Place an opposite market order to neutralize exposure."""

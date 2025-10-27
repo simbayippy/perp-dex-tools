@@ -49,7 +49,7 @@ def make_config(
         stop_loss_enabled=True,
         stop_loss_percentage=Decimal("2"),
         position_timeout_minutes=60,
-        recovery_mode="ladder",
+        recovery_mode="aggressive",
         stop_price=None,
         pause_price=None,
         boost_mode=False,
@@ -335,51 +335,6 @@ async def test_stop_loss_execution_triggers_market_exit(patch_event_notifier, mo
     event_types = [evt["event_type"] for evt in patch_event_notifier]
     assert "stop_loss_initiated" in event_types
     assert "stop_loss_executed" in event_types
-
-
-@pytest.mark.asyncio
-async def test_recovery_ladder_executes_new_orders(patch_event_notifier, monkeypatch):
-    config = make_config(direction="buy")
-    exchange = IntegrationExchange()
-    strategy = GridStrategy(config=config, exchange_client=exchange)
-
-    base_time = 1_000_000
-    monkeypatch.setattr(grid_strategy_module.time, "time", lambda: base_time)
-
-    tracked = TrackedPosition(
-        position_id="grid-1",
-        entry_price=Decimal("100"),
-        size=Decimal("1"),
-        side="long",
-        open_time=base_time - 7200,
-        close_order_ids=["close-1"],
-    )
-    strategy.grid_state.tracked_positions = [tracked]
-    strategy.grid_state.active_close_orders = [
-        GridOrder(order_id="close-1", price=Decimal("110"), size=Decimal("1"), side="sell")
-    ]
-    exchange.active_close_order_infos = [
-        OrderInfo(
-            order_id="close-1",
-            side="sell",
-            size=Decimal("1"),
-            price=Decimal("110"),
-            status="OPEN",
-            filled_size=Decimal("0"),
-            remaining_size=Decimal("1"),
-            cancel_reason="",
-        )
-    ]
-
-    await strategy.recovery_operator.run_recovery_checks(current_price=Decimal("90"))
-
-    assert "close-1" in exchange.cancelled_orders
-    assert len(exchange.close_orders) == 3
-    assert len(strategy.grid_state.tracked_positions[0].close_order_ids) == 3
-
-    event_types = [evt["event_type"] for evt in patch_event_notifier]
-    assert "recovery_ladder_start" in event_types
-    assert "recovery_ladder_orders_active" in event_types
 
 
 @pytest.mark.asyncio

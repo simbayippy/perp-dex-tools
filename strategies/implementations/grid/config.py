@@ -84,7 +84,7 @@ class GridConfig(BaseModel):
         le=1440
     )
     recovery_mode: str = Field(
-        "ladder",
+        "aggressive",
         description="Recovery approach when handling stuck positions"
     )
     
@@ -115,7 +115,7 @@ class GridConfig(BaseModel):
     @validator('recovery_mode')
     def validate_recovery_mode(cls, v):
         """Validate recovery mode choice."""
-        allowed = {'aggressive', 'ladder', 'hedge', 'none'}
+        allowed = {'aggressive', 'hedge', 'none'}
         if v not in allowed:
             raise ValueError(f"Recovery mode must be one of {', '.join(sorted(allowed))}")
         return v
