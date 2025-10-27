@@ -80,7 +80,7 @@ class GridConfig(BaseModel):
     position_timeout_minutes: int = Field(
         60,
         description="Minutes before an open position is considered stuck",
-        ge=5,
+        ge=1,
         le=1440
     )
     recovery_mode: str = Field(
