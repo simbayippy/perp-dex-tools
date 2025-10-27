@@ -258,6 +258,11 @@ class GridStrategy(BaseStrategy):
             
             # Update active orders
             await self.order_closer.update_active_orders()
+            await self.order_closer.ensure_close_orders(
+                current_position=current_position,
+                best_bid=best_bid,
+                best_ask=best_ask,
+            )
             await self.recovery_operator.run_recovery_checks(current_price)
             
             # Check if we should wait based on cooldown

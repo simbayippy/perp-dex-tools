@@ -13,6 +13,11 @@ from ..models import GridCycleState, GridOrder, GridState, TrackedPosition
 from ..position_manager import GridPositionManager
 from ..utils import client_order_index_from_position
 
+# Internal retry limits for post-only close order handling.
+POST_ONLY_CLOSE_RETRY_LIMIT = 3
+POST_ONLY_CLOSE_RETRY_BACKOFF_SECONDS = 0.25
+POST_ONLY_CLOSE_MARKET_FALLBACK = True
+
 
 class GridOrderCloser:
     """Manage exit logic (close orders, cancellations, stop-loss market exits)."""
@@ -160,6 +165,8 @@ class GridOrderCloser:
                             close_order_ids=[order_result.order_id] if order_result.order_id else [],
                             entry_client_order_index=entry_client_index,
                             close_client_order_indices=[close_client_index],
+                            post_only_retry_count=0,
+                            last_post_only_retry=0.0,
                         )
                         self.position_manager.track(tracked_position)
                         self._log_event(
@@ -235,6 +242,178 @@ class GridOrderCloser:
             "message": "Grid: Waiting for open order to fill",
                     "wait_time": 0.5,
         }
+
+    async def ensure_close_orders(
+        self,
+        current_position: Decimal,
+        best_bid: Optional[Decimal],
+        best_ask: Optional[Decimal],
+    ) -> None:
+        """Repost cancelled close orders when they violate the post-only rule."""
+        if self.position_manager.count() == 0 or current_position == 0:
+            return
+
+        active_ids = {order.order_id for order in self.grid_state.active_close_orders}
+        now = time.time()
+        retry_limit = POST_ONLY_CLOSE_RETRY_LIMIT
+        use_market_fallback = POST_ONLY_CLOSE_MARKET_FALLBACK
+        backoff = POST_ONLY_CLOSE_RETRY_BACKOFF_SECONDS
+
+        for tracked in self.position_manager.all():
+            if tracked.hedged or tracked.size <= 0:
+                continue
+
+            if tracked.close_order_ids and any(order_id in active_ids for order_id in tracked.close_order_ids):
+                tracked.post_only_retry_count = 0
+                continue
+
+            if now - tracked.last_post_only_retry < backoff:
+                continue
+
+            if tracked.post_only_retry_count >= retry_limit:
+                if use_market_fallback:
+                    signed_position = tracked.size if tracked.side == "long" else -tracked.size
+                    self._log_event(
+                        "close_order_retry_limit_exceeded",
+                        (
+                            f"Grid: Close order retries exhausted for {tracked.position_id}; "
+                            "falling back to market exit."
+                        ),
+                        level="WARNING",
+                        position_id=tracked.position_id,
+                        retries=tracked.post_only_retry_count,
+                    )
+                    await self.market_close(
+                        signed_position,
+                        f"Post-only close retries exceeded for {tracked.position_id}",
+                    )
+                    tracked.post_only_retry_count = retry_limit + 1
+                else:
+                    self._log_event(
+                        "close_order_retry_limit_exceeded",
+                        (
+                            f"Grid: Close order retries exhausted for {tracked.position_id}; "
+                            "manual intervention required."
+                        ),
+                        level="ERROR",
+                        position_id=tracked.position_id,
+                        retries=tracked.post_only_retry_count,
+                    )
+                    tracked.last_post_only_retry = now
+                    tracked.post_only_retry_count = retry_limit + 1
+                continue
+
+            attempt = tracked.post_only_retry_count + 1
+            close_side = "sell" if tracked.side == "long" else "buy"
+            close_price = self._compute_retry_close_price(tracked, best_bid, best_ask, attempt)
+            close_client_index = client_order_index_from_position(
+                tracked.position_id,
+                f"close-retry-{attempt}",
+            )
+
+            try:
+                order_result = await self.exchange_client.place_limit_order(
+                    contract_id=self.exchange_client.config.contract_id,
+                    quantity=tracked.size,
+                    price=close_price,
+                    side=close_side,
+                    reduce_only=True,
+                    client_order_id=close_client_index,
+                )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                self._log_event(
+                    "close_order_retry_error",
+                    f"Grid: Failed to repost close order for {tracked.position_id}: {exc}",
+                    level="ERROR",
+                    position_id=tracked.position_id,
+                    side=close_side,
+                    price=close_price,
+                    retries=attempt,
+                    error=str(exc),
+                )
+                tracked.post_only_retry_count = attempt
+                tracked.last_post_only_retry = now
+                continue
+
+            tracked.post_only_retry_count = attempt
+            tracked.last_post_only_retry = now
+
+            if order_result.success:
+                new_order_id = order_result.order_id or str(close_client_index)
+                prev_ids = set(tracked.close_order_ids or [])
+                tracked.close_order_ids = [new_order_id]
+                if close_client_index not in tracked.close_client_order_indices:
+                    tracked.close_client_order_indices.append(close_client_index)
+                self.grid_state.order_index_to_position_id[close_client_index] = tracked.position_id
+
+                new_order = GridOrder(
+                    order_id=new_order_id,
+                    price=order_result.price or close_price,
+                    size=tracked.size,
+                    side=close_side,
+                )
+                self.grid_state.active_close_orders = [
+                    order for order in self.grid_state.active_close_orders if order.order_id not in prev_ids
+                ]
+                self.grid_state.active_close_orders.append(new_order)
+
+                self._log_event(
+                    "close_order_reposted",
+                    "Grid: Reposted close order after post-only cancel",
+                    level="WARNING",
+                    position_id=tracked.position_id,
+                    side=close_side,
+                    price=new_order.price,
+                    size=tracked.size,
+                    retries=attempt,
+                )
+            else:
+                self._log_event(
+                    "close_order_retry_rejected",
+                    "Grid: Close order retry rejected by exchange",
+                    level="ERROR",
+                    position_id=tracked.position_id,
+                    side=close_side,
+                    price=close_price,
+                    size=tracked.size,
+                    retries=attempt,
+                    error=order_result.error_message,
+                )
+
+    def _compute_retry_close_price(
+        self,
+        tracked: TrackedPosition,
+        best_bid: Optional[Decimal],
+        best_ask: Optional[Decimal],
+        attempt: int,
+    ) -> Decimal:
+        """Adjust close limit price to remain post-only while tracking the market."""
+        base_price = self._calculate_close_price(tracked.entry_price)
+        tick = getattr(self.exchange_client.config, "tick_size", None)
+        if tick is None:
+            return base_price
+
+        try:
+            tick_size = Decimal(str(tick))
+        except Exception:  # pragma: no cover - defensive guard
+            tick_size = Decimal(tick)
+
+        multiplier = getattr(self.config, "post_only_tick_multiplier", Decimal("2"))
+        if multiplier <= 0:
+            multiplier = Decimal("1")
+
+        offset = tick_size * multiplier * Decimal(attempt)
+
+        if tracked.side == "long":
+            reference = best_bid if best_bid is not None else base_price
+            price = max(base_price, reference + offset)
+        else:
+            reference = best_ask if best_ask is not None else base_price
+            price = min(base_price, reference - offset)
+            if price <= Decimal("0"):
+                price = tick_size
+
+        return self.exchange_client.round_to_tick(price)
 
     def notify_order_filled(
         self,

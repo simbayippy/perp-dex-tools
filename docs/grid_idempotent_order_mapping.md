@@ -20,7 +20,11 @@ post-only leaks or replays.
   strategy is out of sync.
 - The paired exit limit (or market) order receives its own deterministic client
   ID (`client_order_index_from_position(position_id, "close")`); tracked positions
-  store both entry and exit IDs for recovery/resubmission bookkeeping.
+  store both entry and exit IDs for recovery/resubmission bookkeeping. When
+  post-only cancellations occur the strategy derives retry IDs
+  (`close-retry-1`, `close-retry-2`, …) so every repost stays idempotent; after
+  a small fixed retry budget it optionally falls back to a market exit to avoid
+  dangling exposure.
 - Stop-loss and recovery flows clear the mapping so stale IDs never accumulate.
 
 ### Exchange Support
@@ -60,4 +64,3 @@ post-only leaks or replays.
 - Unit and integration tests now hydrate the new fields (e.g. supplying the
   order ID to `strategy.notify_order_filled`) so the deterministic keys are
   exercised in CI.
-

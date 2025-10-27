@@ -20,6 +20,7 @@ from strategies.implementations.grid.models import (
 from strategies.implementations.grid.position_manager import GridPositionManager
 from strategies.implementations.grid import strategy as grid_strategy_module
 from strategies.implementations.grid.strategy import GridStrategy
+from strategies.implementations.grid.operations import close_position as close_position_module
 
 
 @pytest.fixture(autouse=True)
@@ -204,6 +205,8 @@ def test_grid_state_round_trip_serialisation():
         last_recovery_time=1234567999.0,
         entry_client_order_index=111,
         close_client_order_indices=[222, 333],
+        post_only_retry_count=2,
+        last_post_only_retry=1234568000.0,
     )
     state = GridState(
         cycle_state=GridCycleState.WAITING_FOR_FILL,
@@ -236,6 +239,7 @@ def test_grid_state_round_trip_serialisation():
     assert rebuilt.tracked_positions[0].hedged is True
     assert rebuilt.tracked_positions[0].entry_client_order_index == 111
     assert rebuilt.tracked_positions[0].close_client_order_indices == [222, 333]
+    assert rebuilt.tracked_positions[0].post_only_retry_count == 2
     assert rebuilt.pending_open_order_id == "open-abc"
     assert rebuilt.pending_open_quantity == Decimal("1.5")
     assert rebuilt.pending_position_id == "grid-1"
@@ -460,9 +464,77 @@ def make_tracked_position(**overrides: Any) -> TrackedPosition:
         last_recovery_time=0.0,
         entry_client_order_index=321,
         close_client_order_indices=[654],
+        post_only_retry_count=0,
+        last_post_only_retry=0.0,
     )
     defaults.update(overrides)
     return TrackedPosition(**defaults)
+
+
+@pytest.mark.asyncio
+async def test_ensure_close_orders_reposts_cancelled_order(reset_grid_event_notifier):
+    config = make_config()
+    exchange = DummyExchange()
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+
+    tracked = make_tracked_position(
+        side="long",
+        size=Decimal("1"),
+        close_order_ids=["old-1"],
+        close_client_order_indices=[1111],
+        last_post_only_retry=0.0,
+    )
+    strategy.position_manager.clear()
+    strategy.position_manager.track(tracked)
+    strategy.grid_state.active_close_orders = []
+
+    await strategy.order_closer.ensure_close_orders(
+        current_position=Decimal("1"),
+        best_bid=Decimal("100"),
+        best_ask=Decimal("101"),
+    )
+
+    assert len(exchange.close_orders) == 1
+    placed = exchange.close_orders[-1]
+    assert tracked.post_only_retry_count == 1
+    assert tracked.close_order_ids[0] == str(placed["client_order_id"])
+    assert tracked.close_client_order_indices[-1] == placed["client_order_id"]
+    assert any(order.order_id == str(placed["client_order_id"]) for order in strategy.grid_state.active_close_orders)
+
+
+@pytest.mark.asyncio
+async def test_ensure_close_orders_market_fallback(reset_grid_event_notifier, monkeypatch):
+    config = make_config()
+    exchange = DummyExchange()
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+
+    tracked = make_tracked_position(
+        side="long",
+        size=Decimal("1"),
+        close_order_ids=["old-1"],
+        last_post_only_retry=0.0,
+    )
+    strategy.position_manager.clear()
+    strategy.position_manager.track(tracked)
+    strategy.grid_state.active_close_orders = []
+
+    calls: Dict[str, Any] = {}
+
+    async def fake_market_close(position: Decimal, reason: str) -> bool:
+        calls["args"] = (position, reason)
+        return True
+
+    monkeypatch.setattr(strategy.order_closer, "market_close", fake_market_close)
+    monkeypatch.setattr(close_position_module, "POST_ONLY_CLOSE_RETRY_LIMIT", 0)
+
+    await strategy.order_closer.ensure_close_orders(
+        current_position=Decimal("1"),
+        best_bid=Decimal("100"),
+        best_ask=Decimal("101"),
+    )
+
+    assert "args" in calls
+    assert calls["args"][0] == Decimal("1")
 
 
 @pytest.mark.asyncio

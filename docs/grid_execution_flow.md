@@ -73,6 +73,7 @@ sequenceDiagram
 * **Post-only cancel** – the entry order id never appears in `get_active_orders()`. `_recover_from_canceled_entry()` resets the cycle and logs `entry_order_canceled`.
 * **Partial fills** – both Aster and Backpack emit incremental fills (e.g., `PARTIALLY_FILLED`). The clients compute the difference between the new fill amount and the previous fill and call the callback with just the delta, so the strategy only reacts to newly filled volume.
 * **Missed fill callback** – if the websocket feed drops and `get_active_orders()` reports the pending entry id missing while no callback was triggered, `_recover_from_canceled_entry()` falls back to a retry to avoid stalling.
+* **Close post-only violation** – if the exit limit order is cancelled for crossing the spread, the closer automatically reposts it with a wider tick offset; after a small fixed number of attempts it falls back to a market close to prevent directional exposure.
 
 ### Components recap
 

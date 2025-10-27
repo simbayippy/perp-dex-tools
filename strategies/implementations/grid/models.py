@@ -59,6 +59,8 @@ class TrackedPosition:
     last_recovery_time: float = 0.0
     entry_client_order_index: Optional[int] = None
     close_client_order_indices: List[int] = None
+    post_only_retry_count: int = 0
+    last_post_only_retry: float = 0.0
 
     def __post_init__(self):
         if self.close_client_order_indices is None:
@@ -78,6 +80,8 @@ class TrackedPosition:
             'last_recovery_time': self.last_recovery_time,
             'entry_client_order_index': self.entry_client_order_index,
             'close_client_order_indices': list(self.close_client_order_indices or []),
+            'post_only_retry_count': self.post_only_retry_count,
+            'last_post_only_retry': self.last_post_only_retry,
         }
     
     @classmethod
@@ -101,6 +105,8 @@ class TrackedPosition:
             close_client_order_indices=[
                 int(idx) for idx in data.get('close_client_order_indices', [])
             ] if data.get('close_client_order_indices') is not None else [],
+            post_only_retry_count=int(data.get('post_only_retry_count', 0)),
+            last_post_only_retry=float(data.get('last_post_only_retry', 0.0)),
         )
 
 
