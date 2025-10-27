@@ -3,9 +3,12 @@ Strategy Factory
 Creates strategy instances based on configuration.
 """
 
+from types import SimpleNamespace
 from typing import Dict, Type, List
+
 from .base_strategy import BaseStrategy
 from .implementations.grid import GridStrategy
+from .implementations.grid.config import GridConfig
 from .implementations.funding_arbitrage import FundingArbitrageStrategy
 
 
@@ -52,6 +55,18 @@ class StrategyFactory:
             raise ValueError(f"Unsupported strategy: {strategy_name}. Available: {available}")
         
         strategy_class = cls._strategies[strategy_name]
+        prepared_config = config
+
+        if strategy_name == 'grid' and not hasattr(config, 'take_profit'):
+            raw_params = dict(getattr(config, 'strategy_params', {}) or {})
+            grid_fields = set(GridConfig.model_fields.keys())
+            grid_params = {key: value for key, value in raw_params.items() if key in grid_fields}
+            grid_config = GridConfig(**grid_params)
+            merged = SimpleNamespace(**grid_config.model_dump())
+            for attr in ('exchange', 'ticker', 'contract_id', 'quantity', 'tick_size'):
+                if hasattr(config, attr):
+                    setattr(merged, attr, getattr(config, attr))
+            prepared_config = merged
         
         # Multi-exchange strategies receive exchange_clients dict
         multi_exchange_strategies = ['funding_arbitrage']
@@ -60,12 +75,12 @@ class StrategyFactory:
             if exchange_clients is None:
                 raise ValueError(f"Strategy '{strategy_name}' requires exchange_clients parameter")
             # Pass exchange_clients dict to multi-exchange strategies
-            return strategy_class(config, exchange_clients)
+            return strategy_class(prepared_config, exchange_clients)
         else:
             # Single-exchange strategies receive single exchange_client
             if exchange_client is None:
                 raise ValueError(f"Strategy '{strategy_name}' requires exchange_client parameter")
-            return strategy_class(config, exchange_client)
+            return strategy_class(prepared_config, exchange_client)
     
     @classmethod
     def register_strategy(cls, name: str, strategy_class: Type[BaseStrategy]):

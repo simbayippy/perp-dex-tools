@@ -12,7 +12,7 @@ from bpx.public import Public
 from bpx.account import Account
 from bpx.constants.enums import OrderTypeEnum, TimeInForceEnum
 
-from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_client import BaseExchangeClient, OrderFillCallback
 from exchange_clients.base_models import (
     ExchangePositionSnapshot,
     MissingCredentialsError,
@@ -40,6 +40,7 @@ class BackpackClient(BaseExchangeClient):
         config: Dict[str, Any],
         public_key: Optional[str] = None,
         secret_key: Optional[str] = None,
+        order_fill_callback: OrderFillCallback = None,
     ):
         """
         Initialize Backpack client.
@@ -54,6 +55,8 @@ class BackpackClient(BaseExchangeClient):
         self.secret_key = secret_key or os.getenv("BACKPACK_SECRET_KEY")
         
         super().__init__(config)
+        if order_fill_callback is not None:
+            self.order_fill_callback = order_fill_callback
 
         self.logger = get_exchange_logger("backpack", getattr(self.config, "ticker", "UNKNOWN"))
 
@@ -455,6 +458,9 @@ class BackpackClient(BaseExchangeClient):
                 status = order_data.get("X") or order_data.get("status")
             status = (status or "").upper()
 
+            previous = self._latest_orders.get(order_id)
+            prev_filled = previous.filled_size if previous else Decimal("0")
+
             info = OrderInfo(
                 order_id=order_id,
                 side=side or "",
@@ -490,6 +496,27 @@ class BackpackClient(BaseExchangeClient):
                     "raw_event": order_data,
                 }
                 self._order_update_handler(payload)
+
+            if self.order_fill_callback and filled is not None and price is not None:
+                fill_increment = filled - prev_filled
+                if fill_increment > Decimal("0"):
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(
+                            self.order_fill_callback(
+                                order_id,
+                                price,
+                                fill_increment,
+                                order_data.get("u"),
+                            )
+                        )
+                    except RuntimeError:
+                        await self.order_fill_callback(
+                            order_id,
+                            price,
+                            fill_increment,
+                            order_data.get("u"),
+                        )
         except Exception as exc:
             self.logger.error(f"Error handling Backpack order update: {exc}")
 
@@ -645,7 +672,8 @@ class BackpackClient(BaseExchangeClient):
         quantity: Decimal,
         price: Decimal,
         side: str,
-        reduce_only: bool = False
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
     ) -> OrderResult:
         """
         Place a post-only limit order on Backpack.
@@ -706,6 +734,8 @@ class BackpackClient(BaseExchangeClient):
                 "post_only": True,
                 "time_in_force": TimeInForceEnum.GTC,
             }
+            if client_order_id is not None:
+                payload_preview["client_order_id"] = str(client_order_id)
             
             if attempt > 0:
                 self.logger.info(
@@ -887,7 +917,8 @@ class BackpackClient(BaseExchangeClient):
         contract_id: str,
         quantity: Decimal,
         side: str,
-        reduce_only: bool = False
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
     ) -> OrderResult:
         """Place a market order for immediate execution."""
         backpack_side = "Bid" if side.lower() == "buy" else "Ask"
@@ -922,6 +953,8 @@ class BackpackClient(BaseExchangeClient):
                 "orderType": OrderTypeEnum.MARKET,
                 "quantity": quantity_str,
             }
+            if client_order_id is not None:
+                payload_preview["client_order_id"] = str(client_order_id)
             
             if attempt > 0:
                 self.logger.info(f"[BACKPACK] Market order retry {attempt}: quantity={quantity_str}")

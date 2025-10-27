@@ -17,7 +17,7 @@ import time
 from typing import Dict, Any, List, Optional, Tuple, Callable, Awaitable
 import websockets
 
-from exchange_clients.base_websocket import BaseWebSocketManager
+from exchange_clients.base_websocket import BaseWebSocketManager, BBOData
 
 
 class LighterWebSocketManager(BaseWebSocketManager):
@@ -28,10 +28,12 @@ class LighterWebSocketManager(BaseWebSocketManager):
         config: Dict[str, Any],
         order_update_callback: Optional[Callable] = None,
         liquidation_callback: Optional[Callable[[List[Dict[str, Any]]], Awaitable[None]]] = None,
+        positions_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     ):
         self.config = config
         self.order_update_callback = order_update_callback
         self.liquidation_callback = liquidation_callback
+        self.positions_callback = positions_callback
         super().__init__()
         self.ws = None
         self._listener_task: Optional[asyncio.Task] = None
@@ -543,6 +545,12 @@ class LighterWebSocketManager(BaseWebSocketManager):
                 "channel": f"account_orders/{self.market_index}/{self.account_index}",
                 "auth": auth_token,
             })
+            if self.positions_callback:
+                subscription_messages.append({
+                    "type": "subscribe",
+                    "channel": f"account_all_positions/{self.account_index}",
+                    "auth": auth_token,
+                })
             if self.liquidation_callback:
                 subscription_messages.append({
                     "type": "subscribe",
@@ -578,6 +586,7 @@ class LighterWebSocketManager(BaseWebSocketManager):
 
                 notifications_for_dispatch: Optional[List[Dict[str, Any]]] = None
                 request_snapshot = False
+                positions_payload: Optional[Dict[str, Any]] = None
 
                 async with self.order_book_lock:
                     if data.get("type") == "subscribed/order_book":
@@ -597,6 +606,15 @@ class LighterWebSocketManager(BaseWebSocketManager):
                             self.best_bid = best_bid_price
                         if best_ask_price is not None:
                             self.best_ask = best_ask_price
+                        await self._notify_bbo_update(
+                            BBOData(
+                                symbol=str(getattr(self.config, "ticker", self.market_index)),
+                                bid=self.best_bid,
+                                ask=self.best_ask,
+                                timestamp=time.time(),
+                                sequence=self.order_book_offset,
+                            )
+                        )
                         
                         self._log(
                             f"[LIGHTER] Order book snapshot loaded with {len(self.order_book['bids'])} bids and "
@@ -631,6 +649,15 @@ class LighterWebSocketManager(BaseWebSocketManager):
                                 self.best_bid = best_bid_price
                             if best_ask_price is not None:
                                 self.best_ask = best_ask_price
+                            await self._notify_bbo_update(
+                                BBOData(
+                                    symbol=str(getattr(self.config, "ticker", self.market_index)),
+                                    bid=self.best_bid,
+                                    ask=self.best_ask,
+                                    timestamp=time.time(),
+                                    sequence=offset,
+                                )
+                            )
 
                     elif data.get("type") == "ping":
                         await self.ws.send(json.dumps({"type": "pong"}))
@@ -639,11 +666,17 @@ class LighterWebSocketManager(BaseWebSocketManager):
                         orders = data.get("orders", {}).get(str(self.market_index), [])
                         self.handle_order_update(orders)
 
+                    elif data.get("type") == "update/account_all_positions":
+                        positions_payload = data
+
                     elif data.get("type") == "update/notification":
                         notifications_for_dispatch = data.get("notifs", [])
 
                     elif data.get("type") == "subscribed/notification":
                         self._log("Subscribed to notification channel", "DEBUG")
+
+                    elif data.get("type") == "subscribed/account_all_positions":
+                        self._log("Subscribed to account positions channel", "DEBUG")
 
                 cleanup_counter += 1
                 if cleanup_counter >= 1000:
@@ -660,6 +693,12 @@ class LighterWebSocketManager(BaseWebSocketManager):
 
                 if notifications_for_dispatch:
                     await self._dispatch_liquidations(notifications_for_dispatch)
+
+                if positions_payload and self.positions_callback:
+                    try:
+                        await self.positions_callback(positions_payload)
+                    except Exception as exc:
+                        self._log(f"Error dispatching positions update: {exc}", "ERROR")
 
         finally:
             self.running = False

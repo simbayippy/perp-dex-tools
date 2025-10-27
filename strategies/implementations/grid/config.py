@@ -20,12 +20,25 @@ class GridConfig(BaseModel):
     )
     grid_step: Decimal = Field(
         ...,
-        description="Distance between grid levels as percentage",
+        description="Distance between grid levels as a direct percentage (1 = 1%)",
         gt=0
     )
     direction: str = Field(
         ...,
         description="Trading direction: 'buy' (long) or 'sell' (short)"
+    )
+    order_notional_usd: Optional[Decimal] = Field(
+        None,
+        description=(
+            "Target USD notional (total exposure) per grid entry before leverage. "
+            "Required margin equals notional divided by applied leverage."
+        ),
+        gt=0
+    )
+    target_leverage: Optional[Decimal] = Field(
+        None,
+        description="Desired leverage multiple; will be clamped by exchange limits",
+        gt=0
     )
     max_orders: int = Field(
         ...,
@@ -37,17 +50,44 @@ class GridConfig(BaseModel):
         description="Base cooldown time between orders in seconds",
         gt=0
     )
+    max_margin_usd: Decimal = Field(
+        ...,
+        description="Maximum margin (USD) allocated to the grid strategy",
+        gt=0
+    )
     
-    # Optional safety parameters
+    # Safety parameters
     stop_price: Optional[Decimal] = Field(
         None,
-        description="Stop price - strategy stops if price crosses this level",
+        description="Emergency stop price that closes all exposure and halts the grid when breached",
         gt=0
     )
     pause_price: Optional[Decimal] = Field(
         None,
-        description="Pause price - strategy pauses temporarily if price crosses this level",
+        description="Pause price that suspends new entries while allowing existing orders to manage down",
         gt=0
+    )
+    stop_loss_enabled: bool = Field(
+        True,
+        description="Enable stop loss for individual grid positions"
+    )
+    stop_loss_percentage: Decimal = Field(
+        Decimal('2.0'),
+        description="Stop loss percentage of margin (PnL) to cap losses per position",
+        ge=Decimal('0.5'),
+        le=Decimal('10')
+    )
+    position_timeout_minutes: int = Field(
+        60,
+        description=(
+            "Minutes before an unfilled entry limit is cancelled or an open position triggers recovery"
+        ),
+        ge=1,
+        le=1440
+    )
+    recovery_mode: str = Field(
+        "aggressive",
+        description="Recovery approach when handling stuck positions"
     )
     
     # Optional enhancement parameters
@@ -55,25 +95,16 @@ class GridConfig(BaseModel):
         False,
         description="Use market orders for faster execution (more aggressive)"
     )
-    random_timing: bool = Field(
-        False,
-        description="Add random variation to wait times"
+    post_only_tick_multiplier: Decimal = Field(
+        Decimal('2'),
+        description="How many ticks away from top of book to place post-only orders",
+        ge=Decimal('1'),
+        le=Decimal('10')
     )
-    timing_range: Decimal = Field(
-        Decimal('0.5'),
-        description="Random timing variation range (e.g., 0.5 = ±50%)",
-        ge=0,
-        le=1
-    )
-    dynamic_profit: bool = Field(
-        False,
-        description="Add random variation to take profit levels"
-    )
-    profit_range: Decimal = Field(
-        Decimal('0.5'),
-        description="Dynamic profit variation range (e.g., 0.5 = ±50%)",
-        ge=0,
-        le=1
+    order_margin_usd: Optional[Decimal] = Field(
+        None,
+        description="Optional: target initial margin (USD) per order",
+        ge=Decimal('0')
     )
     
     @validator('direction')
@@ -83,15 +114,36 @@ class GridConfig(BaseModel):
             raise ValueError("Direction must be 'buy' or 'sell'")
         return v
     
+    @validator('recovery_mode')
+    def validate_recovery_mode(cls, v):
+        """Validate recovery mode choice."""
+        allowed = {'aggressive', 'hedge', 'none'}
+        if v not in allowed:
+            raise ValueError(f"Recovery mode must be one of {', '.join(sorted(allowed))}")
+        return v
+    
     @validator('stop_price', 'pause_price')
     def validate_prices(cls, v, values):
         """Validate stop and pause prices make sense for the direction."""
         if v is not None and v <= 0:
             raise ValueError("Prices must be positive")
         return v
+
+    @validator('order_notional_usd')
+    def validate_order_notional(cls, v):
+        """Ensure order notional, when provided, is positive."""
+        if v is not None and v <= 0:
+            raise ValueError("Order notional must be positive")
+        return v
+
+    @validator('target_leverage')
+    def validate_target_leverage(cls, v):
+        """Ensure leverage, when provided, is positive."""
+        if v is not None and v <= 0:
+            raise ValueError("Leverage must be positive")
+        return v
     
     class Config:
         """Pydantic config."""
         validate_assignment = True
         extra = 'forbid'
-

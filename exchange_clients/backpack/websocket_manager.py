@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 import websockets
 
 from exchange_clients.base_models import MissingCredentialsError
-from exchange_clients.base_websocket import BaseWebSocketManager
+from exchange_clients.base_websocket import BaseWebSocketManager, BBOData
 
 
 class BackpackWebSocketManager(BaseWebSocketManager):
@@ -622,8 +622,27 @@ class BackpackWebSocketManager(BaseWebSocketManager):
         self.order_book["bids"] = [{"price": price, "size": size} for price, size in bids_sorted]
         self.order_book["asks"] = [{"price": price, "size": size} for price, size in asks_sorted]
 
+        previous_bid = self.best_bid
+        previous_ask = self.best_ask
         self.best_bid = bids_sorted[0][0] if bids_sorted else None
         self.best_ask = asks_sorted[0][0] if asks_sorted else None
+
+        if (
+            self.best_bid is not None
+            and self.best_ask is not None
+            and (self.best_bid != previous_bid or self.best_ask != previous_ask)
+        ):
+            asyncio.create_task(
+                self._notify_bbo_update(
+                    BBOData(
+                        symbol=self.symbol or "",
+                        bid=self.best_bid,
+                        ask=self.best_ask,
+                        timestamp=time.time(),
+                        sequence=self._last_update_id,
+                    )
+                )
+            )
 
     async def _close_depth_ws(self) -> None:
         if self._depth_ws:

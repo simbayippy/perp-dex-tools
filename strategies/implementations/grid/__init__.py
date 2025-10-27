@@ -6,7 +6,7 @@ A single-exchange grid trading strategy that:
 - Takes profit when price moves between grid levels
 - Maintains a maximum number of active orders
 - Supports safety features (stop/pause prices)
-- Optional dynamic parameters (random timing, dynamic profit)
+- Enforces deterministic execution with configurable risk limits
 """
 
 from .strategy import GridStrategy
@@ -20,4 +20,3 @@ __all__ = [
     'GridOrder',
     'GridCycleState',
 ]
-

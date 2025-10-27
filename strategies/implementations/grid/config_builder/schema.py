@@ -30,16 +30,21 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
         # ====================================================================
         # Exchange Configuration
         # ====================================================================
-        create_exchange_choice_parameter(
+        ParameterSchema(
             key="exchange",
             prompt="Which exchange to trade on?",
+            param_type=ParameterType.CHOICE,
+            choices=["lighter"],
+            default="lighter",
             required=True,
-            help_text="Grid strategy trades on a single exchange",
+            help_text="Grid currently supports the Lighter connector; other venues are pending.",
+            show_default_in_prompt=True,
         ),
         ParameterSchema(
             key="ticker",
             prompt="Which trading pair? (e.g., BTC, ETH, HYPE)",
             param_type=ParameterType.STRING,
+            default="BTC",
             required=True,
             min_length=1,
             max_length=20,
@@ -57,32 +62,51 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             help_text="BUY: Place buy orders (accumulate). SELL: Place sell orders (distribute)",
         ),
         create_decimal_parameter(
-            key="quantity",
-            prompt="Order quantity (per order)?",
-            min_value=Decimal("0.001"),
+            key="order_notional_usd",
+            prompt="Target position exposure per order (USD)?",
+            min_value=Decimal("1"),
             max_value=Decimal("1000000"),
             required=True,
-            help_text="The size of each grid order",
+            help_text=(
+                "Total exposure per grid order (USD). Example: 25 = ~$25 position value; "
+                "margin required equals notional ÷ applied leverage."
+            ),
         ),
         create_decimal_parameter(
             key="take_profit",
-            prompt="Take profit percentage (e.g., 0.008 = 0.8%)?",
+            prompt="Take profit percentage (e.g., 0.08 = 0.08%)?",
+            default=Decimal("0.08"),
             min_value=Decimal("0.001"),
-            max_value=Decimal("0.1"),
+            max_value=Decimal("1"),
             required=True,
-            help_text="How much profit to take on each trade. Higher = more profit but fewer fills",
+            help_text=(
+                "How much profit to take on each trade (0.001–1). Provide values as whole percentages "
+                "(0.08 = 0.08%, 0.15 = 0.15%). Higher = more profit but fewer fills."
+            ),
+        ),
+        create_decimal_parameter(
+            key="target_leverage",
+            prompt="Desired leverage multiple (optional)?",
+            default=None,
+            min_value=Decimal("1"),
+            max_value=Decimal("1000"),
+            required=False,
+            help_text="Request leverage to use for the grid. We will clamp to the exchange maximum.",
         ),
         # ====================================================================
         # Grid Spacing
         # ====================================================================
         create_decimal_parameter(
             key="grid_step",
-            prompt="Grid step (minimum distance between orders, e.g., 0.002 = 0.2%)?",
+            prompt="Grid step (minimum distance between orders, e.g., 0.2 = 0.2%)?",
             default=Decimal("0.002"),
             min_value=Decimal("0.0001"),
             max_value=Decimal("0.1"),
             required=False,
-            help_text="Minimum price distance between grid orders. Lower = denser grid",
+            help_text=(
+                "Minimum price gap between adjacent grid exits expressed as a direct percentage." \
+                " Example: 0.2 = 0.2%, 1 = 1%. Default 0.002 = 0.002% for very tight spacing."
+            ),
         ),
         ParameterSchema(
             key="max_orders",
@@ -94,6 +118,14 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             required=False,
             help_text="Limit the number of open orders to manage risk",
             show_default_in_prompt=True,
+        ),
+        create_decimal_parameter(
+            key="max_margin_usd",
+            prompt="Maximum margin to allocate (USD)?",
+            min_value=Decimal("10"),
+            max_value=Decimal("1000000"),
+            required=True,
+            help_text="Caps how much account margin the grid strategy can consume",
         ),
         # ====================================================================
         # Timing Configuration
@@ -109,22 +141,63 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             help_text="How long to wait between placing new orders",
             show_default_in_prompt=True,
         ),
+        # ====================================================================
+        # Risk Management
+        # ====================================================================
         create_boolean_parameter(
-            key="random_timing",
-            prompt="Enable random timing variation?",
-            default=False,
+            key="stop_loss_enabled",
+            prompt="Enable per-position stop loss?",
+            default=True,
             required=False,
-            help_text="Add randomness to wait time to avoid predictable patterns",
+            help_text="Automatically place stop loss exits for individual positions",
         ),
-        # ====================================================================
-        # Advanced Features
-        # ====================================================================
-        create_boolean_parameter(
-            key="dynamic_profit",
-            prompt="Enable dynamic profit-taking?",
-            default=False,
+        create_decimal_parameter(
+            key="stop_loss_percentage",
+            prompt="Stop loss percentage (e.g., 2 = 2%)?",
+            default=Decimal("2.0"),
+            min_value=Decimal("0.5"),
+            max_value=Decimal("10"),
             required=False,
-            help_text="Adjust take profit based on market volatility",
+            help_text=(
+                "Closes positions once unrealised loss exceeds this share of margin (PnL%)"
+                " at the grid level."
+            ),
+        ),
+        ParameterSchema(
+            key="position_timeout_minutes",
+            prompt="Minutes before a position is considered stuck?",
+            param_type=ParameterType.INTEGER,
+            default=5,
+            min_value=1,
+            max_value=1440,
+            required=False,
+            help_text=(
+                "If a post-only entry stays unfilled past this window it will be cancelled,"
+                " and any filled position that remains open beyond the same window will trigger"
+                " the configured recovery action."
+            ),
+            show_default_in_prompt=True,
+        ),
+        ParameterSchema(
+            key="recovery_mode",
+            prompt="Recovery mode for stuck positions?",
+            param_type=ParameterType.CHOICE,
+            choices=["aggressive", "hedge", "none"],
+            default="aggressive",
+            required=False,
+            help_text=(
+                "How to unwind stuck positions: aggressive=immediate market exit,"
+                " hedge=neutralize via opposing market order, none=leave exposed"
+            ),
+        ),
+        create_decimal_parameter(
+            key="post_only_tick_multiplier",
+            prompt="Tick multiplier for post-only limit placement?",
+            default=Decimal("10"),
+            min_value=Decimal("1"),
+            max_value=Decimal("20"),
+            required=False,
+            help_text="How many ticks away from the top of book to anchor post-only orders",
         ),
         create_decimal_parameter(
             key="stop_price",
@@ -132,7 +205,7 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             default=None,
             min_value=Decimal("0"),
             required=False,
-            help_text="Emergency exit: close all positions if price goes beyond this level",
+            help_text="Emergency brake: market-close all exposure and halt the grid if price breaches this level",
         ),
         create_decimal_parameter(
             key="pause_price",
@@ -140,16 +213,25 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             default=None,
             min_value=Decimal("0"),
             required=False,
-            help_text="Pause trading but keep positions open if price reaches this level",
+            help_text="Temporarily pause entry placement while leaving existing exits and recovery active",
         ),
     ],
     # Category grouping
     categories={
         "Exchange": ["exchange", "ticker"],
-        "Grid Setup": ["direction", "quantity", "take_profit"],
+        "Grid Setup": ["direction", "order_notional_usd", "take_profit", "target_leverage"],
         "Grid Spacing": ["grid_step", "max_orders"],
-        "Timing": ["wait_time", "random_timing"],
-        "Advanced": ["dynamic_profit", "stop_price", "pause_price"],
+        "Capital & Limits": ["max_margin_usd"],
+        "Execution": ["wait_time"],
+        "Risk Management": [
+            "stop_loss_enabled",
+            "stop_loss_percentage",
+            "position_timeout_minutes",
+            "recovery_mode",
+            "post_only_tick_multiplier",
+            "stop_price",
+            "pause_price",
+        ],
     },
 )
 
@@ -174,13 +256,18 @@ def create_default_grid_config() -> dict:
         "exchange": "lighter",
         "ticker": "BTC",
         "direction": "buy",
-        "quantity": Decimal("100"),
+        "order_notional_usd": Decimal("100"),
+        "target_leverage": Decimal("10"),
         "take_profit": Decimal("0.008"),
         "grid_step": Decimal("0.002"),
         "max_orders": 25,
         "wait_time": 10,
-        "random_timing": False,
-        "dynamic_profit": False,
+        "max_margin_usd": Decimal("5000"),
+        "stop_loss_enabled": True,
+        "stop_loss_percentage": Decimal("2.0"),
+        "position_timeout_minutes": 60,
+        "recovery_mode": "aggressive",
+        "post_only_tick_multiplier": Decimal("2"),
         "stop_price": None,
         "pause_price": None,
     }

@@ -6,14 +6,21 @@ Inherits directly from BaseStrategy and composes what it needs.
 """
 
 import time
-import random
-import asyncio
 from decimal import Decimal
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from strategies.base_strategy import BaseStrategy
+from exchange_clients.market_data import PriceStream
 from .config import GridConfig
-from .models import GridState, GridOrder, GridCycleState
+from .models import GridCycleState, GridState
+from .operations import (
+    GridOpenPositionOperator,
+    GridOrderCloser,
+    GridRecoveryOperator,
+)
+from .position_manager import GridPositionManager
+from .risk_controller import GridRiskController
+from helpers.event_notifier import GridEventNotifier
 
 
 class GridStrategy(BaseStrategy):
@@ -48,12 +55,97 @@ class GridStrategy(BaseStrategy):
         # Initialize grid state
         self.grid_state = GridState()
         
+        exchange_name = "unknown"
+        if hasattr(exchange_client, "get_exchange_name"):
+            try:
+                exchange_name = exchange_client.get_exchange_name()
+            except Exception:
+                exchange_name = "unknown"
+        
+        ticker = "unknown"
+        if hasattr(exchange_client, "config"):
+            ticker = getattr(exchange_client.config, "ticker", ticker)
+        elif hasattr(config, "ticker"):
+            ticker = getattr(config, "ticker")
+        
+        self.event_notifier = GridEventNotifier(
+            strategy="grid",
+            exchange=str(exchange_name),
+            ticker=str(ticker or "unknown"),
+        )
+
+        self.order_notional_usd: Optional[Decimal] = getattr(config, "order_notional_usd", None)
+        target_leverage: Optional[Decimal] = getattr(config, "target_leverage", None)
+
+        stream_symbol = str(getattr(config, "ticker", getattr(exchange_client.config, "ticker", "")))
+        fetch_symbol = getattr(exchange_client.config, "contract_id", stream_symbol)
+        self.price_stream = PriceStream(
+            exchange_client=exchange_client,
+            stream_symbol=stream_symbol,
+            fetch_symbol=fetch_symbol,
+        )
+
+        # Compose helper components
+        self.position_manager = GridPositionManager(self.grid_state)
+        self.risk_controller = GridRiskController(
+            config=config,
+            exchange_client=exchange_client,
+            grid_state=self.grid_state,
+            logger=self.logger,
+            log_event=self._log_event,
+            requested_leverage=target_leverage,
+        )
+        self.order_closer = GridOrderCloser(
+            config=config,
+            exchange_client=exchange_client,
+            grid_state=self.grid_state,
+            logger=self.logger,
+            log_event=self._log_event,
+            position_manager=self.position_manager,
+        )
+        self.open_operator = GridOpenPositionOperator(
+            config=config,
+            exchange_client=exchange_client,
+            grid_state=self.grid_state,
+            logger=self.logger,
+            risk_controller=self.risk_controller,
+            price_stream=self.price_stream,
+            order_notional_usd=self.order_notional_usd,
+        )
+        self.recovery_operator = GridRecoveryOperator(
+            config=config,
+            exchange_client=exchange_client,
+            grid_state=self.grid_state,
+            logger=self.logger,
+            log_event=self._log_event,
+            position_manager=self.position_manager,
+            order_closer=self.order_closer,
+        )
+        
         self.logger.log("Grid strategy initialized with parameters:", "INFO")
         self.logger.log(f"  - Take Profit: {config.take_profit}%", "INFO")
         self.logger.log(f"  - Grid Step: {config.grid_step}%", "INFO")
         self.logger.log(f"  - Direction: {config.direction}", "INFO")
+        if self.order_notional_usd is not None:
+            self.logger.log(f"  - Order Notional (USD): {self.order_notional_usd}", "INFO")
+        else:
+            qty_display = getattr(self.exchange_client.config, "quantity", None)
+            self.logger.log(f"  - Order Quantity (base): {qty_display}", "INFO")
         self.logger.log(f"  - Max Orders: {config.max_orders}", "INFO")
         self.logger.log(f"  - Wait Time: {config.wait_time}s", "INFO")
+        self.logger.log(f"  - Max Margin (USD): {config.max_margin_usd}", "INFO")
+        self.logger.log(
+            f"  - Stop Loss: {'enabled' if config.stop_loss_enabled else 'disabled'} "
+            f"(threshold {config.stop_loss_percentage}%)",
+            "INFO",
+        )
+        if target_leverage is not None:
+            self.logger.log(f"  - Target Leverage: {target_leverage}x", "INFO")
+        self.logger.log(
+            f"  - Position Timeout: {config.position_timeout_minutes} minutes",
+            "INFO",
+        )
+        self.logger.log(f"  - Recovery Mode: {config.recovery_mode}", "INFO")
         
         # Log safety parameters if set
         if config.stop_price is not None:
@@ -70,45 +162,139 @@ class GridStrategy(BaseStrategy):
                 "INFO"
             )
     
+    def _serialize_value(self, value: Any) -> Any:
+        """Serialize payload values for structured logging."""
+        if isinstance(value, Decimal):
+            return float(value)
+        if isinstance(value, (list, tuple)):
+            return [self._serialize_value(item) for item in value]
+        if isinstance(value, dict):
+            return {key: self._serialize_value(val) for key, val in value.items()}
+        return value
+    
+    def _log_event(self, event_type: str, message: str, level: str = "INFO", **context: Any) -> None:
+        """Emit structured grid strategy event."""
+        payload = {
+            "event_type": event_type,
+            "grid_direction": self.config.direction,
+            **context,
+        }
+        serialized_payload = {key: self._serialize_value(val) for key, val in payload.items()}
+        self.logger.log(message, level.upper(), **serialized_payload)
+
+        if self.event_notifier:
+            self.event_notifier.notify(
+                event_type=event_type,
+                level=level.upper(),
+                message=message,
+                payload=serialized_payload,
+            )
+    
     async def _initialize_strategy(self):
         """Initialize strategy (called by base class)."""
-        # Load persisted state if available
-        # (In future, this would load from state_manager)
-        pass
+        await self.risk_controller.prepare_leverage_settings()
+        stream_symbol = getattr(self.config, "ticker", None)
+        if stream_symbol:
+            try:
+                await self.exchange_client.ensure_market_feed(stream_symbol)
+            except Exception as exc:
+                self.logger.log(
+                    f"Grid: Failed to align websocket market feed for {stream_symbol}: {exc}",
+                    "WARNING",
+                )
     
     async def should_execute(self) -> bool:
         """Determine if grid strategy should execute."""
         try:
             # Get current market data
-            best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(
-                self.exchange_client.config.contract_id
-            )
-            current_price = (best_bid + best_ask) / 2
+            bbo = await self.price_stream.latest()
+            best_bid = bbo.bid
+            best_ask = bbo.ask
+            current_price = (best_bid + best_ask) / Decimal("2")
             
             # Check stop price - critical safety check first
+            pause_active = False
+
             if self.config.stop_price is not None:
-                if (self.config.direction == 'buy' and current_price < self.config.stop_price) or \
-                   (self.config.direction == 'sell' and current_price > self.config.stop_price):
-                    self.logger.log(
-                        f"⚠️ STOP PRICE TRIGGERED! Current: {current_price}, Stop: {self.config.stop_price}", 
-                        "WARNING"
+                stop_condition = (
+                    (self.config.direction == 'buy' and current_price < self.config.stop_price) or
+                    (self.config.direction == 'sell' and current_price > self.config.stop_price)
+                )
+                if stop_condition:
+                    message = (
+                        f"⚠️ STOP PRICE TRIGGERED! Current: {current_price}, Stop: {self.config.stop_price}"
                     )
-                    self.logger.log("Canceling all orders and stopping strategy...", "WARNING")
-                    await self._cancel_all_orders()
+                    self._log_event(
+                        "stop_price_triggered",
+                        message,
+                        level="WARNING",
+                        current_price=current_price,
+                        stop_price=self.config.stop_price,
+                    )
+
+                    signed_position = self.grid_state.last_known_position or Decimal("0")
+                    try:
+                        fetched_position = await self.exchange_client.get_account_positions()
+                        if not isinstance(fetched_position, Decimal):
+                            fetched_position = Decimal(str(fetched_position))
+                        signed_position = fetched_position
+                    except Exception:
+                        signed_position = signed_position or Decimal("0")
+
+                    if signed_position != 0:
+                        await self.order_closer.market_close(
+                            signed_position,
+                            "Stop price triggered",
+                            tracked_position=None,
+                        )
+
+                    await self.order_closer.cancel_all_orders()
+                    self._log_event(
+                        "stop_price_shutdown",
+                        "All positions flattened; strategy will remain halted until stop is cleared.",
+                        level="WARNING",
+                    )
+                    self._reset_pending_entry_state()
                     return False
-            
-            # Check pause price - temporary pause
+
             if self.config.pause_price is not None:
-                if (self.config.direction == 'buy' and current_price > self.config.pause_price) or \
-                   (self.config.direction == 'sell' and current_price < self.config.pause_price):
-                    self.logger.log(
-                        f"⏸️ PAUSE PRICE REACHED! Current: {current_price}, Pause: {self.config.pause_price}", 
-                        "INFO"
+                pause_condition = (
+                    (self.config.direction == 'buy' and current_price > self.config.pause_price) or
+                    (self.config.direction == 'sell' and current_price < self.config.pause_price)
+                )
+                if pause_condition:
+                    self._log_event(
+                        "pause_price_triggered",
+                        f"⏸️ PAUSE PRICE REACHED! Current: {current_price}, Pause: {self.config.pause_price}",
+                        level="INFO",
+                        current_price=current_price,
+                        pause_price=self.config.pause_price,
                     )
-                    return False
+                    pause_active = True
+
+            current_position, snapshot = await self.risk_controller.refresh_risk_snapshot(current_price)
+            if await self.risk_controller.enforce_stop_loss(
+                snapshot,
+                current_price,
+                current_position,
+                self.order_closer.market_close,
+            ):
+                return False
             
             # Update active orders
-            await self._update_active_orders()
+            await self.order_closer.update_active_orders()
+            await self.recovery_operator.run_recovery_checks(
+                current_price=current_price,
+                current_position=current_position,
+            )
+            await self.order_closer.ensure_close_orders(
+                current_position=current_position,
+                best_bid=best_bid,
+                best_ask=best_ask,
+            )
+
+            if pause_active:
+                return False
             
             # Check if we should wait based on cooldown
             wait_time = self._calculate_wait_time()
@@ -119,7 +305,12 @@ class GridStrategy(BaseStrategy):
             return await self._meet_grid_step_condition(best_bid, best_ask)
             
         except Exception as e:
-            self.logger.log(f"Error in should_execute: {e}", "ERROR")
+            self._log_event(
+                "should_execute_error",
+                f"Error in should_execute: {e}",
+                level="ERROR",
+                error=str(e),
+            )
             return False
     
     async def execute_strategy(self, market_data=None) -> Dict[str, Any]:
@@ -140,11 +331,19 @@ class GridStrategy(BaseStrategy):
         try:
             # State 1: Ready to place open order
             if self.grid_state.cycle_state == GridCycleState.READY:
-                return await self._place_open_order()
+                return await self.open_operator.place_open_order()
             
             # State 2: Waiting for fill, then place close order
             elif self.grid_state.cycle_state == GridCycleState.WAITING_FOR_FILL:
-                return await self._handle_filled_order()
+                result = await self.order_closer.handle_filled_order()
+                if result.get("action") == "wait":
+                    if await self._recover_from_canceled_entry():
+                        return {
+                            "action": "wait",
+                            "message": "Grid: Entry order canceled; retrying",
+                            "wait_time": 0,
+                        }
+                return result
             
             else:
                 # Unknown state, reset
@@ -156,7 +355,12 @@ class GridStrategy(BaseStrategy):
                 }
                 
         except Exception as e:
-            self.logger.log(f"Error executing grid strategy: {e}", "ERROR")
+            self._log_event(
+                "execute_strategy_error",
+                f"Error executing grid strategy: {e}",
+                level="ERROR",
+                error=str(e),
+            )
             # Reset state on error
             self.grid_state.cycle_state = GridCycleState.READY
             return {
@@ -164,205 +368,140 @@ class GridStrategy(BaseStrategy):
                 'message': f'Grid strategy error: {e}',
                 'wait_time': 5
             }
-    
-    async def _place_open_order(self) -> Dict[str, Any]:
-        """Place an open order to enter a new grid level."""
-        try:
-            # Place order using exchange client
-            quantity = self.exchange_client.config.quantity
-            contract_id = self.exchange_client.config.contract_id
-            
-            # Get aggressive price (act like market order but with price protection)
-            best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(contract_id)
-            
-            if self.config.direction == 'buy':
-                # For buy, place below ask to fill quickly
-                order_price = best_ask - self.exchange_client.config.tick_size
-            else:  # sell
-                # For sell, place above bid to fill quickly
-                order_price = best_bid + self.exchange_client.config.tick_size
-            
-            order_price = self.exchange_client.round_to_tick(order_price)
-            
-            order_result = await self.exchange_client.place_limit_order(
-                contract_id=contract_id,
-                quantity=quantity,
-                price=order_price,
-                side=self.config.direction
-            )
-            
-            if order_result.success:
-                # Update state to waiting for fill
-                self.grid_state.cycle_state = GridCycleState.WAITING_FOR_FILL
-                
-                # Record filled price and quantity from result
-                if order_result.status == 'FILLED':
-                    self.grid_state.filled_price = order_result.price
-                    self.grid_state.filled_quantity = order_result.size
-                
-                self.logger.log(
-                    f"Grid: Placed {self.config.direction} order for {quantity} @ {order_result.price}",
-                    "INFO"
-                )
-                
-                return {
-                    'action': 'order_placed',
-                    'order_id': order_result.order_id,
-                    'side': self.config.direction,
-                    'quantity': quantity,
-                    'price': order_result.price,
-                    'status': order_result.status
-                }
-            else:
-                self.logger.log(f"Grid: Failed to place open order: {order_result.error_message}", "ERROR")
-                return {
-                    'action': 'error',
-                    'message': order_result.error_message,
-                    'wait_time': 5
-                }
-                
-        except Exception as e:
-            self.logger.log(f"Error placing open order: {e}", "ERROR")
-            return {
-                'action': 'error',
-                'message': str(e),
-                'wait_time': 5
-            }
-    
-    async def _handle_filled_order(self) -> Dict[str, Any]:
-        """Handle a filled open order by placing corresponding close order."""
-        # Check if we have filled price (may be set by notify_order_filled callback)
-        if self.grid_state.filled_price and self.grid_state.filled_quantity:
-            try:
-                # Calculate close order parameters
-                close_side = 'sell' if self.config.direction == 'buy' else 'buy'
-                close_price = self._calculate_close_price(self.grid_state.filled_price)
-                
-                # Place close order
-                if self.config.boost_mode:
-                    # Boost mode: use market order for faster execution
-                    order_result = await self.exchange_client.place_market_order(
-                        contract_id=self.exchange_client.config.contract_id,
-                        quantity=self.grid_state.filled_quantity,
-                        side=close_side
-                    )
-                else:
-                    # Normal mode: use limit order
-                    order_result = await self.exchange_client.place_close_order(
-                        contract_id=self.exchange_client.config.contract_id,
-                        quantity=self.grid_state.filled_quantity,
-                        price=close_price,
-                        side=close_side
-                    )
-                
-                if order_result.success:
-                    # Reset state for next cycle
-                    self.grid_state.cycle_state = GridCycleState.READY
-                    self.grid_state.filled_price = None
-                    self.grid_state.filled_quantity = None
-                    self.grid_state.last_open_order_time = time.time()
-                    
-                    self.logger.log(
-                        f"Grid: Placed close order at {close_price}",
-                        "INFO"
-                    )
-                    
-                    return {
-                        'action': 'order_placed',
-                        'order_id': order_result.order_id,
-                        'side': close_side,
-                        'quantity': self.grid_state.filled_quantity,
-                        'price': close_price,
-                        'wait_time': 1 if self.exchange_client.get_exchange_name() == "lighter" else 0
-                    }
-                else:
-                    self.logger.log(f"Grid: Failed to place close order: {order_result.error_message}", "ERROR")
-                    return {
-                        'action': 'error',
-                        'message': order_result.error_message,
-                        'wait_time': 5
-                    }
-                    
-            except Exception as e:
-                self.logger.log(f"Error placing close order: {e}", "ERROR")
-                return {
-                    'action': 'error',
-                    'message': str(e),
-                    'wait_time': 5
-                }
-        else:
-            # Still waiting for fill notification
-            return {
-                'action': 'wait',
-                'message': 'Grid: Waiting for open order to fill',
-                'wait_time': 0.5
-            }
-    
-    def notify_order_filled(self, filled_price: Decimal, filled_quantity: Decimal):
+
+    def notify_order_filled(
+        self,
+        filled_price: Decimal,
+        filled_quantity: Decimal,
+        order_id: Optional[str] = None,
+    ) -> None:
         """
         Notify strategy that an order was filled.
-        
+
         This is called by the trading bot after successful order execution.
         """
-        self.grid_state.filled_price = filled_price
-        self.grid_state.filled_quantity = filled_quantity
-        self.logger.log(
-            f"Grid: Order filled at {filled_price} for {filled_quantity}",
-            "INFO"
-        )
-    
-    def _calculate_close_price(self, filled_price: Decimal) -> Decimal:
-        """Calculate the close price based on take-profit settings."""
-        # Calculate dynamic take-profit if enabled
-        take_profit_pct = self.config.take_profit
-        if self.config.dynamic_profit:
-            base_profit = float(take_profit_pct)
-            variation = base_profit * float(self.config.profit_range)
-            random_offset = random.uniform(-variation, variation)
-            take_profit_pct = Decimal(max(0, base_profit + random_offset))
-            
-            self.logger.log(
-                f"Dynamic profit: base={self.config.take_profit}%, "
-                f"actual={take_profit_pct:.4f}% (±{variation:.4f}%)", 
-                "DEBUG"
-            )
+        self.order_closer.notify_order_filled(filled_price, filled_quantity, order_id=order_id)
+
+    async def _recover_from_canceled_entry(self) -> bool:
+        """Reset cycle if the pending entry order is no longer active."""
+        pending_id = self.grid_state.pending_open_order_id
+        if not pending_id:
+            return False
         
-        # Calculate close price
-        if self.config.direction == 'buy':
-            # Long position: sell higher
-            close_price = filled_price * (1 + take_profit_pct / 100)
-        else:
-            # Short position: buy back lower
-            close_price = filled_price * (1 - take_profit_pct / 100)
-        
-        return close_price
-    
-    async def _update_active_orders(self):
-        """Update active close orders."""
-        try:
-            active_orders = await self.exchange_client.get_active_orders(
-                self.exchange_client.config.contract_id
+        timeout_minutes = getattr(self.config, "position_timeout_minutes", None)
+        pending_placed_at = self.grid_state.pending_open_order_time
+        if (
+            timeout_minutes
+            and timeout_minutes > 0
+            and pending_placed_at is not None
+            and time.time() - pending_placed_at >= timeout_minutes * 60
+        ):
+            position_id = self.grid_state.pending_position_id or self.grid_state.filled_position_id
+            self._log_event(
+                "entry_order_timeout",
+                (
+                    f"Grid: Pending entry order {pending_id} exceeded timeout "
+                    f"({timeout_minutes} min); canceling and retrying."
+                ),
+                level="WARNING",
+                order_id=pending_id,
+                position_id=position_id,
+                timeout_minutes=timeout_minutes,
             )
-            
-            # Filter close orders (opposite side of direction)
-            close_side = 'sell' if self.config.direction == 'buy' else 'buy'
-            
-            self.grid_state.active_close_orders = [
-                GridOrder(
-                    order_id=order.order_id,
-                    price=order.price,
-                    size=order.size,
-                    side=order.side
+            try:
+                await self.exchange_client.cancel_order(str(pending_id))
+            except Exception as exc:
+                self._log_event(
+                    "entry_order_timeout_cancel_failed",
+                    f"Grid: Cancel attempt for timed-out entry {pending_id} failed: {exc}",
+                    level="ERROR",
+                    order_id=pending_id,
+                    position_id=position_id,
+                    error=str(exc),
                 )
-                for order in active_orders
-                if order.side == close_side
-            ]
-            
-        except Exception as e:
-            self.logger.log(f"Error updating active orders: {e}", "ERROR")
+            self._reset_pending_entry_state()
+            return True
+
+        contract_id = getattr(self.exchange_client.config, "contract_id", None)
+        if not contract_id:
+            return False
+
+        try:
+            active_orders = await self.exchange_client.get_active_orders(contract_id)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self.logger.log(
+                f"Grid: Failed to fetch active orders while checking for canceled entry: {exc}",
+                "DEBUG",
+            )
+            return False
+
+        pending_str = str(pending_id)
+        candidate_ids = {pending_str}
+        resolver = getattr(self.exchange_client, "resolve_client_order_id", None)
+        if callable(resolver):
+            try:
+                resolved_id = resolver(pending_str)
+            except Exception:  # pragma: no cover - defensive
+                resolved_id = None
+            if resolved_id is not None:
+                candidate_ids.add(str(resolved_id))
+
+        for order in active_orders:
+            order_id = getattr(order, "order_id", None)
+            if order_id is not None and str(order_id) in candidate_ids:
+                return False
+
+        # If a fill arrived while we were checking, do not treat the entry as canceled.
+        if (
+            self.grid_state.filled_client_order_index is not None
+            or self.grid_state.filled_quantity is not None
+        ):
+            return False
+
+        position_id = self.grid_state.pending_position_id or self.grid_state.filled_position_id
+        message = "Grid: Entry order canceled before fill; scheduling retry"
+        context = {
+            "order_id": pending_id,
+        }
+        if position_id:
+            context["position_id"] = position_id
+
+        self._log_event(
+            "entry_order_canceled",
+            message,
+            level="INFO",
+            **context,
+        )
+        
+        # Log position attempt failure with clear separator
+        if position_id:
+            self.logger.log(
+                f"\n{'='*80}\n❌ POSITION {position_id} CANCELED | Entry order removed before fill\n{'='*80}\n",
+                "INFO",
+            )
+        
+        self._reset_pending_entry_state()
+        return True
     
+    def _reset_pending_entry_state(self) -> None:
+        """Clear all state related to a pending entry order and resume READY cycle."""
+        pending_idx = self.grid_state.pending_client_order_index
+        if pending_idx is not None:
+            self.grid_state.order_index_to_position_id.pop(pending_idx, None)
+        self.grid_state.pending_open_order_id = None
+        self.grid_state.pending_open_quantity = None
+        self.grid_state.pending_open_order_time = None
+        self.grid_state.pending_position_id = None
+        self.grid_state.pending_client_order_index = None
+        self.grid_state.filled_price = None
+        self.grid_state.filled_quantity = None
+        self.grid_state.filled_position_id = None
+        self.grid_state.filled_client_order_index = None
+        self.grid_state.cycle_state = GridCycleState.READY
+        self.grid_state.last_open_order_time = time.time()
+
     def _calculate_wait_time(self) -> float:
-        """Calculate wait time between orders with optional randomization."""
+        """Calculate wait time between orders based on order density."""
         active_count = len(self.grid_state.active_close_orders)
         last_count = self.grid_state.last_close_orders_count
         
@@ -387,18 +526,6 @@ class GridStrategy(BaseStrategy):
             cool_down_time = self.config.wait_time / 2
         else:
             cool_down_time = self.config.wait_time / 4
-        
-        # Apply random timing if enabled
-        if self.config.random_timing:
-            variation = float(cool_down_time) * float(self.config.timing_range)
-            random_offset = random.uniform(-variation, variation)
-            cool_down_time = max(1, cool_down_time + random_offset)
-            
-            self.logger.log(
-                f"Random timing: base={self.config.wait_time}s, "
-                f"calculated={cool_down_time:.1f}s (±{variation:.1f}s)", 
-                "DEBUG"
-            )
         
         # Handle startup with existing orders
         if self.grid_state.last_open_order_time == 0 and active_count > 0:
@@ -427,7 +554,8 @@ class GridStrategy(BaseStrategy):
                 next_close_price = next_close_order.price
                 
                 # Calculate new order close price
-                new_order_close_price = best_ask * (1 + self.config.take_profit / 100)
+                take_profit_multiplier = self.order_closer.get_take_profit_multiplier()
+                new_order_close_price = best_ask * take_profit_multiplier
                 
                 # Check if there's enough gap
                 return next_close_price / new_order_close_price > 1 + self.config.grid_step / 100
@@ -441,7 +569,8 @@ class GridStrategy(BaseStrategy):
                 next_close_price = next_close_order.price
                 
                 # Calculate new order close price
-                new_order_close_price = best_bid * (1 - self.config.take_profit / 100)
+                take_profit_multiplier = self.order_closer.get_take_profit_multiplier()
+                new_order_close_price = best_bid * take_profit_multiplier
                 
                 # Check if there's enough gap
                 return new_order_close_price / next_close_price > 1 + self.config.grid_step / 100
@@ -450,27 +579,6 @@ class GridStrategy(BaseStrategy):
             self.logger.log(f"Error in grid step condition: {e}", "ERROR")
             return False
     
-    async def _cancel_all_orders(self):
-        """Cancel all active orders (used when stop price is triggered)."""
-        try:
-            self.logger.log(
-                f"Canceling {len(self.grid_state.active_close_orders)} active orders...", 
-                "INFO"
-            )
-            
-            for order in self.grid_state.active_close_orders:
-                try:
-                    await self.exchange_client.cancel_order(order.order_id)
-                    self.logger.log(f"Canceled order {order.order_id}", "INFO")
-                except Exception as e:
-                    self.logger.log(f"Error canceling order {order.order_id}: {e}", "ERROR")
-            
-            # Clear active close orders from state
-            self.grid_state.active_close_orders = []
-            self.logger.log("All orders canceled", "INFO")
-            
-        except Exception as e:
-            self.logger.log(f"Error in _cancel_all_orders: {e}", "ERROR")
     
     async def get_status(self) -> Dict[str, Any]:
         """Get current strategy status."""
@@ -483,6 +591,9 @@ class GridStrategy(BaseStrategy):
                 "cycle_state": self.grid_state.cycle_state.value,
                 "active_orders": len(self.grid_state.active_close_orders),
                 "position": float(position),
+                "margin_used": float(self.grid_state.last_known_margin),
+                "margin_limit": float(self.config.max_margin_usd),
+                "margin_ratio": float(self.grid_state.margin_ratio) if self.grid_state.margin_ratio is not None else None,
                 "active_close_amount": float(active_close_amount),
                 "last_order_time": self.grid_state.last_open_order_time,
                 "parameters": {
@@ -511,4 +622,3 @@ class GridStrategy(BaseStrategy):
             "max_orders",
             "wait_time"
         ]
-

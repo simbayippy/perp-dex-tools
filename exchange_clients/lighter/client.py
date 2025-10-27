@@ -7,7 +7,7 @@ import asyncio
 import time
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Callable, Awaitable
 
 from exchange_clients.base_client import BaseExchangeClient
 from exchange_clients.base_models import (
@@ -38,6 +38,7 @@ class LighterClient(BaseExchangeClient):
         api_key_private_key: Optional[str] = None,
         account_index: Optional[int] = None,
         api_key_index: Optional[int] = None,
+        order_fill_callback: Optional[Callable[[str, Decimal, Decimal, Optional[int]], Awaitable[None]]] = None,
     ):
         """
         Initialize Lighter client.
@@ -90,6 +91,11 @@ class LighterClient(BaseExchangeClient):
         self.current_order = None
         self._min_order_notional: Dict[str, Decimal] = {}
         self._latest_orders: Dict[str, OrderInfo] = {}
+        self.order_fill_callback = order_fill_callback
+        self._positions_lock = asyncio.Lock()
+        self._positions_ready = asyncio.Event()
+        self._raw_positions: Dict[str, Dict[str, Any]] = {}
+        self._client_to_server_order_index: Dict[str, str] = {}
 
     def _validate_config(self) -> None:
         """Validate Lighter configuration."""
@@ -222,6 +228,7 @@ class LighterClient(BaseExchangeClient):
                 config=self.config,
                 order_update_callback=self._handle_websocket_order_update,
                 liquidation_callback=self.handle_liquidation_notification,
+                positions_callback=self._handle_positions_stream_update,
             )
 
             # Set logger for WebSocket manager
@@ -229,6 +236,8 @@ class LighterClient(BaseExchangeClient):
 
             # Await WebSocket connection (real-time price updates and order tracking)
             await self.ws_manager.connect()
+            # Seed initial position snapshot via REST as a fallback until stream data arrives
+            await self._refresh_positions_via_rest()
 
         except Exception as e:
             self.logger.error(f"Error connecting to Lighter: {e}")
@@ -304,6 +313,9 @@ class LighterClient(BaseExchangeClient):
             if market_index is None or client_order_index is None:
                 continue
 
+            if server_order_index is not None:
+                self._client_to_server_order_index[str(client_order_index)] = str(server_order_index)
+
             if str(market_index) != str(self.config.contract_id):
                 self.logger.info(
                     f"[LIGHTER] Ignoring order update for market {market_index} "
@@ -330,6 +342,7 @@ class LighterClient(BaseExchangeClient):
                     continue
                 elif status in ['FILLED', 'CANCELED']:
                     del self.orders_cache[order_id]
+                    self._client_to_server_order_index.pop(order_id, None)
                 else:
                     self.orders_cache[order_id]['status'] = status
                     self.orders_cache[order_id]['filled_size'] = filled_size
@@ -386,6 +399,20 @@ class LighterClient(BaseExchangeClient):
                 self._latest_orders[order_id] = current_order
                 if server_order_index is not None:
                     self._latest_orders[str(server_order_index)] = current_order
+
+                if status == 'FILLED' and self.order_fill_callback:
+                    try:
+                        sequence = getattr(order_data, 'offset', None)
+                    except Exception:
+                        sequence = None
+                    asyncio.get_running_loop().create_task(
+                        self.order_fill_callback(
+                            order_id,
+                            price,
+                            filled_size,
+                            sequence,
+                        )
+                    )
 
     async def handle_liquidation_notification(self, notifications: List[Dict[str, Any]]) -> None:
         """Normalize liquidation notifications from the Lighter stream."""
@@ -451,7 +478,7 @@ class LighterClient(BaseExchangeClient):
         """
         # Efficient: Direct access to cached BBO from WebSocket
         if self.ws_manager and self.ws_manager.best_bid is not None and self.ws_manager.best_ask is not None:
-            self.logger.info(f"📡 [LIGHTER] Using real-time BBO from WebSocket")
+            # self.logger.info(f"📡 [LIGHTER] Using real-time BBO from WebSocket")
             return Decimal(str(self.ws_manager.best_bid)), Decimal(str(self.ws_manager.best_ask))
         
         # DRY: Reuse existing orderbook logic for REST fallback
@@ -535,38 +562,32 @@ class LighterClient(BaseExchangeClient):
                 result = await order_api.order_book_orders(
                     market_id=market_id,
                     limit=levels,
-                    _request_timeout=10
+                    _request_timeout=10,
                 )
-                
-                # Check if the API returned success
+
                 if result.code != 200:
                     self.logger.error(
                         f"❌ [LIGHTER] Order book API error: code={result.code}, message={result.message}"
                     )
                     return {'bids': [], 'asks': []}
-                
-                # Convert to standardized format
-                # SDK returns SimpleOrder objects with price and remaining_base_amount as strings
+
                 bids = [
                     {
-                        'price': Decimal(bid.price), 
-                        'size': Decimal(bid.remaining_base_amount)
-                    } 
+                        'price': Decimal(bid.price),
+                        'size': Decimal(bid.remaining_base_amount),
+                    }
                     for bid in result.bids
                 ]
                 asks = [
                     {
-                        'price': Decimal(ask.price), 
-                        'size': Decimal(ask.remaining_base_amount)
-                    } 
+                        'price': Decimal(ask.price),
+                        'size': Decimal(ask.remaining_base_amount),
+                    }
                     for ask in result.asks
                 ]
-                
-                return {
-                    'bids': bids,
-                    'asks': asks
-                }
-                
+
+                return {'bids': bids, 'asks': asks}
+
             except Exception as api_error:
                 self.logger.error(
                     f"❌ [LIGHTER] SDK order book fetch failed: {api_error}"
@@ -588,7 +609,8 @@ class LighterClient(BaseExchangeClient):
         quantity: Decimal,
         price: Decimal,
         side: str,
-        reduce_only: bool = False
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
     ) -> OrderResult:
         """
         Place a post only order with Lighter using official SDK.
@@ -612,8 +634,11 @@ class LighterClient(BaseExchangeClient):
         else:
             raise Exception(f"Invalid side: {side}")
 
-        # Generate unique client order index
-        client_order_index = int(time.time() * 1000) % 1000000  # Simple unique ID
+        # Generate client order index (allow caller override)
+        if client_order_id is not None:
+            client_order_index = int(client_order_id)
+        else:
+            client_order_index = int(time.time() * 1000) % 1000000  # Simple unique ID
         self.current_order_client_id = client_order_index
 
         expiry_seconds = getattr(self.config, "order_expiry_seconds", 3600)
@@ -640,7 +665,42 @@ class LighterClient(BaseExchangeClient):
             f"price={order_params.get('price')} amount={order_params.get('base_amount')}"
         )
 
-        create_order, tx_hash, error = await self.lighter_client.create_order(**order_params)
+        # Retry only when Lighter returns its nonce-mismatch error
+        nonce_retry_tokens = ("code=21104", "invalid nonce")
+        max_attempts = 2
+        error = None
+        for attempt in range(1, max_attempts + 1):
+            create_order, tx_hash, error = await self.lighter_client.create_order(**order_params)
+            if error is None:
+                break
+
+            error_text = str(error)
+            if attempt < max_attempts and any(token in error_text.lower() for token in nonce_retry_tokens):
+                self.logger.warning(
+                    f"⚠️ [LIGHTER] Nonce mismatch detected (attempt {attempt}/{max_attempts}): {error_text}. "
+                    "Refreshing nonce via SDK and retrying..."
+                )
+                if hasattr(self.lighter_client, 'nonce_manager'):
+                    try:
+                        self.lighter_client.nonce_manager.hard_refresh_nonce(self.api_key_index)
+                    except Exception as refresh_exc:
+                        self.logger.debug(f"[LIGHTER] Failed to refresh nonce proactively: {refresh_exc}")
+                await asyncio.sleep(0)
+                continue
+
+            self.logger.error(f"❌ [LIGHTER] Order submission failed: {error}")
+            return OrderResult(
+                success=False,
+                order_id=str(client_order_index),
+                error_message=f"Order creation error: {error}",
+            )
+        else:
+            self.logger.error("❌ [LIGHTER] Order submission failed: unknown error (nonce retry exhausted)")
+            return OrderResult(
+                success=False,
+                order_id=str(client_order_index),
+                error_message="Order creation error: nonce retry exhausted",
+            )
 
         if hasattr(create_order, "to_dict"):
             try:
@@ -674,22 +734,29 @@ class LighterClient(BaseExchangeClient):
                 f"(min notional check skipped for position closing)"
             )
 
-        if error is not None:
-            self.logger.error(f"❌ [LIGHTER] Order submission failed: {error}")
-            return OrderResult(
-                success=False,
-                order_id=str(client_order_index),
-                error_message=f"Order creation error: {error}",
-            )
+        # error is guaranteed to be None here (success path)
 
-        return OrderResult(success=True, order_id=str(client_order_index))
+        # Convert back to Decimal for logging/consumers
+        normalized_price = Decimal(order_params['price']) / self.price_multiplier
+        normalized_size = Decimal(order_params['base_amount']) / self.base_amount_multiplier
+
+        return OrderResult(
+            success=True,
+            order_id=str(client_order_index),
+            side=side,
+            size=normalized_size,
+            price=normalized_price,
+            status="OPEN",
+            filled_size=Decimal("0"),
+        )
 
     async def place_market_order(
         self,
         contract_id: str,
         quantity: Decimal,
         side: str,
-        reduce_only: bool = False
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None
     ) -> OrderResult:
         """
         Place a market order with Lighter using official SDK.
@@ -715,8 +782,11 @@ class LighterClient(BaseExchangeClient):
             else:
                 raise Exception(f"Invalid side: {side}")
 
-            # Generate unique client order index
-            client_order_index = int(time.time() * 1000) % 1000000
+            if client_order_id is not None:
+                client_order_index = int(client_order_id)
+            else:
+                client_order_index = int(time.time() * 1000) % 1000000
+            self.current_order_client_id = client_order_index
 
             # Get current market price for worst acceptable execution price
             # (this is the slippage tolerance for market orders)
@@ -807,16 +877,29 @@ class LighterClient(BaseExchangeClient):
 
         return order_price
 
+    def resolve_client_order_id(self, client_order_id: str) -> Optional[str]:
+        """Resolve a client order index to the server-side order index, if known."""
+        return self._client_to_server_order_index.get(str(client_order_id))
+
     async def cancel_order(self, order_id: str) -> OrderResult:
         """Cancel an order with Lighter."""
         # Ensure client is initialized
         if self.lighter_client is None:
             await self._initialize_lighter_client()
 
+        # Map client order indices to server order indices if available
+        order_key = str(order_id)
+        server_index = self._client_to_server_order_index.get(order_key, order_key)
+
+        try:
+            order_index_int = int(server_index)
+        except (TypeError, ValueError):
+            return OrderResult(success=False, error_message=f"Invalid order id: {order_id}")
+
         # Cancel order using official SDK
         cancel_order, tx_hash, error = await self.lighter_client.cancel_order(
             market_index=self.config.contract_id,
-            order_index=int(order_id)  # Assuming order_id is the order index
+            order_index=order_index_int
         )
 
         if error is not None:
@@ -953,6 +1036,184 @@ class LighterClient(BaseExchangeClient):
             self.logger.debug(f"Traceback: {traceback.format_exc()}")
             return None
 
+    async def _handle_positions_stream_update(self, payload: Dict[str, Any]) -> None:
+        """Process account positions update received from websocket stream."""
+        positions_map = payload.get("positions") or {}
+        if not isinstance(positions_map, dict):
+            return
+
+        updates: Dict[str, Dict[str, Any]] = {}
+
+        for market_idx, raw_position in positions_map.items():
+            if raw_position is None:
+                continue
+
+            position_dict = dict(raw_position)
+            market_id = position_dict.get("market_id")
+            if market_id is None:
+                try:
+                    market_id = int(market_idx)
+                    position_dict["market_id"] = market_id
+                except (TypeError, ValueError):
+                    position_dict["market_id"] = market_idx
+
+            symbol_raw = position_dict.get("symbol")
+            if not symbol_raw:
+                if market_id == getattr(self.config, "contract_id", None):
+                    symbol_raw = getattr(self.config, "ticker", None)
+            if not symbol_raw:
+                symbol_raw = str(market_idx)
+
+            position_dict["symbol"] = symbol_raw
+            normalized_symbol = self.normalize_symbol(str(symbol_raw)).upper()
+            updates[normalized_symbol] = position_dict
+
+        async with self._positions_lock:
+            self._raw_positions = updates
+            self._positions_ready.set()
+
+    def _decimal_or_none(self, value: Any) -> Optional[Decimal]:
+        """Convert raw numeric values to Decimal when possible."""
+        if value is None:
+            return None
+        if isinstance(value, Decimal):
+            return value
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+
+    def _build_snapshot_from_raw(self, normalized_symbol: str, raw: Dict[str, Any]) -> Optional[ExchangePositionSnapshot]:
+        """Construct an ExchangePositionSnapshot from cached raw position data."""
+        if raw is None:
+            return None
+
+        raw_quantity = raw.get("position") or raw.get("quantity") or Decimal("0")
+        try:
+            quantity = Decimal(raw_quantity)
+        except Exception:
+            quantity = self._decimal_or_none(raw_quantity) or Decimal("0")
+
+        sign_indicator = raw.get("sign")
+        if isinstance(sign_indicator, int) and sign_indicator != 0:
+            quantity = quantity.copy_abs() * (Decimal(1) if sign_indicator > 0 else Decimal(-1))
+
+        entry_price = self._decimal_or_none(raw.get("avg_entry_price"))
+        exposure = self._decimal_or_none(raw.get("position_value"))
+        if exposure is not None:
+            exposure = exposure.copy_abs()
+
+        mark_price = self._decimal_or_none(raw.get("mark_price"))
+        if mark_price is None and exposure is not None and quantity != 0:
+            mark_price = exposure / quantity.copy_abs()
+
+        unrealized = self._decimal_or_none(raw.get("unrealized_pnl"))
+        realized = self._decimal_or_none(raw.get("realized_pnl"))
+        margin_reserved = self._decimal_or_none(raw.get("allocated_margin"))
+        liquidation_price = self._decimal_or_none(raw.get("liquidation_price"))
+
+        side: Optional[str] = None
+        if isinstance(sign_indicator, int):
+            if sign_indicator > 0:
+                side = "long"
+            elif sign_indicator < 0:
+                side = "short"
+        if side is None:
+            if quantity > 0:
+                side = "long"
+            elif quantity < 0:
+                side = "short"
+
+        snapshot = ExchangePositionSnapshot(
+            symbol=normalized_symbol,
+            quantity=quantity,
+            side=side,
+            entry_price=entry_price,
+            mark_price=mark_price,
+            exposure_usd=exposure,
+            unrealized_pnl=unrealized,
+            realized_pnl=realized,
+            funding_accrued=self._decimal_or_none(raw.get("funding_accrued")),
+            margin_reserved=margin_reserved,
+            leverage=None,
+            liquidation_price=liquidation_price,
+            timestamp=datetime.now(timezone.utc),
+            metadata={
+                "market_id": raw.get("market_id"),
+                "raw_sign": raw.get("sign"),
+            },
+        )
+
+        return snapshot
+
+    async def _snapshot_from_cache(self, normalized_symbol: str) -> Optional[ExchangePositionSnapshot]:
+        """Retrieve a cached snapshot if available, optionally enriching with funding data."""
+        async with self._positions_lock:
+            raw = self._raw_positions.get(normalized_symbol)
+            needs_funding = False
+            if raw is not None:
+                needs_funding = raw.get("funding_accrued") is None
+
+        if raw is None:
+            return None
+
+        snapshot = self._build_snapshot_from_raw(normalized_symbol, raw)
+        if snapshot is None:
+            return None
+
+        if (
+            needs_funding
+            and snapshot.side
+            and snapshot.quantity != 0
+            and raw.get("market_id") is not None
+        ):
+            try:
+                funding = await self._get_cumulative_funding(
+                    raw.get("market_id"),
+                    snapshot.side,
+                    quantity=snapshot.quantity,
+                )
+            except Exception as exc:
+                self.logger.debug(f"[LIGHTER] Funding lookup failed for {normalized_symbol}: {exc}")
+                funding = None
+
+            snapshot.funding_accrued = funding
+            if funding is not None:
+                async with self._positions_lock:
+                    cached = self._raw_positions.get(normalized_symbol)
+                    if cached is not None:
+                        cached["funding_accrued"] = funding
+        else:
+            snapshot.funding_accrued = snapshot.funding_accrued or self._decimal_or_none(raw.get("funding_accrued"))
+
+        return snapshot
+
+    async def _refresh_positions_via_rest(self) -> None:
+        """Refresh cached positions via REST as a fallback."""
+        try:
+            self.logger.debug("[LIGHTER] Refreshing positions via REST fallback")
+            positions = await self._get_detailed_positions()
+        except Exception as exc:
+            self.logger.warning(f"[LIGHTER] Failed to refresh positions via REST: {exc}")
+            return
+
+        updates: Dict[str, Dict[str, Any]] = {}
+        for pos in positions:
+            if pos is None:
+                continue
+            position_dict = dict(pos)
+            symbol_raw = position_dict.get("symbol") or getattr(self.config, "ticker", None)
+            if not symbol_raw and position_dict.get("market_id") is not None:
+                symbol_raw = str(position_dict["market_id"])
+            if not symbol_raw:
+                continue
+            normalized_symbol = self.normalize_symbol(str(symbol_raw)).upper()
+            updates[normalized_symbol] = position_dict
+
+        async with self._positions_lock:
+            self._raw_positions = updates
+            self._positions_ready.set()
+
     @query_retry(reraise=True)
     async def _fetch_orders_with_retry(self) -> List[Dict[str, Any]]:
         """Get orders using official SDK."""
@@ -989,22 +1250,51 @@ class LighterClient(BaseExchangeClient):
         # Filter orders for the specific market
         contract_orders = []
         for order in order_list:
+            market_idx = getattr(order, "market_id", None)
+            if market_idx is None:
+                market_idx = getattr(order, "market_index", None)
+            if market_idx is not None and str(market_idx) != str(contract_id):
+                continue
+
+            client_idx = getattr(order, "client_order_index", None)
+            server_idx = getattr(order, "order_index", None)
+            order_id = None
+            if client_idx not in (None, 0):
+                order_id = str(client_idx)
+                if server_idx is not None:
+                    self._client_to_server_order_index[order_id] = str(server_idx)
+            elif server_idx is not None:
+                server_id_str = str(server_idx)
+                # Attempt to reuse an existing client index mapped to this server index
+                for client_key, mapped_server in self._client_to_server_order_index.items():
+                    if mapped_server == server_id_str:
+                        order_id = client_key
+                        break
+                else:
+                    order_id = server_id_str
+
+            if order_id is None:
+                continue
+
             # Convert Lighter Order to OrderInfo
             side = "sell" if order.is_ask else "buy"
-            size = Decimal(order.initial_base_amount)
-            price = Decimal(order.price)
+            size = Decimal(str(order.initial_base_amount))
+            remaining = Decimal(str(order.remaining_base_amount))
+            price = Decimal(str(order.price))
+            filled = Decimal(str(order.filled_base_amount))
 
-            # Only include orders with remaining size > 0
-            if size > 0:
-                contract_orders.append(OrderInfo(
-                    order_id=str(order.order_index),
-                    side=side,
-                    size=Decimal(order.remaining_base_amount),  # FIXME: This is wrong. Should be size
-                    price=price,
-                    status=order.status.upper(),
-                    filled_size=Decimal(order.filled_base_amount),
-                    remaining_size=Decimal(order.remaining_base_amount)
-                ))
+            if size <= 0:
+                continue
+
+            contract_orders.append(OrderInfo(
+                order_id=order_id,
+                side=side,
+                size=size,
+                price=price,
+                status=str(order.status).upper(),
+                filled_size=filled,
+                remaining_size=remaining,
+            ))
 
         return contract_orders
 
@@ -1380,120 +1670,43 @@ class LighterClient(BaseExchangeClient):
             return None
 
     async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
-        """
-        Retrieve detailed metrics for a specific symbol.
-        """
-        try:
-            positions = await self._get_detailed_positions()
-        except Exception as exc:
-            self.logger.warning(f"[LIGHTER] Failed to fetch positions for snapshot: {exc}")
-            return None
-
+        """Return the latest cached position snapshot for a symbol, falling back to REST if required."""
         normalized_symbol = self.normalize_symbol(symbol).upper()
-        
-        self.logger.debug(
-            f"[LIGHTER] get_position_snapshot looking for normalized symbol: '{normalized_symbol}'"
-        )
-        
-        for pos in positions:
-            # Normalize the position's symbol too (e.g., "1000TOSHI" -> "TOSHI")
-            pos_symbol_raw = pos.get("symbol") or ""
-            pos_symbol_normalized = self.normalize_symbol(pos_symbol_raw).upper()
-            
-            
-            if pos_symbol_normalized != normalized_symbol:
-                continue
-            
-            self.logger.debug(
-                f"[LIGHTER] ✓ Found matching position for '{normalized_symbol}', building snapshot..."
-            )
- 
-            raw_quantity = pos.get("position") or Decimal("0")
-            try:
-                quantity = Decimal(raw_quantity)
-            except Exception:
-                quantity = Decimal(str(raw_quantity))
 
-            sign_indicator = pos.get("sign")
-            if isinstance(sign_indicator, int) and sign_indicator != 0:
-                quantity = quantity.copy_abs() * (Decimal(1) if sign_indicator > 0 else Decimal(-1))
+        snapshot = await self._snapshot_from_cache(normalized_symbol)
+        if snapshot:
+            return snapshot
 
-            quantity = Decimal(quantity)
-            entry_price: Optional[Decimal] = pos.get("avg_entry_price")
-            exposure: Optional[Decimal] = pos.get("position_value")
-            if exposure is not None:
-                exposure = exposure.copy_abs()
+        try:
+            await asyncio.wait_for(self._positions_ready.wait(), timeout=1.0)
+        except asyncio.TimeoutError:
+            pass
 
-            mark_price: Optional[Decimal] = None
-            if exposure is not None and quantity != 0:
-                mark_price = exposure / quantity.copy_abs()
+        snapshot = await self._snapshot_from_cache(normalized_symbol)
+        if snapshot:
+            return snapshot
 
-            unrealized: Optional[Decimal] = pos.get("unrealized_pnl")
-            realized: Optional[Decimal] = pos.get("realized_pnl")
-            margin_reserved: Optional[Decimal] = pos.get("allocated_margin")
-            liquidation_price: Optional[Decimal] = pos.get("liquidation_price")
-
-            side = None
-            if isinstance(sign_indicator, int):
-                if sign_indicator > 0:
-                    side = "long"
-                elif sign_indicator < 0:
-                    side = "short"
-            if side is None:
-                if quantity > 0:
-                    side = "long"
-                elif quantity < 0:
-                    side = "short"
-            
-            # Fetch cumulative funding fees for THIS SPECIFIC position (not all historical positions)
-            market_id = pos.get("market_id")
-            funding_accrued = None
-            if market_id is not None:
-                try:
-                    funding_accrued = await self._get_cumulative_funding(market_id, side, quantity=quantity)
-                except Exception as exc:
-                    self.logger.debug(
-                        f"[LIGHTER] Failed to fetch funding for {symbol} (market_id={market_id}): {exc}"
-                    )
-
-            metadata: Dict[str, Any] = {
-                "market_id": pos.get("market_id"),
-                "raw_sign": pos.get("sign"),
-            }
-
-            return ExchangePositionSnapshot(
-                symbol=normalized_symbol,
-                quantity=quantity,
-                side=side if isinstance(side, str) else None,
-                entry_price=entry_price,
-                mark_price=mark_price,
-                exposure_usd=exposure,
-                unrealized_pnl=unrealized,
-                realized_pnl=realized,
-                funding_accrued=funding_accrued,
-                margin_reserved=margin_reserved,
-                leverage=None,
-                liquidation_price=liquidation_price,
-                timestamp=datetime.now(timezone.utc),
-                metadata={k: v for k, v in metadata.items() if v is not None},
-            )
-
-        self.logger.debug(
-            f"[LIGHTER] No position found for '{normalized_symbol}' after checking {len(positions)} positions"
-        )
-        return None
+        await self._refresh_positions_via_rest()
+        return await self._snapshot_from_cache(normalized_symbol)
 
     async def get_account_pnl(self) -> Optional[Decimal]:
         """Get account P&L using Lighter SDK."""
-        try:
-            positions = await self._get_detailed_positions()
-            total_pnl = Decimal('0')
-            for pos in positions:
-                total_pnl += pos['unrealized_pnl']
-            return total_pnl
-        except Exception as e:
-            self.logger.error(f"Error getting account P&L: {e}")
-            return None
+        async with self._positions_lock:
+            raw_positions = list(self._raw_positions.values())
+
+        if not raw_positions:
+            await self._refresh_positions_via_rest()
+            async with self._positions_lock:
+                raw_positions = list(self._raw_positions.values())
+
+        total_pnl = Decimal("0")
+        for raw in raw_positions:
+            unrealized = raw.get("unrealized_pnl")
+            value = self._decimal_or_none(unrealized)
+            if value is not None:
+                total_pnl += value
+
+        return total_pnl
     
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
         """

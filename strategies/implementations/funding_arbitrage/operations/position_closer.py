@@ -286,6 +286,7 @@ class PositionCloser:
             await self._ensure_market_feed_once(client, position.symbol)
 
             try:
+                # THIS IS PROBABLY PROBLAMATIC (or the risk_controlelr) -> SPAMS GETTING POSITION SNAPSHOTS
                 snapshots[dex] = await client.get_position_snapshot(position.symbol)
             except Exception as exc:  # pragma: no cover - defensive logging
                 self._strategy.logger.log(

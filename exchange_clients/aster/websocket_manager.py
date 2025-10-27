@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 import aiohttp
 import websockets
 
-from exchange_clients.base_websocket import BaseWebSocketManager
+from exchange_clients.base_websocket import BaseWebSocketManager, BBOData
 
 
 class AsterWebSocketManager(BaseWebSocketManager):
@@ -395,6 +395,14 @@ class AsterWebSocketManager(BaseWebSocketManager):
                 
                 if self.logger:
                     self.logger.info(f"✅ Book ticker ready: bid={self.best_bid}, ask={self.best_ask}")
+                await self._notify_bbo_update(
+                    BBOData(
+                        symbol=symbol,
+                        bid=self.best_bid,
+                        ask=self.best_ask,
+                        timestamp=time.time(),
+                    )
+                )
             except asyncio.TimeoutError:
                 if self.logger:
                     self.logger.warning(f"⏱️  No BBO message received within 5s")
@@ -546,14 +554,24 @@ class AsterWebSocketManager(BaseWebSocketManager):
             if data.get('e') != 'bookTicker':
                 return
             
-            # Extract best bid and ask
+            # Extract symbol, best bid and ask
+            symbol = data.get('s', '')
             best_bid_str = data.get('b')
             best_ask_str = data.get('a')
             
             if best_bid_str and best_ask_str:
                 self.best_bid = float(best_bid_str)
                 self.best_ask = float(best_ask_str)
-                
+                await self._notify_bbo_update(
+                    BBOData(
+                        symbol=symbol,
+                        bid=self.best_bid,
+                        ask=self.best_ask,
+                        timestamp=time.time(),
+                        sequence=data.get('u'),
+                    )
+                )
+
         
         except Exception as e:
             if self.logger:

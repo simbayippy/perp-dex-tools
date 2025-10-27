@@ -78,34 +78,57 @@ class UnifiedLogger:
             
             # Console handler with colors and source location (SHARED by all components)
             if log_to_console:
+                def _truncate_module_path(module: str, max_width: int) -> str:
+                    if len(module) <= max_width:
+                        return module
+
+                    parts = module.split(".")
+                    # Always keep at least the final segment
+                    kept = parts[-1]
+                    idx = len(parts) - 2
+                    while idx >= 0:
+                        candidate = ".".join(parts[idx:])
+                        if len(candidate) + 3 <= max_width:  # account for ellipsis
+                            return f"...{candidate}"
+                        idx -= 1
+
+                    # Fall back to cropping the final segment if everything else fails
+                    return f"...{kept[-(max_width-3):]}" if len(kept) + 3 > max_width else f"...{kept}"
+
                 def format_record(record):
-                    # Truncate the file path to last 2 segments
-                    name_parts = record["name"].split(".")
-                    if len(name_parts) >= 2:
-                        short_name = f"{name_parts[-2]}.{name_parts[-1]}"
+                    module_name = record.get("module") or record.get("name", "")
+                    function_name = record.get("function", "")
+                    line_number = record.get("line", 0)
+                    
+                    max_width = 55
+                    
+                    # Build the immutable suffix: function:line (NEVER truncate this)
+                    if function_name:
+                        suffix = f":{function_name}:{line_number}"
                     else:
-                        short_name = record["name"]
+                        suffix = f":{line_number}"
                     
-                    # Create source location string
-                    source_location = f"{short_name}:{record['function']}:{record['line']}"
+                    suffix_len = len(suffix)
                     
-                    # Smart truncation if longer than 45 characters
-                    max_width = 45
-                    if len(source_location) > max_width:
-                        # Always preserve the line number at the end
-                        line_part = f":{record['line']}"
-                        available_space = max_width - len(line_part) - 3  # 3 for "..."
-                        
-                        if available_space > 10:  # Only truncate if we have reasonable space
-                            # Take first part and add ellipsis
-                            truncated = source_location[:available_space] + "..." + line_part
-                            source_location = truncated
-                        # If not enough space, just use the original (better than unreadable)
+                    # Calculate available space for module path
+                    available_for_module = max_width - suffix_len
                     
-                    # Pad to fixed width for alignment
-                    record["extra"]["short_name"] = f"{source_location:<45}"
+                    # Truncate module path to fit (function:line is sacred)
+                    if available_for_module <= 3:
+                        # Very long function name - use minimal module indicator
+                        module_display = "..."
+                    else:
+                        # Truncate module path intelligently to fit available space
+                        module_display = _truncate_module_path(module_name, available_for_module)
+                    
+                    # Build final source location: module + function:line
+                    source_location = f"{module_display}{suffix}"
+                    
+                    # Right-align to EXACTLY max_width characters
+                    # This ensures ALL log messages start at the same column
+                    record["extra"]["short_name"] = f"{source_location:>{max_width}}"
                     return True
-                    
+                
                 console_format = (
                     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
                     "<level>{level: <8}</level> | "
@@ -155,7 +178,8 @@ class UnifiedLogger:
                 backtrace=False,
                 diagnose=False,
                 enqueue=True,  # ← Add this for thread-safe async writes
-                buffering=1    # ← Add this for line-buffered mode
+                buffering=1,   # ← Add this for line-buffered mode
+                catch=True     # ← Catch handler errors to prevent silent failures
             )
             _logger._perp_dex_history_setup = True
 
@@ -183,8 +207,9 @@ class UnifiedLogger:
                 filter=ensure_component_session,
                 backtrace=False,
                 diagnose=False,
-                enqueue=True,  # ← Add this
-                buffering=1    # ← Add this
+                enqueue=True,  # ← Add this for thread-safe async writes
+                buffering=1,   # ← Add this for line-buffered mode
+                catch=True     # ← Catch handler errors to prevent silent failures
             )
             _logger._perp_dex_session_setup = True
         
@@ -267,6 +292,49 @@ class UnifiedLogger:
             log_to_console=True,  # Inherit from current setup
             log_level=self.log_level
         )
+    
+    def flush(self):
+        """
+        Explicitly flush all log handlers to disk.
+        
+        This is critical for ensuring buffered/enqueued logs are written
+        before the process exits, especially in async contexts.
+        """
+        try:
+            # Force a log message through to trigger queue processing
+            self._logger.opt(depth=1).debug("LOG_FLUSH_MARKER")
+            
+            # Small delay to allow enqueued messages to be processed
+            import time
+            time.sleep(0.05)  # 50ms should be enough for queue flush
+            
+            # Flush stdout/stderr
+            import sys
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            # Silent failure - don't break on flush errors
+            pass
+    
+    @staticmethod
+    def flush_all_handlers():
+        """
+        Global flush of all loguru handlers.
+        
+        Call this before process exit to ensure all buffered logs are written.
+        """
+        try:
+            import sys
+            import time
+            
+            # Give enqueued logs time to process
+            time.sleep(0.1)
+            
+            # Flush system streams
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
 
 
 def get_logger(
