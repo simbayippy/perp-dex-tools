@@ -98,16 +98,35 @@ class UnifiedLogger:
                 def format_record(record):
                     module_name = record.get("module") or record.get("name", "")
                     function_name = record.get("function", "")
-                    line_part = f":{record.get('line')}"
+                    line_number = record.get("line", 0)
+                    
+                    # Build the immutable suffix (function:line) - never truncate this
+                    line_part = f":{line_number}"
                     function_part = f":{function_name}{line_part}" if function_name else line_part
-
+                    
                     max_width = 55
-                    available = max_width - len(function_part)
-                    if available < 10:
-                        available = 10  # ensure we can show at least some module context
-
-                    module_display = _truncate_module_path(module_name, available)
+                    suffix_len = len(function_part)
+                    
+                    # Calculate how much space we have for the module path
+                    available = max_width - suffix_len
+                    
+                    # If suffix alone exceeds max_width, truncate the module completely
+                    if available < 5:
+                        module_display = "..."
+                    else:
+                        module_display = _truncate_module_path(module_name, available)
+                    
+                    # Build the full source location
                     source_location = f"{module_display}{function_part}"
+                    
+                    # CRITICAL: Enforce strict max_width by truncating if needed
+                    if len(source_location) > max_width:
+                        # Truncate from the module part only, keep function:line intact
+                        overflow = len(source_location) - max_width
+                        module_display = module_display[:-(overflow + 3)] + "..."
+                        source_location = f"{module_display}{function_part}"
+                    
+                    # Right-align to exactly max_width characters
                     record["extra"]["short_name"] = f"{source_location:>{max_width}}"
                     return True
                 
