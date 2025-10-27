@@ -44,7 +44,14 @@ class GridRecoveryOperator:
             return
 
         active_ids = {order.order_id for order in self.grid_state.active_close_orders}
-        self.position_manager.prune_by_active_orders(active_ids)
+        pruned_positions = self.position_manager.prune_by_active_orders(active_ids)
+        
+        # Log completed positions
+        for position in pruned_positions:
+            self.logger.log(
+                f"\n{'='*80}\n💰 POSITION {position.position_id} COMPLETE | Entry @ {position.entry_price} | Size: {position.size} | Side: {position.side.upper()}\n{'='*80}\n",
+                "INFO",
+            )
 
         if self.position_manager.count() == 0:
             return

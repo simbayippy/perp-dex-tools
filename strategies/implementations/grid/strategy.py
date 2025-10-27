@@ -380,6 +380,14 @@ class GridStrategy(BaseStrategy):
             level="INFO",
             **context,
         )
+        
+        # Log position attempt failure with clear separator
+        if position_id:
+            self.logger.log(
+                f"\n{'='*80}\n❌ POSITION {position_id} CANCELED | Entry order rejected (post-only)\n{'='*80}\n",
+                "INFO",
+            )
+        
         self.grid_state.pending_open_order_id = None
         self.grid_state.pending_open_quantity = None
         self.grid_state.filled_price = None

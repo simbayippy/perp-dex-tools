@@ -135,6 +135,13 @@ class GridOpenPositionOperator:
             if order_result.success:
                 position_id = self.grid_state.allocate_position_id()
                 self.grid_state.pending_position_id = position_id
+                
+                # Log separator for new position
+                self.logger.log(
+                    f"\n{'='*80}\n🔷 STARTING POSITION {position_id} | {self.config.direction.upper()} @ {order_result.price}\n{'='*80}",
+                    "INFO",
+                )
+                
                 # Update state to waiting for fill
                 self.grid_state.cycle_state = GridCycleState.WAITING_FOR_FILL
 

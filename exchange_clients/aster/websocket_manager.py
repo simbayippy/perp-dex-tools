@@ -45,8 +45,8 @@ class AsterWebSocketManager(BaseWebSocketManager):
         self.config = config
         
         # 📊 Order book state (for real-time BBO via book ticker)
-                        self.best_bid = None
-                        self.best_ask = None
+        self.best_bid = None
+        self.best_ask = None
         self._book_ticker_ws = None  # Separate WebSocket for book ticker
         self._book_ticker_task = None
         self._current_book_ticker_symbol = None  # Track which symbol we're subscribed to
@@ -554,7 +554,8 @@ class AsterWebSocketManager(BaseWebSocketManager):
             if data.get('e') != 'bookTicker':
                 return
             
-            # Extract best bid and ask
+            # Extract symbol, best bid and ask
+            symbol = data.get('s', '')
             best_bid_str = data.get('b')
             best_ask_str = data.get('a')
             

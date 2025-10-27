@@ -66,13 +66,18 @@ class GridPositionManager:
     # ------------------------------------------------------------------ #
     # Maintenance helpers
     # ------------------------------------------------------------------ #
-    def prune_by_active_orders(self, active_order_ids: Set[str]) -> None:
+    def prune_by_active_orders(self, active_order_ids: Set[str]) -> List[TrackedPosition]:
         """
         Remove positions whose close orders are no longer active.
 
         Mirrors the legacy behaviour previously embedded in ``GridStrategy``.
+        
+        Returns:
+            List of pruned (completed) positions
         """
         remaining: List[TrackedPosition] = []
+        pruned: List[TrackedPosition] = []
+        
         for tracked in self._state.tracked_positions:
             if tracked.hedged:
                 continue
@@ -80,8 +85,11 @@ class GridPositionManager:
                 continue
             if any(order_id in active_order_ids for order_id in tracked.close_order_ids):
                 remaining.append(tracked)
+            else:
+                pruned.append(tracked)
 
         self._state.tracked_positions = remaining
+        return pruned
 
     def replace(self, positions: List[TrackedPosition]) -> None:
         """Replace the tracked positions list."""

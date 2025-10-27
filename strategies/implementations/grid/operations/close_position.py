@@ -163,6 +163,12 @@ class GridOrderCloser:
                         f"Grid: Placed close order at {close_price} for position {position_id}",
                         "INFO",
                     )
+                    
+                    # Log position entry completion
+                    self.logger.log(
+                        f"✅ Position {position_id} ENTRY COMPLETE | Waiting for exit @ {close_price}",
+                        "INFO",
+                    )
 
                     return {
                         "action": "order_placed",
