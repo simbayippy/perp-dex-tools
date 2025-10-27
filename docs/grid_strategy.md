@@ -54,6 +54,9 @@ hiccups or post-only cancels.
 - **Entry timeout** – Pending entry limits share the same `position_timeout_minutes`
   budget; if an entry sits too long the bot cancels it and resets for a new
   attempt.
+- **Stop & Pause levels** – `stop_price` flattens all exposure immediately and
+  halts the grid; `pause_price` simply suspends new entries while letting
+  existing exits and recovery logic continue to run.
 - **Recovery modes** – Time-based recovery now supports `aggressive`
   (market exit), `hedge` (neutralize via opposing market order), or `none`
   (manual intervention).

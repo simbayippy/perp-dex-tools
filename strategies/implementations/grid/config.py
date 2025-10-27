@@ -59,12 +59,12 @@ class GridConfig(BaseModel):
     # Safety parameters
     stop_price: Optional[Decimal] = Field(
         None,
-        description="Stop price - strategy stops if price crosses this level",
+        description="Emergency stop price that closes all exposure and halts the grid when breached",
         gt=0
     )
     pause_price: Optional[Decimal] = Field(
         None,
-        description="Pause price - strategy pauses temporarily if price crosses this level",
+        description="Pause price that suspends new entries while allowing existing orders to manage down",
         gt=0
     )
     stop_loss_enabled: bool = Field(
@@ -73,7 +73,7 @@ class GridConfig(BaseModel):
     )
     stop_loss_percentage: Decimal = Field(
         Decimal('2.0'),
-        description="Stop loss percentage to cap losses per position",
+        description="Stop loss percentage of margin (PnL) to cap losses per position",
         ge=Decimal('0.5'),
         le=Decimal('10')
     )

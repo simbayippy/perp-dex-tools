@@ -168,6 +168,15 @@ class GridRiskController:
         if stop_fraction <= 0:
             return False
 
+        effective_margin_ratio: Optional[Decimal] = self.grid_state.margin_ratio
+        if not effective_margin_ratio or effective_margin_ratio <= 0:
+            effective_margin_ratio = self._fallback_margin_ratio
+
+        if not effective_margin_ratio or effective_margin_ratio <= 0:
+            effective_margin_ratio = Decimal("1")
+
+        stop_fraction *= effective_margin_ratio
+
         now = time.time()
         if now - self.grid_state.last_stop_loss_trigger < 3:
             # Avoid spamming market orders if the previous stop-loss just fired

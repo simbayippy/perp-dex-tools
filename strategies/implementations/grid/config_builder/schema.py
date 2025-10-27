@@ -158,7 +158,10 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             min_value=Decimal("0.5"),
             max_value=Decimal("10"),
             required=False,
-            help_text="Closes positions once loss exceeds this percentage threshold",
+            help_text=(
+                "Closes positions once unrealised loss exceeds this share of margin (PnL%)"
+                " at the grid level."
+            ),
         ),
         ParameterSchema(
             key="position_timeout_minutes",
@@ -202,7 +205,7 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             default=None,
             min_value=Decimal("0"),
             required=False,
-            help_text="Emergency exit: close all positions if price goes beyond this level",
+            help_text="Emergency brake: market-close all exposure and halt the grid if price breaches this level",
         ),
         create_decimal_parameter(
             key="pause_price",
@@ -210,7 +213,7 @@ GRID_STRATEGY_SCHEMA = StrategySchema(
             default=None,
             min_value=Decimal("0"),
             required=False,
-            help_text="Pause trading but keep positions open if price reaches this level",
+            help_text="Temporarily pause entry placement while leaving existing exits and recovery active",
         ),
     ],
     # Category grouping

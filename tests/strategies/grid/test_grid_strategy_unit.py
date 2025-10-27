@@ -394,10 +394,11 @@ async def test_stop_loss_triggers_for_long(reset_grid_event_notifier):
     snapshot = make_snapshot(quantity=Decimal("1"), entry_price=Decimal("100"))
     strategy.grid_state.last_stop_loss_trigger = 0
     strategy.grid_state.active_close_orders = []
+    strategy.grid_state.margin_ratio = Decimal("0.05")
 
     triggered = await strategy.risk_controller.enforce_stop_loss(
         snapshot=snapshot,
-        current_price=Decimal("97"),  # below 2% stop
+        current_price=Decimal("99.8"),  # below PnL-derived stop (~0.1%)
         current_position=Decimal("1"),
         close_position_fn=strategy.order_closer.market_close,
     )
@@ -420,10 +421,11 @@ async def test_stop_loss_triggers_for_short(reset_grid_event_notifier):
 
     snapshot = make_snapshot(quantity=Decimal("-2"), entry_price=Decimal("100"))
     strategy.grid_state.active_close_orders = []
+    strategy.grid_state.margin_ratio = Decimal("0.05")
 
     triggered = await strategy.risk_controller.enforce_stop_loss(
         snapshot=snapshot,
-        current_price=Decimal("103"),  # above stop threshold for short
+        current_price=Decimal("100.3"),  # above PnL-derived stop (~0.1%)
         current_position=Decimal("-2"),
         close_position_fn=strategy.order_closer.market_close,
     )
@@ -458,6 +460,70 @@ async def test_stop_loss_disabled_no_action(reset_grid_event_notifier):
 
     assert triggered is False
     assert events == []
+    assert exchange.market_orders == []
+
+
+@pytest.mark.asyncio
+async def test_stop_price_forces_exit(reset_grid_event_notifier):
+    config = make_config(direction="buy")
+    config.stop_price = Decimal("95")
+    exchange = DummyExchange()
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+    events: List[Dict[str, Any]] = strategy.event_notifier.events  # type: ignore[attr-defined]
+
+    strategy.grid_state.last_known_position = Decimal("1")
+    strategy.grid_state.active_close_orders = [
+        GridOrder(order_id="close-1", price=Decimal("110"), size=Decimal("1"), side="sell")
+    ]
+    strategy.grid_state.pending_open_order_id = "open-1"
+    strategy.grid_state.pending_open_quantity = Decimal("1")
+
+    async def fake_positions():
+        return Decimal("1")
+
+    exchange.get_account_positions = fake_positions  # type: ignore[assignment]
+    exchange.best_bid = Decimal("94")
+    exchange.best_ask = Decimal("94")
+
+    result = await strategy.should_execute()
+
+    assert result is False
+    assert exchange.market_orders, "Expected market exit on stop price breach"
+    assert exchange.market_orders[0]["side"] == "sell"
+    assert "close-1" in exchange.cancelled_orders
+    assert strategy.grid_state.pending_open_order_id is None
+    assert not strategy.grid_state.active_close_orders
+    event_types = [evt["event_type"] for evt in events]
+    assert "stop_price_triggered" in event_types
+    assert "stop_price_shutdown" in event_types
+
+
+@pytest.mark.asyncio
+async def test_pause_price_pauses_entries_but_runs_maintenance(reset_grid_event_notifier):
+    config = make_config(direction="buy")
+    config.pause_price = Decimal("105")
+    exchange = DummyExchange()
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+
+    exchange.best_bid = Decimal("106")
+    exchange.best_ask = Decimal("106")
+
+    flags = {"update_called": False, "recovery_called": False}
+
+    async def fake_update_active_orders():
+        flags["update_called"] = True
+
+    async def fake_recovery(current_price: Decimal):
+        flags["recovery_called"] = True
+
+    strategy.order_closer.update_active_orders = fake_update_active_orders  # type: ignore[assignment]
+    strategy.recovery_operator.run_recovery_checks = fake_recovery  # type: ignore[assignment]
+
+    result = await strategy.should_execute()
+
+    assert result is False
+    assert flags["update_called"] is True
+    assert flags["recovery_called"] is True
     assert exchange.market_orders == []
 
 

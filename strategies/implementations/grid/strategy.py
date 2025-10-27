@@ -213,9 +213,14 @@ class GridStrategy(BaseStrategy):
             current_price = (best_bid + best_ask) / Decimal("2")
             
             # Check stop price - critical safety check first
+            pause_active = False
+
             if self.config.stop_price is not None:
-                if (self.config.direction == 'buy' and current_price < self.config.stop_price) or \
-                   (self.config.direction == 'sell' and current_price > self.config.stop_price):
+                stop_condition = (
+                    (self.config.direction == 'buy' and current_price < self.config.stop_price) or
+                    (self.config.direction == 'sell' and current_price > self.config.stop_price)
+                )
+                if stop_condition:
                     message = (
                         f"⚠️ STOP PRICE TRIGGERED! Current: {current_price}, Stop: {self.config.stop_price}"
                     )
@@ -226,18 +231,38 @@ class GridStrategy(BaseStrategy):
                         current_price=current_price,
                         stop_price=self.config.stop_price,
                     )
+
+                    signed_position = self.grid_state.last_known_position or Decimal("0")
+                    try:
+                        fetched_position = await self.exchange_client.get_account_positions()
+                        if not isinstance(fetched_position, Decimal):
+                            fetched_position = Decimal(str(fetched_position))
+                        signed_position = fetched_position
+                    except Exception:
+                        signed_position = signed_position or Decimal("0")
+
+                    if signed_position != 0:
+                        await self.order_closer.market_close(
+                            signed_position,
+                            "Stop price triggered",
+                            tracked_position=None,
+                        )
+
+                    await self.order_closer.cancel_all_orders()
                     self._log_event(
                         "stop_price_shutdown",
-                        "Canceling all orders and stopping strategy...",
+                        "All positions flattened; strategy will remain halted until stop is cleared.",
                         level="WARNING",
                     )
-                    await self.order_closer.cancel_all_orders()
+                    self._reset_pending_entry_state()
                     return False
-            
-            # Check pause price - temporary pause
+
             if self.config.pause_price is not None:
-                if (self.config.direction == 'buy' and current_price > self.config.pause_price) or \
-                   (self.config.direction == 'sell' and current_price < self.config.pause_price):
+                pause_condition = (
+                    (self.config.direction == 'buy' and current_price > self.config.pause_price) or
+                    (self.config.direction == 'sell' and current_price < self.config.pause_price)
+                )
+                if pause_condition:
                     self._log_event(
                         "pause_price_triggered",
                         f"⏸️ PAUSE PRICE REACHED! Current: {current_price}, Pause: {self.config.pause_price}",
@@ -245,8 +270,8 @@ class GridStrategy(BaseStrategy):
                         current_price=current_price,
                         pause_price=self.config.pause_price,
                     )
-                    return False
-            
+                    pause_active = True
+
             current_position, snapshot = await self.risk_controller.refresh_risk_snapshot(current_price)
             if await self.risk_controller.enforce_stop_loss(
                 snapshot,
@@ -264,6 +289,9 @@ class GridStrategy(BaseStrategy):
                 best_bid=best_bid,
                 best_ask=best_ask,
             )
+
+            if pause_active:
+                return False
             
             # Check if we should wait based on cooldown
             wait_time = self._calculate_wait_time()
