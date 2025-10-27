@@ -94,3 +94,15 @@ class GridPositionManager:
     def replace(self, positions: List[TrackedPosition]) -> None:
         """Replace the tracked positions list."""
         self._state.tracked_positions = list(positions)
+
+    def remove(self, position_id: str) -> Optional[TrackedPosition]:
+        """Remove a single tracked position by id, returning it if present."""
+        remaining: List[TrackedPosition] = []
+        removed: Optional[TrackedPosition] = None
+        for tracked in self._state.tracked_positions:
+            if tracked.position_id == position_id and removed is None:
+                removed = tracked
+                continue
+            remaining.append(tracked)
+        self._state.tracked_positions = remaining
+        return removed

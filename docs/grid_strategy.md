@@ -25,15 +25,17 @@ hiccups or post-only cancels.
    (`reduce_only` limit by default, market if boost mode is enabled).
 4. **Exit tracking**  
    Accepted exit orders reset the state machine to `READY` so the next entry can
-   launch immediately. `GridOrderCloser.ensure_close_orders()` watches for post-only
-   cancels and automatically reposts with a wider tick offset; after three failed
-   attempts it executes a market close to prevent directional exposure.
+   launch immediately. Each loop prunes finished positions before calling
+   `GridOrderCloser.ensure_close_orders()`, which watches for post-only cancels and
+   automatically reposts with a wider tick offset. After three failed attempts it
+   executes a targeted market close, leaving other tracked exits untouched.
 
 ### Deterministic Order Mapping
 
 - `GridState.order_index_to_position_id` binds every client order index to its
   logical `position_id`, which allows fills to be routed even when multiple
-  entries are outstanding.
+  entries are outstanding and lets the fallback logic clean up a single leg
+  without disturbing the rest of the book.
 - Lighter’s connector now keeps a `client → server` order-id map sourced from
   websocket updates and REST snapshots. The strategy always talks in client ids,
   while the connector translates them for cancel/query operations.
@@ -47,8 +49,8 @@ hiccups or post-only cancels.
   in `_recover_from_canceled_entry()` cancels the retry path.
 - **Close order retry** – Exit orders cancelled for price-crossing are reposted
   with deterministic `close-retry-{n}` keys and a progressively wider buffer.
-  After the fixed retry budget, the closer falls back to a market exit (and
-  cancels any residual orders) to guarantee the position flattens.
+  After the fixed retry budget, the closer falls back to a market exit scoped
+  to the affected position, keeping other tracked exits alive.
 - **Recovery modes** – The existing ladder/hedge/aggressive modes remain in
   place for time-based recovery of stuck exits.
 

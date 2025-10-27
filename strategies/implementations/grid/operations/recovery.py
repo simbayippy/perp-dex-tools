@@ -147,7 +147,11 @@ class GridRecoveryOperator:
                 side=tracked.side,
                 size=tracked.size,
             )
-            success = await self.order_closer.market_close(signed_position, f"Aggressive recovery - {reason}")
+            success = await self.order_closer.market_close(
+                signed_position,
+                f"Aggressive recovery - {reason}",
+                tracked_position=tracked,
+            )
             return success
 
         if mode == "ladder":

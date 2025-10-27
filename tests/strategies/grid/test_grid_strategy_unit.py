@@ -524,8 +524,8 @@ async def test_ensure_close_orders_market_fallback(reset_grid_event_notifier, mo
 
     calls: Dict[str, Any] = {}
 
-    async def fake_market_close(position: Decimal, reason: str) -> bool:
-        calls["args"] = (position, reason)
+    async def fake_market_close(position: Decimal, reason: str, tracked_position=None) -> bool:
+        calls["args"] = (position, reason, tracked_position.position_id if tracked_position else None)
         return True
 
     monkeypatch.setattr(strategy.order_closer, "market_close", fake_market_close)
@@ -539,6 +539,7 @@ async def test_ensure_close_orders_market_fallback(reset_grid_event_notifier, mo
 
     assert "args" in calls
     assert calls["args"][0] == Decimal("1")
+    assert calls["args"][2] == tracked.position_id
 
 
 @pytest.mark.asyncio
@@ -590,6 +591,57 @@ async def test_recover_from_canceled_entry_ignores_when_fill_detected(reset_grid
     result = await strategy._recover_from_canceled_entry()
 
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_market_close_targeted_cleanup_preserves_other_positions(reset_grid_event_notifier):
+    config = make_config()
+    exchange = DummyExchange()
+    strategy = GridStrategy(config=config, exchange_client=exchange)
+
+    target = make_tracked_position(
+        position_id="grid-1",
+        side="long",
+        size=Decimal("2"),
+        close_order_ids=["close-1"],
+        close_client_order_indices=[111],
+        entry_client_order_index=55,
+    )
+    other = make_tracked_position(
+        position_id="grid-2",
+        side="long",
+        size=Decimal("2"),
+        close_order_ids=["close-2"],
+        close_client_order_indices=[222],
+        entry_client_order_index=66,
+    )
+
+    strategy.position_manager.clear()
+    strategy.position_manager.track(target)
+    strategy.position_manager.track(other)
+
+    strategy.grid_state.active_close_orders = [
+        GridOrder(order_id="close-1", price=Decimal("100"), size=Decimal("2"), side="sell"),
+        GridOrder(order_id="close-2", price=Decimal("100"), size=Decimal("2"), side="sell"),
+    ]
+    strategy.grid_state.order_index_to_position_id[111] = "grid-1"
+    strategy.grid_state.order_index_to_position_id[222] = "grid-2"
+
+    result = await strategy.order_closer.market_close(
+        Decimal("2"),
+        "test-target",
+        tracked_position=target,
+    )
+
+    assert result is True
+    assert "close-1" in exchange.cancelled_orders
+    assert "close-2" not in exchange.cancelled_orders
+    assert strategy.position_manager.get("grid-2") is not None
+    assert strategy.position_manager.get("grid-1") is None
+    assert any(order.order_id == "close-2" for order in strategy.grid_state.active_close_orders)
+    assert not any(order.order_id == "close-1" for order in strategy.grid_state.active_close_orders)
+    assert 111 not in strategy.grid_state.order_index_to_position_id
+    assert 222 in strategy.grid_state.order_index_to_position_id
 
 
 @pytest.mark.asyncio

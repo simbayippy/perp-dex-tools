@@ -38,8 +38,13 @@ class GridOrderCloser:
         self._log_event = log_event
         self.position_manager = position_manager
 
-    async def market_close(self, current_position: Decimal, reason: str) -> bool:
-        """Execute a market order to flatten the current position."""
+    async def market_close(
+        self,
+        current_position: Decimal,
+        reason: str,
+        tracked_position: Optional[TrackedPosition] = None,
+    ) -> bool:
+        """Execute a market order to flatten the current (or specific) position."""
         size = current_position.copy_abs()
         if size <= 0:
             return False
@@ -80,16 +85,19 @@ class GridOrderCloser:
                 quantity=size,
                 order_id=getattr(order_result, "order_id", None),
             )
-            await self.cancel_all_orders()
-            self.position_manager.clear()
-            self.grid_state.last_known_position = Decimal("0")
-            self.grid_state.last_known_margin = Decimal("0")
-            self.grid_state.margin_ratio = None
-            self.grid_state.pending_position_id = None
-            self.grid_state.filled_position_id = None
-            self.grid_state.pending_client_order_index = None
-            self.grid_state.filled_client_order_index = None
-            self.grid_state.order_index_to_position_id.clear()
+            if tracked_position is not None:
+                await self._finalize_tracked_market_close(tracked_position)
+            else:
+                await self.cancel_all_orders()
+                self.position_manager.clear()
+                self.grid_state.last_known_position = Decimal("0")
+                self.grid_state.last_known_margin = Decimal("0")
+                self.grid_state.margin_ratio = None
+                self.grid_state.pending_position_id = None
+                self.grid_state.filled_position_id = None
+                self.grid_state.pending_client_order_index = None
+                self.grid_state.filled_client_order_index = None
+                self.grid_state.order_index_to_position_id.clear()
             return True
 
         error_message = getattr(order_result, "error_message", "unknown error")
@@ -103,6 +111,41 @@ class GridOrderCloser:
             error=error_message,
         )
         return False
+
+    async def _finalize_tracked_market_close(self, tracked: TrackedPosition) -> None:
+        """Cleanup bookkeeping after a targeted market close."""
+        cancel_ids = [order_id for order_id in tracked.close_order_ids or [] if order_id]
+        for order_id in cancel_ids:
+            try:
+                await self.exchange_client.cancel_order(order_id)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                self.logger.log(
+                    f"Grid: Failed to cancel close order {order_id} after market close: {exc}",
+                    "DEBUG",
+                )
+
+        if cancel_ids:
+            cancel_set = set(cancel_ids)
+            self.grid_state.active_close_orders = [
+                order for order in self.grid_state.active_close_orders if order.order_id not in cancel_set
+            ]
+
+        if tracked.entry_client_order_index is not None:
+            self.grid_state.order_index_to_position_id.pop(tracked.entry_client_order_index, None)
+            if self.grid_state.pending_client_order_index == tracked.entry_client_order_index:
+                self.grid_state.pending_client_order_index = None
+            if self.grid_state.filled_client_order_index == tracked.entry_client_order_index:
+                self.grid_state.filled_client_order_index = None
+
+        for idx in tracked.close_client_order_indices or []:
+            self.grid_state.order_index_to_position_id.pop(idx, None)
+
+        if self.grid_state.pending_position_id == tracked.position_id:
+            self.grid_state.pending_position_id = None
+        if self.grid_state.filled_position_id == tracked.position_id:
+            self.grid_state.filled_position_id = None
+
+        self.position_manager.remove(tracked.position_id)
 
     async def handle_filled_order(self) -> Dict[str, Any]:
         """Handle a filled open order by placing corresponding close order."""
@@ -286,6 +329,7 @@ class GridOrderCloser:
                     await self.market_close(
                         signed_position,
                         f"Post-only close retries exceeded for {tracked.position_id}",
+                        tracked_position=tracked,
                     )
                     tracked.post_only_retry_count = retry_limit + 1
                 else:
