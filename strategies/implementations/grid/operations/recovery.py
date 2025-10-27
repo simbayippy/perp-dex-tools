@@ -44,12 +44,35 @@ class GridRecoveryOperator:
             return
 
         active_ids = {order.order_id for order in self.grid_state.active_close_orders}
+        
+        # Build a map of order_id to close price for exit logging
+        close_order_prices = {
+            order.order_id: order.price 
+            for order in self.grid_state.active_close_orders
+        }
+        
         pruned_positions = self.position_manager.prune_by_active_orders(active_ids)
         
-        # Log completed positions
+        # Log completed positions with exit details
         for position in pruned_positions:
+            # Find the exit price from the close order that was placed
+            exit_price = None
+            for close_order_id in position.close_order_ids:
+                if close_order_id in close_order_prices:
+                    exit_price = close_order_prices[close_order_id]
+                    break
+            
+            # Log exit filled
+            if exit_price:
+                self.logger.log(
+                    f"\n{'-'*80}\n🎯 Position {position.position_id} EXIT FILLED @ {exit_price}\n{'-'*80}",
+                    "INFO",
+                )
+            
+            # Log position complete
+            exit_info = f" | Exit @ {exit_price}" if exit_price else ""
             self.logger.log(
-                f"\n{'='*80}\n💰 POSITION {position.position_id} COMPLETE | Entry @ {position.entry_price} | Size: {position.size} | Side: {position.side.upper()}\n{'='*80}\n",
+                f"\n{'='*80}\n💰 POSITION {position.position_id} COMPLETE | Entry @ {position.entry_price} | Size: {position.size} | Side: {position.side.upper()}{exit_info}\n{'='*80}\n",
                 "INFO",
             )
 

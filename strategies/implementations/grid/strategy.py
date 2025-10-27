@@ -389,7 +389,7 @@ class GridStrategy(BaseStrategy):
         # Log position attempt failure with clear separator
         if position_id:
             self.logger.log(
-                f"\n{'='*80}\n❌ POSITION {position_id} CANCELED | Entry order rejected (post-only)\n{'='*80}\n",
+                f"\n{'='*80}\n❌ POSITION {position_id} CANCELED | Entry order rejected (post-only violation)\n{'='*80}\n",
                 "INFO",
             )
         
