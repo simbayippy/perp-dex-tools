@@ -78,34 +78,39 @@ class UnifiedLogger:
             
             # Console handler with colors and source location (SHARED by all components)
             if log_to_console:
+                def _truncate_module_path(module: str, max_width: int) -> str:
+                    if len(module) <= max_width:
+                        return module
+
+                    parts = module.split(".")
+                    # Always keep at least the final segment
+                    kept = parts[-1]
+                    idx = len(parts) - 2
+                    while idx >= 0:
+                        candidate = ".".join(parts[idx:])
+                        if len(candidate) + 3 <= max_width:  # account for ellipsis
+                            return f"...{candidate}"
+                        idx -= 1
+
+                    # Fall back to cropping the final segment if everything else fails
+                    return f"...{kept[-(max_width-3):]}" if len(kept) + 3 > max_width else f"...{kept}"
+
                 def format_record(record):
-                    # Truncate the file path to last 2 segments
-                    name_parts = record["name"].split(".")
-                    if len(name_parts) >= 2:
-                        short_name = f"{name_parts[-2]}.{name_parts[-1]}"
-                    else:
-                        short_name = record["name"]
-                    
-                    # Create source location string
-                    source_location = f"{short_name}:{record['function']}:{record['line']}"
-                    
-                    # Smart truncation if longer than 45 characters
-                    max_width = 45
-                    if len(source_location) > max_width:
-                        # Always preserve the line number at the end
-                        line_part = f":{record['line']}"
-                        available_space = max_width - len(line_part) - 3  # 3 for "..."
-                        
-                        if available_space > 10:  # Only truncate if we have reasonable space
-                            # Take first part and add ellipsis
-                            truncated = source_location[:available_space] + "..." + line_part
-                            source_location = truncated
-                        # If not enough space, just use the original (better than unreadable)
-                    
-                    # Pad to fixed width for alignment
-                    record["extra"]["short_name"] = f"{source_location:<45}"
+                    module_name = record.get("module") or record.get("name", "")
+                    function_name = record.get("function", "")
+                    line_part = f":{record.get('line')}"
+                    function_part = f":{function_name}{line_part}" if function_name else line_part
+
+                    max_width = 55
+                    available = max_width - len(function_part)
+                    if available < 10:
+                        available = 10  # ensure we can show at least some module context
+
+                    module_display = _truncate_module_path(module_name, available)
+                    source_location = f"{module_display}{function_part}"
+                    record["extra"]["short_name"] = f"{source_location:>{max_width}}"
                     return True
-                    
+                
                 console_format = (
                     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
                     "<level>{level: <8}</level> | "
