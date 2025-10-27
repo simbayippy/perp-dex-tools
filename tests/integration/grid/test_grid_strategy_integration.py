@@ -260,11 +260,15 @@ async def test_grid_cycle_places_open_and_close_order(patch_event_notifier):
     open_size = exchange.limit_orders[0]["quantity"]
 
     # Simulate fill notification from execution engine
-    strategy.notify_order_filled(open_price, open_size)
+    strategy.notify_order_filled(
+        open_price,
+        open_size,
+        order_id=open_result["order_id"],
+    )
 
     close_result = await strategy.execute_strategy()
     assert close_result["action"] == "order_placed"
-    assert exchange.close_orders
+    assert close_result["order_id"]
 
     events = patch_event_notifier
     event_types = [evt["event_type"] for evt in events]
@@ -313,11 +317,15 @@ async def test_stop_loss_execution_triggers_market_exit(patch_event_notifier, mo
     open_price = exchange.limit_orders[0]["price"]
     open_size = exchange.limit_orders[0]["quantity"]
 
-    strategy.notify_order_filled(open_price, open_size)
+    strategy.notify_order_filled(
+        open_price,
+        open_size,
+        order_id=open_result["order_id"],
+    )
     close_result = await strategy.execute_strategy()
     assert close_result["action"] == "order_placed"
-    close_order_id = exchange.close_orders[0]["order_id"]
-    close_price = exchange.close_orders[0]["price"]
+    close_order_id = close_result["order_id"]
+    close_price = close_result["price"]
 
     # Seed state to simulate live position
     exchange.position_quantity = open_size
