@@ -665,7 +665,42 @@ class LighterClient(BaseExchangeClient):
             f"price={order_params.get('price')} amount={order_params.get('base_amount')}"
         )
 
-        create_order, tx_hash, error = await self.lighter_client.create_order(**order_params)
+        # Retry only when Lighter returns its nonce-mismatch error
+        nonce_retry_tokens = ("code=21104", "invalid nonce")
+        max_attempts = 2
+        error = None
+        for attempt in range(1, max_attempts + 1):
+            create_order, tx_hash, error = await self.lighter_client.create_order(**order_params)
+            if error is None:
+                break
+
+            error_text = str(error)
+            if attempt < max_attempts and any(token in error_text.lower() for token in nonce_retry_tokens):
+                self.logger.warning(
+                    f"⚠️ [LIGHTER] Nonce mismatch detected (attempt {attempt}/{max_attempts}): {error_text}. "
+                    "Refreshing nonce via SDK and retrying..."
+                )
+                if hasattr(self.lighter_client, 'nonce_manager'):
+                    try:
+                        self.lighter_client.nonce_manager.hard_refresh_nonce(self.api_key_index)
+                    except Exception as refresh_exc:
+                        self.logger.debug(f"[LIGHTER] Failed to refresh nonce proactively: {refresh_exc}")
+                await asyncio.sleep(0)
+                continue
+
+            self.logger.error(f"❌ [LIGHTER] Order submission failed: {error}")
+            return OrderResult(
+                success=False,
+                order_id=str(client_order_index),
+                error_message=f"Order creation error: {error}",
+            )
+        else:
+            self.logger.error("❌ [LIGHTER] Order submission failed: unknown error (nonce retry exhausted)")
+            return OrderResult(
+                success=False,
+                order_id=str(client_order_index),
+                error_message="Order creation error: nonce retry exhausted",
+            )
 
         if hasattr(create_order, "to_dict"):
             try:
@@ -699,13 +734,7 @@ class LighterClient(BaseExchangeClient):
                 f"(min notional check skipped for position closing)"
             )
 
-        if error is not None:
-            self.logger.error(f"❌ [LIGHTER] Order submission failed: {error}")
-            return OrderResult(
-                success=False,
-                order_id=str(client_order_index),
-                error_message=f"Order creation error: {error}",
-            )
+        # error is guaranteed to be None here (success path)
 
         # Convert back to Decimal for logging/consumers
         normalized_price = Decimal(order_params['price']) / self.price_multiplier
