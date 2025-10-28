@@ -64,6 +64,18 @@ async def load_proxy_assignments(
     for row in rows:
         credentials_payload = _decode_credentials(row["credentials_encrypted"], decrypt)
 
+        raw_metadata = row["proxy_metadata"] if "proxy_metadata" in row else None
+        metadata = {}
+        if isinstance(raw_metadata, dict):
+            metadata = raw_metadata
+        elif isinstance(raw_metadata, str):
+            try:
+                decoded_meta = json.loads(raw_metadata)
+                if isinstance(decoded_meta, dict):
+                    metadata = decoded_meta
+            except json.JSONDecodeError:
+                metadata = {}
+
         endpoint = ProxyEndpoint(
             id=str(row["proxy_id"]),
             label=row["label"],
@@ -71,7 +83,7 @@ async def load_proxy_assignments(
             auth_type=row["auth_type"],
             username=credentials_payload.get("username"),
             password=credentials_payload.get("password"),
-            metadata=_coerce_dict(row.get("proxy_metadata")),
+            metadata=metadata,
             credentials=credentials_payload,
             is_active=bool(row["proxy_is_active"]),
         )
@@ -125,7 +137,7 @@ def _decode_credentials(raw_payload, decrypt: Optional[Callable[[str], str]]) ->
     return decoded
 
 
-def _coerce_dict(value) -> dict:
+def _coerce_dict(value) -> dict:  # kept for backwards compatibility
     if value is None:
         return {}
     if isinstance(value, dict):
