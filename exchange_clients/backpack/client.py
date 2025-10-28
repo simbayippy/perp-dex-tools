@@ -105,6 +105,7 @@ class BackpackClient(BaseExchangeClient):
                 symbol_formatter=self._ensure_exchange_symbol,
             )
             self.ws_manager.set_logger(self.logger)
+            self.ws_manager.set_proxy_selector(self._proxy_selector)
         else:
             self.ws_manager.update_symbol(ws_symbol)
 

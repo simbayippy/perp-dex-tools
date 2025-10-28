@@ -327,7 +327,7 @@ class BackpackWebSocketManager(BaseWebSocketManager):
         if self.logger:
             self.logger.info(f"[BACKPACK] Connecting account stream for {self.symbol}")
 
-        self._account_ws = await websockets.connect(self.ws_url)
+        self._account_ws = await self._connect_via_proxy(self.ws_url)
         await self._subscribe_account_stream()
 
     async def _subscribe_account_stream(self) -> None:
@@ -471,7 +471,7 @@ class BackpackWebSocketManager(BaseWebSocketManager):
         if self.logger:
             self.logger.info(f"[BACKPACK] Connecting depth stream for {self.symbol}")
 
-        self._depth_ws = await websockets.connect(self.ws_url)
+        self._depth_ws = await self._connect_via_proxy(self.ws_url)
         await self._subscribe_depth_stream()
 
     async def _subscribe_depth_stream(self) -> None:

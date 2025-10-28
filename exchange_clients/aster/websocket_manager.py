@@ -206,7 +206,7 @@ class AsterWebSocketManager(BaseWebSocketManager):
 
             # Connect to user data stream (order updates)
             ws_url = f"{self.ws_url}/ws/{self.listen_key}"
-            self.websocket = await websockets.connect(ws_url)
+            self.websocket = await self._connect_via_proxy(ws_url)
             self.running = True
 
             if self.logger:
@@ -382,7 +382,7 @@ class AsterWebSocketManager(BaseWebSocketManager):
         
         try:
             # Connect to WebSocket
-            self._book_ticker_ws = await websockets.connect(book_ticker_url)
+            self._book_ticker_ws = await self._connect_via_proxy(book_ticker_url)
             
             if self.logger:
                 self.logger.info(f"✅ Connected to Aster book ticker for {symbol}")
@@ -495,7 +495,7 @@ class AsterWebSocketManager(BaseWebSocketManager):
             
             while self.running:
                 try:
-                    async with websockets.connect(book_ticker_url) as ws:
+                    async with self._connect_via_proxy(book_ticker_url) as ws:
                         self._book_ticker_ws = ws
                         
                         if self.logger:
@@ -731,7 +731,7 @@ class AsterWebSocketManager(BaseWebSocketManager):
             
             while self.running:
                 try:
-                    async with websockets.connect(depth_url) as ws:
+                    async with self._connect_via_proxy(depth_url) as ws:
                         self._depth_ws = ws
                         
                         if self.logger:

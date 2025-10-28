@@ -21,6 +21,7 @@ Associate each trading account with a pool of static proxies, use them for all H
 - [x] Update `exchange_clients/base_client.py` to accept an optional `ProxyEndpoint` or selector and expose helper methods (`_create_http_client`, `_connect_websocket`) that apply the proxy.
 - [ ] Ensure all concrete exchange clients use the helpers when instantiating SDK sessions or websockets; for SDKs that accept transport overrides, pass the proxied client, otherwise inject via environment/session config.
 - [x] Modify strategy bootstrap (`runbot.py`, `trading_bot.py`) to load proxy assignments per account (DB + optional config override) and pass them into every exchange client instance.
+- [ ] Exclude data-only collectors (e.g., `funding_rate_service/collection/orchestrator.py` and adapters) from proxy routing—they should continue using direct connections for public data scraping.
 
 ## Operations & Monitoring
 - [ ] Implement a health check coroutine that verifies egress IP per proxy (`https://ifconfig.io` via proxy) and marks failing proxies inactive.

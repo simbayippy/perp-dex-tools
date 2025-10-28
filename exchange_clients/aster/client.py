@@ -161,6 +161,7 @@ class AsterClient(BaseExchangeClient):
 
         # Set logger for WebSocket manager
         self.ws_manager.set_logger(self.logger)
+        self.ws_manager.set_proxy_selector(self._proxy_selector)
 
         try:
             # Start WebSocket connection in background task

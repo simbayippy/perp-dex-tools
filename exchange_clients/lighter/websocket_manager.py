@@ -754,7 +754,7 @@ class LighterWebSocketManager(BaseWebSocketManager):
         await self.reset_order_book()
 
         try:
-            self.ws = await websockets.connect(self.ws_url)
+            self.ws = await self._connect_via_proxy(self.ws_url)
             self._log("[LIGHTER] 🔗 Connected to websocket", "INFO")
         except Exception as exc:
             self._log(f"Failed to connect to Lighter websocket: {exc}", "ERROR")
