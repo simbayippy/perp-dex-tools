@@ -90,6 +90,14 @@ python database/scripts/add_account.py --from-env --account-name main_bot
 
 # From custom env file (useful for multiple accounts/API keys)
 python database/scripts/add_account.py --from-env --account-name acc1_funding --env-file .env.acc2
+
+# Attach proxies while creating the account
+python database/scripts/add_account.py \
+    --from-env --account-name acc1 \
+    --env-file .env.acc1 \
+    --proxy-file proxies.acc1.txt \
+    --proxy-label-prefix primed_sg \
+    --proxy-scheme http
 ```
 
 **Features:**
@@ -290,3 +298,20 @@ Then you can run directly:
 ./database/scripts/seed_dexes.py
 ```
 
+**Optional: attach proxies after creating the account**
+
+```bash
+# Create a newline-delimited list of proxies (host:port[:user:pass])
+cat > proxies.txt <<'EOF'
+proxyas.primedproxies.com:8888:PRIM_USER:PASSWORD
+proxyas.primedproxies.com:8888:PRIM_USER:PASSWORD
+EOF
+
+# Bulk register proxies and link them to the account
+python database/scripts/add_proxy.py \
+    --batch-file proxies.txt \
+    --account acc1 \
+    --label-prefix primed_sg \
+    --priority 0 \
+    --scheme http
+```

@@ -179,6 +179,35 @@ async def list_accounts(show_credentials: bool = False, show_full: bool = False)
                 print(f"\n   🔗 Shared Exchange Credentials ({len(shares)}):")
                 for share in shares:
                     print(f"      • {share['exchange_name']} (from '{share['shared_from']}', type: {share['sharing_type']})")
+
+            # Proxy assignments
+            proxies = await db.fetch_all("""
+                SELECT 
+                    np.label,
+                    np.endpoint_url,
+                    np.auth_type,
+                    np.is_active AS proxy_is_active,
+                    apa.priority,
+                    apa.status,
+                    apa.last_checked_at
+                FROM account_proxy_assignments apa
+                JOIN network_proxies np ON apa.proxy_id = np.id
+                WHERE apa.account_id = :account_id
+                ORDER BY apa.priority ASC, np.label ASC
+            """, {"account_id": account['id']})
+
+            if proxies:
+                print(f"\n   🌐 Proxy Assignments ({len(proxies)}):")
+                for proxy in proxies:
+                    status_icon = "✅" if proxy["status"] == "active" and proxy["proxy_is_active"] else "❌"
+                    print(
+                        f"      {status_icon} {proxy['label']} "
+                        f"(priority {proxy['priority']}, status {proxy['status']})"
+                    )
+                    print(f"         Endpoint: {proxy['endpoint_url']}")
+                    print(f"         Auth: {proxy['auth_type']}")
+                    if proxy["last_checked_at"]:
+                        print(f"         Last health check: {proxy['last_checked_at']}")
         
         print("\n" + "="*70)
         print(f"Total accounts: {len(accounts)}")
@@ -210,4 +239,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
