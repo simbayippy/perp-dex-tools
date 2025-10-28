@@ -96,6 +96,11 @@ class SessionProxyManager:
 
         proxy_type = _protocol_to_socks_type(proxy.protocol)
         if proxy_type is None:
+            if proxy.protocol.lower().startswith("socks"):
+                raise RuntimeError(
+                    "PySocks is required for socket-level proxying. Install with 'pip install PySocks'."
+                ) from _SOCKS_IMPORT_ERROR
+            # HTTP/HTTPS proxies rely on environment variables; socket patching is skipped.
             return
 
         socks.set_default_proxy(
@@ -112,7 +117,8 @@ class SessionProxyManager:
     def _restore_socket(cls) -> None:
         if cls._socket_patched:
             socket.socket = cls._original_socket
-            socks.set_default_proxy(None)
+            if socks is not None:  # pragma: no branch - defensive
+                socks.set_default_proxy(None)
             cls._socket_patched = False
 
     @staticmethod
@@ -125,11 +131,11 @@ class SessionProxyManager:
 
 
 def _protocol_to_socks_type(protocol: str):
+    if socks is None:
+        return None
     protocol = protocol.lower()
     if protocol in {"socks5", "socks5h"}:
         return socks.SOCKS5
     if protocol in {"socks4", "socks4a"}:
         return socks.SOCKS4
-    if protocol in {"http", "https"}:
-        return socks.HTTP
     return None

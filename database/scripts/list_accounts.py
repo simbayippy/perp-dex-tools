@@ -25,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from cryptography.fernet import Fernet
 from databases import Database
 from dotenv import load_dotenv
+from database.credential_loader import DatabaseCredentialLoader
 
 # Load environment variables
 load_dotenv()
@@ -88,6 +89,7 @@ async def list_accounts(show_credentials: bool = False, show_full: bool = False)
             return
         
         decryptor = CredentialDecryptor() if show_credentials else None
+        proxy_loader = DatabaseCredentialLoader(db)
         
         for i, account in enumerate(accounts, 1):
             status = "✅ Active" if account['is_active'] else "❌ Inactive"
@@ -180,34 +182,40 @@ async def list_accounts(show_credentials: bool = False, show_full: bool = False)
                 for share in shares:
                     print(f"      • {share['exchange_name']} (from '{share['shared_from']}', type: {share['sharing_type']})")
 
-            # Proxy assignments
-            proxies = await db.fetch_all("""
-                SELECT 
-                    np.label,
-                    np.endpoint_url,
-                    np.auth_type,
-                    np.is_active AS proxy_is_active,
-                    apa.priority,
-                    apa.status,
-                    apa.last_checked_at
-                FROM account_proxy_assignments apa
-                JOIN network_proxies np ON apa.proxy_id = np.id
-                WHERE apa.account_id = :account_id
-                ORDER BY apa.priority ASC, np.label ASC
-            """, {"account_id": account['id']})
+            assignments = await proxy_loader.load_account_proxy_assignments(
+                account["account_name"],
+                only_active=False,
+            )
 
-            if proxies:
-                print(f"\n   🌐 Proxy Assignments ({len(proxies)}):")
-                for proxy in proxies:
-                    status_icon = "✅" if proxy["status"] == "active" and proxy["proxy_is_active"] else "❌"
+            if assignments:
+                print(f"\n   🌐 Proxy Assignments ({len(assignments)}):")
+                for assignment in assignments:
+                    proxy = assignment.proxy
+                    status_active = assignment.status == "active" and proxy.is_active
+                    status_icon = "✅" if status_active else "❌"
                     print(
-                        f"      {status_icon} {proxy['label']} "
-                        f"(priority {proxy['priority']}, status {proxy['status']})"
+                        f"      {status_icon} {proxy.label} "
+                        f"(priority {assignment.priority}, status {assignment.status})"
                     )
-                    print(f"         Endpoint: {proxy['endpoint_url']}")
-                    print(f"         Auth: {proxy['auth_type']}")
-                    if proxy["last_checked_at"]:
-                        print(f"         Last health check: {proxy['last_checked_at']}")
+                    print(f"         Endpoint: {proxy.endpoint}")
+                    print(f"         Auth: {proxy.auth_type}")
+
+                    if proxy.username or proxy.password:
+                        if show_full:
+                            auth_line = (
+                                f"{proxy.username or ''}:{proxy.password or ''}".rstrip(":")
+                            )
+                        elif show_credentials:
+                            masked_pass = "***" if proxy.password else ""
+                            auth_line = (
+                                f"{proxy.username or ''}:{masked_pass}".rstrip(":")
+                            )
+                        else:
+                            auth_line = "(set)"
+                        print(f"         Credentials: {auth_line}")
+
+                    if assignment.last_checked_at:
+                        print(f"         Last health check: {assignment.last_checked_at}")
         
         print("\n" + "="*70)
         print(f"Total accounts: {len(accounts)}")
