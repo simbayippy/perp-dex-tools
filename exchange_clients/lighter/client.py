@@ -1325,8 +1325,45 @@ class LighterClient(BaseExchangeClient):
         return account_data.accounts[0].positions
 
     async def get_account_positions(self) -> Decimal:
-        """Get account positions using official SDK."""
-        # Get account info which includes positions
+        """
+        Get account positions (WebSocket-first for rate limit efficiency).
+        
+        ⚡ OPTIMIZATION: Uses WebSocket cached positions to save 300 weight REST call per query!
+        Grid strategy calls this every cycle (~40s), so this saves 450 weight/min (7.5x rate limit).
+        """
+        # Try WebSocket cached positions first (zero weight!)
+        ticker = getattr(self.config, "ticker", None)
+        if ticker:
+            normalized_symbol = self.normalize_symbol(ticker).upper()
+            async with self._positions_lock:
+                raw = self._raw_positions.get(normalized_symbol)
+            
+            if raw is not None:
+                quantity = raw.get("position") or raw.get("quantity") or Decimal("0")
+                try:
+                    return Decimal(str(quantity))
+                except Exception:
+                    pass
+        
+        # Wait briefly for WebSocket data if not ready yet
+        try:
+            await asyncio.wait_for(self._positions_ready.wait(), timeout=0.5)
+            # Try cache again after waiting
+            if ticker:
+                normalized_symbol = self.normalize_symbol(ticker).upper()
+                async with self._positions_lock:
+                    raw = self._raw_positions.get(normalized_symbol)
+                if raw is not None:
+                    quantity = raw.get("position") or raw.get("quantity") or Decimal("0")
+                    try:
+                        return Decimal(str(quantity))
+                    except Exception:
+                        pass
+        except asyncio.TimeoutError:
+            pass
+        
+        # Fall back to REST only if WebSocket data not available (300 weight)
+        self.logger.info("[LIGHTER] get_account_positions WebSocket positions not available, using REST fallback (300 weight)")
         positions = await self._fetch_positions_with_retry()
 
         # Find position for current market
