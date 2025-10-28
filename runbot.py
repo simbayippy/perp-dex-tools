@@ -88,14 +88,13 @@ def setup_logging(log_level: str):
         console_handler.setFormatter(formatter)
         root_logger.addHandler(console_handler)
 
-    # Suppress websockets debug logs unless DEBUG level is explicitly requested
-    if log_level.upper() != 'DEBUG':
-        logging.getLogger('websockets').setLevel(logging.WARNING)
-
-    # Suppress other noisy loggers
+    # Always suppress noisy library debug logs (even in DEBUG mode)
+    # These libraries are too verbose and don't provide useful trading info
+    logging.getLogger('websockets').setLevel(logging.WARNING)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
     logging.getLogger('requests').setLevel(logging.WARNING)
     logging.getLogger('aiohttp').setLevel(logging.WARNING)
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
     
     # Suppress funding service verbose logs (keep only warnings/errors)
     logging.getLogger('funding_rate_service').setLevel(logging.WARNING)
@@ -167,6 +166,9 @@ async def load_account_credentials(account_name: str) -> dict:
 async def main():
     """Main entry point."""
     args = parse_arguments()
+
+    # Set LOG_LEVEL environment variable for UnifiedLogger
+    os.environ['LOG_LEVEL'] = args.log_level
 
     # Setup logging first
     setup_logging(args.log_level)
