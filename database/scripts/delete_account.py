@@ -42,9 +42,9 @@ class AccountDeleter:
     """Handle account deletion with safety checks"""
     
     def __init__(self):
-        db_url = os.getenv("FUNDING_DB_URL")
+        db_url = os.getenv("DATABASE_URL")
         if not db_url:
-            raise ValueError("FUNDING_DB_URL environment variable not set")
+            raise ValueError("DATABASE_URL environment variable not set")
         self.db = Database(db_url)
     
     async def connect(self):
