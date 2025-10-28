@@ -100,4 +100,3 @@ class ProxySelector:
 
     def __bool__(self) -> bool:  # pragma: no cover - defensive
         return bool(self._assignments)
-*** End Patch (Note: purposely inserted error to highlight)
