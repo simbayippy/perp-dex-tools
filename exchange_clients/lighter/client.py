@@ -96,6 +96,11 @@ class LighterClient(BaseExchangeClient):
         self._positions_ready = asyncio.Event()
         self._raw_positions: Dict[str, Dict[str, Any]] = {}
         self._client_to_server_order_index: Dict[str, str] = {}
+        
+        # User stats caching (real-time balance from WebSocket - 0 weight!)
+        self._user_stats_lock = asyncio.Lock()
+        self._user_stats_ready = asyncio.Event()
+        self._user_stats: Optional[Dict[str, Any]] = None
 
     def _validate_config(self) -> None:
         """Validate Lighter configuration."""
@@ -228,6 +233,7 @@ class LighterClient(BaseExchangeClient):
                 order_update_callback=self._handle_websocket_order_update,
                 liquidation_callback=self.handle_liquidation_notification,
                 positions_callback=self._handle_positions_stream_update,
+                user_stats_callback=self._handle_user_stats_update,
             )
 
             # Set logger for WebSocket manager
@@ -1047,6 +1053,30 @@ class LighterClient(BaseExchangeClient):
             self.logger.debug(f"Traceback: {traceback.format_exc()}")
             return None
 
+    async def _handle_user_stats_update(self, payload: Dict[str, Any]) -> None:
+        """
+        Process user stats update from WebSocket (includes real-time balance).
+        
+        ⚡ OPTIMIZATION: WebSocket balance updates are FREE (0 weight) vs 300 weight REST call!
+        """
+        stats = payload.get("stats")
+        if not stats:
+            return
+        
+        # Check if this is first update (before setting the flag)
+        is_first_update = not self._user_stats_ready.is_set()
+        
+        async with self._user_stats_lock:
+            self._user_stats = stats
+            self._user_stats_ready.set()
+        
+        # Log first balance update for visibility
+        if is_first_update:
+            available_balance = stats.get("available_balance", "N/A")
+            self.logger.debug(
+                f"[LIGHTER] Received user stats via WebSocket: balance={available_balance} (0 weight)"
+            )
+    
     async def _handle_positions_stream_update(self, payload: Dict[str, Any]) -> None:
         """Process account positions update received from websocket stream."""
         positions_map = payload.get("positions") or {}
@@ -1468,11 +1498,43 @@ class LighterClient(BaseExchangeClient):
 
     # Account monitoring methods (Lighter-specific implementations)
     async def get_account_balance(self) -> Optional[Decimal]:
-        """Get current account balance using Lighter SDK."""
+        """
+        Get current account balance (WebSocket-first for 0 weight).
+        
+        ⚡ OPTIMIZATION: Uses WebSocket user_stats stream to save 300 weight REST call!
+        The user_stats WebSocket provides real-time balance updates for FREE.
+        """
         try:
+            # Try WebSocket user stats first (0 weight!)
+            async with self._user_stats_lock:
+                if self._user_stats is not None:
+                    available_balance = self._user_stats.get("available_balance")
+                    if available_balance is not None:
+                        try:
+                            return Decimal(str(available_balance))
+                        except Exception:
+                            pass
+            
+            # Wait briefly for WebSocket data if not ready yet
+            try:
+                await asyncio.wait_for(self._user_stats_ready.wait(), timeout=0.5)
+                # Try again after waiting
+                async with self._user_stats_lock:
+                    if self._user_stats is not None:
+                        available_balance = self._user_stats.get("available_balance")
+                        if available_balance is not None:
+                            try:
+                                return Decimal(str(available_balance))
+                            except Exception:
+                                pass
+            except asyncio.TimeoutError:
+                pass
+            
+            # Fall back to REST only if WebSocket not available (300 weight)
             if not self.account_api:
                 return None
-                
+            
+            self.logger.info("[LIGHTER] get_account_balance WebSocket user_stats not available, using REST fallback (300 weight)")
             account_data = await self.account_api.account(by="index", value=str(self.account_index))
             if account_data and account_data.accounts:
                 return Decimal(account_data.accounts[0].available_balance or "0")
