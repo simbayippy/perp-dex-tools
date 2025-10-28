@@ -8,7 +8,13 @@ import inspect
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING, Callable, Awaitable
 
+import httpx
+
 from exchange_clients.events import LiquidationEvent, LiquidationEventDispatcher
+
+from networking import ProxySelector, ProxyEndpoint
+from networking.http import create_httpx_client
+from networking.exceptions import ProxyUnavailableError
 
 
 # Type alias for optional order fill callback
@@ -60,6 +66,7 @@ class BaseExchangeClient(ABC):
         self._validate_config()
         self._liquidation_dispatcher = LiquidationEventDispatcher()
         self.ws_manager: Optional["BaseWebSocketManager"] = None
+        self._proxy_selector: Optional["ProxySelector"] = getattr(config, "proxy_selector", None)
         
         # Per-symbol contract ID cache (fixes multi-symbol trading bug)
         # Maps normalized symbol -> exchange-specific contract_id
@@ -183,6 +190,47 @@ class BaseExchangeClient(ABC):
                     f"WebSocket feed preparation failed: {exc}",
                     "DEBUG",
                 )
+
+    # ========================================================================
+    # PROXY MANAGEMENT
+    # ========================================================================
+
+    def set_proxy_selector(self, selector: "ProxySelector") -> None:
+        """Register a proxy selector for this client."""
+        self._proxy_selector = selector
+
+    def clear_proxy_selector(self) -> None:
+        """Remove any configured proxy selector."""
+        self._proxy_selector = None
+
+    def current_proxy(self, rotate_if_needed: bool = False) -> Optional["ProxyEndpoint"]:
+        """Return the active proxy endpoint without mutating rotation order."""
+        if not self._proxy_selector:
+            return None
+
+        try:
+            return (
+                self._proxy_selector.rotate()
+                if rotate_if_needed
+                else self._proxy_selector.current()
+            )
+        except ProxyUnavailableError:
+            return None
+
+    def mark_proxy_unhealthy(self, endpoint: Optional["ProxyEndpoint"]) -> None:
+        if not self._proxy_selector or endpoint is None:
+            return
+        try:
+            self._proxy_selector.mark_unhealthy(endpoint)
+        except ProxyUnavailableError:
+            pass
+
+    def build_http_client(self, **kwargs) -> httpx.AsyncClient:
+        """
+        Return an httpx.AsyncClient configured with the current proxy.
+        """
+        proxy = self.current_proxy()
+        return create_httpx_client(proxy, **kwargs)
 
     @abstractmethod
     def get_exchange_name(self) -> str:

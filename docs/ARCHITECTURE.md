@@ -137,11 +137,12 @@ The system follows a **strict 3-layer architecture** with clear separation of co
    
    a. Check if --account flag provided:
       if args.account:
-          account_credentials = await load_account_credentials("acc1")
-   
+          account_credentials, proxy_selector = await load_account_credentials("acc1")
+
    b. Load credentials from database:
       loader = DatabaseCredentialLoader(database)
       credentials = await loader.load_account_credentials("acc1")
+      proxy_selector = await loader.load_account_proxy_selector("acc1")
       
       # Returns:
       # {
@@ -149,9 +150,10 @@ The system follows a **strict 3-layer architecture** with clear separation of co
       #     "backpack": {"public_key": "abc...", "secret_key": "xyz..."},
       #     "aster": {"api_key": "...", "secret_key": "..."}
       # }
-   
+      # proxy_selector -> rotates static proxies for the account
+    
    c. Pass credentials to TradingBot:
-      bot = TradingBot(config, account_credentials=credentials)
+      bot = TradingBot(config, account_credentials=credentials, account_proxy_selector=proxy_selector)
    
    ↓
 
