@@ -1226,6 +1226,81 @@ class LighterClient(BaseExchangeClient):
 
         return snapshot
 
+    def _get_live_mark_price(self, normalized_symbol: str) -> Optional[Decimal]:
+        """
+        Return a real-time mark price using the active order-book feed.
+
+        Lighter's account positions stream is event-driven, so the cached mark price only
+        changes when the exchange pushes a fresh position update. We reuse the best bid/ask
+        tracked by the WebSocket to keep the mark current without hitting the heavy REST
+        endpoint.
+        """
+        ws_manager = getattr(self, "ws_manager", None)
+        if ws_manager is None:
+            self.logger.warning("[LIGHTER] Skipping live mark enrichment – websocket manager unavailable")
+            return None
+
+        config_symbol = getattr(self.config, "ticker", None)
+        if config_symbol:
+            active_symbol = self.normalize_symbol(str(config_symbol)).upper()
+            if normalized_symbol != active_symbol:
+                return None
+
+        midpoint_candidates: List[Decimal] = []
+        for price in (ws_manager.best_bid, ws_manager.best_ask):
+            if price is None:
+                continue
+            try:
+                midpoint_candidates.append(Decimal(str(price)))
+            except (InvalidOperation, TypeError, ValueError):
+                continue
+
+        if not midpoint_candidates:
+            return None
+
+        if len(midpoint_candidates) == 2:
+            return (midpoint_candidates[0] + midpoint_candidates[1]) / Decimal("2")
+
+        return midpoint_candidates[0]
+
+    async def _enrich_snapshot_with_live_market_data(
+        self,
+        normalized_symbol: str,
+        raw: Dict[str, Any],
+        snapshot: ExchangePositionSnapshot,
+    ) -> None:
+        """
+        Refresh mark price, exposure, and unrealized PnL using the latest order-book data.
+        """
+        live_mark = self._get_live_mark_price(normalized_symbol)
+        if live_mark is None:
+            return
+
+        snapshot.mark_price = live_mark
+
+        quantity = snapshot.quantity or Decimal("0")
+        quantity_abs = quantity.copy_abs()
+        if quantity_abs != 0:
+            snapshot.exposure_usd = quantity_abs * live_mark
+
+        entry_price = snapshot.entry_price
+        if entry_price is not None and quantity != 0:
+            try:
+                snapshot.unrealized_pnl = (live_mark - entry_price) * quantity
+            except Exception:
+                pass
+
+        async with self._positions_lock:
+            cached = self._raw_positions.get(normalized_symbol)
+            if cached is None:
+                return
+
+            cached["mark_price"] = str(live_mark)
+            if snapshot.exposure_usd is not None:
+                cached["position_value"] = str(snapshot.exposure_usd)
+            if snapshot.unrealized_pnl is not None:
+                cached["unrealized_pnl"] = str(snapshot.unrealized_pnl)
+
     async def _snapshot_from_cache(self, normalized_symbol: str) -> Optional[ExchangePositionSnapshot]:
         """Retrieve a cached snapshot if available, optionally enriching with funding data."""
         async with self._positions_lock:
@@ -1241,6 +1316,8 @@ class LighterClient(BaseExchangeClient):
         snapshot = self._build_snapshot_from_raw(normalized_symbol, raw)
         if snapshot is None:
             return None
+
+        await self._enrich_snapshot_with_live_market_data(normalized_symbol, raw, snapshot)
 
         if (
             needs_funding # ⚠️ Only True if funding_accrued is None
