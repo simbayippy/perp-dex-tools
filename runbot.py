@@ -49,6 +49,15 @@ def parse_arguments():
         help="Account name to load credentials from database (e.g., 'acc1'). "
              "If provided, credentials will be loaded from the database instead of env vars.",
     )
+    
+    parser.add_argument(
+        "--log-level",
+        "-l",
+        type=str,
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging level (default: INFO). Use DEBUG to see detailed logs.",
+    )
 
     return parser.parse_args()
 
@@ -160,7 +169,7 @@ async def main():
     args = parse_arguments()
 
     # Setup logging first
-    setup_logging("INFO")
+    setup_logging(args.log_level)
 
     from trading_config.config_yaml import load_config_from_yaml, validate_config_file
 
