@@ -193,11 +193,10 @@ class LighterClient(BaseExchangeClient):
                     account_index=self.account_index,
                     api_key_index=self.api_key_index,
                 )
-
-                # Check client
-                err = self.lighter_client.check_client()
-                if err is not None:
-                    raise Exception(f"CheckClient error: {err}")
+                
+                # ⚡ OPTIMIZATION: Removed check_client() call (saves 150 weight / 250% of rate limit!)
+                # API key validity will be verified on first order attempt with clear error message
+                self.logger.debug("[LIGHTER] Client initialized (skipping API key validation to save rate limit)")
 
             except Exception as e:
                 self.logger.error(f"Failed to initialize Lighter client: {e}")
@@ -236,8 +235,20 @@ class LighterClient(BaseExchangeClient):
 
             # Await WebSocket connection (real-time price updates and order tracking)
             await self.ws_manager.connect()
-            # Seed initial position snapshot via REST as a fallback until stream data arrives
-            await self._refresh_positions_via_rest()
+            
+            # ⚡ OPTIMIZATION: Wait for WebSocket positions instead of REST call (saves 300 weight/500% of rate limit!)
+            # WebSocket subscribes to 'account_all_positions' and will populate positions within 1-2 seconds
+            # If positions are urgently needed, strategies can call get_position_snapshot() which will
+            # fall back to REST only if WebSocket data isn't available yet
+            self.logger.debug("[LIGHTER] Waiting for WebSocket positions stream (saves 300 weight REST call)")
+            
+            # Give WebSocket a moment to receive initial positions (usually instant)
+            # If not received, strategies will trigger REST fallback only when actually needed
+            try:
+                await asyncio.wait_for(self._positions_ready.wait(), timeout=2.0)
+                self.logger.debug("[LIGHTER] Initial positions received via WebSocket ✅")
+            except asyncio.TimeoutError:
+                self.logger.debug("[LIGHTER] WebSocket positions not ready yet (will use REST fallback when needed)")
 
         except Exception as e:
             self.logger.error(f"Error connecting to Lighter: {e}")
