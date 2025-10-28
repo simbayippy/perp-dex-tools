@@ -133,6 +133,40 @@ python database/scripts/add_account.py --from-env --account-name acc1_funding --
 
 ---
 
+#### `delete_account.py`
+Delete a trading account and its credentials from the database.
+
+**Usage:**
+```bash
+# Interactive mode (recommended - shows list and confirms)
+python database/scripts/delete_account.py
+
+# Delete specific account (with confirmation)
+python database/scripts/delete_account.py --account-name acc2
+
+# Force delete without confirmation (DANGEROUS)
+python database/scripts/delete_account.py --account-name acc2 --force
+```
+
+**Features:**
+- Interactive mode lists all accounts for selection
+- Shows detailed summary before deletion (credentials, positions, open positions)
+- Warns if account has open positions
+- Requires confirmation by typing account name
+- Safely cascades deletion:
+  - ✓ Deletes account record
+  - ✓ Deletes all exchange credentials (CASCADE)
+  - ✓ Deletes account sharing relationships (CASCADE)
+  - ✓ Preserves position records (sets `account_id` to NULL)
+
+**⚠️ Important Notes:**
+- Deleting an account does NOT close exchange positions
+- Position records remain in database with `account_id = NULL`
+- Exchange credentials are permanently deleted
+- Cannot be undone (unless you have a database backup)
+
+---
+
 #### `list_accounts.py`
 List all trading accounts and their configured exchanges.
 
