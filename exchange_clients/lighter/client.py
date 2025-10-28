@@ -1139,6 +1139,11 @@ class LighterClient(BaseExchangeClient):
                 symbol_raw = str(market_idx)
 
             position_dict["symbol"] = symbol_raw
+            
+            # WebSocket provides "total_funding_paid_out", but _snapshot_from_cache() expects "funding_accrued"
+            if "total_funding_paid_out" in position_dict:
+                position_dict["funding_accrued"] = position_dict["total_funding_paid_out"]
+            
             normalized_symbol = self.normalize_symbol(str(symbol_raw)).upper()
             updates[normalized_symbol] = position_dict
 
@@ -1226,6 +1231,7 @@ class LighterClient(BaseExchangeClient):
             raw = self._raw_positions.get(normalized_symbol)
             needs_funding = False
             if raw is not None:
+                # raw from websocket data
                 needs_funding = raw.get("funding_accrued") is None
 
         if raw is None:
@@ -1236,7 +1242,7 @@ class LighterClient(BaseExchangeClient):
             return None
 
         if (
-            needs_funding
+            needs_funding # ⚠️ Only True if funding_accrued is None
             and snapshot.side
             and snapshot.quantity != 0
             and raw.get("market_id") is not None
@@ -1586,7 +1592,7 @@ class LighterClient(BaseExchangeClient):
             if account_data and account_data.accounts:
                 positions = []
                 for pos in account_data.accounts[0].positions:
-                    positions.append({
+                    pos_dict = {
                         'market_id': pos.market_id,
                         'symbol': pos.symbol,
                         'position': Decimal(pos.position),
@@ -1597,7 +1603,13 @@ class LighterClient(BaseExchangeClient):
                         'liquidation_price': Decimal(pos.liquidation_price),
                         'allocated_margin': Decimal(pos.allocated_margin),
                         'sign': pos.sign  # 1 for Long, -1 for Short
-                    })
+                    }
+                    
+                    # Map funding field (same as WebSocket) to avoid REST funding lookup
+                    if hasattr(pos, 'total_funding_paid_out'):
+                        pos_dict['funding_accrued'] = Decimal(pos.total_funding_paid_out)
+                    
+                    positions.append(pos_dict)
                 return positions
             return []
         except Exception as e:
