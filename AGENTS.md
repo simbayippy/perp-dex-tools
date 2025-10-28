@@ -1,35 +1,19 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `runbot.py` and `trading_bot.py` orchestrate live strategies; YAML configs live in `configs/` and are generated via `trading_config/`.
-- `strategies/` holds the layered strategy stack—`base_strategy`, shared `components/`, and live code under `implementations/` such as `funding_arbitrage/`.
-- `exchange_clients/` packages typed DEX connectors (`py.typed` ships with it); CLI/UI helpers live in `helpers/`, `scripts/`, `dashboard/`, and `tui/`.
-- `funding_rate_service/` provides the FastAPI backend and shares PostgreSQL state with strategy operations (`strategies/implementations/funding_arbitrage/operations/position_opener.py` and `strategies/implementations/funding_arbitrage/position_manager.py`).
-- Tests are routed through `tests/` with discovery/warnings managed by `pytest.ini`; public docs live in `docs/`, internal work notes in `docs-internal/`.
+Core execution lives in `runbot.py` and `trading_bot.py`, orchestrating YAML strategy configs from `configs/` (generated via `trading_config/`). Strategies are layered under `strategies/`, with shared `components/`, base abstractions in `base_strategy/`, and live implementations in `implementations/` such as `funding_arbitrage/`. Exchange connectors reside in `exchange_clients/` (ships `py.typed`), while operational helpers and UI shells are in `helpers/`, `scripts/`, `dashboard/`, and `tui/`. The FastAPI backend sits in `funding_rate_service/`, sharing PostgreSQL state with funding arb operations. Tests live under `tests/`; public docs are in `docs/`, internal notes in `docs-internal/`.
 
 ## Build, Test, and Development Commands
-- `make install` (or `python -m venv venv && pip install -r requirements.txt && pip install -e './exchange_clients[all]'`) sets up the virtualenv.
-- `python runbot.py --config configs/example_grid.yml` executes a saved strategy; swap in your own config to replay.
-- `cd funding_rate_service && uvicorn main:app --reload` launches the API service against your local Postgres.
-- `pytest` exercises the suite; add `-m integration` for cross-DEX paths or `tests/path/test_module.py -k scenario` to target cases.
-- `black funding_rate_service` and `flake8` enforce formatting; run both before opening a PR.
+Set up dependencies with `make install` (or `python -m venv venv && pip install -r requirements.txt && pip install -e './exchange_clients[all]'`). Replay a saved strategy via `python runbot.py --config configs/example_grid.yml`. Launch the funding API from `funding_rate_service/` using `uvicorn main:app --reload`. Run the full suite with `pytest`, add `-m integration` for cross-DEX coverage, or target specific cases via `pytest tests/path/test_module.py -k scenario`. Apply formatters before PRs: `black funding_rate_service` and `flake8`.
 
 ## Coding Style & Naming Conventions
-- Target Python 3.10+, four-space indentation, and PEP 8 defaults; `.flake8` relaxes line length to 129 chars.
-- Modules/files stay lowercase with underscores; classes are PascalCase; configs and environment keys remain uppercase snake_case.
-- Preserve type hints—connectors expose `py.typed`, so prefer explicit typing for new public APIs.
+Target Python 3.10+, four-space indentation, and PEP 8 defaults; `.flake8` allows 129-character lines. Keep modules lowercase with underscores, classes in PascalCase, configs and environment keys in uppercase snake_case. Preserve type hints for any public APIs, especially when touching `exchange_clients/`.
 
 ## Testing Guidelines
-- Place tests in `tests/` using the `test_*.py` pattern; mirror package structure when practical.
-- Mark async cases with `@pytest.mark.asyncio`; tag `@pytest.mark.unit` or `@pytest.mark.integration` so CI filtering remains accurate.
-- When touching strategies or connectors, add regression coverage for order lifecycle, funding calculations, and error paths.
+Write tests under `tests/` using the `test_*.py` pattern and mirror package layout. Use `pytest.mark.asyncio` for async paths and tag scope with `@pytest.mark.unit` or `@pytest.mark.integration`. Cover order lifecycle, funding calculations, and error handling whenever you adjust strategies or connectors.
 
 ## Commit & Pull Request Guidelines
-- Follow the existing history: concise, imperative summaries (`strategies: tighten funding arb rebalance`) with focused scope.
-- Reference related configs/docs in the commit body when they change, and keep secrets out of diffs.
-- PRs should outline motivation, testing performed (`pytest`, manual run commands), and include screenshots for TUI/dashboard updates; link issues/tasks when available.
+Follow the repo history: concise, imperative summaries such as `strategies: tighten funding arb rebalance`. Reference changed configs or docs in the body and never leak secrets. PRs should explain motivation, list validation (`pytest`, manual runs), and include screenshots for TUI/dashboard tweaks. Link issues or tasks where applicable.
 
-## Deployment & Environment
-- Develop and validate changes locally, but mirror settings to the production VPS where bots run; sync configs and virtualenv packages before redeploying.
-- Share PostgreSQL credentials and API keys via secure channels, populate `.env` from `env_example.txt`, and avoid committing secrets.
-- Strategy YAMLs in `configs/` must stay anonymized; keep per-server overrides in `docs-internal/` or private vaults, not in git.
+## Security & Configuration Tips
+Populate `.env` from `env_example.txt` and keep API keys out of git. Sync local configs with production VPS settings before deployment, and store per-server overrides in `docs-internal/` or secure vaults. Strategy YAMLs in `configs/` must remain anonymized.

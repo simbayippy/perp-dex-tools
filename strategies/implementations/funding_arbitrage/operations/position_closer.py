@@ -907,6 +907,24 @@ class PositionCloser:
             if _is_valid_contract(normalized):
                 resolved_contract = normalized
 
+        # Try to restore multipliers from metadata cache (saves 300 weight REST call!)
+        if metadata:
+            if hasattr(client, "base_amount_multiplier") and getattr(client, "base_amount_multiplier", None) is None:
+                cached_base = metadata.get("base_amount_multiplier")
+                if cached_base is not None:
+                    try:
+                        setattr(client, "base_amount_multiplier", cached_base)
+                    except Exception:
+                        pass
+            
+            if hasattr(client, "price_multiplier") and getattr(client, "price_multiplier", None) is None:
+                cached_price = metadata.get("price_multiplier")
+                if cached_price is not None:
+                    try:
+                        setattr(client, "price_multiplier", cached_price)
+                    except Exception:
+                        pass
+        
         base_multiplier_missing = hasattr(client, "base_amount_multiplier") and getattr(
             client, "base_amount_multiplier", None
         ) is None
@@ -967,6 +985,18 @@ class PositionCloser:
         # Surface the resolved contract_id to callers and leg metadata
         if _is_valid_contract(resolved_contract):
             metadata.setdefault("contract_id", resolved_contract)
+            
+            # ⚡ Cache multipliers to metadata to avoid expensive get_contract_attributes() on next session
+            if hasattr(client, "base_amount_multiplier"):
+                base_mult = getattr(client, "base_amount_multiplier", None)
+                if base_mult is not None:
+                    metadata.setdefault("base_amount_multiplier", base_mult)
+            
+            if hasattr(client, "price_multiplier"):
+                price_mult = getattr(client, "price_multiplier", None)
+                if price_mult is not None:
+                    metadata.setdefault("price_multiplier", price_mult)
+            
             return resolved_contract
         return None
 
