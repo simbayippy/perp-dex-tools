@@ -1141,7 +1141,8 @@ class LighterClient(BaseExchangeClient):
             position_dict["symbol"] = symbol_raw
             
             # WebSocket provides "total_funding_paid_out", but _snapshot_from_cache() expects "funding_accrued"
-            if "total_funding_paid_out" in position_dict:
+            # Note: total_funding_paid_out is optional (omitted when empty/None)
+            if "total_funding_paid_out" in position_dict and position_dict["total_funding_paid_out"] is not None:
                 position_dict["funding_accrued"] = position_dict["total_funding_paid_out"]
             
             normalized_symbol = self.normalize_symbol(str(symbol_raw)).upper()
@@ -1606,7 +1607,8 @@ class LighterClient(BaseExchangeClient):
                     }
                     
                     # Map funding field (same as WebSocket) to avoid REST funding lookup
-                    if hasattr(pos, 'total_funding_paid_out'):
+                    # Note: total_funding_paid_out is optional (omitted when empty/None)
+                    if hasattr(pos, 'total_funding_paid_out') and pos.total_funding_paid_out is not None:
                         pos_dict['funding_accrued'] = Decimal(pos.total_funding_paid_out)
                     
                     positions.append(pos_dict)
