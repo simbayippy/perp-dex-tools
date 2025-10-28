@@ -9,7 +9,7 @@ Ensure each trading account process transparently routes all outbound traffic (H
   - [x] Normalizes proxy definitions from the DB model (`ProxyEndpoint`).
   - [x] Applies environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, lowercase variants).
   - [x] Monkey-patches `socket.socket` using `socks.socksocket` for SOCKS proxies.
-  - [x] No-ops gracefully for HTTP-only proxies (env vars only) and when already enabled for the same endpoint.
+  - [x] Skip socket patching for HTTP proxies (env-vars only) to keep tunnels stable.
   - [x] Provides `enable()`, `disable()`, `rotate()`, and `is_active()` helpers.
   - [x] Restores the original socket implementation and clears env vars on disable.
 
@@ -23,6 +23,7 @@ Ensure each trading account process transparently routes all outbound traffic (H
 - [x] Update `exchange_clients/lighter/client.py` to rely on the session proxy (remove manual proxy wiring in `_initialize_api_client`, nonce patching, signer config).
 - [ ] Apply the same pattern to Backpack, Aster, and any other SDK wrappers, replacing per-client proxy config with a simple readiness check (`SessionProxyManager.is_active()`).
 - [ ] Audit for direct `requests`/`httpx` usage elsewhere and delete redundant proxy plumbing.
+- [ ] Ensure WebSocket managers (Lighter, Backpack, etc.) honour the proxy (switch to proxy-aware client or tunnel helper).
 
 ## 4. Monitoring & Rotation
 - [ ] Implement a startup check that resolves the visible IP via the proxy (`helpers/networking.py::detect_egress_ip`) and log the result.
