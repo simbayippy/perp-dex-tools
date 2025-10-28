@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional, Dict, Any
 
-from networking.selector import ProxySelector
 from exchange_clients.factory import ExchangeFactory
 from helpers.unified_logger import get_logger
 from helpers.lark_bot import LarkBot
@@ -43,12 +42,7 @@ class TradingConfig:
 class TradingBot:
     """Modular Trading Bot - Main trading logic supporting multiple exchanges."""
 
-    def __init__(
-        self,
-        config: TradingConfig,
-        account_credentials: Optional[Dict[str, Dict[str, Any]]] = None,
-        account_proxy_selector: Optional[ProxySelector] = None,
-    ):
+    def __init__(self, config: TradingConfig, account_credentials: Optional[Dict[str, Dict[str, Any]]] = None):
         """
         Initialize Trading Bot.
         
@@ -56,12 +50,9 @@ class TradingBot:
             config: Trading configuration
             account_credentials: Optional credentials dict mapping exchange names to credentials.
                                If provided, credentials will be used instead of environment variables.
-            account_proxy_selector: Optional proxy selector to route all network
-                                    requests through a fixed set of proxies.
         """
         self.config = config
         self.account_credentials = account_credentials
-        self.account_proxy_selector = account_proxy_selector
         self.logger = get_logger("bot", config.strategy, context={"exchange": config.exchange, "ticker": config.ticker}, log_to_console=True)
 
         # Log account info if credentials provided
@@ -69,8 +60,6 @@ class TradingBot:
             account_name = config.strategy_params.get('_account_name', 'unknown')
             self.logger.info(f"Using database credentials for account: {account_name}")
             self.logger.info(f"Available exchanges: {list(account_credentials.keys())}")
-        if account_proxy_selector:
-            self.logger.info("Proxy selector configured for account networking")
 
         # Determine if strategy needs multiple exchanges
         multi_exchange_strategies = ['funding_arbitrage']
@@ -123,10 +112,6 @@ class TradingBot:
                 # Set a representative exchange client for backward compatibility
                 self.exchange_client = next(iter(self.exchange_clients.values()))
 
-                if self.account_proxy_selector:
-                    for client in self.exchange_clients.values():
-                        client.set_proxy_selector(self.account_proxy_selector)
-
                 self.logger.info(
                     f"Created {len(self.exchange_clients)} exchange clients: {list(self.exchange_clients.keys())}"
                 )
@@ -143,9 +128,6 @@ class TradingBot:
                     exchange_creds,  # Pass credentials to factory
                 )
                 self.exchange_clients = None  # Not used for single-exchange strategies
-
-                if self.account_proxy_selector:
-                    self.exchange_client.set_proxy_selector(self.account_proxy_selector)
 
                 if hasattr(self.exchange_client, "order_fill_callback"):
                     self.exchange_client.order_fill_callback = self._handle_order_fill

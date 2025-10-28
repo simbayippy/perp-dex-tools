@@ -9,19 +9,15 @@ Generate configs via:
     python -m trading_config.config_builder
 """
 
-import os
 import argparse
 import asyncio
 import logging
-import sys
-from decimal import Decimal
 from pathlib import Path
-from typing import Optional, Tuple
-
+import sys
 import dotenv
-
-from networking.selector import ProxySelector
+from decimal import Decimal
 from trading_bot import TradingBot, TradingConfig
+import os
 
 
 def parse_arguments():
@@ -109,15 +105,15 @@ def setup_logging(log_level: str):
     # Note: We keep the root logger at the requested level (INFO) so atomic_multi_order.py logs show up
 
 
-async def load_account_credentials(account_name: str) -> Tuple[dict, Optional[ProxySelector]]:
+async def load_account_credentials(account_name: str) -> dict:
     """
-    Load encrypted credentials and proxy selector for an account from the database.
+    Load encrypted credentials for an account from the database.
     
     Args:
         account_name: Name of the account to load credentials for
         
     Returns:
-        Tuple of (credentials, proxy_selector)
+        Dictionary mapping exchange names to their credentials
         
     Raises:
         SystemExit: If credentials cannot be loaded
@@ -139,9 +135,9 @@ async def load_account_credentials(account_name: str) -> Tuple[dict, Optional[Pr
         await db.connect()
         
         try:
+            # Load credentials (encryption_key is read from env by the loader)
             loader = DatabaseCredentialLoader(db)
             credentials = await loader.load_account_credentials(account_name)
-            proxy_selector = await loader.load_account_proxy_selector(account_name)
             
             if not credentials:
                 print(f"Error: No credentials found for account '{account_name}'")
@@ -150,12 +146,9 @@ async def load_account_credentials(account_name: str) -> Tuple[dict, Optional[Pr
                 sys.exit(1)
             
             print(f"✓ Loaded credentials for account: {account_name}")
-            print(f"  Exchanges: {', '.join(credentials.keys())}")
-            if proxy_selector:
-                print("  Networking: proxy selector configured")
-            print()
+            print(f"  Exchanges: {', '.join(credentials.keys())}\n")
             
-            return credentials, proxy_selector
+            return credentials
         finally:
             await db.disconnect()
             
@@ -218,12 +211,11 @@ async def main():
 
     # Load account credentials from database if --account is provided
     account_credentials = None
-    account_proxy_selector = None
     account_name = None
     if args.account:
         account_name = args.account
         print(f"Loading credentials for account: {account_name}")
-        account_credentials, account_proxy_selector = await load_account_credentials(account_name)
+        account_credentials = await load_account_credentials(account_name)
     
     # Store account info in strategy config for later use
     strategy_config["_account_name"] = account_name
@@ -246,11 +238,7 @@ async def main():
     print("="*70 + "\n")
     
     # Create bot with optional account credentials
-    bot = TradingBot(
-        config,
-        account_credentials=account_credentials,
-        account_proxy_selector=account_proxy_selector,
-    )
+    bot = TradingBot(config, account_credentials=account_credentials)
     try:
         await bot.run()
     except Exception as e:

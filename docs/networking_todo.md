@@ -5,8 +5,8 @@ Associate each trading account with a pool of static proxies, use them for all H
 
 ## Database & Secrets
 - [x] Create migration adding `network_proxies` (id, label, endpoint_url, auth_type, credentials_encrypted, metadata JSONB, is_active) and `account_proxy_assignments` (account_id FK, proxy_id FK, priority INT, status ENUM, last_checked_at TIMESTAMP).
-- [ ] Extend the Fernet helper in `database/scripts/add_account.py` to encrypt proxy credentials and add CLI flags `--proxy-label`, `--proxy-endpoint`, `--proxy-user`, `--proxy-pass`, `--proxy-priority`.
-- [ ] Seed initial proxies for the existing account and document required `.env` variables for the proxy encryption key.
+- [x] Extend the Fernet helper in `database/scripts/add_account.py` to encrypt proxy credentials and add CLI flags `--proxy-label`, `--proxy-endpoint`, `--proxy-user`, `--proxy-pass`, `--proxy-priority`.
+- [x] Seed initial proxies for the existing account and document required `.env` variables for the proxy encryption key.
 
 ## Networking Package
 - [x] Add top-level `networking/` package with modules:
@@ -17,12 +17,13 @@ Associate each trading account with a pool of static proxies, use them for all H
   - `exceptions.py` – `ProxyUnavailableError`, `ProxyAuthError`, etc.
 - [ ] Add unit tests covering selection logic and helper factories (use dummy proxies/mocks).
 
-## Client & Strategy Wiring
-- [x] Update `exchange_clients/base_client.py` to accept an optional `ProxyEndpoint` or selector and expose helper methods (`_create_http_client`, `_connect_websocket`) that apply the proxy.
-- [ ] Ensure all concrete exchange clients use the helpers when instantiating SDK sessions or websockets; for SDKs that accept transport overrides, pass the proxied client, otherwise inject via environment/session config.
-- [x] Modify strategy bootstrap (`runbot.py`, `trading_bot.py`) to load proxy assignments per account (DB + optional config override) and pass them into every exchange client instance.
+## Runtime Proxy Strategy
+- [ ] Implement per-process proxy enablement (e.g., socket-level patch or env vars) so each bot process routes all outbound traffic through its assigned proxy.
+- [ ] Provide a CLI hook or wrapper that reads the account’s proxy configuration and enables the proxy before instantiating exchange clients.
+- [ ] Document how to run one account per process (screen/tmux session) and verify the proxy in use.
+- [ ] Ensure data-only collectors (funding_rate_service, etc.) skip proxy enablement.
 
 ## Operations & Monitoring
-- [ ] Implement a health check coroutine that verifies egress IP per proxy (`https://ifconfig.io` via proxy) and marks failing proxies inactive.
-- [ ] Emit structured logs (`account`, `proxy_label`, `egress_ip`) when a client connects or rotates proxies.
-- [ ] Document proxy provisioning in `docs/networking.md` (providers, setup, rotation policy, troubleshooting). Includes vendor shortlist (1Proxy, NetNut, Smartproxy fixed residential, Bright Data static residential, Oxylabs static residential).
+- [ ] Add a simple “detect external IP” check in each bot process to confirm the configured proxy is active.
+- [ ] Emit logs showing proxy label and detected IP at startup.
+- [ ] Document the per-process proxy bootstrap flow in `docs/networking.md` (providers, setup, verification, troubleshooting). Includes vendor shortlist (1Proxy, NetNut, Smartproxy fixed residential, Bright Data static residential, Oxylabs static residential).
