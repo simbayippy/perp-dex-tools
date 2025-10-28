@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Dict, Any, List, Optional, Tuple, Callable, Awaitable
 
+import requests
+
 from exchange_clients.base_client import BaseExchangeClient
 from exchange_clients.base_models import (
     OrderResult,
@@ -24,6 +26,7 @@ from helpers.unified_logger import get_exchange_logger
 # Import official Lighter SDK for API client
 import lighter
 from lighter import SignerClient, ApiClient, Configuration
+from lighter import nonce_manager as lighter_nonce_manager
 
 # Import custom WebSocket implementation
 from .websocket_manager import LighterWebSocketManager
@@ -96,6 +99,9 @@ class LighterClient(BaseExchangeClient):
         self._positions_ready = asyncio.Event()
         self._raw_positions: Dict[str, Dict[str, Any]] = {}
         self._client_to_server_order_index: Dict[str, str] = {}
+
+        # Ensure nonce helper respects proxies (monkey patch once per process)
+        self._ensure_nonce_proxy_patch()
         
         # User stats caching (real-time balance from WebSocket - 0 weight!)
         self._user_stats_lock = asyncio.Lock()
@@ -105,6 +111,9 @@ class LighterClient(BaseExchangeClient):
         # Market ID caching (to avoid expensive order_books() calls - saves 300 weight per lookup!)
         self._market_id_cache: Dict[str, int] = {}
         self._contract_id_cache: Dict[str, str] = {}
+
+        # Track the proxy currently assigned to REST operations
+        self._active_proxy = None
 
     def _validate_config(self) -> None:
         """Validate Lighter configuration."""
@@ -142,8 +151,7 @@ class LighterClient(BaseExchangeClient):
             
             # Cache miss - fetch ALL markets (300 weight)
             self.logger.debug(f"[LIGHTER] Cache miss for {symbol}, fetching all markets (300 weight)")
-            order_api = lighter.OrderApi(self.api_client)
-            order_books = await order_api.order_books()
+            order_books = await self._order_api_call("order_books")
             
             # Collect all available symbols for better error messages
             available_symbols = []
@@ -195,10 +203,8 @@ class LighterClient(BaseExchangeClient):
         """Get market configuration for a ticker using official SDK."""
         try:
             # Use shared API client
-            order_api = lighter.OrderApi(self.api_client)
-
             # Get order books to find market info
-            order_books = await order_api.order_books()
+            order_books = await self._order_api_call("order_books")
 
             for market in order_books.order_books:
                 if market.symbol == ticker:
@@ -239,13 +245,16 @@ class LighterClient(BaseExchangeClient):
             except Exception as e:
                 self.logger.error(f"Failed to initialize Lighter client: {e}")
                 raise
+
+        # Ensure signer client walks through the same proxy-aware API client
+        self._configure_signer_client_proxy()
         return self.lighter_client
 
     async def connect(self) -> None:
         """Connect to Lighter."""
         try:
-            # Initialize shared API client
-            self.api_client = ApiClient(configuration=Configuration(host=self.base_url))
+            # Initialize shared API client (respecting proxy configuration)
+            self._initialize_api_client()
 
             # Initialize Lighter client
             await self._initialize_lighter_client()
@@ -310,6 +319,172 @@ class LighterClient(BaseExchangeClient):
     def get_exchange_name(self) -> str:
         """Get the exchange name."""
         return "lighter"
+
+    # ========================================================================
+    # Proxy-aware REST client helpers
+    # ========================================================================
+
+    _nonce_patch_enabled = False
+
+    def _ensure_nonce_proxy_patch(self) -> None:
+        """Monkey-patch the SDK nonce helper so it honors proxy configuration."""
+        if LighterClient._nonce_patch_enabled:
+            return
+
+        original_get_nonce = lighter_nonce_manager.get_nonce_from_api
+
+        def _get_nonce_with_proxy(client, account_index, api_key_index):
+            proxy_url = getattr(client.configuration, "proxy", None)
+            proxies = None
+            if proxy_url:
+                proxies = {"http": proxy_url, "https": proxy_url}
+
+            response = requests.get(
+                client.configuration.host + "/api/v1/nextNonce",
+                params={
+                    "account_index": account_index,
+                    "api_key_index": api_key_index,
+                },
+                proxies=proxies,
+                timeout=10,
+            )
+            if response.status_code != 200:
+                raise Exception(f"couldn't get nonce {response.content}")
+            return response.json()["nonce"]
+
+        lighter_nonce_manager.get_nonce_from_api = _get_nonce_with_proxy
+        lighter_nonce_manager._original_get_nonce_from_api = original_get_nonce  # type: ignore[attr-defined]
+        LighterClient._nonce_patch_enabled = True
+
+    def _initialize_api_client(self, rotate: bool = False, rebuild_dependents: bool = False) -> None:
+        """
+        Instantiate the async API client, routing HTTP requests via the
+        currently selected proxy when available.
+        """
+
+        configuration = Configuration(host=self.base_url)
+
+        proxy_endpoint = self.current_proxy(rotate_if_needed=rotate)
+        self._active_proxy = proxy_endpoint
+
+        if proxy_endpoint:
+            proxy_url = proxy_endpoint.url_with_auth()
+
+            if hasattr(configuration, "proxy"):
+                setattr(configuration, "proxy", proxy_url)
+            elif hasattr(configuration, "proxies"):
+                setattr(
+                    configuration,
+                    "proxies",
+                    {
+                        "http": proxy_url,
+                        "https": proxy_url,
+                    },
+                )
+            else:  # Fallback for future SDK changes
+                configuration.proxy = proxy_url  # type: ignore[attr-defined]
+
+            if self.logger:
+                self.logger.debug(
+                    f"[LIGHTER] REST client using proxy '{proxy_endpoint.label}' ({proxy_url})"
+                )
+        else:
+            if self.logger:
+                self.logger.debug(
+                    "[LIGHTER] REST client using direct connection (no proxy configured)"
+                )
+
+            if hasattr(configuration, "proxy"):
+                setattr(configuration, "proxy", None)
+            if hasattr(configuration, "proxies"):
+                setattr(configuration, "proxies", None)
+
+        self.api_client = ApiClient(configuration=configuration)
+
+        if rebuild_dependents:
+            self.account_api = lighter.AccountApi(self.api_client)
+            self.order_api = lighter.OrderApi(self.api_client)
+
+        # Keep signer client (if present) aligned with the latest proxy settings
+        self._configure_signer_client_proxy()
+
+    async def _proxied_api_call(
+        self,
+        api_attr: str,
+        factory: Callable[[Any], Any],
+        method: str,
+        *args,
+        **kwargs,
+    ) -> Any:
+        """Execute an SDK API call with proxy failover handling."""
+
+        if getattr(self, api_attr, None) is None:
+            setattr(self, api_attr, factory(self.api_client))
+
+        attempt = 0
+        while True:
+            attempt += 1
+            api_instance = getattr(self, api_attr)
+            func = getattr(api_instance, method)
+            try:
+                return await func(*args, **kwargs)
+            except Exception as exc:
+                if self._active_proxy is None or attempt >= 2:
+                    raise
+
+                if self.logger:
+                    self.logger.warning(
+                        f"[LIGHTER] {method} failed via proxy '{self._active_proxy.label}': {exc}. Rotating proxy."
+                    )
+
+                self.mark_proxy_unhealthy(self._active_proxy)
+                self._initialize_api_client(rotate=True, rebuild_dependents=True)
+                setattr(self, api_attr, factory(self.api_client))
+
+    async def _order_api_call(self, method: str, *args, **kwargs) -> Any:
+        return await self._proxied_api_call("order_api", lighter.OrderApi, method, *args, **kwargs)
+
+    async def _account_api_call(self, method: str, *args, **kwargs) -> Any:
+        return await self._proxied_api_call("account_api", lighter.AccountApi, method, *args, **kwargs)
+
+    def _configure_signer_client_proxy(self) -> None:
+        """
+        Ensure the SignerClient (used for order placement) shares the proxied
+        API client so all submission/cancel requests use the assigned proxy.
+        """
+
+        if not getattr(self, "lighter_client", None):
+            return
+
+        # Make sure the SignerClient reuses the proxy-aware ApiClient
+        self.lighter_client.api_client = self.api_client
+        self.lighter_client.tx_api = lighter.TransactionApi(self.api_client)
+        self.lighter_client.order_api = lighter.OrderApi(self.api_client)
+
+        if hasattr(self.lighter_client, "nonce_manager") and self.lighter_client.nonce_manager is not None:
+            self.lighter_client.nonce_manager.api_client = self.api_client
+
+        # Align SignerClient's internal configuration with active proxy setting
+        proxy_endpoint = self._active_proxy
+        signer_config = self.lighter_client.api_client.configuration
+        if proxy_endpoint:
+            proxy_url = proxy_endpoint.url_with_auth()
+            if hasattr(signer_config, "proxy"):
+                setattr(signer_config, "proxy", proxy_url)
+            elif hasattr(signer_config, "proxies"):
+                setattr(
+                    signer_config,
+                    "proxies",
+                    {
+                        "http": proxy_url,
+                        "https": proxy_url,
+                    },
+                )
+        else:
+            if hasattr(signer_config, "proxy"):
+                setattr(signer_config, "proxy", None)
+            if hasattr(signer_config, "proxies"):
+                setattr(signer_config, "proxies", None)
 
     def supports_liquidation_stream(self) -> bool:
         """Lighter exposes real-time liquidation notifications."""
@@ -609,8 +784,8 @@ class LighterClient(BaseExchangeClient):
             
             # Use SDK to fetch order book
             try:
-                order_api = lighter.OrderApi(self.api_client)
-                result = await order_api.order_book_orders(
+                result = await self._order_api_call(
+                    "order_book_orders",
                     market_id=market_id,
                     limit=levels,
                     _request_timeout=10,
@@ -993,18 +1168,21 @@ class LighterClient(BaseExchangeClient):
             
             # Query active orders for this market
             try:
-                orders_response = await self.order_api.account_active_orders(
+                orders_response = await self._order_api_call(
+                    "account_active_orders",
                     account_index=self.account_index,
                     market_id=int(market_id),
                     auth=auth_token,
-                    _request_timeout=10
+                    _request_timeout=10,
                 )
             except Exception as e:
                 # Order might not be active anymore (filled or cancelled)
                 self.logger.debug(f"Order {order_id} not found in active orders (might be filled): {e}")
                 
                 # Check if order was filled by looking at positions
-                account_data = await self.account_api.account(by="index", value=str(self.account_index))
+                account_data = await self._account_api_call(
+                    "account", by="index", value=str(self.account_index)
+                )
                 if account_data and account_data.accounts and account_data.accounts[0].positions:
                     for position in account_data.accounts[0].positions:
                         if position.symbol == self.config.ticker:
@@ -1386,14 +1564,12 @@ class LighterClient(BaseExchangeClient):
             self.logger.error(f"Error creating auth token: {error}")
             raise ValueError(f"Error creating auth token: {error}")
 
-        # Use OrderApi to get active orders
-        order_api = lighter.OrderApi(self.api_client)
-
         # Get active orders for the specific market
-        orders_response = await order_api.account_active_orders(
+        orders_response = await self._order_api_call(
+            "account_active_orders",
             account_index=self.account_index,
             market_id=self.config.contract_id,
-            auth=auth_token
+            auth=auth_token,
         )
 
         if not orders_response:
@@ -1460,11 +1636,10 @@ class LighterClient(BaseExchangeClient):
     @query_retry(reraise=True)
     async def _fetch_positions_with_retry(self) -> List[Dict[str, Any]]:
         """Get positions using official SDK."""
-        # Use shared API client
-        account_api = lighter.AccountApi(self.api_client)
-
         # Get account info
-        account_data = await account_api.account(by="index", value=str(self.account_index))
+        account_data = await self._account_api_call(
+            "account", by="index", value=str(self.account_index)
+        )
 
         if not account_data or not account_data.accounts:
             self.logger.error("Failed to get positions")
@@ -1536,9 +1711,8 @@ class LighterClient(BaseExchangeClient):
             f"[LIGHTER] Looking for ticker '{ticker}' as '{lighter_symbol}' in Lighter markets"
         )
         
-        order_api = lighter.OrderApi(self.api_client)
         # Get all order books to find the market for our ticker
-        order_books = await order_api.order_books()
+        order_books = await self._order_api_call("order_books")
 
         # Find the market that matches our ticker
         market_info = None
@@ -1571,7 +1745,9 @@ class LighterClient(BaseExchangeClient):
             self.logger.error(f"Available symbols: {', '.join(available_symbols[:10])}{'...' if len(available_symbols) > 10 else ''}")
             raise ValueError(f"Ticker '{ticker}' not found in available markets. Available: {', '.join(available_symbols[:5])}")
 
-        market_summary = await order_api.order_book_details(market_id=market_info.market_id)
+        market_summary = await self._order_api_call(
+            "order_book_details", market_id=market_info.market_id
+        )
         order_book_details = market_summary.order_book_details[0]
         # Set contract_id to market name (Lighter uses market IDs as identifiers)
         market_id_value = market_info.market_id
@@ -1653,7 +1829,9 @@ class LighterClient(BaseExchangeClient):
                 return None
             
             self.logger.info("[LIGHTER] get_account_balance WebSocket user_stats not available, using REST fallback (300 weight)")
-            account_data = await self.account_api.account(by="index", value=str(self.account_index))
+            account_data = await self._account_api_call(
+                "account", by="index", value=str(self.account_index)
+            )
             if account_data and account_data.accounts:
                 return Decimal(account_data.accounts[0].available_balance or "0")
             return None
@@ -1666,8 +1844,10 @@ class LighterClient(BaseExchangeClient):
         try:
             if not self.account_api:
                 return []
-                
-            account_data = await self.account_api.account(by="index", value=str(self.account_index))
+
+            account_data = await self._account_api_call(
+                "account", by="index", value=str(self.account_index)
+            )
             if account_data and account_data.accounts:
                 positions = []
                 for pos in account_data.accounts[0].positions:
@@ -1722,16 +1902,12 @@ class LighterClient(BaseExchangeClient):
                 return None
             
             # Fetch recent trades for this account and market using OrderApi
-            # ✅ Correct API: order_api.trades() with account_index filter
-            if not hasattr(self, 'order_api') or self.order_api is None:
-                self.logger.debug("[LIGHTER] OrderApi not available for trade history")
-                return None
-            
-            trades_response = await self.order_api.trades(
+            trades_response = await self._order_api_call(
+                "trades",
                 account_index=account_index,
                 market_id=market_id,
                 sort_by='timestamp',  # Sort by time
-                sort_dir='desc',  # Descending (newest first) 
+                sort_dir='desc',  # Descending (newest first)
                 limit=100,  # Last 100 trades should cover most position opens
                 auth=auth_token,
                 authorization=auth_token,
@@ -1858,7 +2034,8 @@ class LighterClient(BaseExchangeClient):
         try:
             # Fetch position funding history with authentication
             # Lighter requires BOTH auth (query param) and authorization (header) for main accounts
-            response = await self.account_api.position_funding(
+            response = await self._account_api_call(
+                "position_funding",
                 account_index=account_index,
                 market_id=market_id,
                 limit=100,  # Get recent funding payments
@@ -1956,10 +2133,6 @@ class LighterClient(BaseExchangeClient):
             Dictionary with leverage limits based on margin fractions
         """
         try:
-            # Initialize order API if needed
-            if not hasattr(self, 'order_api') or self.order_api is None:
-                self.order_api = lighter.OrderApi(self.api_client)
-            
             # Normalize symbol and get market ID
             normalized_symbol = self.normalize_symbol(symbol)
             market_id = await self._get_market_id_for_symbol(normalized_symbol)
@@ -1978,9 +2151,10 @@ class LighterClient(BaseExchangeClient):
                 }
             
             # Query market details
-            market_details_response = await self.order_api.order_book_details(
+            market_details_response = await self._order_api_call(
+                "order_book_details",
                 market_id=market_id,
-                _request_timeout=10
+                _request_timeout=10,
             )
             
             if not market_details_response or not market_details_response.order_book_details:
@@ -2023,9 +2197,10 @@ class LighterClient(BaseExchangeClient):
             account_leverage = None
             try:
                 if self.account_api:
-                    account_data = await self.account_api.account(
-                        by="index", 
-                        value=str(self.account_index)
+                    account_data = await self._account_api_call(
+                        "account",
+                        by="index",
+                        value=str(self.account_index),
                     )
                     
                     if account_data and account_data.accounts:
@@ -2086,7 +2261,9 @@ class LighterClient(BaseExchangeClient):
             if not self.account_api:
                 return None
                 
-            account_data = await self.account_api.account(by="index", value=str(self.account_index))
+            account_data = await self._account_api_call(
+                "account", by="index", value=str(self.account_index)
+            )
             if account_data and account_data.accounts:
                 return Decimal(account_data.accounts[0].total_asset_value or "0")
             return None
