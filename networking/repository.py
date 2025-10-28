@@ -62,9 +62,10 @@ async def load_proxy_assignments(
     assignments: List[ProxyAssignment] = []
 
     for row in rows:
-        credentials_payload = _decode_credentials(row["credentials_encrypted"], decrypt)
+        row_dict = dict(row)
+        credentials_payload = _decode_credentials(row_dict.get("credentials_encrypted"), decrypt)
 
-        raw_metadata = row["proxy_metadata"] if "proxy_metadata" in row else None
+        raw_metadata = row_dict.get("proxy_metadata")
         metadata = {}
         if isinstance(raw_metadata, dict):
             metadata = raw_metadata
@@ -77,24 +78,24 @@ async def load_proxy_assignments(
                 metadata = {}
 
         endpoint = ProxyEndpoint(
-            id=str(row["proxy_id"]),
-            label=row["label"],
-            endpoint=row["endpoint_url"],
-            auth_type=row["auth_type"],
+            id=str(row_dict["proxy_id"]),
+            label=row_dict["label"],
+            endpoint=row_dict["endpoint_url"],
+            auth_type=row_dict["auth_type"],
             username=credentials_payload.get("username"),
             password=credentials_payload.get("password"),
             metadata=metadata,
             credentials=credentials_payload,
-            is_active=bool(row["proxy_is_active"]),
+            is_active=bool(row_dict["proxy_is_active"]),
         )
 
         assignment = ProxyAssignment(
-            id=str(row["assignment_id"]),
-            account_id=str(row["account_id"]),
+            id=str(row_dict["assignment_id"]),
+            account_id=str(row_dict["account_id"]),
             proxy=endpoint,
-            priority=row["priority"] or 0,
-            status=row["status"] or "inactive",
-            last_checked_at=row.get("last_checked_at"),
+            priority=row_dict["priority"] or 0,
+            status=row_dict["status"] or "inactive",
+            last_checked_at=row_dict.get("last_checked_at"),
         )
 
         if only_active and not assignment.is_account_active:
