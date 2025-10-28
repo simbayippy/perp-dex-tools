@@ -101,6 +101,10 @@ class LighterClient(BaseExchangeClient):
         self._user_stats_lock = asyncio.Lock()
         self._user_stats_ready = asyncio.Event()
         self._user_stats: Optional[Dict[str, Any]] = None
+        
+        # Market ID caching (to avoid expensive order_books() calls - saves 300 weight per lookup!)
+        self._market_id_cache: Dict[str, int] = {}
+        self._contract_id_cache: Dict[str, str] = {}
 
     def _validate_config(self) -> None:
         """Validate Lighter configuration."""
@@ -112,7 +116,10 @@ class LighterClient(BaseExchangeClient):
 
     async def _get_market_id_for_symbol(self, symbol: str) -> Optional[int]:
         """
-        Get Lighter market_id for a given symbol.
+        Get Lighter market_id for a given symbol (cached to save 300 weight per lookup).
+        
+        ⚡ OPTIMIZATION: Caches market_id after first lookup to avoid expensive order_books() calls.
+        The order_books() endpoint fetches ALL markets (300 weight), so caching is critical.
         
         Args:
             symbol: Trading symbol (e.g., 'BTC', 'ETH', 'TOSHI')
@@ -120,28 +127,54 @@ class LighterClient(BaseExchangeClient):
         Returns:
             Integer market_id, or None if not found
         """
+        # Normalize symbol for cache key consistency
+        cache_key = symbol.upper()
+        
+        # Check cache first (0 weight!)
+        if cache_key in self._market_id_cache:
+            self.logger.debug(f"[LIGHTER] Using cached market_id for {symbol} (saved 300 weight)")
+            return self._market_id_cache[cache_key]
+        
         try:
             # Convert normalized symbol to Lighter's format (e.g., "TOSHI" -> "1000TOSHI")
             from exchange_clients.lighter.common import get_lighter_symbol_format
             lighter_symbol = get_lighter_symbol_format(symbol)
             
+            # Cache miss - fetch ALL markets (300 weight)
+            self.logger.debug(f"[LIGHTER] Cache miss for {symbol}, fetching all markets (300 weight)")
             order_api = lighter.OrderApi(self.api_client)
             order_books = await order_api.order_books()
             
             # Collect all available symbols for better error messages
             available_symbols = []
+            found_market_id = None
             
             for market in order_books.order_books:
                 available_symbols.append(market.symbol)
+                
+                # Cache ALL markets while we have them (amortize the 300 weight cost!)
+                market_cache_key = market.symbol.upper()
+                self._market_id_cache[market_cache_key] = market.market_id
+                
                 # Try Lighter-specific format first (e.g., "1000TOSHI")
                 if market.symbol.upper() == lighter_symbol.upper():
-                    return market.market_id
+                    found_market_id = market.market_id
                 # Try exact match with original symbol
                 elif market.symbol == symbol:
-                    return market.market_id
+                    found_market_id = market.market_id
                 # Try case-insensitive match
                 elif market.symbol.upper() == symbol.upper():
-                    return market.market_id
+                    found_market_id = market.market_id
+            
+            if found_market_id is not None:
+                # Cache the lookup key we used (not just the exact symbol match)
+                self._market_id_cache[cache_key] = found_market_id
+                self._market_id_cache[lighter_symbol.upper()] = found_market_id
+                self.logger.debug(
+                    f"[LIGHTER] Cached market_id={found_market_id} for {symbol} "
+                    f"(and {len(available_symbols)} other markets)"
+                )
+                return found_market_id
             
             # Symbol not found - provide helpful error message
             self.logger.warning(
