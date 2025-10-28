@@ -48,8 +48,15 @@ for env_file in "${ENV_FILES[@]}"; do
     # Copy env file to .env
     cp "$env_file" .env
     
+    proxy_file="proxies.${account_name}.txt"
+    proxy_args=()
+    if [ -f "$proxy_file" ]; then
+        echo "🌐 Found proxy list: $proxy_file"
+        proxy_args=(--proxy-file "$proxy_file" --proxy-label-prefix "${account_name}_proxy")
+    fi
+
     # Add account to database
-    python database/scripts/add_account.py --from-env --account-name "$account_name"
+    python database/scripts/add_account.py --from-env --account-name "$account_name" --env-file "$env_file" "${proxy_args[@]}"
     
     echo ""
 done
@@ -72,4 +79,3 @@ echo "🚀 Run bots:"
 echo "   python runbot.py --config config.yml --account acc1"
 echo "   python runbot.py --config config.yml --account acc2"
 echo "   python runbot.py --config config.yml --account acc3"
-

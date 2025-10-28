@@ -17,7 +17,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Optional
 
 # Ensure project root on sys.path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -30,91 +30,9 @@ import dotenv
 from databases import Database
 
 from database.scripts.add_account import CredentialEncryptor  # Reuse helper
+from database.scripts.proxy_utils import assign_proxy, parse_proxy_line, upsert_proxy
 
 dotenv.load_dotenv()
-
-
-async def upsert_proxy(
-    db: Database,
-    label: str,
-    endpoint_url: str,
-    auth_type: str,
-    encrypted_credentials: Optional[str],
-) -> str:
-    query = """
-        INSERT INTO network_proxies (label, endpoint_url, auth_type, credentials_encrypted, is_active)
-        VALUES (:label, :endpoint, :auth_type, CAST(:creds AS jsonb), TRUE)
-        ON CONFLICT (label) DO UPDATE
-        SET endpoint_url = EXCLUDED.endpoint_url,
-            auth_type = EXCLUDED.auth_type,
-            credentials_encrypted = EXCLUDED.credentials_encrypted,
-            is_active = TRUE,
-            updated_at = NOW()
-        RETURNING id
-    """
-    row = await db.fetch_one(
-        query,
-        {
-            "label": label,
-            "endpoint": endpoint_url,
-            "auth_type": auth_type,
-            "creds": encrypted_credentials,
-        },
-    )
-    return str(row["id"])
-
-
-async def assign_proxy(
-    db: Database,
-    account_name: str,
-    proxy_id: str,
-    priority: int,
-    status: str = "active",
-) -> None:
-    account_row = await db.fetch_one(
-        "SELECT id FROM accounts WHERE account_name = :name",
-        {"name": account_name},
-    )
-    if not account_row:
-        raise ValueError(f"Account '{account_name}' not found")
-
-    account_id = account_row["id"]
-    query = """
-        INSERT INTO account_proxy_assignments (account_id, proxy_id, priority, status)
-        VALUES (:account_id, :proxy_id, :priority, :status)
-        ON CONFLICT (account_id, proxy_id) DO UPDATE
-        SET priority = EXCLUDED.priority,
-            status = EXCLUDED.status,
-            updated_at = NOW()
-    """
-    await db.execute(
-        query,
-        {
-            "account_id": account_id,
-            "proxy_id": proxy_id,
-            "priority": priority,
-            "status": status,
-        },
-    )
-
-
-def parse_proxy_line(
-    raw: str,
-    *,
-    scheme: str,
-) -> Tuple[str, Optional[str], Optional[str]]:
-    tokens = [token.strip() for token in raw.split(":") if token.strip()]
-    if len(tokens) < 2:
-        raise ValueError(f"Invalid proxy line (need host:port[:user:pass]): '{raw}'")
-
-    host = tokens[0]
-    port = tokens[1]
-    endpoint_url = f"{scheme}://{host}:{port}"
-
-    username = tokens[2] if len(tokens) >= 3 else None
-    password = ":".join(tokens[3:]) if len(tokens) >= 4 else None
-
-    return endpoint_url, username, password
 
 
 async def main(args: argparse.Namespace) -> None:
@@ -161,7 +79,7 @@ async def main(args: argparse.Namespace) -> None:
                     creds_payload = json.dumps(payload)
 
                 proxy_id = await upsert_proxy(
-                    db=db,
+                    db,
                     label=label,
                     endpoint_url=endpoint_url,
                     auth_type=args.auth_type,
@@ -171,7 +89,7 @@ async def main(args: argparse.Namespace) -> None:
 
                 if args.account:
                     await assign_proxy(
-                        db=db,
+                        db,
                         account_name=args.account,
                         proxy_id=proxy_id,
                         priority=args.priority + (idx - start_index),
@@ -200,7 +118,7 @@ async def main(args: argparse.Namespace) -> None:
             creds_payload = json.dumps(payload)
 
         proxy_id = await upsert_proxy(
-            db=db,
+            db,
             label=args.label,
             endpoint_url=args.endpoint,
             auth_type=args.auth_type,
@@ -210,7 +128,7 @@ async def main(args: argparse.Namespace) -> None:
 
         if args.account:
             await assign_proxy(
-                db=db,
+                db,
                 account_name=args.account,
                 proxy_id=proxy_id,
                 priority=args.priority,
