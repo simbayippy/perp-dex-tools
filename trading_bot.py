@@ -16,6 +16,7 @@ from helpers.unified_logger import get_logger
 from helpers.lark_bot import LarkBot
 from helpers.telegram_bot import TelegramBot
 from strategies import StrategyFactory
+from networking import ProxySelector, SessionProxyManager
 
 
 @dataclass
@@ -42,7 +43,12 @@ class TradingConfig:
 class TradingBot:
     """Modular Trading Bot - Main trading logic supporting multiple exchanges."""
 
-    def __init__(self, config: TradingConfig, account_credentials: Optional[Dict[str, Dict[str, Any]]] = None):
+    def __init__(
+        self,
+        config: TradingConfig,
+        account_credentials: Optional[Dict[str, Dict[str, Any]]] = None,
+        proxy_selector: Optional[ProxySelector] = None,
+    ):
         """
         Initialize Trading Bot.
         
@@ -50,9 +56,11 @@ class TradingBot:
             config: Trading configuration
             account_credentials: Optional credentials dict mapping exchange names to credentials.
                                If provided, credentials will be used instead of environment variables.
+            proxy_selector: Optional proxy selector derived from account assignments.
         """
         self.config = config
         self.account_credentials = account_credentials
+        self.proxy_selector = proxy_selector
         self.logger = get_logger("bot", config.strategy, context={"exchange": config.exchange, "ticker": config.ticker}, log_to_console=True)
 
         # Log account info if credentials provided
@@ -60,6 +68,17 @@ class TradingBot:
             account_name = config.strategy_params.get('_account_name', 'unknown')
             self.logger.info(f"Using database credentials for account: {account_name}")
             self.logger.info(f"Available exchanges: {list(account_credentials.keys())}")
+
+        if proxy_selector:
+            if SessionProxyManager.is_active():
+                active_display = SessionProxyManager.describe(mask_password=True)
+                assignment = proxy_selector.current_assignment()
+                if not active_display and assignment:
+                    active_display = assignment.proxy.masked_label()
+                if active_display:
+                    self.logger.info(f"Session proxy active: {active_display}")
+            else:
+                self.logger.warning("Proxy assignments loaded but session proxy is disabled")
 
         # Determine if strategy needs multiple exchanges
         multi_exchange_strategies = ['funding_arbitrage']
@@ -109,6 +128,10 @@ class TradingBot:
                 if not self.exchange_clients:
                     raise ValueError("Failed to instantiate any exchange clients.")
 
+                if proxy_selector:
+                    for client in self.exchange_clients.values():
+                        setattr(client, "proxy_selector", proxy_selector)
+
                 # Set a representative exchange client for backward compatibility
                 self.exchange_client = next(iter(self.exchange_clients.values()))
 
@@ -128,6 +151,9 @@ class TradingBot:
                     exchange_creds,  # Pass credentials to factory
                 )
                 self.exchange_clients = None  # Not used for single-exchange strategies
+
+                if proxy_selector and self.exchange_client:
+                    setattr(self.exchange_client, "proxy_selector", proxy_selector)
 
                 if hasattr(self.exchange_client, "order_fill_callback"):
                     self.exchange_client.order_fill_callback = self._handle_order_fill

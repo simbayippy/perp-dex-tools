@@ -11,6 +11,7 @@ dependencies = [
     "aiohttp>=3.8.0",
     "websockets>=10.0",
     "tenacity>=8.0.0",
+    "PySocks>=1.7.0",
 ]
 
 [project.optional-dependencies]
@@ -58,4 +59,3 @@ packages = {find = {where = ["."]}}
 
 [tool.setuptools.package-data]
 exchange_clients = ["py.typed"]
-
