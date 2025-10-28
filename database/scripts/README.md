@@ -85,15 +85,19 @@ Add a new trading account with encrypted credentials to the database.
 # Interactive mode (recommended)
 python database/scripts/add_account.py --interactive
 
-# From .env file
+# From .env file (default)
 python database/scripts/add_account.py --from-env --account-name main_bot
+
+# From custom env file (useful for multiple accounts/API keys)
+python database/scripts/add_account.py --from-env --account-name acc1_funding --env-file .env.acc2
 ```
 
 **Features:**
-- Reads credentials from `.env` file (Lighter, Aster, Backpack)
+- Reads credentials from `.env` file (or custom env file via `--env-file`)
 - Encrypts credentials using Fernet encryption
 - Stores encrypted credentials in database
 - Supports multiple exchanges per account
+- Supports multiple accounts with different API keys using different env files
 - Idempotent - safe to run multiple times (updates existing credentials)
 
 **First Time Setup:**
@@ -106,6 +110,25 @@ echo "CREDENTIAL_ENCRYPTION_KEY=your_generated_key_here" >> .env
 
 # 3. Add your account
 python database/scripts/add_account.py --from-env --account-name main_bot
+```
+
+**Adding Multiple Accounts (e.g., different API keys for same Lighter account):**
+```bash
+# 1. Create separate env file with new API key credentials
+cat > .env.acc2 << EOF
+API_KEY_PRIVATE_KEY=<new_api_key_private_key>
+LIGHTER_ACCOUNT_INDEX=213803
+LIGHTER_API_KEY_INDEX=3
+DATABASE_URL=<same_as_main_env>
+CREDENTIAL_ENCRYPTION_KEY=<same_as_main_env>
+EOF
+
+# 2. Add new account entry with different API key
+python database/scripts/add_account.py --from-env --account-name acc1_funding --env-file .env.acc2
+
+# 3. Run different strategies on same Lighter account with different API keys
+# Terminal 1: python runbot.py --config config1.yml --account acc1
+# Terminal 2: python runbot.py --config config2.yml --account acc1_funding
 ```
 
 ---

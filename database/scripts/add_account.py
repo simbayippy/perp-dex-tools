@@ -30,7 +30,8 @@ from cryptography.fernet import Fernet
 from databases import Database
 from dotenv import load_dotenv
 
-# Load environment variables
+# Load environment variables (can be overridden with --env-file)
+# Default load for imports/initialization
 load_dotenv()
 
 try:
@@ -247,10 +248,13 @@ async def read_credentials_from_env() -> Dict[str, Dict]:
     return credentials
 
 
-async def add_account_from_env(account_name: str):
-    """Add account using credentials from .env file"""
+async def add_account_from_env(account_name: str, env_file: str = ".env"):
+    """Add account using credentials from specified env file"""
     
-    logger.info(f"📋 Adding account '{account_name}' from .env file...")
+    # Reload environment from specified file
+    load_dotenv(dotenv_path=env_file, override=True)
+    
+    logger.info(f"📋 Adding account '{account_name}' from {env_file}...")
     logger.info("="*70)
     
     # Get database URL
@@ -353,7 +357,8 @@ async def interactive_mode():
 async def main():
     parser = argparse.ArgumentParser(description="Add trading account to database")
     parser.add_argument('--account-name', help='Name of the account to create')
-    parser.add_argument('--from-env', action='store_true', help='Read credentials from .env file')
+    parser.add_argument('--from-env', action='store_true', help='Read credentials from env file')
+    parser.add_argument('--env-file', default='.env', help='Path to env file (default: .env)')
     parser.add_argument('--interactive', action='store_true', help='Interactive mode')
     
     args = parser.parse_args()
@@ -362,8 +367,8 @@ async def main():
         # Interactive mode
         success = await interactive_mode()
     elif args.from_env and args.account_name:
-        # From .env mode
-        success = await add_account_from_env(args.account_name)
+        # From specified env file
+        success = await add_account_from_env(args.account_name, args.env_file)
     else:
         parser.print_help()
         return 1
