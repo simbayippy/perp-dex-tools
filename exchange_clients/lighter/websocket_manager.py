@@ -29,11 +29,13 @@ class LighterWebSocketManager(BaseWebSocketManager):
         order_update_callback: Optional[Callable] = None,
         liquidation_callback: Optional[Callable[[List[Dict[str, Any]]], Awaitable[None]]] = None,
         positions_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+        user_stats_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     ):
         self.config = config
         self.order_update_callback = order_update_callback
         self.liquidation_callback = liquidation_callback
         self.positions_callback = positions_callback
+        self.user_stats_callback = user_stats_callback
         super().__init__()
         self.ws = None
         self._listener_task: Optional[asyncio.Task] = None
@@ -557,9 +559,15 @@ class LighterWebSocketManager(BaseWebSocketManager):
                     "channel": f"notification/{self.account_index}",
                     "auth": auth_token,
                 })
+            if self.user_stats_callback:
+                subscription_messages.append({
+                    "type": "subscribe",
+                    "channel": f"user_stats/{self.account_index}",
+                    "auth": auth_token,
+                })
         else:
-            if self.liquidation_callback:
-                self._log("Skipping account order/notification subscriptions (no auth token)", "WARNING")
+            if self.liquidation_callback or self.user_stats_callback:
+                self._log("Skipping account order/notification/user_stats subscriptions (no auth token)", "WARNING")
 
         for message in subscription_messages:
             await self.ws.send(json.dumps(message))
@@ -587,6 +595,7 @@ class LighterWebSocketManager(BaseWebSocketManager):
                 notifications_for_dispatch: Optional[List[Dict[str, Any]]] = None
                 request_snapshot = False
                 positions_payload: Optional[Dict[str, Any]] = None
+                user_stats_payload: Optional[Dict[str, Any]] = None
 
                 async with self.order_book_lock:
                     if data.get("type") == "subscribed/order_book":
@@ -678,6 +687,12 @@ class LighterWebSocketManager(BaseWebSocketManager):
                     elif data.get("type") == "subscribed/account_all_positions":
                         self._log("Subscribed to account positions channel", "DEBUG")
 
+                    elif data.get("type") == "update/user_stats":
+                        user_stats_payload = data
+
+                    elif data.get("type") == "subscribed/user_stats":
+                        self._log("Subscribed to user stats channel (real-time balance updates)", "DEBUG")
+
                 cleanup_counter += 1
                 if cleanup_counter >= 1000:
                     self.cleanup_old_order_book_levels()
@@ -699,6 +714,12 @@ class LighterWebSocketManager(BaseWebSocketManager):
                         await self.positions_callback(positions_payload)
                     except Exception as exc:
                         self._log(f"Error dispatching positions update: {exc}", "ERROR")
+
+                if user_stats_payload and self.user_stats_callback:
+                    try:
+                        await self.user_stats_callback(user_stats_payload)
+                    except Exception as exc:
+                        self._log(f"Error dispatching user stats update: {exc}", "ERROR")
 
         finally:
             self.running = False

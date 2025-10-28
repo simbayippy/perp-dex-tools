@@ -30,7 +30,8 @@ from cryptography.fernet import Fernet
 from databases import Database
 from dotenv import load_dotenv
 
-# Load environment variables
+# Load environment variables (can be overridden with --env-file)
+# Default load for imports/initialization
 load_dotenv()
 
 try:
@@ -94,7 +95,8 @@ class AccountManager:
         )
         
         if existing:
-            logger.info(f"Account '{account_name}' already exists (id: {existing['id']})")
+            logger.info(f"ℹ️  Account '{account_name}' already exists (id: {existing['id']})")
+            logger.info("   Credentials will be updated/overridden")
             return existing['id']
         
         # Create account
@@ -182,6 +184,7 @@ class AccountManager:
                 "additional": additional_json
             })
             logger.info(f"✅ Updated credentials for {exchange_name} (account_id: {account_id})")
+            logger.info(f"   Previous credentials have been overridden")
         else:
             # Insert new credentials
             additional_json = json.dumps(additional_creds) if additional_creds else None
@@ -247,10 +250,27 @@ async def read_credentials_from_env() -> Dict[str, Dict]:
     return credentials
 
 
-async def add_account_from_env(account_name: str):
-    """Add account using credentials from .env file"""
+async def add_account_from_env(account_name: str, env_file: str = ".env"):
+    """Add account using credentials from specified env file"""
     
-    logger.info(f"📋 Adding account '{account_name}' from .env file...")
+    # Check if env file exists
+    env_path = Path(env_file)
+    if not env_path.exists():
+        logger.error(f"❌ Environment file not found: {env_file}")
+        logger.error(f"   Searched at: {env_path.absolute()}")
+        logger.warning("⚠️  Falling back to default .env file")
+        env_file = ".env"
+        env_path = Path(env_file)
+        if not env_path.exists():
+            logger.error(f"❌ Default .env file also not found!")
+            return False
+    
+    logger.info(f"✅ Found environment file: {env_path.absolute()}")
+    
+    # Reload environment from specified file
+    load_dotenv(dotenv_path=env_file, override=True)
+    
+    logger.info(f"📋 Adding account '{account_name}' from {env_file}...")
     logger.info("="*70)
     
     # Get database URL
@@ -276,9 +296,19 @@ async def add_account_from_env(account_name: str):
         credentials = await read_credentials_from_env()
         
         if not credentials:
-            logger.warning("⚠️  No credentials found in .env file")
+            logger.warning(f"⚠️  No credentials found in {env_file}")
             logger.info("Make sure you have set: LIGHTER_*, ASTER_*, BACKPACK_* variables")
             return False
+        
+        # Log what was loaded for verification
+        logger.info(f"\n📦 Loaded credentials from {env_file}:")
+        for exchange, creds in credentials.items():
+            logger.info(f"   - {exchange}:")
+            for key, value in creds.items():
+                if key and value:
+                    # Show first 4 chars for verification without exposing full keys
+                    masked_value = f"{str(value)[:4]}..." if len(str(value)) > 4 else "***"
+                    logger.info(f"      {key}: {masked_value}")
         
         # Add credentials for each exchange
         for exchange_name, creds in credentials.items():
@@ -353,7 +383,8 @@ async def interactive_mode():
 async def main():
     parser = argparse.ArgumentParser(description="Add trading account to database")
     parser.add_argument('--account-name', help='Name of the account to create')
-    parser.add_argument('--from-env', action='store_true', help='Read credentials from .env file')
+    parser.add_argument('--from-env', action='store_true', help='Read credentials from env file')
+    parser.add_argument('--env-file', default='.env', help='Path to env file (default: .env)')
     parser.add_argument('--interactive', action='store_true', help='Interactive mode')
     
     args = parser.parse_args()
@@ -362,8 +393,8 @@ async def main():
         # Interactive mode
         success = await interactive_mode()
     elif args.from_env and args.account_name:
-        # From .env mode
-        success = await add_account_from_env(args.account_name)
+        # From specified env file
+        success = await add_account_from_env(args.account_name, args.env_file)
     else:
         parser.print_help()
         return 1

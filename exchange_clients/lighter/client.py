@@ -96,6 +96,15 @@ class LighterClient(BaseExchangeClient):
         self._positions_ready = asyncio.Event()
         self._raw_positions: Dict[str, Dict[str, Any]] = {}
         self._client_to_server_order_index: Dict[str, str] = {}
+        
+        # User stats caching (real-time balance from WebSocket - 0 weight!)
+        self._user_stats_lock = asyncio.Lock()
+        self._user_stats_ready = asyncio.Event()
+        self._user_stats: Optional[Dict[str, Any]] = None
+        
+        # Market ID caching (to avoid expensive order_books() calls - saves 300 weight per lookup!)
+        self._market_id_cache: Dict[str, int] = {}
+        self._contract_id_cache: Dict[str, str] = {}
 
     def _validate_config(self) -> None:
         """Validate Lighter configuration."""
@@ -107,7 +116,10 @@ class LighterClient(BaseExchangeClient):
 
     async def _get_market_id_for_symbol(self, symbol: str) -> Optional[int]:
         """
-        Get Lighter market_id for a given symbol.
+        Get Lighter market_id for a given symbol (cached to save 300 weight per lookup).
+        
+        ⚡ OPTIMIZATION: Caches market_id after first lookup to avoid expensive order_books() calls.
+        The order_books() endpoint fetches ALL markets (300 weight), so caching is critical.
         
         Args:
             symbol: Trading symbol (e.g., 'BTC', 'ETH', 'TOSHI')
@@ -115,28 +127,54 @@ class LighterClient(BaseExchangeClient):
         Returns:
             Integer market_id, or None if not found
         """
+        # Normalize symbol for cache key consistency
+        cache_key = symbol.upper()
+        
+        # Check cache first (0 weight!)
+        if cache_key in self._market_id_cache:
+            self.logger.debug(f"[LIGHTER] Using cached market_id for {symbol} (saved 300 weight)")
+            return self._market_id_cache[cache_key]
+        
         try:
             # Convert normalized symbol to Lighter's format (e.g., "TOSHI" -> "1000TOSHI")
             from exchange_clients.lighter.common import get_lighter_symbol_format
             lighter_symbol = get_lighter_symbol_format(symbol)
             
+            # Cache miss - fetch ALL markets (300 weight)
+            self.logger.debug(f"[LIGHTER] Cache miss for {symbol}, fetching all markets (300 weight)")
             order_api = lighter.OrderApi(self.api_client)
             order_books = await order_api.order_books()
             
             # Collect all available symbols for better error messages
             available_symbols = []
+            found_market_id = None
             
             for market in order_books.order_books:
                 available_symbols.append(market.symbol)
+                
+                # Cache ALL markets while we have them (amortize the 300 weight cost!)
+                market_cache_key = market.symbol.upper()
+                self._market_id_cache[market_cache_key] = market.market_id
+                
                 # Try Lighter-specific format first (e.g., "1000TOSHI")
                 if market.symbol.upper() == lighter_symbol.upper():
-                    return market.market_id
+                    found_market_id = market.market_id
                 # Try exact match with original symbol
                 elif market.symbol == symbol:
-                    return market.market_id
+                    found_market_id = market.market_id
                 # Try case-insensitive match
                 elif market.symbol.upper() == symbol.upper():
-                    return market.market_id
+                    found_market_id = market.market_id
+            
+            if found_market_id is not None:
+                # Cache the lookup key we used (not just the exact symbol match)
+                self._market_id_cache[cache_key] = found_market_id
+                self._market_id_cache[lighter_symbol.upper()] = found_market_id
+                self.logger.debug(
+                    f"[LIGHTER] Cached market_id={found_market_id} for {symbol} "
+                    f"(and {len(available_symbols)} other markets)"
+                )
+                return found_market_id
             
             # Symbol not found - provide helpful error message
             self.logger.warning(
@@ -193,11 +231,10 @@ class LighterClient(BaseExchangeClient):
                     account_index=self.account_index,
                     api_key_index=self.api_key_index,
                 )
-
-                # Check client
-                err = self.lighter_client.check_client()
-                if err is not None:
-                    raise Exception(f"CheckClient error: {err}")
+                
+                # ⚡ OPTIMIZATION: Removed check_client() call (saves 150 weight / 250% of rate limit!)
+                # API key validity will be verified on first order attempt with clear error message
+                self.logger.debug("[LIGHTER] Client initialized (skipping API key validation to save rate limit)")
 
             except Exception as e:
                 self.logger.error(f"Failed to initialize Lighter client: {e}")
@@ -229,6 +266,7 @@ class LighterClient(BaseExchangeClient):
                 order_update_callback=self._handle_websocket_order_update,
                 liquidation_callback=self.handle_liquidation_notification,
                 positions_callback=self._handle_positions_stream_update,
+                user_stats_callback=self._handle_user_stats_update,
             )
 
             # Set logger for WebSocket manager
@@ -236,8 +274,20 @@ class LighterClient(BaseExchangeClient):
 
             # Await WebSocket connection (real-time price updates and order tracking)
             await self.ws_manager.connect()
-            # Seed initial position snapshot via REST as a fallback until stream data arrives
-            await self._refresh_positions_via_rest()
+            
+            # ⚡ OPTIMIZATION: Wait for WebSocket positions instead of REST call (saves 300 weight/500% of rate limit!)
+            # WebSocket subscribes to 'account_all_positions' and will populate positions within 1-2 seconds
+            # If positions are urgently needed, strategies can call get_position_snapshot() which will
+            # fall back to REST only if WebSocket data isn't available yet
+            self.logger.debug("[LIGHTER] Waiting for WebSocket positions stream (saves 300 weight REST call)")
+            
+            # Give WebSocket a moment to receive initial positions (usually instant)
+            # If not received, strategies will trigger REST fallback only when actually needed
+            try:
+                await asyncio.wait_for(self._positions_ready.wait(), timeout=2.0)
+                self.logger.debug("[LIGHTER] Initial positions received via WebSocket ✅")
+            except asyncio.TimeoutError:
+                self.logger.debug("[LIGHTER] WebSocket positions not ready yet (will use REST fallback when needed)")
 
         except Exception as e:
             self.logger.error(f"Error connecting to Lighter: {e}")
@@ -648,8 +698,8 @@ class LighterClient(BaseExchangeClient):
         order_params = {
             'market_index': self.config.contract_id,
             'client_order_index': client_order_index,
-            'base_amount': int(quantity * self.base_amount_multiplier),
-            'price': int(price * self.price_multiplier),
+            'base_amount': round(quantity * self.base_amount_multiplier),
+            'price': round(price * self.price_multiplier),
             'is_ask': is_ask,
             'order_type': self.lighter_client.ORDER_TYPE_LIMIT,
             'time_in_force': self.lighter_client.ORDER_TIME_IN_FORCE_POST_ONLY,
@@ -804,7 +854,7 @@ class LighterClient(BaseExchangeClient):
                     avg_execution_price = mid_price * (Decimal('1') + slippage_tolerance)
                 
                 # Convert to Lighter's price format (integer with multiplier)
-                avg_execution_price_int = int(avg_execution_price * self.price_multiplier)
+                avg_execution_price_int = round(avg_execution_price * self.price_multiplier)
                 
             except Exception as price_error:
                 self.logger.error(f"Failed to get market price for market order: {price_error}")
@@ -812,7 +862,7 @@ class LighterClient(BaseExchangeClient):
                 avg_execution_price_int = 0  # 0 means no limit
             
             # Convert quantity to Lighter's base amount format
-            base_amount = int(quantity * self.base_amount_multiplier)
+            base_amount = round(quantity * self.base_amount_multiplier)
             
             self.logger.info(
                 f"📤 [LIGHTER] Placing market order: "
@@ -1036,6 +1086,30 @@ class LighterClient(BaseExchangeClient):
             self.logger.debug(f"Traceback: {traceback.format_exc()}")
             return None
 
+    async def _handle_user_stats_update(self, payload: Dict[str, Any]) -> None:
+        """
+        Process user stats update from WebSocket (includes real-time balance).
+        
+        ⚡ OPTIMIZATION: WebSocket balance updates are FREE (0 weight) vs 300 weight REST call!
+        """
+        stats = payload.get("stats")
+        if not stats:
+            return
+        
+        # Check if this is first update (before setting the flag)
+        is_first_update = not self._user_stats_ready.is_set()
+        
+        async with self._user_stats_lock:
+            self._user_stats = stats
+            self._user_stats_ready.set()
+        
+        # Log first balance update for visibility
+        if is_first_update:
+            available_balance = stats.get("available_balance", "N/A")
+            self.logger.debug(
+                f"[LIGHTER] Received user stats via WebSocket: balance={available_balance} (0 weight)"
+            )
+    
     async def _handle_positions_stream_update(self, payload: Dict[str, Any]) -> None:
         """Process account positions update received from websocket stream."""
         positions_map = payload.get("positions") or {}
@@ -1314,8 +1388,45 @@ class LighterClient(BaseExchangeClient):
         return account_data.accounts[0].positions
 
     async def get_account_positions(self) -> Decimal:
-        """Get account positions using official SDK."""
-        # Get account info which includes positions
+        """
+        Get account positions (WebSocket-first for rate limit efficiency).
+        
+        ⚡ OPTIMIZATION: Uses WebSocket cached positions to save 300 weight REST call per query!
+        Grid strategy calls this every cycle (~40s), so this saves 450 weight/min (7.5x rate limit).
+        """
+        # Try WebSocket cached positions first (zero weight!)
+        ticker = getattr(self.config, "ticker", None)
+        if ticker:
+            normalized_symbol = self.normalize_symbol(ticker).upper()
+            async with self._positions_lock:
+                raw = self._raw_positions.get(normalized_symbol)
+            
+            if raw is not None:
+                quantity = raw.get("position") or raw.get("quantity") or Decimal("0")
+                try:
+                    return Decimal(str(quantity))
+                except Exception:
+                    pass
+        
+        # Wait briefly for WebSocket data if not ready yet
+        try:
+            await asyncio.wait_for(self._positions_ready.wait(), timeout=0.5)
+            # Try cache again after waiting
+            if ticker:
+                normalized_symbol = self.normalize_symbol(ticker).upper()
+                async with self._positions_lock:
+                    raw = self._raw_positions.get(normalized_symbol)
+                if raw is not None:
+                    quantity = raw.get("position") or raw.get("quantity") or Decimal("0")
+                    try:
+                        return Decimal(str(quantity))
+                    except Exception:
+                        pass
+        except asyncio.TimeoutError:
+            pass
+        
+        # Fall back to REST only if WebSocket data not available (300 weight)
+        self.logger.info("[LIGHTER] get_account_positions WebSocket positions not available, using REST fallback (300 weight)")
         positions = await self._fetch_positions_with_retry()
 
         # Find position for current market
@@ -1420,11 +1531,43 @@ class LighterClient(BaseExchangeClient):
 
     # Account monitoring methods (Lighter-specific implementations)
     async def get_account_balance(self) -> Optional[Decimal]:
-        """Get current account balance using Lighter SDK."""
+        """
+        Get current account balance (WebSocket-first for 0 weight).
+        
+        ⚡ OPTIMIZATION: Uses WebSocket user_stats stream to save 300 weight REST call!
+        The user_stats WebSocket provides real-time balance updates for FREE.
+        """
         try:
+            # Try WebSocket user stats first (0 weight!)
+            async with self._user_stats_lock:
+                if self._user_stats is not None:
+                    available_balance = self._user_stats.get("available_balance")
+                    if available_balance is not None:
+                        try:
+                            return Decimal(str(available_balance))
+                        except Exception:
+                            pass
+            
+            # Wait briefly for WebSocket data if not ready yet
+            try:
+                await asyncio.wait_for(self._user_stats_ready.wait(), timeout=0.5)
+                # Try again after waiting
+                async with self._user_stats_lock:
+                    if self._user_stats is not None:
+                        available_balance = self._user_stats.get("available_balance")
+                        if available_balance is not None:
+                            try:
+                                return Decimal(str(available_balance))
+                            except Exception:
+                                pass
+            except asyncio.TimeoutError:
+                pass
+            
+            # Fall back to REST only if WebSocket not available (300 weight)
             if not self.account_api:
                 return None
-                
+            
+            self.logger.info("[LIGHTER] get_account_balance WebSocket user_stats not available, using REST fallback (300 weight)")
             account_data = await self.account_api.account(by="index", value=str(self.account_index))
             if account_data and account_data.accounts:
                 return Decimal(account_data.accounts[0].available_balance or "0")
