@@ -648,8 +648,8 @@ class LighterClient(BaseExchangeClient):
         order_params = {
             'market_index': self.config.contract_id,
             'client_order_index': client_order_index,
-            'base_amount': int(quantity * self.base_amount_multiplier),
-            'price': int(price * self.price_multiplier),
+            'base_amount': round(quantity * self.base_amount_multiplier),
+            'price': round(price * self.price_multiplier),
             'is_ask': is_ask,
             'order_type': self.lighter_client.ORDER_TYPE_LIMIT,
             'time_in_force': self.lighter_client.ORDER_TIME_IN_FORCE_POST_ONLY,
@@ -804,7 +804,7 @@ class LighterClient(BaseExchangeClient):
                     avg_execution_price = mid_price * (Decimal('1') + slippage_tolerance)
                 
                 # Convert to Lighter's price format (integer with multiplier)
-                avg_execution_price_int = int(avg_execution_price * self.price_multiplier)
+                avg_execution_price_int = round(avg_execution_price * self.price_multiplier)
                 
             except Exception as price_error:
                 self.logger.error(f"Failed to get market price for market order: {price_error}")
@@ -812,7 +812,7 @@ class LighterClient(BaseExchangeClient):
                 avg_execution_price_int = 0  # 0 means no limit
             
             # Convert quantity to Lighter's base amount format
-            base_amount = int(quantity * self.base_amount_multiplier)
+            base_amount = round(quantity * self.base_amount_multiplier)
             
             self.logger.info(
                 f"📤 [LIGHTER] Placing market order: "
