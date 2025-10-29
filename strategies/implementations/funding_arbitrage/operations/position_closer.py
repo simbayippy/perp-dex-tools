@@ -98,6 +98,12 @@ class PositionCloser:
         snapshots: Dict[str, Optional["ExchangePositionSnapshot"]],
     ) -> Tuple[bool, Optional[str]]:
         strategy = self._strategy
+        age_hours = position.get_age_hours()
+        min_hold_hours = getattr(strategy.config.risk_config, "min_hold_hours", 0) or 0
+
+        # Defer non-critical exits until the minimum hold window expires
+        if min_hold_hours > 0 and age_hours < min_hold_hours:
+            return False, "MIN_HOLD_ACTIVE"
 
         current_rates = await self._gather_current_rates(position)
         if current_rates is not None and self._risk_manager is not None:
@@ -125,7 +131,7 @@ class PositionCloser:
                 return False, "HOLD_TOP_OPPORTUNITY"
             return True, "PROFIT_EROSION"
 
-        if position.get_age_hours() > strategy.config.risk_config.max_position_age_hours:
+        if age_hours > strategy.config.risk_config.max_position_age_hours:
             return True, "TIME_LIMIT"
 
         return False, None

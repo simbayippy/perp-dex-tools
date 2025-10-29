@@ -322,11 +322,29 @@ class FundingArbitrageStrategy(BaseStrategy):
             limit_order_offset_pct = Decimal("0.0001")
 
         # Build risk configuration using overrides (fallback to defaults)
+        risk_defaults = RiskManagementConfig()
         risk_config = RiskManagementConfig(
-            strategy=strategy_params.get('risk_strategy', RiskManagementConfig().strategy),
-            min_erosion_threshold=Decimal(str(strategy_params.get('profit_erosion_threshold', RiskManagementConfig().min_erosion_threshold))),
-            max_position_age_hours=strategy_params.get('max_position_age_hours', RiskManagementConfig().max_position_age_hours),
-            check_interval_seconds=strategy_params.get('check_interval_seconds', RiskManagementConfig().check_interval_seconds),
+            strategy=strategy_params.get('risk_strategy', risk_defaults.strategy),
+            min_erosion_threshold=Decimal(
+                str(
+                    strategy_params.get(
+                        'profit_erosion_threshold',
+                        risk_defaults.min_erosion_threshold,
+                    )
+                )
+            ),
+            max_position_age_hours=strategy_params.get(
+                'max_position_age_hours',
+                risk_defaults.max_position_age_hours,
+            ),
+            check_interval_seconds=strategy_params.get(
+                'check_interval_seconds',
+                risk_defaults.check_interval_seconds,
+            ),
+            min_hold_hours=strategy_params.get(
+                'min_hold_hours',
+                risk_defaults.min_hold_hours,
+            ),
         )
 
         max_oi_value = strategy_params.get('max_oi_usd')

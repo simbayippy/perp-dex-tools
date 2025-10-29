@@ -60,6 +60,11 @@ class RiskManagementConfig(BaseModel):
         description="How often to check positions (seconds)"
     )
     
+    min_hold_hours: int = Field(
+        default=0,
+        description="Minimum hours to hold a position before risk exits are considered"
+    )
+    
     class Config:
         use_enum_values = True
         validate_assignment = True

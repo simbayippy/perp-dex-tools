@@ -157,6 +157,17 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             ),
         ),
         ParameterSchema(
+            key="min_hold_hours",
+            prompt="Minimum position hold time (hours) before exits are considered?",
+            param_type=ParameterType.INTEGER,
+            default=0,
+            min_value=0,
+            max_value=720,
+            required=False,
+            help_text="Set to >0 to suppress risk-based exits (funding flip, erosion) until the position has aged at least this many hours.",
+            show_default_in_prompt=True,
+        ),
+        ParameterSchema(
             key="max_position_age_hours",
             prompt="Maximum position age (hours)?",
             param_type=ParameterType.INTEGER,
@@ -220,6 +231,7 @@ FUNDING_ARB_SCHEMA = StrategySchema(
         "Risk Management": [
             "risk_strategy",
             "profit_erosion_threshold",
+            "min_hold_hours",
             "max_position_age_hours",
         ],
         "Execution": [
@@ -258,6 +270,7 @@ def create_default_funding_config() -> dict:
         "max_oi_usd": None,
         "risk_strategy": "combined",
         "profit_erosion_threshold": Decimal("0.5"),
+        "min_hold_hours": 0,
         "max_position_age_hours": 168,
         "max_new_positions_per_cycle": 2,
         "check_interval_seconds": 60,
