@@ -28,6 +28,8 @@ class LighterWebSocketManager(BaseWebSocketManager):
 
     RECONNECT_BACKOFF_INITIAL = 1.0
     RECONNECT_BACKOFF_MAX = 30.0
+    HEARTBEAT_INTERVAL = 20.0  # seconds
+    RECEIVE_TIMEOUT = 45.0
 
     def __init__(
         self,
@@ -647,8 +649,18 @@ class LighterWebSocketManager(BaseWebSocketManager):
             self._log(f"[LIGHTER] Using HTTP proxy for websocket: {proxy_kwargs['proxy']}", "INFO")
 
         try:
-            self.ws = await session.ws_connect(self.ws_url, **proxy_kwargs)
+            self.ws = await session.ws_connect(
+                self.ws_url,
+                heartbeat=self.HEARTBEAT_INTERVAL,
+                receive_timeout=self.RECEIVE_TIMEOUT,
+                **proxy_kwargs,
+            )
             self._log("[LIGHTER] 🔗 Connected to websocket", "INFO")
+            self._log(
+                f"[LIGHTER] Websocket heartbeat enabled every {self.HEARTBEAT_INTERVAL:.0f}s "
+                f"(receive timeout {self.RECEIVE_TIMEOUT:.0f}s)",
+                "INFO",
+            )
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
             self._log(f"Failed to connect to Lighter websocket: {exc}", "ERROR")
             raise
