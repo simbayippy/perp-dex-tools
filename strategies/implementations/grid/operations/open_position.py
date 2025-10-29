@@ -4,10 +4,12 @@ Open-position orchestration for the grid strategy.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
 
+from aiohttp import ClientResponseError
 from exchange_clients.market_data import PriceStream
 from ..config import GridConfig
 from ..models import GridCycleState, GridState
@@ -130,13 +132,61 @@ class GridOpenPositionOperator:
             position_id = self.grid_state.allocate_position_id()
             entry_client_index = client_order_index_from_position(position_id, "entry")
 
-            order_result = await self.exchange_client.place_limit_order(
-                contract_id=contract_id,
-                quantity=quantity,
-                price=order_price,
-                side=self.config.direction,
-                client_order_id=entry_client_index,
+            self.logger.log(
+                (
+                    f"Grid: Submitting {self.config.direction} order via "
+                    f"{self.exchange_client.get_exchange_name()} "
+                    f"(contract_id={contract_id}, quantity={quantity}, price={order_price}, "
+                    f"client_id={entry_client_index})"
+                ),
+                "INFO",
             )
+
+            try:
+                order_result = await self.exchange_client.place_limit_order(
+                    contract_id=contract_id,
+                    quantity=quantity,
+                    price=order_price,
+                    side=self.config.direction,
+                    client_order_id=entry_client_index,
+                )
+            except ClientResponseError as http_exc:
+                request_url = (
+                    str(http_exc.request_info.real_url)
+                    if http_exc.request_info and http_exc.request_info.real_url
+                    else "unknown"
+                )
+                message = (
+                    f"Grid: HTTP error while placing order "
+                    f"(status={http_exc.status}, url={request_url}, "
+                    f"client_id={entry_client_index}): {http_exc}"
+                )
+                self.logger.log(message, "ERROR")
+                return {
+                    "action": "error",
+                    "message": message,
+                    "wait_time": 5,
+                }
+            except asyncio.TimeoutError:
+                message = (
+                    f"Grid: Timeout while placing order via {self.exchange_client.get_exchange_name()} "
+                    f"(contract_id={contract_id}, client_id={entry_client_index})"
+                )
+                self.logger.log(message, "ERROR")
+                return {
+                    "action": "error",
+                    "message": message,
+                    "wait_time": 5,
+                }
+            except Exception as exc:
+                self.logger.log(
+                    (
+                        f"Grid: Unexpected exception from place_limit_order "
+                        f"(contract_id={contract_id}, client_id={entry_client_index}): {exc}"
+                    ),
+                    "ERROR",
+                )
+                raise
 
             if order_result.success:
                 self.grid_state.pending_position_id = position_id
