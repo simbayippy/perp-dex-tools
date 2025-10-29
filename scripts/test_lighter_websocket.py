@@ -32,7 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from trading_bot import TradingConfig
 from exchange_clients.factory import ExchangeFactory
-from networking import SessionProxyManager, ProxyConfig
+from networking import SessionProxyManager, ProxyEndpoint
 from runbot import load_account_context
 
 
@@ -98,9 +98,11 @@ async def main() -> None:
     credentials, proxy_selector = await load_account_context(args.account)
 
     # Hard-coded proxy configuration
-    hardcoded_proxy = ProxyConfig(
-        host="pr.lunaproxy.com",
-        port=32233,
+    hardcoded_proxy = ProxyEndpoint(
+        id="hardcoded-proxy",
+        label="Hardcoded Luna Proxy",
+        endpoint="http://pr.lunaproxy.com:32233",
+        auth_type="basic",
         username="user-sss078tzdwo7",
         password="6uN8NZp0SQQEw"
     )
