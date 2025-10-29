@@ -60,9 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional runtime in seconds. 0 = run until Ctrl+C (default).",
     )
     parser.add_argument(
-        "--disable-proxy",
+        "--enable-proxy",
         action="store_true",
-        help="Skip enabling the account's session proxy",
+        help="Enable the account's configured proxy for this test run (disabled by default)",
     )
     parser.add_argument(
         "--log-level",
@@ -99,7 +99,7 @@ async def main() -> None:
 
     # Enable proxy (if available)
     proxy_used = None
-    if proxy_selector and not args.disable_proxy:
+    if proxy_selector and args.enable_proxy:
         proxy = proxy_selector.current_proxy()
         if proxy:
             SessionProxyManager.enable(proxy)
@@ -107,8 +107,10 @@ async def main() -> None:
             print(f"[proxy] Enabled session proxy: {proxy_used}")
         else:
             print("[proxy] No active proxy assignment found; proceeding without proxy")
-    elif args.disable_proxy:
-        print("[proxy] Proxy usage skipped (--disable-proxy)")
+    elif args.enable_proxy:
+        print("[proxy] Proxy usage requested but no proxies found; continuing without proxy")
+    else:
+        print("[proxy] Proxy usage disabled (use --enable-proxy to test through proxy)")
 
     # Extract Lighter credentials
     lighter_creds = credentials.get("lighter")

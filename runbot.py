@@ -64,9 +64,9 @@ def parse_arguments():
     )
 
     parser.add_argument(
-        "--disable-proxy",
+        "--enable-proxy",
         action="store_true",
-        help="Skip configuring the account's proxy assignments for this session.",
+        help="Enable the account's configured proxy assignments for this session (disabled by default).",
     )
 
     return parser.parse_args()
@@ -249,9 +249,7 @@ async def main():
         account_credentials, proxy_selector = await load_account_context(account_name)
 
         if proxy_selector:
-            if args.disable_proxy:
-                print("⚠️ Proxy enablement skipped (--disable-proxy flag)\n")
-            else:
+            if args.enable_proxy:
                 proxy = proxy_selector.current_proxy()
                 if proxy:
                     try:
@@ -276,6 +274,8 @@ async def main():
                         print(f"⚠️ Failed to enable session proxy ({exc})\n")
                 else:
                     print("⚠️ No active proxies available for this account\n")
+            else:
+                print("ℹ️ Proxy enablement skipped (use --enable-proxy to enable)\n")
         # load_account_context already prints summary lines (including trailing newline)
     
     # Store account info in strategy config for later use
