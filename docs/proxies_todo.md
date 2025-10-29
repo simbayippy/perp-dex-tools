@@ -32,7 +32,7 @@ Ensure each trading account process transparently routes all outbound traffic (H
 - [x] Implement a startup check that resolves the visible IP via the proxy (`helpers/networking.py::detect_egress_ip`) and log the result.
 - [ ] Emit structured logs with proxy label, endpoint, and detected IP at process start (and on rotation).
 - [x] Add periodic proxy health monitoring to re-validate egress IP during long runs.
-- [ ] Wire rotation logic to `SessionProxyManager.rotate()` when priority fallbacks are attempted or health checks fail.
+- [x] Wire rotation logic to `SessionProxyManager.rotate()` when priority fallbacks are attempted or health checks fail (via `ProxyHealthMonitor` callback).
 - [ ] Capture proxy health metrics/events for operations dashboards.
 
 ## 5. Testing & Rollout

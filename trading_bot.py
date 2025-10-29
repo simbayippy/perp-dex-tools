@@ -17,7 +17,7 @@ from helpers.lark_bot import LarkBot
 from helpers.telegram_bot import TelegramBot
 from strategies import StrategyFactory
 from networking import ProxySelector, SessionProxyManager
-from helpers.networking import ProxyHealthMonitor
+from helpers.networking import ProxyHealthMonitor, detect_egress_ip
 
 
 @dataclass
@@ -64,6 +64,7 @@ class TradingBot:
         self.proxy_selector = proxy_selector
         self.logger = get_logger("bot", config.strategy, context={"exchange": config.exchange, "ticker": config.ticker}, log_to_console=True)
         self._proxy_health_monitor: Optional[ProxyHealthMonitor] = None
+        self._proxy_rotation_attempts = 0
 
         # Log account info if credentials provided
         if account_credentials:
@@ -167,6 +168,7 @@ class TradingBot:
         self.last_log_time = 0
         self.shutdown_requested = False
         self.loop = None
+        self._last_confirmed_proxy_ip: Optional[str] = self.config.strategy_params.get("_proxy_egress_ip")
 
         # Initialize strategy
         try:
@@ -298,6 +300,55 @@ class TradingBot:
         except Exception as e:
             self.logger.error(f"Error during graceful shutdown: {e}")
 
+    async def _on_proxy_unhealthy(self, failure_count: int) -> None:
+        """Rotate to the next proxy when health checks continue to fail."""
+        if not self.proxy_selector:
+            self.logger.error(
+                "Proxy health monitor reported failures but no proxy selector is configured"
+            )
+            return
+
+        current_assignment = self.proxy_selector.current_assignment()
+        current_proxy_id = current_assignment.proxy.id if current_assignment else None
+
+        new_proxy = self.proxy_selector.rotate()
+        if not new_proxy:
+            self.logger.error(
+                "Proxy health monitor reported failures but no alternate proxy assignments are available"
+            )
+            return
+
+        if current_proxy_id and new_proxy.id == current_proxy_id:
+            self.logger.error(
+                "Proxy health monitor reported failures but only one active proxy assignment exists"
+            )
+            return
+
+        try:
+            masked_label = new_proxy.masked_label() if hasattr(new_proxy, "masked_label") else new_proxy.url_with_auth(mask_password=True)
+            self.logger.warning(
+                f"Rotating session proxy after {failure_count} failed health checks -> {masked_label}"
+            )
+            SessionProxyManager.rotate(new_proxy)
+            self._proxy_rotation_attempts += 1
+
+            ip_result = await detect_egress_ip()
+            if ip_result.address:
+                self._last_confirmed_proxy_ip = ip_result.address
+                self.logger.info(
+                    f"Proxy egress IP after rotation: {ip_result.address} (via {ip_result.source})"
+                )
+                self.config.strategy_params["_proxy_egress_ip"] = ip_result.address
+                self.config.strategy_params["_proxy_egress_source"] = ip_result.source
+                self.config.strategy_params["_proxy_rotation_count"] = self._proxy_rotation_attempts
+            else:
+                reason = ip_result.error or "no response"
+                self.logger.warning(
+                    f"Proxy rotation complete but unable to confirm new egress IP (reason: {reason})"
+                )
+        except Exception as exc:
+            self.logger.error(f"Proxy rotation failed: {exc}")
+
     async def run(self):
         """Main trading loop."""
         try:
@@ -312,8 +363,9 @@ class TradingBot:
                 if not self._proxy_health_monitor:
                     self._proxy_health_monitor = ProxyHealthMonitor(
                         logger=self.logger,
-                        interval_seconds=1800.0,
+                        interval_seconds=1800.0, # every 30 mins
                         timeout=10.0,
+                        on_unhealthy=self._on_proxy_unhealthy,
                     )
                 self._proxy_health_monitor.start()
             

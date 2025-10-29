@@ -10,7 +10,8 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence
+from typing import Awaitable, Callable, Iterable, Optional, Sequence
+import inspect
 
 import aiohttp
 
@@ -88,6 +89,9 @@ async def detect_egress_ip(
             await client.close()
 
 
+UnhealthyCallback = Callable[[int], Optional[Awaitable[None]]]
+
+
 class ProxyHealthMonitor:
     """
     Periodically validates the proxy egress IP to ensure the proxy remains active.
@@ -100,6 +104,8 @@ class ProxyHealthMonitor:
         interval_seconds: float = 1800.0,
         timeout: float = 10.0,
         services: Iterable[str] = DEFAULT_EGRESS_SERVICES,
+        on_unhealthy: Optional[UnhealthyCallback] = None,
+        failure_threshold: int = 3,
     ) -> None:
         self._logger = logger
         self._interval = interval_seconds
@@ -108,6 +114,9 @@ class ProxyHealthMonitor:
         self._task: Optional[asyncio.Task] = None
         self._last_ip: Optional[str] = None
         self._consecutive_failures = 0
+        self._on_unhealthy = on_unhealthy
+        self._failure_threshold = max(1, int(failure_threshold))
+        self._failure_notified = False
 
     def start(self) -> None:
         """Begin monitoring in the background."""
@@ -151,6 +160,7 @@ class ProxyHealthMonitor:
                         )
                     self._last_ip = result.address
                     self._consecutive_failures = 0
+                    self._failure_notified = False
                 else:
                     self._consecutive_failures += 1
                     log_method = self._logger.warning
@@ -160,13 +170,30 @@ class ProxyHealthMonitor:
                     if result.error:
                         message = f"{message}: {result.error}"
                     log_method(message)
+                    await self._maybe_notify_unhealthy()
                 first_iteration = False
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # pragma: no cover - defensive
                 self._consecutive_failures += 1
                 self._logger.error(f"Proxy health monitor error: {exc}")
+                await self._maybe_notify_unhealthy()
             await asyncio.sleep(self._interval)
+
+    async def _maybe_notify_unhealthy(self) -> None:
+        if (
+            self._on_unhealthy
+            and not self._failure_notified
+            and self._consecutive_failures >= self._failure_threshold
+        ):
+            try:
+                result = self._on_unhealthy(self._consecutive_failures)
+                if inspect.isawaitable(result):
+                    await result  # type: ignore[arg-type]
+            except Exception as exc:  # pragma: no cover - defensive logging
+                self._logger.error(f"Proxy rotation callback failed: {exc}")
+            finally:
+                self._failure_notified = True
 
 
 __all__ = [
