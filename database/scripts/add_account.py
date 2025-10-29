@@ -36,12 +36,12 @@ load_dotenv()
 
 try:
     from funding_rate_service.utils.logger import logger
-from database.scripts.proxy_utils import assign_proxy, parse_proxy_line, upsert_proxy
-
 except ImportError:
     import logging
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
+
+from database.scripts.proxy_utils import assign_proxy, parse_proxy_line, upsert_proxy
 
 
 class CredentialEncryptor:
