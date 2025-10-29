@@ -861,12 +861,48 @@ class LighterClient(BaseExchangeClient):
                 # Use a very permissive price as fallback (10% slippage)
                 avg_execution_price_int = 0  # 0 means no limit
             
+            # Resolve numeric market index from provided contract identifier
+            try:
+                market_index = int(contract_id)
+            except (ValueError, TypeError):
+                normalized_symbol = self.normalize_symbol(contract_id)
+                cache_key = normalized_symbol.upper()
+
+                cached_market_id = (
+                    self._contract_id_cache.get(cache_key)
+                    or self._market_id_cache.get(cache_key)
+                )
+
+                if cached_market_id is None:
+                    current_ticker = getattr(self.config, "ticker", "")
+                    if current_ticker:
+                        current_cache_key = self.normalize_symbol(current_ticker).upper()
+                        if current_cache_key == cache_key:
+                            cached_market_id = getattr(self.config, "contract_id", None)
+
+                if cached_market_id is None:
+                    market_id = await self._get_market_id_for_symbol(normalized_symbol)
+                    if market_id is None:
+                        raise ValueError(
+                            f"Could not resolve market identifier for '{contract_id}' on Lighter"
+                        )
+                    cached_market_id = market_id
+
+                market_index = int(cached_market_id)
+                original_key = str(contract_id).upper()
+                self._contract_id_cache[cache_key] = str(market_index)
+                self._contract_id_cache[original_key] = str(market_index)
+                self._market_id_cache[cache_key] = market_index
+                # Preserve original lookup key (e.g., PROVE-PERP) for future cache hits
+                self._market_id_cache[original_key] = market_index
+            contract_display = f"{contract_id} (id={market_index})" if str(contract_id) != str(market_index) else str(market_index)
+
             # Convert quantity to Lighter's base amount format
             base_amount = round(quantity * self.base_amount_multiplier)
             
             self.logger.info(
                 f"📤 [LIGHTER] Placing market order: "
-                f"market={contract_id}, "
+                f"market={contract_display}, "
                 f"client_id={client_order_index}, "
                 f"side={'SELL' if is_ask else 'BUY'}, "
                 f"base_amount={base_amount}, "
@@ -875,7 +911,7 @@ class LighterClient(BaseExchangeClient):
 
             # ✅ Use dedicated create_market_order method (not generic create_order)
             create_order, tx_hash, error = await self.lighter_client.create_market_order(
-                market_index=int(contract_id),
+                market_index=market_index,
                 client_order_index=client_order_index,
                 base_amount=base_amount,
                 avg_execution_price=avg_execution_price_int,
