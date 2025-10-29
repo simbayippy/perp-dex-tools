@@ -32,7 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from trading_bot import TradingConfig
 from exchange_clients.factory import ExchangeFactory
-from networking import SessionProxyManager
+from networking import SessionProxyManager, ProxyConfig
 from runbot import load_account_context
 
 
@@ -97,18 +97,33 @@ async def main() -> None:
     # Pull account credentials + proxy assignments from the DB
     credentials, proxy_selector = await load_account_context(args.account)
 
+    # Hard-coded proxy configuration
+    hardcoded_proxy = ProxyConfig(
+        host="pr.lunaproxy.com",
+        port=32233,
+        username="user-sss078tzdwo7",
+        password="6uN8NZp0SQQEw"
+    )
+
     # Enable proxy (if available)
     proxy_used = None
-    if proxy_selector and args.enable_proxy:
-        proxy = proxy_selector.current_proxy()
-        if proxy:
-            SessionProxyManager.enable(proxy)
-            proxy_used = proxy.url_with_auth(mask_password=True)
-            print(f"[proxy] Enabled session proxy: {proxy_used}")
-        else:
-            print("[proxy] No active proxy assignment found; proceeding without proxy")
-    elif args.enable_proxy:
-        print("[proxy] Proxy usage requested but no proxies found; continuing without proxy")
+    if args.enable_proxy:
+        # Use hard-coded proxy
+        SessionProxyManager.enable(hardcoded_proxy)
+        proxy_used = hardcoded_proxy.url_with_auth(mask_password=True)
+        print(f"[proxy] Enabled hard-coded proxy: {proxy_used}")
+        
+        # Original proxy logic (commented out)
+        # if proxy_selector and args.enable_proxy:
+        #     proxy = proxy_selector.current_proxy()
+        #     if proxy:
+        #         SessionProxyManager.enable(proxy)
+        #         proxy_used = proxy.url_with_auth(mask_password=True)
+        #         print(f"[proxy] Enabled session proxy: {proxy_used}")
+        #     else:
+        #         print("[proxy] No active proxy assignment found; proceeding without proxy")
+        # elif args.enable_proxy:
+        #     print("[proxy] Proxy usage requested but no proxies found; continuing without proxy")
     else:
         print("[proxy] Proxy usage disabled (use --enable-proxy to test through proxy)")
 
