@@ -362,4 +362,13 @@ class PositionMonitor:
         if remaining <= 0:
             return f"Min hold: satisfied (risk checks active since {ready_display})"
 
-        return f"Min hold: ACTIVE ({remaining:.2f}h remaining, risk checks resume {ready_display})"
+        remaining_minutes = max(0, int(round(remaining * 60)))
+        hours_left, minutes_left = divmod(remaining_minutes, 60)
+        parts = []
+        if hours_left:
+            parts.append(f"{hours_left}h")
+        if minutes_left or not parts:
+            parts.append(f"{minutes_left}m")
+        remaining_fmt = " ".join(parts)
+
+        return f"Min hold: ACTIVE ({remaining_fmt} remaining, risk checks resume {ready_display})"
