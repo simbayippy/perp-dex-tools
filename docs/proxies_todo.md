@@ -23,7 +23,10 @@ Ensure each trading account process transparently routes all outbound traffic (H
 - [x] Update `exchange_clients/lighter/client.py` to rely on the session proxy (remove manual proxy wiring in `_initialize_api_client`, nonce patching, signer config).
 - [ ] Apply the same pattern to Backpack, Aster, and any other SDK wrappers, replacing per-client proxy config with a simple readiness check (`SessionProxyManager.is_active()`).
 - [ ] Audit for direct `requests`/`httpx` usage elsewhere and delete redundant proxy plumbing.
-- [ ] Ensure WebSocket managers (Lighter, Backpack, etc.) honour the proxy (switch to proxy-aware client or tunnel helper).
+- [ ] Ensure WebSocket managers (Backpack, etc.) honour the proxy (switch to proxy-aware client or tunnel helper).
+  - [x] Lighter: migrate WebSocket manager to aiohttp-based client so HTTP proxies are applied.
+  - [ ] Backpack: move WebSocket manager off `websockets` and reuse the proxy-aware aiohttp pattern.
+  - [ ] Aster: rework order/user-data streams to honor session proxy (aiohttp proxy args or CONNECT tunneling).
 
 ## 4. Monitoring & Rotation
 - [ ] Implement a startup check that resolves the visible IP via the proxy (`helpers/networking.py::detect_egress_ip`) and log the result.
