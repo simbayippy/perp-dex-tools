@@ -91,6 +91,7 @@ class LighterClient(BaseExchangeClient):
         self.current_order = None
         self._min_order_notional: Dict[str, Decimal] = {}
         self._latest_orders: Dict[str, OrderInfo] = {}
+        self._order_update_events: Dict[str, asyncio.Event] = {}
         self.order_fill_callback = order_fill_callback
         self._positions_lock = asyncio.Lock()
         self._positions_ready = asyncio.Event()
@@ -428,8 +429,11 @@ class LighterClient(BaseExchangeClient):
                 )
                 self.current_order = current_order
                 self._latest_orders[order_id] = current_order
+                self._notify_order_update(order_id)
                 if server_order_index is not None:
-                    self._latest_orders[str(server_order_index)] = current_order
+                    server_key = str(server_order_index)
+                    self._latest_orders[server_key] = current_order
+                    self._notify_order_update(server_key)
 
             if status in ['FILLED', 'CANCELED']:
                 self.logger.log_transaction(order_id, side, filled_size, price, status)
@@ -447,8 +451,11 @@ class LighterClient(BaseExchangeClient):
                             cancel_reason='unknown'
                         )
                 self._latest_orders[order_id] = current_order
+                self._notify_order_update(order_id)
                 if server_order_index is not None:
-                    self._latest_orders[str(server_order_index)] = current_order
+                    server_key = str(server_order_index)
+                    self._latest_orders[server_key] = current_order
+                    self._notify_order_update(server_key)
 
                 if status == 'FILLED' and self.order_fill_callback:
                     try:
@@ -463,6 +470,14 @@ class LighterClient(BaseExchangeClient):
                             sequence,
                         )
                     )
+
+    def _notify_order_update(self, order_key: str) -> None:
+        """Unblock coroutines waiting for a specific order id."""
+        if not order_key:
+            return
+        event = self._order_update_events.get(str(order_key))
+        if event is not None and not event.is_set():
+            event.set()
 
     async def handle_liquidation_notification(self, notifications: List[Dict[str, Any]]) -> None:
         """Normalize liquidation notifications from the Lighter stream."""
@@ -996,6 +1011,32 @@ class LighterClient(BaseExchangeClient):
         else:
             return OrderResult(success=False, error_message='Failed to send cancellation transaction')
 
+    async def _await_order_update(self, order_key: str, timeout: float = 1.0) -> Optional[OrderInfo]:
+        """Wait briefly for a websocket update before falling back to REST."""
+        if not order_key:
+            return None
+
+        order_key_str = str(order_key)
+        cached = self._latest_orders.get(order_key_str)
+        if cached is not None:
+            return cached
+
+        if self.ws_manager is None:
+            return None
+
+        event = self._order_update_events.setdefault(order_key_str, asyncio.Event())
+        if event.is_set():
+            return self._latest_orders.get(order_key_str)
+
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return self._latest_orders.get(order_key_str)
+        except Exception:
+            return self._latest_orders.get(order_key_str)
+
+        return self._latest_orders.get(order_key_str)
+
     async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
         """
         Get order information from Lighter using official SDK.
@@ -1005,10 +1046,26 @@ class LighterClient(BaseExchangeClient):
         try:
             order_id_str = str(order_id)
 
-            # First check latest updates captured from WebSocket
+            # Check latest updates captured from WebSocket (client & server ids)
             cached = self._latest_orders.get(order_id_str)
             if cached is not None:
                 return cached
+
+            server_order_id = self._client_to_server_order_index.get(order_id_str)
+            if server_order_id:
+                server_cached = self._latest_orders.get(str(server_order_id))
+                if server_cached is not None:
+                    return server_cached
+
+            # Wait briefly for websocket state before hitting REST endpoints
+            websocket_snapshot = await self._await_order_update(order_id_str)
+            if websocket_snapshot is not None:
+                return websocket_snapshot
+
+            if server_order_id:
+                server_snapshot = await self._await_order_update(str(server_order_id), timeout=0.5)
+                if server_snapshot is not None:
+                    return server_snapshot
 
             if not self.order_api:
                 self.logger.error("Order API not initialized")
@@ -1035,25 +1092,37 @@ class LighterClient(BaseExchangeClient):
                     _request_timeout=10
                 )
             except Exception as e:
+                status = getattr(e, "status", None)
+                if status == 429 or "Too Many Requests" in str(e):
+                    self.logger.warning(
+                        f"Rate limited while fetching order info for {order_id_str}; "
+                        "falling back to cached websocket state"
+                    )
+                    return self._latest_orders.get(order_id_str)
+
                 # Order might not be active anymore (filled or cancelled)
                 self.logger.debug(f"Order {order_id} not found in active orders (might be filled): {e}")
                 
                 # Check if order was filled by looking at positions
-                account_data = await self.account_api.account(by="index", value=str(self.account_index))
-                if account_data and account_data.accounts and account_data.accounts[0].positions:
-                    for position in account_data.accounts[0].positions:
-                        if position.symbol == self.config.ticker:
-                            position_amt = abs(float(position.position))
-                            if position_amt > 0.001:  # Only include significant positions
-                                return OrderInfo(
-                                    order_id=order_id,
-                                    side="buy" if float(position.position) > 0 else "sell",
-                                    size=Decimal(str(position_amt)),
-                                    price=Decimal(str(position.avg_price)),
-                                    status="FILLED",
-                                    filled_size=Decimal(str(position_amt)),
-                                    remaining_size=Decimal('0')
-                                )
+                if self.account_api:
+                    account_data = await self.account_api.account(
+                        by="index",
+                        value=str(self.account_index),
+                    )
+                    if account_data and account_data.accounts and account_data.accounts[0].positions:
+                        for position in account_data.accounts[0].positions:
+                            if position.symbol == self.config.ticker:
+                                position_amt = abs(float(position.position))
+                                if position_amt > 0.001:  # Only include significant positions
+                                    return OrderInfo(
+                                        order_id=order_id,
+                                        side="buy" if float(position.position) > 0 else "sell",
+                                        size=Decimal(str(position_amt)),
+                                        price=Decimal(str(position.avg_price)),
+                                        status="FILLED",
+                                        filled_size=Decimal(str(position_amt)),
+                                        remaining_size=Decimal('0')
+                                    )
                 return None
             
             # Look for the specific order by order_index
@@ -1111,6 +1180,11 @@ class LighterClient(BaseExchangeClient):
                             remaining_size=remaining,
                         )
                         self._latest_orders[order_id_str] = info
+                        self._notify_order_update(order_id_str)
+                        if server_idx >= 0:
+                            server_key = str(server_idx)
+                            self._latest_orders[server_key] = info
+                            self._notify_order_update(server_key)
                         return info
             
             # Order not found in active orders - might be filled
