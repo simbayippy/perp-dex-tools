@@ -8,8 +8,9 @@ def parse_proxy_line(raw: str, *, scheme: str = "http") -> Tuple[str, Optional[s
     """
     Parse a proxy definition string into endpoint URL and optional credentials.
 
-    Expected format:
-        host:port[:username[:password]]
+    Supports two formats:
+        1. host:port[:username[:password]]
+        2. username:password:host:port (common for proxy providers)
 
     Args:
         raw: Raw proxy string.
@@ -25,6 +26,21 @@ def parse_proxy_line(raw: str, *, scheme: str = "http") -> Tuple[str, Optional[s
     if len(tokens) < 2:
         raise ValueError(f"Invalid proxy definition (expected host:port[:user:pass]): '{raw}'")
 
+    # Detect format by checking if last token is a valid port number
+    try:
+        port_candidate = int(tokens[-1])
+        # Format 2: username:password:host:port
+        if len(tokens) >= 4 and port_candidate > 0:
+            username = tokens[0]
+            password = ":".join(tokens[1:-2])  # Handle passwords with colons
+            host = tokens[-2]
+            port = tokens[-1]
+            endpoint_url = f"{scheme}://{host}:{port}"
+            return endpoint_url, username, password
+    except (ValueError, IndexError):
+        pass
+
+    # Format 1: host:port[:username[:password]]
     host, port = tokens[0], tokens[1]
     endpoint_url = f"{scheme}://{host}:{port}"
 
