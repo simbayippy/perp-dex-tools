@@ -9,7 +9,7 @@ Responsible for:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -278,6 +278,7 @@ class PositionMonitor:
         message_lines = [
             f"Position {position.symbol} snapshot{account_info}",
             self._compose_yield_summary(position),
+            self._compose_hold_summary(position),
             separator,
             header_line,
             separator,
@@ -343,3 +344,22 @@ class PositionMonitor:
             f"current {current_rate_display} | "
             f"erosion {erosion_display} (limit {threshold_display})"
         )
+
+    def _compose_hold_summary(self, position: FundingArbPosition) -> str:
+        risk_cfg = getattr(self._strategy_config, "risk_config", None) if getattr(self, "_strategy_config", None) else None
+        if not risk_cfg:
+            return "Min hold: n/a"
+
+        min_hold_hours = getattr(risk_cfg, "min_hold_hours", 0) or 0
+        if min_hold_hours <= 0:
+            return "Min hold: disabled"
+
+        age_hours = position.get_age_hours()
+        remaining = max(0.0, float(min_hold_hours) - age_hours)
+        ready_at = position.opened_at + timedelta(hours=min_hold_hours)
+        ready_display = ready_at.strftime("%Y-%m-%d %H:%M:%S")
+
+        if remaining <= 0:
+            return f"Min hold: satisfied (risk checks active since {ready_display})"
+
+        return f"Min hold: ACTIVE ({remaining:.2f}h remaining, risk checks resume {ready_display})"
