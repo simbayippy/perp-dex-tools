@@ -17,6 +17,7 @@ from helpers.lark_bot import LarkBot
 from helpers.telegram_bot import TelegramBot
 from strategies import StrategyFactory
 from networking import ProxySelector, SessionProxyManager
+from helpers.networking import ProxyHealthMonitor
 
 
 @dataclass
@@ -62,6 +63,7 @@ class TradingBot:
         self.account_credentials = account_credentials
         self.proxy_selector = proxy_selector
         self.logger = get_logger("bot", config.strategy, context={"exchange": config.exchange, "ticker": config.ticker}, log_to_console=True)
+        self._proxy_health_monitor: Optional[ProxyHealthMonitor] = None
 
         # Log account info if credentials provided
         if account_credentials:
@@ -269,6 +271,10 @@ class TradingBot:
         self.logger.info(f"Starting graceful shutdown: {reason}")
         self.shutdown_requested = True
 
+        if self._proxy_health_monitor:
+            await self._proxy_health_monitor.stop()
+            self._proxy_health_monitor = None
+
         try:
             # Cleanup strategy
             if hasattr(self, 'strategy') and self.strategy:
@@ -301,6 +307,15 @@ class TradingBot:
             
             # Capture the running event loop for thread-safe callbacks
             self.loop = asyncio.get_running_loop()
+
+            if SessionProxyManager.is_active():
+                if not self._proxy_health_monitor:
+                    self._proxy_health_monitor = ProxyHealthMonitor(
+                        logger=self.logger,
+                        interval_seconds=1800.0,
+                        timeout=10.0,
+                    )
+                self._proxy_health_monitor.start()
             
             # Connection phase
             await self._connect_exchanges()

@@ -21,6 +21,7 @@ from trading_bot import TradingBot, TradingConfig
 import os
 
 from networking import ProxySelector, SessionProxyManager
+from helpers.networking import detect_egress_ip
 
 
 def parse_arguments():
@@ -240,6 +241,8 @@ async def main():
     account_name = None
     proxy_selector: Optional[ProxySelector] = None
     active_proxy_display: Optional[str] = None
+    detected_proxy_ip: Optional[str] = None
+    detected_proxy_source: Optional[str] = None
     if args.account:
         account_name = args.account
         print(f"Loading credentials for account: {account_name}")
@@ -255,6 +258,20 @@ async def main():
                         SessionProxyManager.enable(proxy)
                         active_proxy_display = proxy.url_with_auth(mask_password=True)
                         print(f"✓ Session proxy enabled: {proxy.label} -> {active_proxy_display}\n")
+                        ip_result = await detect_egress_ip()
+                        if ip_result.address:
+                            detected_proxy_ip = ip_result.address
+                            detected_proxy_source = ip_result.source
+                            print(
+                                f"✓ Proxy egress IP confirmed: {ip_result.address} "
+                                f"(via {ip_result.source})\n"
+                            )
+                        else:
+                            failure_reason = ip_result.error or "no response"
+                            print(
+                                "⚠️ Unable to confirm proxy egress IP "
+                                f"(reason: {failure_reason})\n"
+                            )
                     except Exception as exc:
                         print(f"⚠️ Failed to enable session proxy ({exc})\n")
                 else:
@@ -265,6 +282,8 @@ async def main():
     strategy_config["_account_name"] = account_name
     strategy_config["_account_credentials"] = account_credentials
     strategy_config["_proxy_enabled"] = bool(active_proxy_display)
+    strategy_config["_proxy_egress_ip"] = detected_proxy_ip
+    strategy_config["_proxy_egress_source"] = detected_proxy_source
 
     # Convert to TradingConfig
     config = _config_dict_to_trading_config(strategy_name, strategy_config)
@@ -282,6 +301,8 @@ async def main():
         print(f"  Account:  {account_name}")
     if active_proxy_display:
         print(f"  Proxy:    {active_proxy_display}")
+    if detected_proxy_ip:
+        print(f"  EgressIP: {detected_proxy_ip}")
     print("="*70 + "\n")
     
     # Create bot with optional account credentials
