@@ -390,11 +390,12 @@ class GridStrategy(BaseStrategy):
         
         timeout_minutes = getattr(self.config, "position_timeout_minutes", None)
         pending_placed_at = self.grid_state.pending_open_order_time
+        now = time.time()
         if (
             timeout_minutes
             and timeout_minutes > 0
             and pending_placed_at is not None
-            and time.time() - pending_placed_at >= timeout_minutes * 60
+            and now - pending_placed_at >= timeout_minutes * 60
         ):
             position_id = self.grid_state.pending_position_id or self.grid_state.filled_position_id
             self._log_event(
@@ -449,6 +450,85 @@ class GridStrategy(BaseStrategy):
         for order in active_orders:
             order_id = getattr(order, "order_id", None)
             if order_id is not None and str(order_id) in candidate_ids:
+                return False
+
+        # Give the websocket stream a short grace period to emit the fill before assuming cancellation.
+        grace_seconds = 2.0
+        if pending_placed_at is not None and now - pending_placed_at < grace_seconds:
+            self.logger.log(
+                (
+                    "Grid: Pending entry missing from active orders but still within fill grace window; "
+                    "waiting for fill confirmation."
+                ),
+                "DEBUG",
+                order_id=pending_id,
+                elapsed_seconds=round(now - pending_placed_at, 3),
+            )
+            return False
+
+        # Double-check latest order state before treating as canceled to avoid losing fills that arrived slightly late.
+        order_info = None
+        get_order_info = getattr(self.exchange_client, "get_order_info", None)
+        if callable(get_order_info):
+            try:
+                order_info = await get_order_info(pending_str, force_refresh=True)  # type: ignore[arg-type]
+            except TypeError:
+                order_info = await get_order_info(pending_str)  # type: ignore[call-arg]
+            except Exception as exc:  # pragma: no cover - defensive logging
+                self.logger.log(
+                    (
+                        "Grid: Failed to refresh order info while validating pending entry "
+                        f"{pending_id}: {exc}"
+                    ),
+                    "DEBUG",
+                    order_id=pending_id,
+                    error=str(exc),
+                )
+
+        if order_info is not None:
+            status = str(getattr(order_info, "status", "") or "").upper()
+            if status in {"FILLED", "EXECUTED"}:
+                filled_price = getattr(order_info, "price", None)
+                filled_quantity = (
+                    getattr(order_info, "filled_size", None)
+                    or getattr(order_info, "size", None)
+                )
+                if filled_price is not None and filled_quantity is not None:
+                    price_dec = filled_price if isinstance(filled_price, Decimal) else Decimal(str(filled_price))
+                    quantity_dec = (
+                        filled_quantity
+                        if isinstance(filled_quantity, Decimal)
+                        else Decimal(str(filled_quantity))
+                    )
+                    self.order_closer.notify_order_filled(
+                        price_dec,
+                        quantity_dec,
+                        order_id=pending_str,
+                    )
+                    self.grid_state.pending_open_order_time = None
+                    self._log_event(
+                        "entry_fill_synced",
+                        "Grid: Detected filled entry while reconciling pending order; resuming close placement.",
+                        level="INFO",
+                        order_id=pending_id,
+                        price=price_dec,
+                        quantity=quantity_dec,
+                    )
+                    return False
+                else:  # pragma: no cover - defensive guard
+                    self.logger.log(
+                        (
+                            "Grid: Order info reported FILLED without price/quantity; "
+                            "deferring cancellation."
+                        ),
+                        "WARNING",
+                        order_id=pending_id,
+                        raw_order_info=str(order_info),
+                    )
+                    return False
+
+            if status in {"OPEN", "PARTIALLY_FILLED"}:
+                # Order still live or mid-fill; allow another iteration for websocket state to catch up.
                 return False
 
         # If a fill arrived while we were checking, do not treat the entry as canceled.
