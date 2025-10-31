@@ -94,6 +94,19 @@ class LighterClient(BaseExchangeClient):
         self._latest_orders: Dict[str, OrderInfo] = {}
         self._order_update_events: Dict[str, asyncio.Event] = {}
         self.order_fill_callback = order_fill_callback
+        default_window = 6 * 3600
+        try:
+            window_value = int(getattr(config, "inactive_order_lookup_window_seconds", default_window))
+        except Exception:
+            window_value = default_window
+        self._inactive_lookup_window_seconds = max(60, window_value)
+
+        default_limit = 50
+        try:
+            limit_value = int(getattr(config, "inactive_order_lookup_limit", default_limit))
+        except Exception:
+            limit_value = default_limit
+        self._inactive_lookup_limit = min(100, max(1, limit_value))
         self._positions_lock = asyncio.Lock()
         self._positions_ready = asyncio.Event()
         self._raw_positions: Dict[str, Dict[str, Any]] = {}
@@ -234,6 +247,137 @@ class LighterClient(BaseExchangeClient):
         
         if contract_id is not None and tick_size is not None:
             return contract_id, tick_size
+        return None
+
+    def _build_order_info_from_payload(self, order_obj: Any, order_id: str) -> Optional[OrderInfo]:
+        """
+        Convert Lighter order payload (active or inactive) into OrderInfo.
+        """
+        try:
+            size = Decimal(str(getattr(order_obj, "initial_base_amount", "0")))
+        except Exception:
+            size = Decimal("0")
+
+        try:
+            remaining = Decimal(str(getattr(order_obj, "remaining_base_amount", "0")))
+        except Exception:
+            remaining = Decimal("0")
+
+        try:
+            filled_base = Decimal(str(getattr(order_obj, "filled_base_amount", "0")))
+        except Exception:
+            filled_base = Decimal("0")
+
+        if filled_base <= Decimal("0") and size >= remaining:
+            filled_base = size - remaining
+
+        if filled_base < Decimal("0"):
+            filled_base = Decimal("0")
+        if remaining < Decimal("0"):
+            remaining = Decimal("0")
+
+        status_raw = str(getattr(order_obj, "status", "")).upper()
+        if status_raw not in {"FILLED", "PARTIALLY_FILLED", "OPEN", "CANCELED"}:
+            if filled_base >= size and size > 0:
+                status_raw = "FILLED"
+            elif filled_base > 0:
+                status_raw = "PARTIALLY_FILLED"
+            elif remaining >= size:
+                status_raw = "OPEN"
+
+        if status_raw == "FILLED":
+            remaining = Decimal("0")
+            filled_base = size if size > 0 else filled_base
+        elif status_raw == "OPEN" and filled_base > 0:
+            status_raw = "PARTIALLY_FILLED"
+
+        side = "sell" if getattr(order_obj, "is_ask", False) else "buy"
+        try:
+            price = Decimal(str(getattr(order_obj, "price", "0")))
+        except Exception:
+            price = Decimal("0")
+
+        return OrderInfo(
+            order_id=str(order_id),
+            side=side,
+            size=size,
+            price=price,
+            status=status_raw,
+            filled_size=filled_base,
+            remaining_size=remaining,
+        )
+
+    async def _lookup_inactive_order(
+        self,
+        order_id_str: str,
+        market_id: int,
+    ) -> Optional[OrderInfo]:
+        """
+        Fetch historical order details from Lighter's accountInactiveOrders endpoint.
+        """
+        if not self.order_api:
+            return None
+
+        auth_token, error = self.lighter_client.create_auth_token_with_expiry()
+        if error:
+            self.logger.error(f"Error creating auth token for inactive orders: {error}")
+            return None
+
+        now = int(time.time())
+        start_ts = max(0, now - self._inactive_lookup_window_seconds)
+        between = f"{start_ts}-{now}"
+
+        try:
+            response = await self.order_api.account_inactive_orders(
+                account_index=self.account_index,
+                limit=self._inactive_lookup_limit,
+                auth=auth_token,
+                market_id=int(market_id),
+                between_timestamps=between,
+            )
+        except Exception as exc:
+            self.logger.warning(
+                f"[LIGHTER] Failed inactive order lookup for {order_id_str}: {exc}"
+            )
+            return None
+
+        if response is None or not getattr(response, "orders", None):
+            return None
+
+        order_id_int = None
+        try:
+            order_id_int = int(order_id_str)
+        except Exception:
+            pass
+
+        for order in response.orders:
+            try:
+                client_idx = int(getattr(order, "client_order_index", -1))
+            except Exception:
+                client_idx = -1
+            try:
+                server_idx = int(getattr(order, "order_index", -1))
+            except Exception:
+                server_idx = -1
+
+            matches_lookup = False
+            if order_id_int is not None:
+                matches_lookup = client_idx == order_id_int or server_idx == order_id_int
+            else:
+                matches_lookup = str(getattr(order, "client_order_index", "")) == order_id_str
+
+            if not matches_lookup:
+                continue
+
+            info = self._build_order_info_from_payload(order, order_id_str)
+            if info is not None:
+                if server_idx >= 0:
+                    self._latest_orders[str(server_idx)] = info
+                    self._notify_order_update(str(server_idx))
+                self._latest_orders[order_id_str] = info
+                self._notify_order_update(order_id_str)
+                return info
+
         return None
     
     async def _get_market_config(self, ticker: str) -> Tuple[int, int, int]:
@@ -1081,53 +1225,61 @@ class LighterClient(BaseExchangeClient):
 
         return self._latest_orders.get(order_key_str)
 
-    async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
+    async def get_order_info(self, order_id: str, *, force_refresh: bool = False) -> Optional[OrderInfo]:
         """
         Get order information from Lighter using official SDK.
         
         Note: Lighter uses order_index (int) as order_id, and we need market_id to query orders.
+
+        Args:
+            order_id: Client or server order identifier.
+            force_refresh: When True, bypass websocket caches and fetch fresh data via REST.
         """
         try:
             order_id_str = str(order_id)
 
             # Check latest updates captured from WebSocket (client & server ids)
-            cached = self._latest_orders.get(order_id_str)
-            if cached is not None:
-                return cached
-
             server_order_id = self._client_to_server_order_index.get(order_id_str)
-            if server_order_id:
-                server_cached = self._latest_orders.get(str(server_order_id))
-                if server_cached is not None:
-                    return server_cached
 
-            # Wait briefly for websocket state before hitting REST endpoints
-            websocket_snapshot = await self._await_order_update(order_id_str)
-            if websocket_snapshot is not None:
-                return websocket_snapshot
+            cached_primary = self._latest_orders.get(order_id_str)
+            cached_server = self._latest_orders.get(str(server_order_id)) if server_order_id else None
+            cached_fallback = cached_primary or cached_server
 
-            if server_order_id:
-                server_snapshot = await self._await_order_update(str(server_order_id), timeout=0.5)
-                if server_snapshot is not None:
-                    return server_snapshot
+            if not force_refresh:
+                if cached_primary is not None:
+                    return cached_primary
+
+                if cached_server is not None:
+                    return cached_server
+
+                # Wait briefly for websocket state before hitting REST endpoints
+                websocket_snapshot = await self._await_order_update(order_id_str)
+                if websocket_snapshot is not None:
+                    return websocket_snapshot
+
+                if server_order_id:
+                    server_snapshot = await self._await_order_update(str(server_order_id), timeout=0.5)
+                    if server_snapshot is not None:
+                        return server_snapshot
 
             if not self.order_api:
                 self.logger.error("Order API not initialized")
-                return None
+                return cached_fallback
             
             # Get market ID from config (should be set during initialization)
             market_id = getattr(self.config, 'contract_id', None)
             if market_id is None:
                 self.logger.error(f"Market ID not found in config for symbol {self.config.ticker}")
-                return None
+                return cached_fallback
             
             # Generate auth token
             auth_token, error = self.lighter_client.create_auth_token_with_expiry()
             if error:
                 self.logger.error(f"Error creating auth token: {error}")
-                return None
+                return cached_fallback
             
             # Query active orders for this market
+            orders_response = None
             try:
                 orders_response = await self.order_api.account_active_orders(
                     account_index=self.account_index,
@@ -1146,32 +1298,15 @@ class LighterClient(BaseExchangeClient):
 
                 # Order might not be active anymore (filled or cancelled)
                 self.logger.debug(f"Order {order_id} not found in active orders (might be filled): {e}")
-                
-                # Check if order was filled by looking at positions
-                if self.account_api:
-                    account_data = await self.account_api.account(
-                        by="index",
-                        value=str(self.account_index),
-                    )
-                    if account_data and account_data.accounts and account_data.accounts[0].positions:
-                        for position in account_data.accounts[0].positions:
-                            if position.symbol == self.config.ticker:
-                                position_amt = abs(float(position.position))
-                                if position_amt > 0.001:  # Only include significant positions
-                                    return OrderInfo(
-                                        order_id=order_id,
-                                        side="buy" if float(position.position) > 0 else "sell",
-                                        size=Decimal(str(position_amt)),
-                                        price=Decimal(str(position.avg_price)),
-                                        status="FILLED",
-                                        filled_size=Decimal(str(position_amt)),
-                                        remaining_size=Decimal('0')
-                                    )
-                return None
-            
+                orders_response = None
+        
             # Look for the specific order by order_index
-            if orders_response and orders_response.orders:
-                order_id_int = int(order_id_str)
+            if orders_response and getattr(orders_response, "orders", None):
+                order_id_int = None
+                try:
+                    order_id_int = int(order_id_str)
+                except Exception:
+                    pass
                 for order in orders_response.orders:
                     try:
                         client_idx = int(getattr(order, "client_order_index", -1))
@@ -1182,47 +1317,14 @@ class LighterClient(BaseExchangeClient):
                     except Exception:
                         server_idx = -1
 
-                    if client_idx == order_id_int or server_idx == order_id_int:
-                        size = Decimal(str(getattr(order, "initial_base_amount", "0")))
-                        remaining = Decimal(str(getattr(order, "remaining_base_amount", "0")))
-                        filled_base = Decimal(str(getattr(order, "filled_base_amount", "0")))
+                    matches = False
+                    if order_id_int is not None:
+                        matches = client_idx == order_id_int or server_idx == order_id_int
+                    else:
+                        matches = str(getattr(order, "client_order_index", "")) == order_id_str
 
-                        # Some payloads only provide remaining; fall back to size - remaining
-                        if filled_base <= Decimal("0") and size >= remaining:
-                            filled_base = size - remaining
-
-                        if filled_base < Decimal("0"):
-                            filled_base = Decimal("0")
-                        if remaining < Decimal("0"):
-                            remaining = Decimal("0")
-
-                        status_raw = str(getattr(order, "status", "")).upper()
-                        if status_raw not in {"FILLED", "PARTIALLY_FILLED", "OPEN", "CANCELED"}:
-                            if filled_base >= size and size > 0:
-                                status_raw = "FILLED"
-                            elif filled_base > 0:
-                                status_raw = "PARTIALLY_FILLED"
-                            elif remaining >= size:
-                                status_raw = "OPEN"
-
-                        if status_raw == "FILLED":
-                            remaining = Decimal("0")
-                            filled_base = size if size > 0 else filled_base
-                        elif status_raw == "OPEN" and filled_base > 0:
-                            status_raw = "PARTIALLY_FILLED"
-
-                        side = "sell" if getattr(order, "is_ask", False) else "buy"
-                        price = Decimal(str(getattr(order, "price", "0")))
-
-                        info = OrderInfo(
-                            order_id=order_id,
-                            side=side,
-                            size=size,
-                            price=price,
-                            status=status_raw,
-                            filled_size=filled_base,
-                            remaining_size=remaining,
-                        )
+                    if matches:
+                        info = self._build_order_info_from_payload(order, order_id)
                         self._latest_orders[order_id_str] = info
                         self._notify_order_update(order_id_str)
                         if server_idx >= 0:
@@ -1230,15 +1332,41 @@ class LighterClient(BaseExchangeClient):
                             self._latest_orders[server_key] = info
                             self._notify_order_update(server_key)
                         return info
+
+            # Active lookup missing—check inactive order history for exact fills
+            inactive_info = await self._lookup_inactive_order(order_id_str, int(market_id))
+            if inactive_info is not None:
+                return inactive_info
+
+            # Fall back to position snapshot as last resort
+            if self.account_api:
+                account_data = await self.account_api.account(
+                    by="index",
+                    value=str(self.account_index),
+                )
+                if account_data and account_data.accounts and account_data.accounts[0].positions:
+                    for position in account_data.accounts[0].positions:
+                        if position.symbol == self.config.ticker:
+                            position_amt = abs(float(position.position))
+                            if position_amt > 0.001:  # Only include significant positions
+                                return OrderInfo(
+                                    order_id=order_id,
+                                    side="buy" if float(position.position) > 0 else "sell",
+                                    size=Decimal(str(position_amt)),
+                                    price=Decimal(str(position.avg_price)),
+                                    status="FILLED",
+                                    filled_size=Decimal(str(position_amt)),
+                                    remaining_size=Decimal('0')
+                                )
             
             # Order not found in active orders - might be filled
-            return None
+            return cached_fallback
 
         except Exception as e:
             self.logger.error(f"Error getting order info: {e}")
             import traceback
             self.logger.debug(f"Traceback: {traceback.format_exc()}")
-            return None
+            return self._latest_orders.get(order_id_str)
 
     async def _handle_user_stats_update(self, payload: Dict[str, Any]) -> None:
         """

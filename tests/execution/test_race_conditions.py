@@ -39,7 +39,7 @@ async def test_order_fills_during_cancellation():
             await asyncio.sleep(0.01)
             return SimpleNamespace(success=True, order_id=order_id, status='CANCELED')
 
-        async def get_order_info(self, order_id: str):
+        async def get_order_info(self, order_id: str, *, force_refresh: bool = False):
             self.order_info_calls.append(order_id)
             filled = Decimal('0.5') if fill_stage[0] == 'partial' else Decimal('1.0')
             return SimpleNamespace(
@@ -99,7 +99,7 @@ async def test_multiple_simultaneous_rollbacks():
         async def cancel_order(self, order_id):
             return SimpleNamespace(success=True, order_id=order_id, status='CANCELED')
 
-        async def get_order_info(self, order_id):
+        async def get_order_info(self, order_id, *, force_refresh: bool = False):
             return SimpleNamespace(
                 order_id=order_id,
                 side='buy',
@@ -157,7 +157,7 @@ async def test_rollback_with_slow_exchange_response():
             await asyncio.sleep(0.5)
             return SimpleNamespace(success=True, order_id=order_id, status='CANCELED')
 
-        async def get_order_info(self, order_id):
+        async def get_order_info(self, order_id, *, force_refresh: bool = False):
             return SimpleNamespace(
                 order_id=order_id,
                 side='buy',

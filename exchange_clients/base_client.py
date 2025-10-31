@@ -463,12 +463,15 @@ class BaseExchangeClient(ABC):
         return 1  # Default: no multiplier (1 unit = 1 token)
 
     @abstractmethod
-    async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
+    async def get_order_info(self, order_id: str, *, force_refresh: bool = False) -> Optional[OrderInfo]:
         """
         Get detailed information about a specific order.
         
         Args:
             order_id: Order identifier
+            force_refresh: If True, bypass cached/WebSocket data and fetch fresh state
+                directly from the exchange when supported. Exchanges that do not support
+                caching may ignore this flag.
             
         Returns:
             OrderInfo with order details, or None if order not found

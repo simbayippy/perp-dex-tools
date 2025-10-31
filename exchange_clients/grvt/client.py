@@ -377,7 +377,13 @@ class GrvtClient(BaseExchangeClient):
             return OrderResult(success=False, error_message=str(e))
 
     @query_retry(reraise=True)
-    async def get_order_info(self, order_id: str = None, client_order_id: str = None) -> Optional[OrderInfo]:
+    async def get_order_info(
+        self,
+        order_id: str = None,
+        client_order_id: str = None,
+        *,
+        force_refresh: bool = False,
+    ) -> Optional[OrderInfo]:
         """Get order information from GRVT."""
         # Get order information using GRVT SDK
         if order_id is not None:

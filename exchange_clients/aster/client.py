@@ -944,11 +944,11 @@ class AsterClient(BaseExchangeClient):
             return OrderResult(success=False, error_message=str(e))
 
     @query_retry()
-    async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
+    async def get_order_info(self, order_id: str, *, force_refresh: bool = False) -> Optional[OrderInfo]:
         """Get order information from Aster."""
         order_id_str = str(order_id)
         cached = self._latest_orders.get(order_id_str)
-        if cached is not None:
+        if not force_refresh and cached is not None:
             status_upper = (cached.status or "").upper()
             if status_upper in {"FILLED", "CANCELED", "REJECTED", "EXPIRED"}:
                 return cached
@@ -972,7 +972,7 @@ class AsterClient(BaseExchangeClient):
                 remaining = size - filled
 
             info = OrderInfo(
-                order_id=str(result['orderId']),
+                order_id=str(result.get('orderId', order_id)),
                 side=(result.get('side') or '').lower(),
                 size=size or Decimal("0"),
                 price=price or Decimal("0"),

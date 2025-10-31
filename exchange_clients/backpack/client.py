@@ -1050,11 +1050,11 @@ class BackpackClient(BaseExchangeClient):
         return OrderResult(success=True, order_id=str(order_id), status=status, filled_size=filled_size)
 
     @query_retry()
-    async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
+    async def get_order_info(self, order_id: str, *, force_refresh: bool = False) -> Optional[OrderInfo]:
         """Fetch detailed order information."""
         order_id_str = str(order_id)
         cached = self._latest_orders.get(order_id_str)
-        if cached:
+        if cached and not force_refresh:
             status_upper = (cached.status or "").upper()
             if status_upper in {"FILLED", "CANCELED"}:
                 return cached
