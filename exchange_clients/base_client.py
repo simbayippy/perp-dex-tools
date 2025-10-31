@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 import asyncio
 import inspect
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING, Callable, Awaitable
+from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING, Callable, Awaitable
 
 from exchange_clients.events import LiquidationEvent, LiquidationEventDispatcher
 
@@ -66,6 +66,7 @@ class BaseExchangeClient(ABC):
         # e.g., {"STBL": "STBLUSDT", "MET": "METUSDT"}
         self._contract_id_cache: Dict[str, str] = {}
         self.order_fill_callback: OrderFillCallback = None
+        self._contract_id_fallback_logged: Set[str] = set()
 
     @abstractmethod
     def _validate_config(self) -> None:
@@ -421,6 +422,24 @@ class BaseExchangeClient(ABC):
                 return contract_id
         
         # Final fallback: return symbol as-is (exchange will normalize it)
+        logger = getattr(self, "logger", None)
+        if logger is not None and symbol_upper not in self._contract_id_fallback_logged:
+            try:
+                exchange_name = self.get_exchange_name().upper()
+            except Exception:  # pragma: no cover - defensive
+                exchange_name = self.__class__.__name__.upper()
+            message = (
+                f"[{exchange_name}] Falling back to raw symbol '{symbol_upper}' for contract_id "
+                "resolution (cache miss). Ensure market metadata is initialized."
+            )
+            if hasattr(logger, "warning"):
+                logger.warning(message)
+            elif hasattr(logger, "log"):
+                try:
+                    logger.log(message, "WARNING")
+                except Exception:
+                    pass
+            self._contract_id_fallback_logged.add(symbol_upper)
         return symbol
     
     def get_quantity_multiplier(self, symbol: str) -> int:

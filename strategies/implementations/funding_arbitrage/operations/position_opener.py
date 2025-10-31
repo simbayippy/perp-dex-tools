@@ -783,11 +783,53 @@ class PositionOpener:
         try:
             exchange_name = exchange_client.get_exchange_name()
 
-            if not hasattr(exchange_client.config, "contract_id") or exchange_client.config.ticker == "ALL":
-                strategy.logger.log(
-                    f"🔧 [{exchange_name.upper()}] Initializing contract attributes for {symbol}",
-                    "INFO",
-                )
+            config_ticker = getattr(exchange_client.config, "ticker", "")
+            if hasattr(exchange_client, "normalize_symbol"):
+                try:
+                    normalized_symbol = exchange_client.normalize_symbol(symbol).upper()
+                except Exception:
+                    normalized_symbol = symbol.upper()
+            else:
+                normalized_symbol = symbol.upper()
+            contract_cache = getattr(exchange_client, "_contract_id_cache", {})
+            has_cached_contract = normalized_symbol in contract_cache
+            base_missing = getattr(exchange_client, "base_amount_multiplier", None) is None
+            price_missing = getattr(exchange_client, "price_multiplier", None) is None
+            current_contract = getattr(exchange_client.config, "contract_id", None)
+            cached_contract = contract_cache.get(normalized_symbol)
+            contract_mismatch = (
+                has_cached_contract
+                and cached_contract is not None
+                and current_contract is not None
+                and str(current_contract) != str(cached_contract)
+            )
+
+            config_missing = not hasattr(exchange_client.config, "contract_id")
+            ticker_generic = str(config_ticker).upper() in {"", "ALL", "MULTI", "MULTI_SYMBOL"}
+
+            needs_refresh = (
+                config_missing
+                or ticker_generic
+                or not has_cached_contract
+                or base_missing
+                or price_missing
+                or contract_mismatch
+            )
+
+            should_apply_metadata = False
+            if exchange_name == "lighter":
+                metadata_cache = getattr(exchange_client, "_market_metadata", {})
+                if normalized_symbol in metadata_cache:
+                    should_apply_metadata = True
+                else:
+                    needs_refresh = True
+
+            if needs_refresh or should_apply_metadata:
+                if needs_refresh:
+                    strategy.logger.log(
+                        f"🔧 [{exchange_name.upper()}] Initializing contract attributes for {symbol}",
+                        "INFO",
+                    )
 
                 original_ticker = exchange_client.config.ticker
                 exchange_client.config.ticker = symbol
@@ -801,10 +843,11 @@ class PositionOpener:
                         )
                         return False
 
-                    strategy.logger.log(
-                        f"✅ [{exchange_name.upper()}] {symbol} initialized → contract_id={contract_id}, tick_size={tick_size}",
-                        "INFO",
-                    )
+                    if needs_refresh:
+                        strategy.logger.log(
+                            f"✅ [{exchange_name.upper()}] {symbol} initialized → contract_id={contract_id}, tick_size={tick_size}",
+                            "INFO",
+                        )
 
                 except ValueError as exc:
                     error_msg = str(exc).lower()

@@ -86,6 +86,7 @@ class LighterClient(BaseExchangeClient):
         # Market configuration
         self.base_amount_multiplier = None
         self.price_multiplier = None
+
         self.orders_cache = {}
         self.current_order_client_id = None
         self.current_order = None
@@ -106,6 +107,7 @@ class LighterClient(BaseExchangeClient):
         # Market ID caching (to avoid expensive order_books() calls - saves 300 weight per lookup!)
         self._market_id_cache: Dict[str, int] = {}
         self._contract_id_cache: Dict[str, str] = {}
+        self._market_metadata: Dict[str, Dict[str, Any]] = {}
 
     def _validate_config(self) -> None:
         """Validate Lighter configuration."""
@@ -191,6 +193,48 @@ class LighterClient(BaseExchangeClient):
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             return None
+    
+    def _cache_market_metadata(self, normalized_symbol: str, metadata: Dict[str, Any]) -> None:
+        """
+        Persist market metadata for a symbol so multi-symbol sessions reuse correct precision.
+        """
+        cache_key = normalized_symbol.upper()
+        self._market_metadata[cache_key] = metadata
+        contract_id = metadata.get("contract_id")
+        if contract_id is not None:
+            self._contract_id_cache[cache_key] = str(contract_id)
+    
+    def _apply_market_metadata(self, normalized_symbol: str) -> Optional[Tuple[Any, Decimal]]:
+        """
+        Load cached market metadata into the client and config.
+        """
+        cache_key = normalized_symbol.upper()
+        metadata = self._market_metadata.get(cache_key)
+        if metadata is None:
+            return None
+        
+        base_mult = metadata.get("base_amount_multiplier")
+        price_mult = metadata.get("price_multiplier")
+        contract_id = metadata.get("contract_id")
+        tick_size = metadata.get("tick_size")
+        min_notional = metadata.get("min_notional")
+        
+        if base_mult is not None:
+            self.base_amount_multiplier = base_mult
+        if price_mult is not None:
+            self.price_multiplier = price_mult
+        if contract_id is not None:
+            self.config.contract_id = contract_id
+            self._contract_id_cache[cache_key] = str(contract_id)
+        if tick_size is not None:
+            setattr(self.config, "tick_size", tick_size)
+        if min_notional is not None:
+            self._min_order_notional[cache_key] = min_notional
+            setattr(self.config, "min_order_notional", min_notional)
+        
+        if contract_id is not None and tick_size is not None:
+            return contract_id, tick_size
+        return None
     
     async def _get_market_config(self, ticker: str) -> Tuple[int, int, int]:
         """Get market configuration for a ticker using official SDK."""
@@ -1632,10 +1676,16 @@ class LighterClient(BaseExchangeClient):
 
     async def get_contract_attributes(self) -> Tuple[str, Decimal]:
         """Get contract ID for a ticker."""
-        ticker = self.config.ticker
-        if len(ticker) == 0:
+        ticker = getattr(self.config, "ticker", "")
+        if not ticker:
             self.logger.error("Ticker is empty")
             raise ValueError("Ticker is empty")
+
+        normalized_ticker = self.normalize_symbol(ticker)
+        cached_metadata = self._apply_market_metadata(normalized_ticker)
+        if cached_metadata is not None:
+            contract_id, tick_size = cached_metadata
+            return contract_id, tick_size
 
         # Convert normalized ticker to Lighter's format (e.g., "TOSHI" -> "1000TOSHI")
         from exchange_clients.lighter.common import get_lighter_symbol_format
@@ -1689,10 +1739,13 @@ class LighterClient(BaseExchangeClient):
         # Cache contract_id for this symbol (multi-symbol trading support)
         # Use normalized symbol as key for consistency
         normalized_ticker = self.normalize_symbol(ticker)
-        self._contract_id_cache[normalized_ticker.upper()] = str(market_id_value)
+        cache_key = normalized_ticker.upper()
+        self._contract_id_cache[cache_key] = str(market_id_value)
         
-        self.base_amount_multiplier = pow(10, market_info.supported_size_decimals)
-        self.price_multiplier = pow(10, market_info.supported_price_decimals)
+        base_amount_multiplier = pow(10, market_info.supported_size_decimals)
+        price_multiplier = pow(10, market_info.supported_price_decimals)
+        self.base_amount_multiplier = base_amount_multiplier
+        self.price_multiplier = price_multiplier
 
         try:
             self.config.tick_size = Decimal("1") / (Decimal("10") ** order_book_details.price_decimals)
@@ -1713,6 +1766,17 @@ class LighterClient(BaseExchangeClient):
             self.logger.debug(
                 f"[LIGHTER] Minimum order notional for {normalized_symbol}: ${min_quote_amount}"
             )
+
+        metadata = {
+            "symbol": market_info.symbol,
+            "normalized_symbol": normalized_ticker,
+            "contract_id": market_id_value,
+            "base_amount_multiplier": base_amount_multiplier,
+            "price_multiplier": price_multiplier,
+            "tick_size": getattr(self.config, "tick_size", None),
+            "min_notional": min_quote_amount,
+        }
+        self._cache_market_metadata(normalized_ticker, metadata)
 
         return self.config.contract_id, self.config.tick_size
 
