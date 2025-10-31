@@ -27,6 +27,7 @@ from lighter import SignerClient, ApiClient, Configuration
 
 # Import custom WebSocket implementation
 from .websocket_manager import LighterWebSocketManager
+from networking import SessionProxyManager
 
 
 class LighterClient(BaseExchangeClient):
@@ -433,6 +434,11 @@ class LighterClient(BaseExchangeClient):
     async def connect(self) -> None:
         """Connect to Lighter."""
         try:
+            if SessionProxyManager.is_active():
+                proxy_info = SessionProxyManager.describe(mask_password=True)
+                if proxy_info:
+                    self.logger.info(f"[LIGHTER] Session proxy configured: {proxy_info}")
+
             # Initialize shared API client
             self.api_client = ApiClient(configuration=Configuration(host=self.base_url))
 

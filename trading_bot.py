@@ -16,6 +16,8 @@ from helpers.unified_logger import get_logger
 from helpers.lark_bot import LarkBot
 from helpers.telegram_bot import TelegramBot
 from strategies import StrategyFactory
+from networking import ProxySelector, SessionProxyManager
+from helpers.networking import ProxyHealthMonitor, detect_egress_ip
 
 
 @dataclass
@@ -42,7 +44,12 @@ class TradingConfig:
 class TradingBot:
     """Modular Trading Bot - Main trading logic supporting multiple exchanges."""
 
-    def __init__(self, config: TradingConfig, account_credentials: Optional[Dict[str, Dict[str, Any]]] = None):
+    def __init__(
+        self,
+        config: TradingConfig,
+        account_credentials: Optional[Dict[str, Dict[str, Any]]] = None,
+        proxy_selector: Optional[ProxySelector] = None,
+    ):
         """
         Initialize Trading Bot.
         
@@ -50,16 +57,31 @@ class TradingBot:
             config: Trading configuration
             account_credentials: Optional credentials dict mapping exchange names to credentials.
                                If provided, credentials will be used instead of environment variables.
+            proxy_selector: Optional proxy selector derived from account assignments.
         """
         self.config = config
         self.account_credentials = account_credentials
+        self.proxy_selector = proxy_selector
         self.logger = get_logger("bot", config.strategy, context={"exchange": config.exchange, "ticker": config.ticker}, log_to_console=True)
+        self._proxy_health_monitor: Optional[ProxyHealthMonitor] = None
+        self._proxy_rotation_attempts = 0
 
         # Log account info if credentials provided
         if account_credentials:
             account_name = config.strategy_params.get('_account_name', 'unknown')
             self.logger.info(f"Using database credentials for account: {account_name}")
             self.logger.info(f"Available exchanges: {list(account_credentials.keys())}")
+
+        if proxy_selector:
+            if SessionProxyManager.is_active():
+                active_display = SessionProxyManager.describe(mask_password=True)
+                assignment = proxy_selector.current_assignment()
+                if not active_display and assignment:
+                    active_display = assignment.proxy.masked_label()
+                if active_display:
+                    self.logger.info(f"Session proxy active: {active_display}")
+            else:
+                self.logger.warning("Proxy assignments loaded but session proxy is disabled")
 
         # Determine if strategy needs multiple exchanges
         multi_exchange_strategies = ['funding_arbitrage']
@@ -109,6 +131,10 @@ class TradingBot:
                 if not self.exchange_clients:
                     raise ValueError("Failed to instantiate any exchange clients.")
 
+                if proxy_selector:
+                    for client in self.exchange_clients.values():
+                        setattr(client, "proxy_selector", proxy_selector)
+
                 # Set a representative exchange client for backward compatibility
                 self.exchange_client = next(iter(self.exchange_clients.values()))
 
@@ -129,6 +155,9 @@ class TradingBot:
                 )
                 self.exchange_clients = None  # Not used for single-exchange strategies
 
+                if proxy_selector and self.exchange_client:
+                    setattr(self.exchange_client, "proxy_selector", proxy_selector)
+
                 if hasattr(self.exchange_client, "order_fill_callback"):
                     self.exchange_client.order_fill_callback = self._handle_order_fill
                 
@@ -139,6 +168,7 @@ class TradingBot:
         self.last_log_time = 0
         self.shutdown_requested = False
         self.loop = None
+        self._last_confirmed_proxy_ip: Optional[str] = self.config.strategy_params.get("_proxy_egress_ip")
 
         # Initialize strategy
         try:
@@ -243,6 +273,10 @@ class TradingBot:
         self.logger.info(f"Starting graceful shutdown: {reason}")
         self.shutdown_requested = True
 
+        if self._proxy_health_monitor:
+            await self._proxy_health_monitor.stop()
+            self._proxy_health_monitor = None
+
         try:
             # Cleanup strategy
             if hasattr(self, 'strategy') and self.strategy:
@@ -266,6 +300,55 @@ class TradingBot:
         except Exception as e:
             self.logger.error(f"Error during graceful shutdown: {e}")
 
+    async def _on_proxy_unhealthy(self, failure_count: int) -> None:
+        """Rotate to the next proxy when health checks continue to fail."""
+        if not self.proxy_selector:
+            self.logger.error(
+                "Proxy health monitor reported failures but no proxy selector is configured"
+            )
+            return
+
+        current_assignment = self.proxy_selector.current_assignment()
+        current_proxy_id = current_assignment.proxy.id if current_assignment else None
+
+        new_proxy = self.proxy_selector.rotate()
+        if not new_proxy:
+            self.logger.error(
+                "Proxy health monitor reported failures but no alternate proxy assignments are available"
+            )
+            return
+
+        if current_proxy_id and new_proxy.id == current_proxy_id:
+            self.logger.error(
+                "Proxy health monitor reported failures but only one active proxy assignment exists"
+            )
+            return
+
+        try:
+            masked_label = new_proxy.masked_label() if hasattr(new_proxy, "masked_label") else new_proxy.url_with_auth(mask_password=True)
+            self.logger.warning(
+                f"Rotating session proxy after {failure_count} failed health checks -> {masked_label}"
+            )
+            SessionProxyManager.rotate(new_proxy)
+            self._proxy_rotation_attempts += 1
+
+            ip_result = await detect_egress_ip()
+            if ip_result.address:
+                self._last_confirmed_proxy_ip = ip_result.address
+                self.logger.info(
+                    f"Proxy egress IP after rotation: {ip_result.address} (via {ip_result.source})"
+                )
+                self.config.strategy_params["_proxy_egress_ip"] = ip_result.address
+                self.config.strategy_params["_proxy_egress_source"] = ip_result.source
+                self.config.strategy_params["_proxy_rotation_count"] = self._proxy_rotation_attempts
+            else:
+                reason = ip_result.error or "no response"
+                self.logger.warning(
+                    f"Proxy rotation complete but unable to confirm new egress IP (reason: {reason})"
+                )
+        except Exception as exc:
+            self.logger.error(f"Proxy rotation failed: {exc}")
+
     async def run(self):
         """Main trading loop."""
         try:
@@ -275,6 +358,16 @@ class TradingBot:
             
             # Capture the running event loop for thread-safe callbacks
             self.loop = asyncio.get_running_loop()
+
+            if SessionProxyManager.is_active():
+                if not self._proxy_health_monitor:
+                    self._proxy_health_monitor = ProxyHealthMonitor(
+                        logger=self.logger,
+                        interval_seconds=1800.0, # every 30 mins
+                        timeout=10.0,
+                        on_unhealthy=self._on_proxy_unhealthy,
+                    )
+                self._proxy_health_monitor.start()
             
             # Connection phase
             await self._connect_exchanges()

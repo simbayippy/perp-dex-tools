@@ -7,7 +7,7 @@ Used by trading bots to retrieve account-specific API keys/secrets.
 
 import os
 import json
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 from uuid import UUID
 from pathlib import Path
 import sys
@@ -24,6 +24,9 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+from networking.repository import load_proxy_assignments
+from networking.selector import ProxySelector
+from networking.models import ProxyAssignment
 
 class CredentialDecryptor:
     """Handles decryption of credentials using Fernet encryption."""
@@ -220,6 +223,52 @@ class DatabaseCredentialLoader:
             raise ValueError(f"Account '{account_name}' not found or inactive")
         
         return account['id']
+
+    async def load_account_proxy_assignments(
+        self,
+        account_name: str,
+        *,
+        only_active: bool = True,
+    ) -> List[ProxyAssignment]:
+        """
+        Load proxy assignments for an account. Returns an empty list when
+        networking tables are not provisioned yet.
+        """
+        await self._ensure_connection()
+
+        account = await self.db.fetch_one(
+            "SELECT id, is_active FROM accounts WHERE account_name = :name",
+            {"name": account_name}
+        )
+        if not account:
+            raise ValueError(f"Account '{account_name}' not found in database")
+        if not account["is_active"]:
+            raise ValueError(f"Account '{account_name}' is inactive")
+
+        assignments = await load_proxy_assignments(
+            self.db,
+            account["id"],
+            decrypt=self.decryptor.decrypt,
+            only_active=only_active,
+        )
+        return assignments
+
+    async def load_account_proxy_selector(
+        self,
+        account_name: str,
+        *,
+        only_active: bool = True,
+    ) -> Optional[ProxySelector]:
+        assignments = await self.load_account_proxy_assignments(
+            account_name,
+            only_active=only_active,
+        )
+        if not assignments:
+            return None
+        try:
+            return ProxySelector.from_assignments(assignments)
+        except Exception:
+            return None
     
     async def get_account_info(self, account_name: str) -> Dict[str, Any]:
         """
@@ -314,4 +363,3 @@ async def get_account_id(account_name: str) -> UUID:
         return await loader.load_account_id(account_name)
     finally:
         await loader.close()
-

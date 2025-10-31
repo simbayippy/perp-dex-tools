@@ -16,8 +16,12 @@ from pathlib import Path
 import sys
 import dotenv
 from decimal import Decimal
+from typing import Optional, Tuple
 from trading_bot import TradingBot, TradingConfig
 import os
+
+from networking import ProxySelector, SessionProxyManager
+from helpers.networking import detect_egress_ip
 
 
 def parse_arguments():
@@ -57,6 +61,12 @@ def parse_arguments():
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging level (default: INFO). Use DEBUG to see detailed logs.",
+    )
+
+    parser.add_argument(
+        "--enable-proxy",
+        action="store_true",
+        help="Enable the account's configured proxy assignments for this session (disabled by default).",
     )
 
     return parser.parse_args()
@@ -105,62 +115,79 @@ def setup_logging(log_level: str):
     # Note: We keep the root logger at the requested level (INFO) so atomic_multi_order.py logs show up
 
 
-async def load_account_credentials(account_name: str) -> dict:
+async def load_account_context(account_name: str) -> Tuple[dict, Optional[ProxySelector]]:
     """
-    Load encrypted credentials for an account from the database.
-    
-    Args:
-        account_name: Name of the account to load credentials for
-        
+    Load credentials and proxy assignments for an account.
+
     Returns:
-        Dictionary mapping exchange names to their credentials
-        
-    Raises:
-        SystemExit: If credentials cannot be loaded
+        Tuple of (credentials, proxy_selector). The selector is None when
+        no proxies are configured or networking tables are absent.
     """
     try:
         from databases import Database
         from database.credential_loader import DatabaseCredentialLoader
-        
-        # Get database URL from environment
-        database_url = os.getenv('DATABASE_URL')
-        
-        if not database_url:
-            print("Error: DATABASE_URL not set in environment")
-            print("Required for loading account credentials from database")
-            sys.exit(1)
-        
-        # Connect to database
-        db = Database(database_url)
-        await db.connect()
-        
-        try:
-            # Load credentials (encryption_key is read from env by the loader)
-            loader = DatabaseCredentialLoader(db)
-            credentials = await loader.load_account_credentials(account_name)
-            
-            if not credentials:
-                print(f"Error: No credentials found for account '{account_name}'")
-                print(f"\nAvailable accounts:")
-                print(f"  Run: python database/scripts/list_accounts.py")
-                sys.exit(1)
-            
-            print(f"✓ Loaded credentials for account: {account_name}")
-            print(f"  Exchanges: {', '.join(credentials.keys())}\n")
-            
-            return credentials
-        finally:
-            await db.disconnect()
-            
-    except ImportError as e:
+    except ImportError as e:  # pragma: no cover - import guard
         print(f"Error: Failed to import database modules: {e}")
         print("Ensure 'databases' and 'cryptography' are installed")
         sys.exit(1)
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        print("Error: DATABASE_URL not set in environment")
+        print("Required for loading account credentials from database")
+        sys.exit(1)
+
+    db = Database(database_url)
+    await db.connect()
+
+    try:
+        loader = DatabaseCredentialLoader(db)
+        credentials = await loader.load_account_credentials(account_name)
+
+        if not credentials:
+            print(f"Error: No credentials found for account '{account_name}'")
+            print("\nAvailable accounts:")
+            print("  Run: python database/scripts/list_accounts.py")
+            sys.exit(1)
+
+        print(f"✓ Loaded credentials for account: {account_name}")
+        print(f"  Exchanges: {', '.join(credentials.keys())}")
+
+        proxy_selector: Optional[ProxySelector] = await loader.load_account_proxy_selector(
+            account_name,
+            only_active=False,
+        )
+
+        if proxy_selector and proxy_selector.assignments:
+            lines = []
+            for assignment in proxy_selector.assignments:
+                proxy = assignment.proxy
+                lines.append(
+                    f"    - {proxy.label} "
+                    f"(priority {assignment.priority}, status {assignment.status}, endpoint {proxy.url_with_auth(mask_password=True)})"
+                )
+            print("  Proxies:")
+            for line in lines:
+                print(line)
+        else:
+            print("  Proxies: none configured")
+
+        print("")  # spacing
+        return credentials, proxy_selector
     except Exception as e:
-        print(f"Error loading credentials from database: {e}")
+        print(f"Error loading account context from database: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
+    finally:
+        await db.disconnect()
+
+
+async def load_account_credentials(account_name: str) -> dict:
+    """Backward-compatible helper returning only credentials."""
+    credentials, _ = await load_account_context(account_name)
+    return credentials
 
 
 async def main():
@@ -209,17 +236,54 @@ async def main():
         sys.exit(1)
     dotenv.load_dotenv(args.env_file)
 
-    # Load account credentials from database if --account is provided
+    # Load account credentials and proxy assignments when --account is provided
     account_credentials = None
     account_name = None
+    proxy_selector: Optional[ProxySelector] = None
+    active_proxy_display: Optional[str] = None
+    detected_proxy_ip: Optional[str] = None
+    detected_proxy_source: Optional[str] = None
     if args.account:
         account_name = args.account
         print(f"Loading credentials for account: {account_name}")
-        account_credentials = await load_account_credentials(account_name)
+        account_credentials, proxy_selector = await load_account_context(account_name)
+
+        if proxy_selector:
+            if args.enable_proxy:
+                proxy = proxy_selector.current_proxy()
+                if proxy:
+                    try:
+                        SessionProxyManager.enable(proxy)
+                        active_proxy_display = proxy.url_with_auth(mask_password=True)
+                        print(f"✓ Session proxy enabled: {proxy.label} -> {active_proxy_display}\n")
+                        ip_result = await detect_egress_ip()
+                        if ip_result.address:
+                            detected_proxy_ip = ip_result.address
+                            detected_proxy_source = ip_result.source
+                            print(
+                                f"✓ Proxy egress IP confirmed: {ip_result.address} "
+                                f"(via {ip_result.source})\n"
+                            )
+                        else:
+                            failure_reason = ip_result.error or "no response"
+                            print(
+                                "⚠️ Unable to confirm proxy egress IP "
+                                f"(reason: {failure_reason})\n"
+                            )
+                    except Exception as exc:
+                        print(f"⚠️ Failed to enable session proxy ({exc})\n")
+                else:
+                    print("⚠️ No active proxies available for this account\n")
+            else:
+                print("ℹ️ Proxy enablement skipped (use --enable-proxy to enable)\n")
+        # load_account_context already prints summary lines (including trailing newline)
     
     # Store account info in strategy config for later use
     strategy_config["_account_name"] = account_name
     strategy_config["_account_credentials"] = account_credentials
+    strategy_config["_proxy_enabled"] = bool(active_proxy_display)
+    strategy_config["_proxy_egress_ip"] = detected_proxy_ip
+    strategy_config["_proxy_egress_source"] = detected_proxy_source
 
     # Convert to TradingConfig
     config = _config_dict_to_trading_config(strategy_name, strategy_config)
@@ -235,10 +299,18 @@ async def main():
     print(f"  Ticker:   {config.ticker}")
     if account_name:
         print(f"  Account:  {account_name}")
+    if active_proxy_display:
+        print(f"  Proxy:    {active_proxy_display}")
+    if detected_proxy_ip:
+        print(f"  EgressIP: {detected_proxy_ip}")
     print("="*70 + "\n")
     
     # Create bot with optional account credentials
-    bot = TradingBot(config, account_credentials=account_credentials)
+    bot = TradingBot(
+        config,
+        account_credentials=account_credentials,
+        proxy_selector=proxy_selector,
+    )
     try:
         await bot.run()
     except Exception as e:

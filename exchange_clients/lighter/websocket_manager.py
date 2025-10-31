@@ -13,15 +13,23 @@ Features:
 
 import asyncio
 import json
+import os
 import time
 from typing import Dict, Any, List, Optional, Tuple, Callable, Awaitable
-import websockets
+from urllib.parse import urlparse
+
+import aiohttp
 
 from exchange_clients.base_websocket import BaseWebSocketManager, BBOData
 
 
 class LighterWebSocketManager(BaseWebSocketManager):
     """WebSocket manager for Lighter order updates and order book."""
+
+    RECONNECT_BACKOFF_INITIAL = 1.0
+    RECONNECT_BACKOFF_MAX = 30.0
+    HEARTBEAT_INTERVAL = 20.0  # seconds
+    RECEIVE_TIMEOUT = 45.0
 
     def __init__(
         self,
@@ -37,7 +45,8 @@ class LighterWebSocketManager(BaseWebSocketManager):
         self.positions_callback = positions_callback
         self.user_stats_callback = user_stats_callback
         super().__init__()
-        self.ws = None
+        self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self._session: Optional[aiohttp.ClientSession] = None
         self._listener_task: Optional[asyncio.Task] = None
 
         # Order book state
@@ -63,6 +72,65 @@ class LighterWebSocketManager(BaseWebSocketManager):
         """Log message using the logger if available."""
         if self.logger:
             self.logger.log(message, level)
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """
+        Lazily initialize the aiohttp session used for websocket connections.
+
+        The session is configured with trust_env=False so that only the explicit
+        proxy arguments we pass are respected. This keeps behavior predictable
+        when SessionProxyManager has applied environment variables.
+        """
+        if self._session and not self._session.closed:
+            return self._session
+
+        timeout = aiohttp.ClientTimeout(total=None)
+        self._session = aiohttp.ClientSession(timeout=timeout, trust_env=False)
+        return self._session
+
+    async def _close_session(self) -> None:
+        """Close the websocket session if it exists."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+        self._session = None
+
+    def _proxy_kwargs(self) -> Dict[str, Any]:
+        """
+        Build proxy kwargs for aiohttp based on the active HTTP proxy.
+
+        Returns empty dict when no HTTP proxy is configured. SOCKS proxies are
+        already handled via SessionProxyManager's socket patching, so we skip
+        explicit wiring in that case to avoid incompatible schemes.
+        """
+        proxy_url = (
+            os.environ.get("HTTPS_PROXY")
+            or os.environ.get("HTTP_PROXY")
+            or os.environ.get("ALL_PROXY")
+            or os.environ.get("https_proxy")
+            or os.environ.get("http_proxy")
+            or os.environ.get("all_proxy")
+        )
+
+        if not proxy_url:
+            return {}
+
+        parsed = urlparse(proxy_url)
+        if parsed.scheme.lower() not in {"http", "https"}:
+            # aiohttp does not support socks proxies natively; rely on socket patching.
+            return {}
+
+        proxy_auth = None
+        if parsed.username or parsed.password:
+            proxy_auth = aiohttp.BasicAuth(parsed.username or "", parsed.password or "")
+            hostname = parsed.hostname or ""
+            port = f":{parsed.port}" if parsed.port else ""
+            netloc = f"{hostname}{port}"
+            parsed = parsed._replace(netloc=netloc, path="", params="", query="", fragment="")
+
+        clean_proxy_url = parsed.geturl()
+        if proxy_auth:
+            return {"proxy": clean_proxy_url, "proxy_auth": proxy_auth}
+        return {"proxy": clean_proxy_url}
 
     def update_order_book(self, side: str, updates: List[Dict[str, Any]]):
         """Update the order book with new price/size information."""
@@ -317,14 +385,14 @@ class LighterWebSocketManager(BaseWebSocketManager):
             "type": "unsubscribe",
             "channel": f"order_book/{market_id}"
         })
-        await self.ws.send(unsubscribe_msg)
+        await self.ws.send_str(unsubscribe_msg)
 
         # Unsubscribe from account orders
         account_unsub_msg = json.dumps({
             "type": "unsubscribe",
             "channel": f"account_orders/{market_id}/{self.account_index}"
         })
-        await self.ws.send(account_unsub_msg)
+        await self.ws.send_str(account_unsub_msg)
     
     async def _subscribe_market(self, market_id: int) -> None:
         """Subscribe to order book and account orders for a market."""
@@ -333,7 +401,7 @@ class LighterWebSocketManager(BaseWebSocketManager):
             "type": "subscribe",
             "channel": f"order_book/{market_id}"
         })
-        await self.ws.send(subscribe_msg)
+        await self.ws.send_str(subscribe_msg)
 
         # Subscribe to account orders (with auth)
         auth_token = None
@@ -352,7 +420,7 @@ class LighterWebSocketManager(BaseWebSocketManager):
         }
         if auth_token:
             account_sub_msg["auth"] = auth_token
-        await self.ws.send(json.dumps(account_sub_msg))
+        await self.ws.send_str(json.dumps(account_sub_msg))
     
     async def _wait_for_market_ready(self, timeout: float = 5.0) -> bool:
         """
@@ -400,14 +468,14 @@ class LighterWebSocketManager(BaseWebSocketManager):
 
             # Unsubscribe and resubscribe to get a fresh snapshot
             unsubscribe_msg = json.dumps({"type": "unsubscribe", "channel": f"order_book/{self.market_index}"})
-            await self.ws.send(unsubscribe_msg)
+            await self.ws.send_str(unsubscribe_msg)
 
             # Wait a moment for the unsubscribe to process
             await asyncio.sleep(1)
 
             # Resubscribe to get a fresh snapshot
             subscribe_msg = json.dumps({"type": "subscribe", "channel": f"order_book/{self.market_index}"})
-            await self.ws.send(subscribe_msg)
+            await self.ws.send_str(subscribe_msg)
 
             self._log("Requested fresh order book snapshot", "INFO")
         except Exception as e:
@@ -512,13 +580,14 @@ class LighterWebSocketManager(BaseWebSocketManager):
             self.best_ask = None
             self.order_book_offset = None
             self.order_book_sequence_gap = False
+            self.order_book_ready = False
 
     async def _subscribe_channels(self) -> None:
         """Subscribe to the required Lighter channels."""
         if not self.ws:
             raise RuntimeError("WebSocket connection not available")
 
-        await self.ws.send(json.dumps({
+        await self.ws.send_str(json.dumps({
             "type": "subscribe",
             "channel": f"order_book/{self.market_index}"
         }))
@@ -570,46 +639,158 @@ class LighterWebSocketManager(BaseWebSocketManager):
                 self._log("Skipping account order/notification/user_stats subscriptions (no auth token)", "WARNING")
 
         for message in subscription_messages:
-            await self.ws.send(json.dumps(message))
+            await self.ws.send_str(json.dumps(message))
 
-    async def _listen(self) -> None:
+    async def _open_connection(self) -> None:
+        """Establish the websocket connection and subscribe to channels."""
+        session = await self._get_session()
+        proxy_kwargs = self._proxy_kwargs()
+        if proxy_kwargs.get("proxy"):
+            self._log(f"[LIGHTER] Using HTTP proxy for websocket: {proxy_kwargs['proxy']}", "INFO")
+
+        try:
+            self.ws = await session.ws_connect(
+                self.ws_url,
+                heartbeat=self.HEARTBEAT_INTERVAL,
+                receive_timeout=self.RECEIVE_TIMEOUT,
+                **proxy_kwargs,
+            )
+            self._log("[LIGHTER] 🔗 Connected to websocket", "INFO")
+            self._log(
+                f"[LIGHTER] Websocket heartbeat enabled every {self.HEARTBEAT_INTERVAL:.0f}s "
+                f"(receive timeout {self.RECEIVE_TIMEOUT:.0f}s)",
+                "INFO",
+            )
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+            self._log(f"Failed to connect to Lighter websocket: {exc}", "ERROR")
+            raise
+
+        try:
+            await self._subscribe_channels()
+        except Exception as exc:
+            if self.ws and not self.ws.closed:
+                await self.ws.close()
+            self.ws = None
+            self._log(f"Subscription failed: {exc}", "ERROR")
+            raise
+
+    async def _consume_messages(self) -> None:
         """Listen for messages on the WebSocket connection."""
         cleanup_counter = 0
-        try:
-            while self.running and self.ws:
-                try:
-                    raw_message = await self.ws.recv()
-                except websockets.exceptions.ConnectionClosed as exc:
-                    self._log(f"Lighter websocket connection closed: {exc}", "WARNING")
-                    break
-                except Exception as exc:
-                    self._log(f"Error receiving websocket message: {exc}", "ERROR")
-                    break
+        while self.running and self.ws:
+            try:
+                msg = await self.ws.receive()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                self._log(f"Error receiving websocket message: {exc}", "ERROR")
+                break
+            except asyncio.CancelledError:
+                raise
 
-                try:
-                    data = json.loads(raw_message)
-                except json.JSONDecodeError as exc:
-                    self._log(f"JSON parsing error in Lighter websocket: {exc}", "ERROR")
-                    continue
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                raw_message = msg.data
+            elif msg.type == aiohttp.WSMsgType.BINARY:
+                raw_message = msg.data.decode(errors="ignore")
+            elif msg.type == aiohttp.WSMsgType.PING:
+                await self.ws.pong()
+                continue
+            elif msg.type == aiohttp.WSMsgType.PONG:
+                continue
+            elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED):
+                self._log("Lighter websocket connection closed by server", "WARNING")
+                close_code = getattr(self.ws, "close_code", None) if self.ws else None
+                close_reason = getattr(self.ws, "close_reason", None) if self.ws else None
+                self._log(
+                    (
+                        f"[LIGHTER] Websocket close details: msg_type={msg.type.name}, "
+                        f"msg_data={msg.data}, msg_extra={msg.extra}, "
+                        f"session_close_code={close_code}, session_close_reason={close_reason}"
+                    ),
+                    "INFO",
+                )
+                break
+            elif msg.type == aiohttp.WSMsgType.ERROR:
+                self._log(f"Lighter websocket error: {msg.data}", "ERROR")
+                close_code = getattr(self.ws, "close_code", None) if self.ws else None
+                close_reason = getattr(self.ws, "close_reason", None) if self.ws else None
+                self._log(
+                    (
+                        f"[LIGHTER] Websocket error details: msg_extra={msg.extra}, "
+                        f"session_close_code={close_code}, session_close_reason={close_reason}"
+                    ),
+                    "INFO",
+                )
+                break
+            else:
+                # Skip ping/pong/unknown frames and continue looping
+                continue
 
-                notifications_for_dispatch: Optional[List[Dict[str, Any]]] = None
-                request_snapshot = False
-                positions_payload: Optional[Dict[str, Any]] = None
-                user_stats_payload: Optional[Dict[str, Any]] = None
+            try:
+                data = json.loads(raw_message)
+            except json.JSONDecodeError as exc:
+                self._log(f"JSON parsing error in Lighter websocket: {exc}", "ERROR")
+                continue
 
-                async with self.order_book_lock:
-                    if data.get("type") == "subscribed/order_book":
-                        self.order_book["bids"].clear()
-                        self.order_book["asks"].clear()
-                        order_book = data.get("order_book", {})
-                        if order_book and "offset" in order_book:
-                            self.order_book_offset = order_book["offset"]
-                        self.update_order_book("bids", order_book.get("bids", []))
-                        self.update_order_book("asks", order_book.get("asks", []))
-                        self.snapshot_loaded = True
-                        self.order_book_ready = True
-                        
-                        # Extract BBO from the snapshot (not just updates)
+            notifications_for_dispatch: Optional[List[Dict[str, Any]]] = None
+            request_snapshot = False
+            positions_payload: Optional[Dict[str, Any]] = None
+            user_stats_payload: Optional[Dict[str, Any]] = None
+
+            async with self.order_book_lock:
+                if data.get("type") == "subscribed/order_book":
+                    self.order_book["bids"].clear()
+                    self.order_book["asks"].clear()
+                    order_book = data.get("order_book", {})
+                    if order_book and "offset" in order_book:
+                        self.order_book_offset = order_book["offset"]
+                    self.update_order_book("bids", order_book.get("bids", []))
+                    self.update_order_book("asks", order_book.get("asks", []))
+                    self.snapshot_loaded = True
+                    self.order_book_ready = True
+
+                    # Extract BBO from the snapshot (not just updates)
+                    (best_bid_price, _), (best_ask_price, _) = self.get_best_levels(min_size_usd=0)
+                    if best_bid_price is not None:
+                        self.best_bid = best_bid_price
+                    if best_ask_price is not None:
+                        self.best_ask = best_ask_price
+                    await self._notify_bbo_update(
+                        BBOData(
+                            symbol=str(getattr(self.config, "ticker", self.market_index)),
+                            bid=self.best_bid,
+                            ask=self.best_ask,
+                            timestamp=time.time(),
+                            sequence=self.order_book_offset,
+                        )
+                    )
+
+                    self._log(
+                        f"[LIGHTER] Order book snapshot loaded with {len(self.order_book['bids'])} bids and "
+                        f"{len(self.order_book['asks'])} asks (BBO: {self.best_bid}/{self.best_ask})",
+                        "INFO",
+                    )
+
+                elif data.get("type") == "update/order_book" and self.snapshot_loaded:
+                    if not self.handle_order_book_cutoff(data):
+                        self._log("Skipping incomplete order book update", "WARNING")
+                        continue
+
+                    order_book = data.get("order_book", {})
+                    offset = order_book.get("offset")
+                    if offset is None:
+                        self._log("Order book update missing offset, skipping", "WARNING")
+                        continue
+
+                    if not self.validate_order_book_offset(offset):
+                        if self.order_book_sequence_gap:
+                            request_snapshot = True
+                        continue
+
+                    self.update_order_book("bids", order_book.get("bids", []))
+                    self.update_order_book("asks", order_book.get("asks", []))
+
+                    if not self.validate_order_book_integrity():
+                        request_snapshot = True
+                    else:
                         (best_bid_price, _), (best_ask_price, _) = self.get_best_levels(min_size_usd=0)
                         if best_bid_price is not None:
                             self.best_bid = best_bid_price
@@ -621,109 +802,125 @@ class LighterWebSocketManager(BaseWebSocketManager):
                                 bid=self.best_bid,
                                 ask=self.best_ask,
                                 timestamp=time.time(),
-                                sequence=self.order_book_offset,
+                                sequence=offset,
                             )
                         )
-                        
-                        self._log(
-                            f"[LIGHTER] Order book snapshot loaded with {len(self.order_book['bids'])} bids and "
-                            f"{len(self.order_book['asks'])} asks (BBO: {self.best_bid}/{self.best_ask})",
-                            "INFO",
-                        )
 
-                    elif data.get("type") == "update/order_book" and self.snapshot_loaded:
-                        if not self.handle_order_book_cutoff(data):
-                            self._log("Skipping incomplete order book update", "WARNING")
-                            continue
+                elif data.get("type") == "ping":
+                    await self.ws.send_str(json.dumps({"type": "pong"}))
 
-                        order_book = data.get("order_book", {})
-                        offset = order_book.get("offset")
-                        if offset is None:
-                            self._log("Order book update missing offset, skipping", "WARNING")
-                            continue
+                elif data.get("type") == "update/account_orders":
+                    orders = data.get("orders", {}).get(str(self.market_index), [])
+                    self.handle_order_update(orders)
 
-                        if not self.validate_order_book_offset(offset):
-                            if self.order_book_sequence_gap:
-                                request_snapshot = True
-                            continue
+                elif data.get("type") == "update/account_all_positions":
+                    positions_payload = data
 
-                        self.update_order_book("bids", order_book.get("bids", []))
-                        self.update_order_book("asks", order_book.get("asks", []))
+                elif data.get("type") == "update/notification":
+                    notifications_for_dispatch = data.get("notifs", [])
 
-                        if not self.validate_order_book_integrity():
-                            request_snapshot = True
-                        else:
-                            (best_bid_price, _), (best_ask_price, _) = self.get_best_levels(min_size_usd=0)
-                            if best_bid_price is not None:
-                                self.best_bid = best_bid_price
-                            if best_ask_price is not None:
-                                self.best_ask = best_ask_price
-                            await self._notify_bbo_update(
-                                BBOData(
-                                    symbol=str(getattr(self.config, "ticker", self.market_index)),
-                                    bid=self.best_bid,
-                                    ask=self.best_ask,
-                                    timestamp=time.time(),
-                                    sequence=offset,
-                                )
-                            )
+                elif data.get("type") == "subscribed/notification":
+                    self._log("Subscribed to notification channel", "DEBUG")
 
-                    elif data.get("type") == "ping":
-                        await self.ws.send(json.dumps({"type": "pong"}))
+                elif data.get("type") == "subscribed/account_all_positions":
+                    self._log("Subscribed to account positions channel", "DEBUG")
 
-                    elif data.get("type") == "update/account_orders":
-                        orders = data.get("orders", {}).get(str(self.market_index), [])
-                        self.handle_order_update(orders)
+                elif data.get("type") == "update/user_stats":
+                    user_stats_payload = data
 
-                    elif data.get("type") == "update/account_all_positions":
-                        positions_payload = data
+                elif data.get("type") == "subscribed/user_stats":
+                    self._log("Subscribed to user stats channel (real-time balance updates)", "DEBUG")
 
-                    elif data.get("type") == "update/notification":
-                        notifications_for_dispatch = data.get("notifs", [])
+            cleanup_counter += 1
+            if cleanup_counter >= 1000:
+                self.cleanup_old_order_book_levels()
+                cleanup_counter = 0
 
-                    elif data.get("type") == "subscribed/notification":
-                        self._log("Subscribed to notification channel", "DEBUG")
+            if request_snapshot:
+                try:
+                    await self.request_fresh_snapshot()
+                    self.order_book_sequence_gap = False
+                except Exception as exc:
+                    self._log(f"Failed to request fresh snapshot: {exc}", "ERROR")
+                    break
 
-                    elif data.get("type") == "subscribed/account_all_positions":
-                        self._log("Subscribed to account positions channel", "DEBUG")
+            if notifications_for_dispatch:
+                await self._dispatch_liquidations(notifications_for_dispatch)
 
-                    elif data.get("type") == "update/user_stats":
-                        user_stats_payload = data
+            if positions_payload and self.positions_callback:
+                try:
+                    await self.positions_callback(positions_payload)
+                except Exception as exc:
+                    self._log(f"Error dispatching positions update: {exc}", "ERROR")
 
-                    elif data.get("type") == "subscribed/user_stats":
-                        self._log("Subscribed to user stats channel (real-time balance updates)", "DEBUG")
+            if user_stats_payload and self.user_stats_callback:
+                try:
+                    await self.user_stats_callback(user_stats_payload)
+                except Exception as exc:
+                    self._log(f"Error dispatching user stats update: {exc}", "ERROR")
 
-                cleanup_counter += 1
-                if cleanup_counter >= 1000:
-                    self.cleanup_old_order_book_levels()
-                    cleanup_counter = 0
+    async def _cleanup_current_ws(self) -> None:
+        """Close the active websocket connection if it exists."""
+        if self.ws and not self.ws.closed:
+            try:
+                await self.ws.close()
+            except Exception as exc:
+                self._log(f"Error closing websocket: {exc}", "ERROR")
+        self.ws = None
+        self.order_book_ready = False
 
-                if request_snapshot:
-                    try:
-                        await self.request_fresh_snapshot()
-                        self.order_book_sequence_gap = False
-                    except Exception as exc:
-                        self._log(f"Failed to request fresh snapshot: {exc}", "ERROR")
-                        break
+    async def _reconnect(self) -> None:
+        """Attempt to reconnect with exponential backoff."""
+        delay = self.RECONNECT_BACKOFF_INITIAL
+        attempt = 1
+        while self.running:
+            self._log(
+                f"[LIGHTER] Reconnecting websocket (attempt {attempt})",
+                "WARNING",
+            )
+            try:
+                await self.reset_order_book()
+                await self._open_connection()
+                self._log("[LIGHTER] Websocket reconnect successful", "INFO")
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._log(
+                    f"[LIGHTER] Reconnect attempt {attempt} failed: {exc}. Retrying in {delay:.1f}s",
+                    "ERROR",
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, self.RECONNECT_BACKOFF_MAX)
+                attempt += 1
 
-                if notifications_for_dispatch:
-                    await self._dispatch_liquidations(notifications_for_dispatch)
+        self._log("[LIGHTER] Reconnect aborted; manager no longer running", "WARNING")
 
-                if positions_payload and self.positions_callback:
-                    try:
-                        await self.positions_callback(positions_payload)
-                    except Exception as exc:
-                        self._log(f"Error dispatching positions update: {exc}", "ERROR")
+    async def _listen_loop(self) -> None:
+        """Keep the websocket stream alive and reconnect on failures."""
+        try:
+            while self.running:
+                try:
+                    await self._consume_messages()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self._log(f"[LIGHTER] Websocket listener error: {exc}", "ERROR")
+                finally:
+                    await self._cleanup_current_ws()
+                    self.order_book_ready = False
+                    self.snapshot_loaded = False
 
-                if user_stats_payload and self.user_stats_callback:
-                    try:
-                        await self.user_stats_callback(user_stats_payload)
-                    except Exception as exc:
-                        self._log(f"Error dispatching user stats update: {exc}", "ERROR")
+                if not self.running:
+                    break
 
+                await self._reconnect()
+        except asyncio.CancelledError:
+            pass
         finally:
+            await self._cleanup_current_ws()
+            await self._close_session()
             self.running = False
-            self.order_book_ready = self.snapshot_loaded
             self._log("WebSocket listener stopped", "INFO")
 
     def handle_order_update(self, order_data_list: List[Dict[str, Any]]):
@@ -754,22 +951,13 @@ class LighterWebSocketManager(BaseWebSocketManager):
         await self.reset_order_book()
 
         try:
-            self.ws = await websockets.connect(self.ws_url)
-            self._log("[LIGHTER] 🔗 Connected to websocket", "INFO")
-        except Exception as exc:
-            self._log(f"Failed to connect to Lighter websocket: {exc}", "ERROR")
-            raise
-
-        try:
-            await self._subscribe_channels()
-        except Exception as exc:
-            await self.ws.close()
-            self.ws = None
-            self._log(f"Subscription failed: {exc}", "ERROR")
+            await self._open_connection()
+        except Exception:
+            await self._close_session()
             raise
 
         self.running = True
-        self._listener_task = asyncio.create_task(self._listen(), name="lighter-ws-listener")
+        self._listener_task = asyncio.create_task(self._listen_loop(), name="lighter-ws-listener")
 
     async def disconnect(self):
         """Disconnect from WebSocket."""
@@ -787,12 +975,7 @@ class LighterWebSocketManager(BaseWebSocketManager):
             finally:
                 self._listener_task = None
 
-        if self.ws:
-            try:
-                await self.ws.close()
-            except Exception as exc:
-                self._log(f"Error closing websocket: {exc}", "ERROR")
-            finally:
-                self.ws = None
+        await self._cleanup_current_ws()
+        await self._close_session()
 
         self._log("WebSocket disconnected", "INFO")

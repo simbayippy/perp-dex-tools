@@ -17,7 +17,7 @@ import asyncio
 import sys
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import argparse
 import json
 
@@ -40,6 +40,8 @@ except ImportError:
     import logging
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
+
+from database.scripts.proxy_utils import assign_proxy, parse_proxy_line, upsert_proxy
 
 
 class CredentialEncryptor:
@@ -250,7 +252,17 @@ async def read_credentials_from_env() -> Dict[str, Dict]:
     return credentials
 
 
-async def add_account_from_env(account_name: str, env_file: str = ".env"):
+async def add_account_from_env(
+    account_name: str,
+    env_file: str = ".env",
+    proxies: Optional[List[str]] = None,
+    *,
+    proxy_scheme: str = "http",
+    proxy_label_prefix: Optional[str] = None,
+    proxy_start_index: int = 1,
+    proxy_priority_base: int = 0,
+    proxy_auth_type: str = "basic",
+):
     """Add account using credentials from specified env file"""
     
     # Check if env file exists
@@ -319,10 +331,55 @@ async def add_account_from_env(account_name: str, env_file: str = ".env"):
                 credentials=creds
             )
         
+        proxy_lines = proxies or []
+        if proxy_lines:
+            label_prefix = proxy_label_prefix or f"{account_name}_proxy"
+            logger.info(f"\n🌐 Attaching {len(proxy_lines)} proxies (label prefix: {label_prefix})")
+
+            successes = 0
+            for idx, raw_entry in enumerate(proxy_lines, start=proxy_start_index):
+                try:
+                    endpoint_url, username, password = parse_proxy_line(
+                        raw_entry, scheme=proxy_scheme
+                    )
+                except ValueError as exc:
+                    logger.warning(f"   ⚠️ Skipping proxy '{raw_entry}': {exc}")
+                    continue
+
+                creds_payload = None
+                if username or password:
+                    payload = {
+                        "username": manager.encryptor.encrypt(username) if username else None,
+                        "password": manager.encryptor.encrypt(password) if password else None,
+                    }
+                    creds_payload = json.dumps(payload)
+
+                label = f"{label_prefix}_{idx}"
+                proxy_id = await upsert_proxy(
+                    db,
+                    label=label,
+                    endpoint_url=endpoint_url,
+                    auth_type=proxy_auth_type,
+                    encrypted_credentials=creds_payload,
+                )
+                await assign_proxy(
+                    db,
+                    account_name=account_name,
+                    proxy_id=proxy_id,
+                    priority=proxy_priority_base + (idx - proxy_start_index),
+                    status="active",
+                )
+                logger.info(f"   ✓ Proxy '{label}' linked (endpoint: {endpoint_url})")
+                successes += 1
+
+            logger.info(f"   Proxies attached: {successes}/{len(proxy_lines)}")
+
         logger.info("\n" + "="*70)
         logger.info(f"✅ Account '{account_name}' setup complete!")
         logger.info(f"   Account ID: {account_id}")
         logger.info(f"   Exchanges configured: {', '.join(credentials.keys())}")
+        if proxy_lines:
+            logger.info(f"   Proxies configured: {len(proxy_lines)} (prefix: {label_prefix})")
         
         return True
         
@@ -386,15 +443,46 @@ async def main():
     parser.add_argument('--from-env', action='store_true', help='Read credentials from env file')
     parser.add_argument('--env-file', default='.env', help='Path to env file (default: .env)')
     parser.add_argument('--interactive', action='store_true', help='Interactive mode')
+    parser.add_argument('--proxy', action='append', help='Proxy definition host:port[:user:pass] (repeatable)')
+    parser.add_argument('--proxy-file', help='Path to newline-delimited proxy list')
+    parser.add_argument('--proxy-scheme', default='http', choices=['http', 'https', 'socks5'], help='Proxy scheme (default: http)')
+    parser.add_argument('--proxy-label-prefix', help='Label prefix for proxies (default: <account>_proxy)')
+    parser.add_argument('--proxy-start-index', type=int, default=1, help='Starting index for proxy labels (default: 1)')
+    parser.add_argument('--proxy-priority-base', type=int, default=0, help='Base priority when assigning proxies (default: 0)')
+    parser.add_argument('--proxy-auth-type', default='basic', choices=['none', 'basic', 'token', 'custom'], help='Proxy authentication type (default: basic)')
     
     args = parser.parse_args()
     
+    proxy_entries: List[str] = []
+    if args.proxy:
+        proxy_entries.extend(args.proxy)
+
+    if args.proxy_file:
+        proxy_path = Path(args.proxy_file)
+        if not proxy_path.exists():
+            parser.error(f"Proxy file not found: {proxy_path}")
+        file_lines = [
+            line.strip()
+            for line in proxy_path.read_text().splitlines()
+            if line.strip() and not line.strip().startswith('#')
+        ]
+        proxy_entries.extend(file_lines)
+
     if args.interactive or (not args.account_name and not args.from_env):
         # Interactive mode
         success = await interactive_mode()
     elif args.from_env and args.account_name:
         # From specified env file
-        success = await add_account_from_env(args.account_name, args.env_file)
+        success = await add_account_from_env(
+            args.account_name,
+            args.env_file,
+            proxy_entries,
+            proxy_scheme=args.proxy_scheme,
+            proxy_label_prefix=args.proxy_label_prefix,
+            proxy_start_index=args.proxy_start_index,
+            proxy_priority_base=args.proxy_priority_base,
+            proxy_auth_type=args.proxy_auth_type,
+        )
     else:
         parser.print_help()
         return 1
@@ -404,4 +492,3 @@ async def main():
 
 if __name__ == "__main__":
     sys.exit(asyncio.run(main()))
-
