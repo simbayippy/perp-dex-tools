@@ -69,7 +69,7 @@ class MockExchangeClient:
         self.canceled_orders.append(order_id)
         return OrderResult(success=True, order_id=order_id, status='CANCELED')
     
-    async def get_order_info(self, order_id: str) -> OrderInfo:
+    async def get_order_info(self, order_id: str, *, force_refresh: bool = False) -> OrderInfo:
         """Mock order info retrieval."""
         self.order_info_calls.append(order_id)
         
@@ -384,7 +384,7 @@ async def test_rollback_race_condition_protection():
     
     # Track fill amounts - simulates order filling more during rollback
     # The rollback will call get_order_info, which should return 0.8 BTC
-    async def mock_get_order_info(order_id: str) -> OrderInfo:
+    async def mock_get_order_info(order_id: str, *, force_refresh: bool = False) -> OrderInfo:
         """Mock that returns the ACTUAL fill amount (0.8 BTC - race condition!)."""
         # Track the call
         mock_client.order_info_calls.append(order_id)
@@ -585,7 +585,7 @@ async def test_rollback_cost_calculation():
     mock_client = MockExchangeClient("test_exchange")
     
     # Mock get_order_info to return 1.0 BTC filled
-    async def mock_get_order_info(order_id):
+    async def mock_get_order_info(order_id, *, force_refresh: bool = False):
         return OrderInfo(
             order_id=order_id,
             side='buy',

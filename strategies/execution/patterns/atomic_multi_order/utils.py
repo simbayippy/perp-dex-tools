@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
@@ -63,8 +64,26 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
     if not order_id:
         return
 
+    exchange_client = ctx.spec.exchange_client
+    get_order_info = getattr(exchange_client, "get_order_info", None)
+    if get_order_info is None:
+        return
+
     try:
-        order_info = await ctx.spec.exchange_client.get_order_info(order_id)
+        supports_force = False
+        try:
+            signature = inspect.signature(get_order_info)
+            supports_force = "force_refresh" in signature.parameters
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            supports_force = False
+
+        if supports_force:
+            try:
+                order_info = await get_order_info(order_id, force_refresh=True)
+            except TypeError:
+                order_info = await get_order_info(order_id)
+        else:
+            order_info = await get_order_info(order_id)
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning(
             f"⚠️ Failed to reconcile fill for {ctx.spec.symbol} after cancel: {exc}"

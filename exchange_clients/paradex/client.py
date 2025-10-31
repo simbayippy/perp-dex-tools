@@ -347,7 +347,7 @@ class ParadexClient(BaseExchangeClient):
         except Exception as e:
             return OrderResult(success=False, error_message=str(e))
 
-    async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
+    async def get_order_info(self, order_id: str, *, force_refresh: bool = False) -> Optional[OrderInfo]:
         """Get order information from Paradex using official SDK."""
         try:
             # Get order by ID using official SDK

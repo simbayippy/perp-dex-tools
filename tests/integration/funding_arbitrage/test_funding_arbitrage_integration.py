@@ -112,7 +112,7 @@ class StubExchangeClient:
     async def cancel_order(self, order_id: str):
         return OrderResult(success=True, order_id=order_id)
 
-    async def get_order_info(self, order_id: str):
+    async def get_order_info(self, order_id: str, *, force_refresh: bool = False):
         return OrderInfo(
             order_id=order_id,
             side="buy",

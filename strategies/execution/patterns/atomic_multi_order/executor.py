@@ -78,6 +78,8 @@ class AtomicMultiOrderExecutor:
         self.logger = get_core_logger("atomic_multi_order")
         self._hedge_manager = HedgeManager(price_provider=price_provider)
         self._retry_manager = RetryManager(price_provider=price_provider)
+        self._post_trade_max_imbalance_pct = Decimal("0.02")  # 2% net exposure tolerance
+        self._post_trade_base_tolerance = Decimal("0.0001")  # residual quantity tolerance
 
     async def execute_atomically(
         self,
@@ -468,6 +470,25 @@ class AtomicMultiOrderExecutor:
                         f"shorts=${total_short_usd:.5f}, imbalance=${imbalance:.5f} "
                         f"({final_imbalance_pct*100:.1f}% within 5% tolerance)"
                     )
+
+                post_trade = await self._verify_post_trade_exposure(contexts)
+                if post_trade is not None:
+                    net_usd = post_trade.get("net_usd", Decimal("0"))
+                    net_pct = post_trade.get("net_pct", Decimal("0"))
+                    net_qty = post_trade.get("net_qty", Decimal("0"))
+                    imbalance = max(imbalance, net_usd)
+
+                    if net_usd > Decimal("0"):
+                        if net_pct > self._post_trade_max_imbalance_pct:
+                            self.logger.warning(
+                                "⚠️ Post-trade exposure detected after hedging: "
+                                f"net_qty={net_qty:.6f}, net_usd=${net_usd:.4f} ({net_pct*100:.2f}%)."
+                            )
+                        elif net_qty > self._post_trade_base_tolerance:
+                            self.logger.debug(
+                                "Post-trade exposure within tolerance: "
+                                f"net_qty={net_qty:.6f}, net_usd=${net_usd:.4f} ({net_pct*100:.2f}%)."
+                            )
                 
                 return AtomicExecutionResult(
                     success=True,
@@ -523,6 +544,18 @@ class AtomicMultiOrderExecutor:
                         residual_imbalance_usd=Decimal("0"),  # Should be 0 after rollback
                         retry_attempts=retry_attempts,
                         retry_success=retry_success,
+                    )
+
+            post_trade = await self._verify_post_trade_exposure(contexts)
+            if post_trade is not None:
+                net_usd = post_trade.get("net_usd", Decimal("0"))
+                net_pct = post_trade.get("net_pct", Decimal("0"))
+                net_qty = post_trade.get("net_qty", Decimal("0"))
+                imbalance = max(imbalance, net_usd)
+                if net_usd > Decimal("0") and net_pct > self._post_trade_max_imbalance_pct:
+                    self.logger.warning(
+                        "⚠️ Residual exposure detected after partial execution: "
+                        f"net_qty={net_qty:.6f}, net_usd=${net_usd:.4f} ({net_pct*100:.2f}%)."
                     )
 
             return AtomicExecutionResult(
@@ -608,6 +641,78 @@ class AtomicMultiOrderExecutor:
         )
 
         return execution_result_to_dict(spec, result)
+
+    async def _verify_post_trade_exposure(self, contexts: List[OrderContext]) -> Optional[Dict[str, Decimal]]:
+        """Pull live position snapshots and detect any residual exposure."""
+        unique_keys = set()
+        tasks = []
+
+        for ctx in contexts:
+            client = ctx.spec.exchange_client
+            symbol = ctx.spec.symbol
+            key = (id(client), symbol)
+            if key in unique_keys:
+                continue
+            getter = getattr(client, "get_position_snapshot", None)
+            if getter is None or not callable(getter):
+                continue
+            unique_keys.add(key)
+
+            async def fetch_snapshot(exchange_client=client, sym=symbol):
+                try:
+                    snapshot = await exchange_client.get_position_snapshot(sym)
+                except Exception as exc:  # pragma: no cover - defensive
+                    self.logger.warning(
+                        f"⚠️ [{exchange_client.get_exchange_name().upper()}] Position snapshot fetch failed for {sym}: {exc}"
+                    )
+                    return None
+                return snapshot
+
+            tasks.append(fetch_snapshot())
+
+        if not tasks:
+            return None
+
+        snapshots = await asyncio.gather(*tasks, return_exceptions=True)
+
+        total_long_qty = Decimal("0")
+        total_short_qty = Decimal("0")
+        total_long_usd = Decimal("0")
+        total_short_usd = Decimal("0")
+
+        for idx, snapshot in enumerate(snapshots):
+            if isinstance(snapshot, Exception) or snapshot is None:
+                continue
+            quantity = snapshot.quantity or Decimal("0")
+            exposure_usd = snapshot.exposure_usd
+            mark_price = snapshot.mark_price or snapshot.entry_price
+
+            abs_qty = quantity.copy_abs()
+            if exposure_usd is None and mark_price is not None:
+                exposure_usd = abs_qty * mark_price
+            elif exposure_usd is None:
+                exposure_usd = Decimal("0")
+
+            if quantity > Decimal("0"):
+                total_long_qty += abs_qty
+                total_long_usd += exposure_usd or Decimal("0")
+            elif quantity < Decimal("0"):
+                total_short_qty += abs_qty
+                total_short_usd += exposure_usd or Decimal("0")
+
+        net_qty = (total_long_qty - total_short_qty).copy_abs()
+        net_usd = (total_long_usd - total_short_usd).copy_abs()
+
+        max_usd = max(total_long_usd, total_short_usd)
+        net_pct = net_usd / max_usd if max_usd > Decimal("0") else Decimal("0")
+
+        return {
+            "net_qty": net_qty,
+            "net_usd": net_usd,
+            "net_pct": net_pct,
+            "long_usd": total_long_usd,
+            "short_usd": total_short_usd,
+        }
 
     async def _run_preflight_checks(
         self,

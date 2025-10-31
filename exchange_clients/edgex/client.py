@@ -435,7 +435,7 @@ class EdgeXClient(BaseExchangeClient):
             return OrderResult(success=False, error_message=str(e))
 
     @query_retry()
-    async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
+    async def get_order_info(self, order_id: str, *, force_refresh: bool = False) -> Optional[OrderInfo]:
         """Get order information from EdgeX using official SDK."""
         # Use the newly created get_order_by_id method
         order_result = await self.client.order.get_order_by_id(order_id_list=[order_id])
