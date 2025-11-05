@@ -20,7 +20,7 @@ from exchange_clients.base_models import (
     validate_credentials,
 )
 from exchange_clients.aster.common import get_aster_symbol_format, get_quantity_multiplier
-from exchange_clients.aster.websocket_manager import AsterWebSocketManager
+from exchange_clients.aster.websocket import AsterWebSocketManager
 from helpers.unified_logger import get_exchange_logger
 
 from .utils import to_decimal

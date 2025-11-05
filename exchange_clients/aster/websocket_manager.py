@@ -18,7 +18,7 @@ import websockets
 from exchange_clients.base_websocket import BaseWebSocketManager, BBOData
 
 
-class AsterWebSocketManager(BaseWebSocketManager):
+class AsterWebSocketManager2(BaseWebSocketManager):
     """WebSocket manager for Aster order updates and order book."""
 
     def __init__(
