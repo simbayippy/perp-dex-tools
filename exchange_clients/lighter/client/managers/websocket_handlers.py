@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
-from exchange_clients.base_models import LiquidationEvent, OrderInfo
+from exchange_clients.base_models import OrderInfo
+from exchange_clients.events import LiquidationEvent
 
 
 class LighterWebSocketHandlers:
