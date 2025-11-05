@@ -54,6 +54,12 @@ class OpportunityScanner:
 
             opportunities = await strategy.opportunity_finder.find_opportunities(filters)
 
+            # Temporary: Skip CC opportunities
+            original_count = len(opportunities)
+            opportunities = [opp for opp in opportunities if opp.symbol != "CC"]
+            if len(opportunities) < original_count:
+                strategy.logger.info("⏭️  Skipped CC opportunities (temporary filter)")
+
             strategy.logger.info(f"Found {len(opportunities)} opportunities")
 
             max_new = strategy.config.max_new_positions_per_cycle
