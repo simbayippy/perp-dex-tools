@@ -934,8 +934,9 @@ from exchange_clients.lighter.websocket import LighterWebSocketManager
 **Lighter** ✅ **COMPLETED**:
 - **Main client (`core.py`)**: 580 lines (from 2,403) - **76% reduction** ✅
 - **WebSocket manager (`manager.py`)**: 353 lines (from 982) - **64% reduction** ✅
+- **Funding adapter (`adapter.py`)**: 125 lines (from 312) - **60% reduction** ✅
 - **Largest module**: 815 lines (`order_manager.py`) - manageable ✅
-- **Structure**: Clean packages with `client/managers/`, `client/utils/`, and `websocket/` ✅
+- **Structure**: Clean packages with `client/managers/`, `client/utils/`, `websocket/`, and `funding_adapter/` ✅
 - **Removed redundancy**: Eliminated `orders_cache`, removed `HEARTBEAT_INTERVAL` ✅
 - **Public API**: Unchanged (same import paths) ✅
 
@@ -956,6 +957,9 @@ from exchange_clients.lighter.websocket import LighterWebSocketManager
    - ✅ **WebSocket Package**: `websocket/manager.py` + components
      - Reduced from 982 lines to 353 lines (`manager.py`) - **64% reduction**
      - Split into 6 focused modules (< 400 lines each)
+   - ✅ **Funding Adapter Package**: `funding_adapter/adapter.py` + components
+     - Reduced from 312 lines to 125 lines (`adapter.py`) - **60% reduction**
+     - Split into 4 focused modules (< 200 lines each)
    - Clean package structure following Python best practices
    - Backward compatible public API
 
@@ -1007,13 +1011,182 @@ These can provide common functionality like:
 - Consider async context managers for connection lifecycle
 - Add comprehensive error types per module
 
+## Funding Adapter Refactoring
+
+### Current State
+Multiple exchanges have funding adapters as single files:
+- **Lighter**: 312 lines ✅ **COMPLETED** (refactored to ~376 lines organized)
+- **Aster**: ~250 lines
+- **Backpack**: ~200 lines
+- **GRVT**: ~350 lines
+- **EdgeX**: ~280 lines
+
+All have mixed responsibilities:
+- API client management
+- Data fetching logic
+- Symbol normalization
+- Response parsing
+
+### Standard Funding Adapter Package Structure Template
+
+This structure can be applied to **any exchange**. Each exchange should follow this pattern:
+
+```
+exchange_clients/{exchange}/
+└── funding_adapter/             # NEW: Funding adapter package
+    ├── __init__.py             # Exports: from .adapter import {Exchange}FundingAdapter
+    ├── adapter.py              # Main adapter class (orchestrator, ~80-130 lines)
+    ├── funding_client.py       # API client management (~40-60 lines)
+    └── fetchers.py             # Data fetching logic (~150-200 lines)
+```
+
+**Key Design Decisions:**
+- `funding_adapter/` is a **package**, not a single file
+- `funding_adapter/adapter.py` contains the main `{Exchange}FundingAdapter` class that inherits from `BaseFundingAdapter`
+- `funding_adapter/__init__.py` is lightweight - just exports the main adapter class
+- Components are separated by responsibility: client management vs data fetching
+- Clear naming: `funding_client.py` (not just `client.py`) to avoid confusion with trading client
+
+### Exchange-Specific Considerations
+
+**Lighter** ✅ **COMPLETED**:
+- Uses official Lighter Python SDK (ApiClient, FundingApi, OrderApi)
+- Complex OI calculation (one-sided to two-sided conversion)
+- Symbol normalization with 1000-prefix handling
+- **Structure**: 4 files, ~376 lines total (from 312 lines monolithic)
+
+**Aster**:
+- Direct HTTP API calls (no SDK)
+- May need session management in funding_client
+- Simpler structure
+
+**Backpack**:
+- Direct HTTP API calls (no SDK)
+- May need session management in funding_client
+- Simpler structure
+
+### Refactoring Benefits
+- **Separation of Concerns**: Client management vs data fetching vs parsing
+- **Easier Testing**: Mock client, test fetchers independently
+- **Better Maintainability**: Smaller, focused files (each < 200 lines)
+- **Reusable Patterns**: Common adapter patterns can be extracted
+- **Clear Boundaries**: Client lifecycle vs data operations
+
+### Funding Adapter Refactoring Strategy (Generalized)
+
+This strategy applies to **all exchanges**. Each phase can be completed per exchange independently.
+
+#### Phase 1: Extract Funding Client Management
+**Goal**: Isolate API client lifecycle and management
+
+**Files to Create**:
+- `{exchange}/funding_adapter/funding_client.py`
+
+**Common Methods to Move**:
+- SDK availability check (if using SDK)
+- `_ensure_client()` / `ensure_client()` - Client initialization
+- `close()` - Client cleanup
+- Session management (if using direct HTTP)
+
+**Responsibilities**:
+- Initialize API clients (SDK or HTTP session)
+- Manage client lifecycle
+- Handle cleanup
+
+#### Phase 2: Extract Data Fetchers
+**Goal**: Isolate data fetching and parsing logic
+
+**Files to Create**:
+- `{exchange}/funding_adapter/fetchers.py`
+
+**Common Methods to Move**:
+- `fetch_funding_rates()` - Funding rates fetching and parsing
+- `fetch_market_data()` - Market data (volume + OI) fetching and parsing
+- `_parse_next_funding_time()` / `parse_next_funding_time()` - Time parsing utilities
+- Exchange-specific constants (e.g., `OI_TWO_SIDED_MULTIPLIER`)
+
+**Responsibilities**:
+- Call API endpoints via funding_client
+- Parse API responses
+- Convert to standardized formats
+- Handle errors and edge cases
+
+#### Phase 3: Create Main Adapter
+**Goal**: Create orchestrator that composes components
+
+**Files to Create**:
+- `{exchange}/funding_adapter/adapter.py`
+- `{exchange}/funding_adapter/__init__.py`
+
+**Main Adapter Responsibilities**:
+- Initialize components (`funding_client`, `fetchers`)
+- Implement `BaseFundingAdapter` interface
+- Delegate to components for specialized tasks
+- Provide symbol normalization wrappers (delegate to `common.py`)
+
+**Design Pattern**:
+```python
+class {Exchange}FundingAdapter(BaseFundingAdapter):
+    def __init__(self, api_base_url, timeout):
+        super().__init__(dex_name="{exchange}", api_base_url=api_base_url, timeout=timeout)
+        self.funding_client = {Exchange}FundingClient(api_base_url)
+        self.fetchers = {Exchange}FundingFetchers(
+            funding_client=self.funding_client,
+            timeout=timeout,
+            normalize_symbol_fn=normalize_exchange_symbol,
+        )
+    
+    async def fetch_funding_rates(self):
+        return await self.fetchers.fetch_funding_rates(self.CANONICAL_INTERVAL_HOURS)
+    
+    async def fetch_market_data(self):
+        return await self.fetchers.fetch_market_data()
+    
+    async def close(self):
+        await self.funding_client.close()
+        await super().close()
+```
+
+### Backward Compatibility Strategy
+
+**Import Path Preservation**:
+```python
+# exchange_clients/lighter/funding_adapter/__init__.py
+from .adapter import LighterFundingAdapter
+
+__all__ = ["LighterFundingAdapter"]
+```
+
+**Usage** (unchanged):
+```python
+from exchange_clients.lighter import LighterFundingAdapter
+```
+
+### Key Learnings from Lighter Refactoring
+
+1. **Clear Component Separation**:
+   - `funding_client.py`: SDK/HTTP client lifecycle
+   - `fetchers.py`: Data fetching and parsing
+   - `adapter.py`: Orchestration and public API
+
+2. **Dependency Injection**:
+   - Fetchers receive `funding_client` and `normalize_symbol_fn` as dependencies
+   - Allows testing components independently
+
+3. **Naming Clarity**:
+   - Use `funding_client.py` (not `client.py`) to avoid confusion with trading client
+   - Makes purpose explicit
+
+4. **Symbol Normalization**:
+   - Delegate to `common.py` functions rather than duplicating logic
+   - Pass function reference to fetchers for flexibility
+
 ## Example: Lighter Client Structure (After Refactoring) ✅ COMPLETED
 
 ```
 exchange_clients/lighter/
 ├── __init__.py                    # Public API: from .client import LighterClient
 ├── common.py                      # ✅ Existing
-├── funding_adapter.py            # ✅ Existing
 │
 ├── client/                        # Client package
 │   ├── __init__.py              # Exports: from .core import LighterClient (12 lines)
@@ -1031,22 +1204,29 @@ exchange_clients/lighter/
 │       ├── __init__.py         # Exports utilities (21 lines)
 │       ├── caching.py          # MarketIdCache class (73 lines)
 │       ├── converters.py       # Order/snapshot converters (157 lines)
-│       └── helpers.py          # Decimal helpers (30 lines)
+│       └── helpers.py         # Decimal helpers (30 lines)
 │
-└── websocket/                     # WebSocket package ✅ COMPLETED
-    ├── __init__.py             # Exports: from .manager import LighterWebSocketManager (10 lines)
-    ├── manager.py               # Main orchestrator (353 lines)
-    ├── connection.py            # Connection & reconnection (173 lines)
-    ├── message_handler.py       # Message parsing & routing (279 lines)
-    ├── order_book.py            # Order book state management (265 lines)
-    └── market_switcher.py       # Market switching (273 lines)
+├── websocket/                     # WebSocket package ✅ COMPLETED
+│   ├── __init__.py             # Exports: from .manager import LighterWebSocketManager (10 lines)
+│   ├── manager.py               # Main orchestrator (353 lines)
+│   ├── connection.py            # Connection & reconnection (173 lines)
+│   ├── message_handler.py       # Message parsing & routing (279 lines)
+│   ├── order_book.py            # Order book state management (265 lines)
+│   └── market_switcher.py       # Market switching (273 lines)
+│
+└── funding_adapter/                # Funding adapter package ✅ COMPLETED
+    ├── __init__.py             # Exports: from .adapter import LighterFundingAdapter (10 lines)
+    ├── adapter.py              # Main orchestrator (125 lines)
+    ├── funding_client.py        # API client management (49 lines)
+    └── fetchers.py             # Data fetching logic (192 lines)
 
-Total: ~4,652 lines (organized vs 3,385 lines monolithic: 2,403 client + 982 websocket)
+Total: ~5,028 lines (organized vs 3,697 lines monolithic: 2,403 client + 982 websocket + 312 funding_adapter)
 ```
 
 **Key Improvements:**
 - ✅ Main client (`core.py`): 580 lines (from 2,403) - **76% reduction**
 - ✅ WebSocket manager (`manager.py`): 353 lines (from 982) - **64% reduction**
+- ✅ Funding adapter (`adapter.py`): 125 lines (from 312) - **60% reduction**
 - ✅ Managers are focused and testable
 - ✅ No redundant caches (removed `orders_cache`, using `_latest_orders` only)
 - ✅ Clean package structure following Python best practices
@@ -1147,6 +1327,15 @@ exchange_clients/lighter/websocket/
 └── market_switcher.py      # 273 lines - Market switching & subscriptions
 ```
 
+**Funding Adapter Package:**
+```
+exchange_clients/lighter/funding_adapter/
+├── __init__.py             # 10 lines - Exports: from .adapter import LighterFundingAdapter
+├── adapter.py              # 125 lines - Main orchestrator
+├── funding_client.py       # 49 lines - API client management
+└── fetchers.py             # 192 lines - Data fetching logic
+```
+
 ### Key Design Decisions Made
 
 **Client Package:**
@@ -1188,6 +1377,24 @@ exchange_clients/lighter/websocket/
    - `client/managers/websocket_handlers.py` processes events (business logic)
    - Callbacks passed from handlers to websocket manager
 
+**Funding Adapter Package:**
+1. **Package Structure**: `funding_adapter/` is a package, not a file
+   - `funding_adapter/adapter.py` contains the main adapter class
+   - `funding_adapter/__init__.py` is lightweight (just exports)
+
+2. **Component Separation**: Clear boundaries between responsibilities
+   - `funding_client.py`: SDK/HTTP client lifecycle management
+   - `fetchers.py`: Data fetching and parsing logic
+   - `adapter.py`: Orchestration and public API
+
+3. **Naming Clarity**: Explicit naming to avoid confusion
+   - `funding_client.py` (not `client.py`) to distinguish from trading client
+   - Makes purpose clear in larger codebase
+
+4. **Dependency Injection**: Components receive dependencies
+   - Fetchers receive `funding_client` and `normalize_symbol_fn`
+   - Allows independent testing and flexibility
+
 ### Lessons Learned
 
 **Client Refactoring:**
@@ -1201,6 +1408,12 @@ exchange_clients/lighter/websocket/
 - **Component initialization order matters**: Update references after connection
 - **Server protocols vary**: Some handle ping/pong at application level (Lighter), others at protocol level (Aster)
 - **Package structure scales well**: Each component < 400 lines, easy to understand and test
+
+**Funding Adapter Refactoring:**
+- **Use explicit naming**: `funding_client.py` avoids confusion with trading `client/` package
+- **Delegate symbol normalization**: Use functions from `common.py` rather than duplicating
+- **Separate client from fetchers**: Client lifecycle vs data operations are distinct concerns
+- **Keep adapter thin**: Main adapter is orchestrator, delegates to specialized components
 
 ---
 
