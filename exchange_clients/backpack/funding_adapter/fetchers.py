@@ -1,88 +1,54 @@
 """
-Backpack DEX Funding Adapter
+Data fetching logic for Backpack funding adapter.
 
-Fetches funding rates and market data from Backpack using direct API calls.
-This adapter is read-only and focused solely on data collection.
+Handles fetching funding rates and market data from Backpack API.
 """
 
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Dict, Optional, Callable
 from decimal import Decimal
-import aiohttp
-import asyncio
 
-from exchange_clients.base_funding_adapter import BaseFundingAdapter
+import aiohttp
+
 from exchange_clients.base_models import FundingRateSample
-from exchange_clients.backpack.common import (
-    normalize_symbol as normalize_backpack_symbol,
-    get_backpack_symbol_format
-)
 from funding_rate_service.utils.logger import logger
 
 
-class BackpackFundingAdapter(BaseFundingAdapter):
-    """
-    Backpack funding rate adapter
-    
-    This adapter uses direct API calls to fetch funding rates and market data 
-    for all available perpetual markets on Backpack.
-    
-    Key features:
-    - Uses direct HTTP calls to Backpack API (no SDK dependency)
-    - Single API call to get ALL funding rates at once
-    - Normalizes symbols from Backpack format to standard format
-    - No authentication required (public endpoints)
-    - Returns funding rates and volume/OI data
-    """
-    
+class BackpackFundingFetchers:
+    """Handles data fetching from Backpack funding API."""
+
     def __init__(
-        self, 
-        api_base_url: str = "https://api.backpack.exchange",
-        timeout: int = 10
+        self,
+        funding_client: 'BackpackFundingClient',
+        timeout: int,
+        normalize_symbol_fn: Callable[[str], str],
+        dex_name: str = "backpack",
     ):
         """
-        Initialize Backpack adapter
+        Initialize fetchers.
         
         Args:
-            api_base_url: Backpack API base URL
+            funding_client: BackpackFundingClient instance
             timeout: Request timeout in seconds
+            normalize_symbol_fn: Function to normalize symbols
+            dex_name: Exchange name for logging
         """
-        super().__init__(
-            dex_name="backpack",
-            api_base_url=api_base_url,
-            timeout=timeout
-        )
-        
-        # HTTP session for API calls
-        self.session: Optional[aiohttp.ClientSession] = None
-        
-        # logger.info(f"Backpack adapter initialized with direct API calls")
-    
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create HTTP session"""
-        if self.session is None or self.session.closed:
-            timeout = aiohttp.ClientTimeout(total=self.timeout)
-            self.session = aiohttp.ClientSession(timeout=timeout)
-        return self.session
-    
-    async def _make_request(self, endpoint: str, params: Optional[Dict] = None) -> Dict:
-        """Make HTTP request to Backpack API"""
-        session = await self._get_session()
-        url = f"{self.api_base_url}/{endpoint}"
-        
-        try:
-            async with session.get(url, params=params) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    error_text = await response.text()
-                    raise Exception(f"HTTP {response.status}: {error_text}")
-        except Exception as e:
-            logger.error(f"{self.dex_name}: Request failed for {endpoint}: {e}")
-            raise
-    
+        self.funding_client = funding_client
+        self.timeout = timeout
+        self.normalize_symbol = normalize_symbol_fn
+        self.dex_name = dex_name
+
     @staticmethod
-    def _parse_timestamp(value: Optional[object]) -> Optional[datetime]:
+    def parse_timestamp(value: Optional[object]) -> Optional[datetime]:
+        """
+        Parse timestamp from various formats.
+        
+        Args:
+            value: Timestamp value (int, datetime, or None)
+            
+        Returns:
+            UTC datetime without timezone info, or None
+        """
         if value is None:
             return None
         if isinstance(value, datetime):
@@ -100,12 +66,42 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             dt = datetime.fromtimestamp(numeric, tz=timezone.utc)
         return dt.replace(tzinfo=None)
 
-    async def fetch_funding_rates(self) -> Dict[str, FundingRateSample]:
+    async def _make_request(self, endpoint: str, params: Optional[Dict] = None) -> Dict:
         """
-        Fetch all funding rates from Backpack
+        Make HTTP request to Backpack API.
+        
+        Args:
+            endpoint: API endpoint (relative to base URL)
+            params: Optional query parameters
+            
+        Returns:
+            JSON response dictionary
+        """
+        session = await self.funding_client.ensure_client()
+        url = f"{self.funding_client.api_base_url}/{endpoint}"
+        
+        try:
+            async with session.get(url, params=params) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"HTTP {response.status}: {error_text}")
+        except Exception as e:
+            logger.error(f"{self.dex_name}: Request failed for {endpoint}: {e}")
+            raise
+
+    async def fetch_funding_rates(
+        self, canonical_interval_hours: Decimal
+    ) -> Dict[str, FundingRateSample]:
+        """
+        Fetch all funding rates from Backpack.
         
         Uses the /api/v1/markPrices endpoint to get ALL funding rates in a single call.
         This is much faster than calling individual endpoints per symbol.
+        
+        Args:
+            canonical_interval_hours: Canonical funding interval (typically 8 hours)
         
         Returns:
             Dictionary mapping normalized symbols to FundingRateSample entries
@@ -114,18 +110,14 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             Exception: If fetching fails after retries
         """
         try:
-            # logger.debug(f"{self.dex_name}: Fetching funding rates...")
-            
             # Get ALL mark prices (including funding rates) in one call
             mark_prices_data = await self._make_request("api/v1/markPrices")
             
             if not mark_prices_data:
-                # logger.warning(f"{self.dex_name}: No mark prices data returned")
                 return {}
             
             # Ensure we have a list
             if not isinstance(mark_prices_data, list):
-                # logger.warning(f"{self.dex_name}: Expected list, got {type(mark_prices_data)}")
                 return {}
             
             rates_dict: Dict[str, FundingRateSample] = {}
@@ -143,12 +135,6 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                     funding_rate = mark_data.get('fundingRate')
                     
                     if funding_rate is None:
-                        # Debug: log available fields for first few symbols only
-                        if len(rates_dict) < 2:
-                            available_fields = list(mark_data.keys())
-                            # logger.debug(
-                            #     f"{self.dex_name}: No funding rate for {symbol}. Available fields: {available_fields}"
-                            # )
                         continue
                     
                     # Normalize symbol (e.g., "BTC_USDC_PERP" -> "BTC")
@@ -156,8 +142,8 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                     
                     raw_rate = Decimal(str(funding_rate))
                     interval_hours = Decimal('1')
-                    normalized_rate = raw_rate * (self.CANONICAL_INTERVAL_HOURS / interval_hours)
-                    next_funding_time = self._parse_timestamp(mark_data.get('nextFundingTime'))
+                    normalized_rate = raw_rate * (canonical_interval_hours / interval_hours)
+                    next_funding_time = self.parse_timestamp(mark_data.get('nextFundingTime'))
                     
                     rates_dict[normalized_symbol] = FundingRateSample(
                         normalized_rate=normalized_rate,
@@ -166,8 +152,6 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                         next_funding_time=next_funding_time,
                         metadata={'symbol': symbol}
                     )
-                    
-                    # Log details for first few symbols only to avoid spam (disabled)
                 
                 except Exception as e:
                     logger.error(
@@ -175,27 +159,15 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                     )
                     continue
             
-            # If no funding rates found, log a helpful message
-            if not rates_dict:
-                # logger.warning(
-                #     f"{self.dex_name}: No funding rates found from {len(mark_prices_data)} mark price entries. "
-                #     f"This may indicate an API issue or change in data format."
-                # )
-                pass
-            
-            # logger.info(
-            #     f"{self.dex_name}: Successfully fetched {len(rates_dict)} funding rates"
-            # )
-            
             return rates_dict
         
         except Exception as e:
             logger.error(f"{self.dex_name}: Failed to fetch funding rates: {e}")
             raise
-    
+
     async def fetch_market_data(self) -> Dict[str, Dict[str, Decimal]]:
         """
-        Fetch market data (volume, open interest) from Backpack
+        Fetch market data (volume, open interest) from Backpack.
         
         Returns:
             Dictionary mapping normalized symbols to market data
@@ -207,8 +179,6 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             }
         """
         try:
-            # logger.debug(f"{self.dex_name}: Fetching market data...")
-            
             # Fetch tickers for volume data (based on API documentation)
             tickers_data = await self._make_request("api/v1/tickers")
             
@@ -216,7 +186,6 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             open_interest_data = await self._make_request("api/v1/openInterest")
             
             if not tickers_data:
-                # logger.warning(f"{self.dex_name}: No tickers data returned")
                 return {}
             
             # Create lookup for open interest data
@@ -242,7 +211,6 @@ class BackpackFundingAdapter(BaseFundingAdapter):
             elif isinstance(tickers_data, list):
                 tickers_list = tickers_data
             else:
-                # logger.warning(f"{self.dex_name}: Unexpected tickers data format: {type(tickers_data)}")
                 return {}
             
             for ticker in tickers_list:
@@ -257,7 +225,7 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                     normalized_symbol = self.normalize_symbol(symbol)
                     
                     # Get volume (24h) - based on API docs, field is "quoteVolume"
-                    volume_24h =  ticker.get('quoteVolume')
+                    volume_24h = ticker.get('quoteVolume')
                     
                     # Get open interest from lookup - based on API docs, field is "openInterest"
                     oi_data = oi_lookup.get(symbol, {})
@@ -274,15 +242,6 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                     
                     if data:  # Only add if we have some data
                         market_data[normalized_symbol] = data
-                        
-                        # Log details for first few symbols only to avoid spam
-                        if len(market_data) <= 3:
-                            # logger.debug(
-                            #     f"{self.dex_name}: {symbol} -> {normalized_symbol}: "
-                            #     f"volume={data.get('volume_24h', 'N/A')}, "
-                            #     f"oi={data.get('open_interest', 'N/A')}"
-                            # )
-                            pass
                 
                 except Exception as e:
                     logger.error(
@@ -290,51 +249,9 @@ class BackpackFundingAdapter(BaseFundingAdapter):
                     )
                     continue
             
-            # logger.info(
-            #     f"{self.dex_name}: Successfully fetched market data for {len(market_data)} symbols"
-            # )
-            
             return market_data
         
         except Exception as e:
             logger.error(f"{self.dex_name}: Failed to fetch market data: {e}")
             return {}
-    
-    def normalize_symbol(self, dex_symbol: str) -> str:
-        """
-        Normalize Backpack symbol format to standard format
-        
-        Uses shared logic from common.py which handles:
-        - "BTC_USDC_PERP" -> "BTC"
-        - "kPEPE_USDC_PERP" -> "PEPE" (removes k-prefix for 1000x tokens)
-        
-        Args:
-            dex_symbol: Backpack-specific symbol format
-            
-        Returns:
-            Normalized symbol (e.g., "BTC", "PEPE")
-        """
-        return normalize_backpack_symbol(dex_symbol)
-    
-    def get_dex_symbol_format(self, normalized_symbol: str) -> str:
-        """
-        Convert normalized symbol back to Backpack-specific format
-        
-        Uses shared logic from common.py which handles:
-        - "BTC" -> "BTC_USDC_PERP"
-        - "PEPE" -> "kPEPE_USDC_PERP" (adds k-prefix for 1000x tokens)
-        
-        Args:
-            normalized_symbol: Normalized symbol (e.g., "BTC", "PEPE")
-            
-        Returns:
-            Backpack-specific format (e.g., "BTC_USDC_PERP", "kPEPE_USDC_PERP")
-        """
-        return get_backpack_symbol_format(normalized_symbol)
-    
-    async def close(self) -> None:
-        """Close the HTTP session"""
-        if self.session and not self.session.closed:
-            await self.session.close()
-            # logger.debug(f"{self.dex_name}: HTTP session closed")
-        await super().close()
+
