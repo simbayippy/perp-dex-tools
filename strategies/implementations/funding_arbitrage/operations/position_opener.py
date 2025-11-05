@@ -99,9 +99,8 @@ class PositionOpener:
 
         except Exception as exc:  # pragma: no cover - defensive logging
             strategy = self._strategy
-            strategy.logger.log(
-                f"❌ {opportunity.symbol}: Unexpected error - {exc}",
-                "ERROR",
+            strategy.logger.error(
+                f"❌ {opportunity.symbol}: Unexpected error - {exc}"
             )
             strategy.failed_symbols.add(opportunity.symbol)
             return None
@@ -114,9 +113,8 @@ class PositionOpener:
         short_dex = opportunity.short_dex
 
         if long_dex not in strategy.exchange_clients or short_dex not in strategy.exchange_clients:
-            strategy.logger.log(
-                f"⛔ [SKIP] {symbol}: Missing exchange clients for {long_dex}/{short_dex}",
-                "WARNING",
+            strategy.logger.warning(
+                f"⛔ [SKIP] {symbol}: Missing exchange clients for {long_dex}/{short_dex}"
             )
             strategy.failed_symbols.add(symbol)
             return None
@@ -125,9 +123,8 @@ class PositionOpener:
         short_client = strategy.exchange_clients[short_dex]
 
         log_stage(strategy.logger, f"{symbol} • Opportunity Validation", icon="📋", stage_id="1")
-        strategy.logger.log(
-            f"Ensuring {symbol} is tradeable on both {long_dex} and {short_dex}",
-            "INFO",
+        strategy.logger.info(
+            f"Ensuring {symbol} is tradeable on both {long_dex} and {short_dex}"
         )
 
         long_init_ok = await self._ensure_contract_attributes(long_client, symbol)
@@ -135,21 +132,18 @@ class PositionOpener:
 
         if not long_init_ok or not short_init_ok:
             if not long_init_ok:
-                strategy.logger.log(
-                    f"⛔ [SKIP] Cannot trade {symbol}: Not supported on {long_dex.upper()} (long side)",
-                    "WARNING",
+                strategy.logger.warning(
+                    f"⛔ [SKIP] Cannot trade {symbol}: Not supported on {long_dex.upper()} (long side)"
                 )
             if not short_init_ok:
-                strategy.logger.log(
-                    f"⛔ [SKIP] Cannot trade {symbol}: Not supported on {short_dex.upper()} (short side)",
-                    "WARNING",
+                strategy.logger.warning(
+                    f"⛔ [SKIP] Cannot trade {symbol}: Not supported on {short_dex.upper()} (short side)"
                 )
             strategy.failed_symbols.add(symbol)
             return None
 
-        strategy.logger.log(
-            f"✅ {symbol} available on both {long_dex.upper()} and {short_dex.upper()}",
-            "INFO",
+        strategy.logger.info(
+            f"✅ {symbol} available on both {long_dex.upper()} and {short_dex.upper()}"
         )
 
         adjusted_size = await self._validate_leverage(
@@ -163,12 +157,11 @@ class PositionOpener:
             strategy.failed_symbols.add(symbol)
             return None
 
-        strategy.logger.log(
+        strategy.logger.info(
             f"🎯 Execution plan for {symbol}: "
             f"Long {long_dex.upper()} (${adjusted_size:.2f}) | "
             f"Short {short_dex.upper()} (${adjusted_size:.2f}) | "
-            f"Divergence {opportunity.divergence*100:.3f}%",
-            "INFO",
+            f"Divergence {opportunity.divergence*100:.3f}%"
         )
 
         log_stage(strategy.logger, "Atomic Multi-Order Execution", icon="🧨", stage_id="3")
@@ -189,10 +182,9 @@ class PositionOpener:
             strategy.failed_symbols.add(symbol)
             return None
 
-        strategy.logger.log(
+        strategy.logger.debug(
             f"📏 Planned execution for {symbol}: qty={plan.quantity} "
-            f"(long≈${plan.long_notional:.2f}, short≈${plan.short_notional:.2f})",
-            "DEBUG",
+            f"(long≈${plan.long_notional:.2f}, short≈${plan.short_notional:.2f})"
         )
 
         result: AtomicExecutionResult = await strategy.atomic_executor.execute_atomically(
@@ -205,15 +197,13 @@ class PositionOpener:
         )
 
         if not result.all_filled:
-            strategy.logger.log(
-                f"❌ {symbol}: Atomic execution failed - {result.error_message}",
-                "ERROR",
+            strategy.logger.error(
+                f"❌ {symbol}: Atomic execution failed - {result.error_message}"
             )
 
             if result.rollback_performed:
-                strategy.logger.log(
-                    f"🔄 Emergency rollback performed, cost: ${result.rollback_cost_usd:.2f}",
-                    "WARNING",
+                strategy.logger.warning(
+                    f"🔄 Emergency rollback performed, cost: ${result.rollback_cost_usd:.2f}"
                 )
 
             strategy.failed_symbols.add(symbol)
@@ -229,9 +219,8 @@ class PositionOpener:
 
         imbalance_usd = result.residual_imbalance_usd or abs(long_exposure - short_exposure)
         if imbalance_usd > Decimal("0.01"):
-            strategy.logger.log(
-                f"⚠️ {symbol}: residual imbalance ${imbalance_usd:.5f} after execution",
-                "WARNING",
+            strategy.logger.warning(
+                f"⚠️ {symbol}: residual imbalance ${imbalance_usd:.5f} after execution"
             )
 
         entry_fees = strategy.fee_calculator.calculate_total_cost(
@@ -301,9 +290,8 @@ class PositionOpener:
             )
 
             if merge_result is None:
-                strategy.logger.log(
-                    f"⚠️ Skipping position update for {position.symbol}: resulting size would be non-positive",
-                    "WARNING",
+                strategy.logger.warning(
+                    f"⚠️ Skipping position update for {position.symbol}: resulting size would be non-positive"
                 )
                 return None
 
@@ -349,18 +337,16 @@ class PositionOpener:
                 normalize_leverage=True,
             )
         except Exception as exc:  # pragma: no cover - defensive
-            strategy.logger.log(
-                f"⛔ [SKIP] {symbol}: Leverage preparation failed - {exc}",
-                "WARNING",
+            strategy.logger.warning(
+                f"⛔ [SKIP] {symbol}: Leverage preparation failed - {exc}"
             )
             return None
 
         adjusted_size = leverage_prep.adjusted_size_usd
 
         if leverage_prep.below_minimum:
-            strategy.logger.log(
-                f"⛔ {symbol}: Position size too small after leverage adjustment (${adjusted_size:.2f})",
-                "WARNING",
+            strategy.logger.warning(
+                f"⛔ {symbol}: Position size too small after leverage adjustment (${adjusted_size:.2f})"
             )
             return None
 
@@ -379,9 +365,8 @@ class PositionOpener:
         strategy = self._strategy
         price_provider = getattr(strategy, "price_provider", None)
         if price_provider is None:
-            strategy.logger.log(
-                "❌ Price provider not available; cannot prepare execution plan",
-                "ERROR",
+            strategy.logger.error(
+                "❌ Price provider not available; cannot prepare execution plan"
             )
             return None
 
@@ -392,9 +377,8 @@ class PositionOpener:
             long_bid, long_ask = await price_provider.get_bbo_prices(long_client, symbol)
             short_bid, short_ask = await price_provider.get_bbo_prices(short_client, symbol)
         except Exception as exc:
-            strategy.logger.log(
-                f"❌ Failed to fetch BBO for {symbol}: {exc}",
-                "ERROR",
+            strategy.logger.error(
+                f"❌ Failed to fetch BBO for {symbol}: {exc}"
             )
             return None
 
@@ -402,9 +386,8 @@ class PositionOpener:
         short_price = Decimal(str(short_bid))
 
         if long_price <= 0 or short_price <= 0:
-            strategy.logger.log(
-                f"❌ Invalid BBO for {symbol}: long_price={long_price}, short_price={short_price}",
-                "ERROR",
+            strategy.logger.error(
+                f"❌ Invalid BBO for {symbol}: long_price={long_price}, short_price={short_price}"
             )
             return None
 
@@ -439,10 +422,9 @@ class PositionOpener:
             final_long_qty = self._round_quantity(long_client, final_long_qty)
             final_short_qty = self._round_quantity(short_client, final_short_qty)
             
-            strategy.logger.log(
+            strategy.logger.debug(
                 f"📊 [MULTIPLIER] {symbol}: long={final_long_qty} (×{long_multiplier}), "
-                f"short={final_short_qty} (×{short_multiplier}) = {common_actual_tokens} tokens",
-                "DEBUG",
+                f"short={final_short_qty} (×{short_multiplier}) = {common_actual_tokens} tokens"
             )
         else:
             # Same multiplier, use traditional common_qty approach
@@ -451,10 +433,9 @@ class PositionOpener:
             final_short_qty = common_qty
 
         if final_long_qty <= Decimal("0") or final_short_qty <= Decimal("0"):
-            strategy.logger.log(
+            strategy.logger.warning(
                 f"⛔ [SKIP] {symbol}: Unable to derive non-zero quantity after rounding "
-                f"(long={final_long_qty}, short={final_short_qty})",
-                "WARNING",
+                f"(long={final_long_qty}, short={final_short_qty})"
             )
             return None
 
@@ -558,9 +539,8 @@ class PositionOpener:
             await exchange_client.ensure_market_feed(symbol)
             # Note: ensure_market_feed now waits internally for WebSocket data to be ready
         except Exception as exc:  # pragma: no cover - defensive logging
-            strategy.logger.log(
-                f"⚠️ [{exchange_client.get_exchange_name().upper()}] WebSocket prep error: {exc}",
-                "DEBUG",
+            strategy.logger.debug(
+                f"⚠️ [{exchange_client.get_exchange_name().upper()}] WebSocket prep error: {exc}"
             )
 
     def _build_new_position(
@@ -648,25 +628,23 @@ class PositionOpener:
         logger = self._strategy.logger
 
         if merged and updated_size is not None and additional_size is not None:
-            logger.log(
+            logger.info(
                 f"🔁 Position increased {symbol}: "
                 f"New size ${updated_size:.2f} (added ${additional_size:.2f}), "
                 f"Long @ ${long_fill['fill_price']}, "
                 f"Short @ ${short_fill['fill_price']}, "
                 f"Fees Δ ${entry_fees:.2f}, Slippage Δ ${total_slippage:.2f}, "
-                f"Imbalance ${imbalance_usd:.5f}",
-                "INFO",
+                f"Imbalance ${imbalance_usd:.5f}"
             )
         else:
-            logger.log(
+            logger.info(
                 f"✅ Position opened {symbol}: "
                 f"Long @ ${long_fill['fill_price']}, "
                 f"Short @ ${short_fill['fill_price']}, "
                 f"Size ${size_usd:.2f}, "
                 f"Slippage: ${total_slippage:.2f}, "
                 f"Fees: ${entry_fees:.2f}, "
-                f"Imbalance ${imbalance_usd:.5f}",
-                "INFO",
+                f"Imbalance ${imbalance_usd:.5f}"
             )
 
     def _merge_existing_position(
@@ -826,9 +804,8 @@ class PositionOpener:
 
             if needs_refresh or should_apply_metadata:
                 if needs_refresh:
-                    strategy.logger.log(
-                        f"🔧 [{exchange_name.upper()}] Initializing contract attributes for {symbol}",
-                        "INFO",
+                    strategy.logger.info(
+                        f"🔧 [{exchange_name.upper()}] Initializing contract attributes for {symbol}"
                     )
 
                 original_ticker = exchange_client.config.ticker
@@ -837,24 +814,21 @@ class PositionOpener:
                 try:
                     contract_id, tick_size = await exchange_client.get_contract_attributes()
                     if not contract_id:
-                        strategy.logger.log(
-                            f"❌ [{exchange_name.upper()}] Symbol {symbol} initialization returned empty contract_id",
-                            "WARNING",
+                        strategy.logger.warning(
+                            f"❌ [{exchange_name.upper()}] Symbol {symbol} initialization returned empty contract_id"
                         )
                         return False
 
                     if needs_refresh:
-                        strategy.logger.log(
-                            f"✅ [{exchange_name.upper()}] {symbol} initialized → contract_id={contract_id}, tick_size={tick_size}",
-                            "INFO",
+                        strategy.logger.info(
+                            f"✅ [{exchange_name.upper()}] {symbol} initialized → contract_id={contract_id}, tick_size={tick_size}"
                         )
 
                 except ValueError as exc:
                     error_msg = str(exc).lower()
                     if "not found" in error_msg or "not supported" in error_msg:
-                        strategy.logger.log(
-                            f"⚠️  [{exchange_name.upper()}] Symbol {symbol} is NOT TRADEABLE on {exchange_name}",
-                            "WARNING",
+                        strategy.logger.warning(
+                            f"⚠️  [{exchange_name.upper()}] Symbol {symbol} is NOT TRADEABLE on {exchange_name}"
                         )
                         return False
                     raise
@@ -864,8 +838,7 @@ class PositionOpener:
             return True
 
         except Exception as exc:
-            strategy.logger.log(
-                f"❌ [{exchange_client.get_exchange_name().upper()}] Failed to ensure contract attributes for {symbol}: {exc}",
-                "ERROR",
+            strategy.logger.error(
+                f"❌ [{exchange_client.get_exchange_name().upper()}] Failed to ensure contract attributes for {symbol}: {exc}"
             )
             return False

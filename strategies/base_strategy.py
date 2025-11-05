@@ -38,11 +38,19 @@ class BaseStrategy(ABC):
         self.config = config
         self.exchange_client = exchange_client
         
-        # Initialize logger
+        # Initialize logger with context including account_name if available
+        context = {
+            'exchange': getattr(config, 'exchange', 'unknown'),
+            'ticker': getattr(config, 'ticker', 'unknown')
+        }
+        # Add account_name to context if available (for multi-account support)
+        account_name = getattr(config, 'account_name', None)
+        if account_name:
+            context['account'] = account_name
+        
         self.logger = get_strategy_logger(
             self.get_strategy_name().lower().replace(' ', '_'),
-            exchange=getattr(config, 'exchange', 'unknown'),
-            ticker=getattr(config, 'ticker', 'unknown')
+            **context
         )
         
         # Strategy state
@@ -95,7 +103,7 @@ class BaseStrategy(ABC):
         # Cleanup event listeners
         self.unregister_events()
         
-        self.logger.log(f"Strategy '{self.get_strategy_name()}' terminated", "INFO")
+        self.logger.info(f"Strategy '{self.get_strategy_name()}' terminated")
     
     def register_events(self):
         """
@@ -163,7 +171,7 @@ class BaseStrategy(ABC):
         missing_params = [param for param in required_params if param not in strategy_params]
         
         if missing_params:
-            self.logger.log(f"Missing required parameters: {missing_params}", "ERROR")
+            self.logger.error(f"Missing required parameters: {missing_params}")
             return False
         
         return True
@@ -175,7 +183,7 @@ class BaseStrategy(ABC):
     
     async def cleanup(self):
         """Cleanup strategy resources."""
-        self.logger.log(f"Strategy '{self.get_strategy_name()}' cleanup completed", "INFO")
+        self.logger.info(f"Strategy '{self.get_strategy_name()}' cleanup completed")
         # CRITICAL: Flush logs to ensure all buffered/enqueued logs are written
         if hasattr(self.logger, 'flush'):
             self.logger.flush()
@@ -187,7 +195,7 @@ class BaseStrategy(ABC):
         try:
             return await self.exchange_client.get_account_positions()
         except Exception as e:
-            self.logger.log(f"Error getting position: {e}", "ERROR")
+            self.logger.error(f"Error getting position: {e}")
             return Decimal('0')
     
     def update_strategy_state(self, key: str, value: Any):

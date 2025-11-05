@@ -46,7 +46,7 @@ class PositionMonitor:
 
         if not positions:
             account_info = f" for account {self._account_name}" if self._account_name else ""
-            self._logger.log(f"No open positions to monitor{account_info}", "DEBUG")
+            self._logger.debug(f"No open positions to monitor{account_info}")
             return
 
         exchange_snapshots = await self._fetch_exchange_position_snapshots(positions)
@@ -70,9 +70,8 @@ class PositionMonitor:
                 else:
                     rate1 = rate2 = None
                     if rate1_data or rate2_data:
-                        self._logger.log(
-                            f"Partial rate data for {position.symbol}: long={bool(rate1_data)} short={bool(rate2_data)}",
-                            "WARNING",
+                        self._logger.warning(
+                            f"Partial rate data for {position.symbol}: long={bool(rate1_data)} short={bool(rate2_data)}"
                         )
 
                 self._refresh_position_leg_metrics(position, exchange_snapshots, rate1, rate2)
@@ -81,9 +80,8 @@ class PositionMonitor:
                 self._log_exchange_metrics(position)
             except Exception as exc:  # pragma: no cover - defensive logging
                 account_info = f" [Account: {self._account_name}]" if self._account_name else ""
-                self._logger.log(
-                    f"Error monitoring position {position.id}{account_info}: {exc}",
-                    "ERROR",
+                self._logger.error(
+                    f"Error monitoring position {position.id}{account_info}: {exc}"
                 )
 
     async def _fetch_exchange_position_snapshots(
@@ -121,9 +119,8 @@ class PositionMonitor:
                 try:
                     snapshot = await client.get_position_snapshot(pos.symbol)
                 except Exception as exc:
-                    self._logger.log(
-                        f"[{dex_key}] Failed to fetch position snapshot for {symbol_key}: {exc}",
-                        "WARNING",
+                    self._logger.warning(
+                        f"[{dex_key}] Failed to fetch position snapshot for {symbol_key}: {exc}"
                     )
                     continue
 
@@ -284,7 +281,7 @@ class PositionMonitor:
             separator,
             *rows,
         ]
-        self._logger.log("\n".join(message_lines), "INFO")
+        self._logger.info("\n".join(message_lines))
 
     @staticmethod
     def _format_decimal(value: Optional[Decimal], precision: int = 2) -> str:
