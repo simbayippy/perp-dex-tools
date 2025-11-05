@@ -228,6 +228,15 @@ class LighterClient(BaseExchangeClient):
                 market_data_manager=self.market_data,
                 ws_manager=None,  # Will be set after ws_manager is created
             )
+            self.order_manager.set_client_references(
+                base_amount_multiplier_ref=self,
+                price_multiplier_ref=self,
+                current_order_client_id_ref=self,
+                contract_id_cache=self._contract_id_cache,
+                market_id_cache=self._market_id_cache,
+                inactive_lookup_window_seconds=self._inactive_lookup_window_seconds,
+                inactive_lookup_limit=self._inactive_lookup_limit,
+            )
 
             # Initialize position manager (needed before WebSocket handlers)
             self.position_manager = LighterPositionManager(
