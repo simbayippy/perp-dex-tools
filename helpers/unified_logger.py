@@ -78,29 +78,147 @@ class UnifiedLogger:
             
             # Console handler with colors and source location (SHARED by all components)
             if log_to_console:
-                def _truncate_module_path(module: str, max_width: int) -> str:
-                    if len(module) <= max_width:
+                def _ellipsize_module_path(module: str, max_module_width: int) -> str:
+                    """
+                    Ellipsize module path while preserving root and final module names.
+                    
+                    Strategy:
+                    1. Always keep the root module (first part) - full or truncated
+                    2. Always keep the final module (last part) - full or truncated  
+                    3. Show abbreviated middle parts (first few + last few chars of each)
+                    4. Use "..." between abbreviated middle parts
+                    5. Ensure total length <= max_module_width
+                    
+                    Examples:
+                        funding_rate_service.core.submodule.opportunity_finder
+                        -> funding_rate_service.core...opportunity_finder
+                        
+                        funding_rate_service.somepath.somechildpath.someotherpath.opportunity_finder
+                        -> funding_rate_service.some...somechi...some..opportunity_finder
+                    """
+                    if len(module) <= max_module_width:
                         return module
 
                     parts = module.split(".")
-                    # Always keep at least the final segment
-                    kept = parts[-1]
-                    idx = len(parts) - 2
-                    while idx >= 0:
-                        candidate = ".".join(parts[idx:])
-                        if len(candidate) + 3 <= max_width:  # account for ellipsis
-                            return f"...{candidate}"
-                        idx -= 1
-
-                    # Fall back to cropping the final segment if everything else fails
-                    return f"...{kept[-(max_width-3):]}" if len(kept) + 3 > max_width else f"...{kept}"
+                    if len(parts) <= 1:
+                        # Single part or empty, just truncate if needed
+                        return module[:max_module_width] if len(module) > max_module_width else module
+                    
+                    # Always keep first (root) and last (file) parts
+                    root = parts[0]
+                    final = parts[-1]
+                    
+                    if len(parts) == 2:
+                        # Only root and final
+                        min_needed = len(root) + 3 + len(final)
+                        if min_needed <= max_module_width:
+                            return f"{root}...{final}"
+                        else:
+                            # Need to truncate one or both
+                            if len(final) <= max_module_width - len(root) - 3:
+                                # Truncate root
+                                available = max_module_width - 3 - len(final)
+                                return f"{root[:available]}...{final}"
+                            else:
+                                # Truncate final (keep root as much as possible)
+                                available = max_module_width - len(root) - 3
+                                return f"{root}...{final[-available:]}" if available > 0 else f"{root[:max_module_width-3]}..."
+                    
+                    # Multiple parts - process middle parts
+                    middle_parts = parts[1:-1]
+                    
+                    # Calculate space available for middle parts
+                    # Reserve space for root, final, and separators
+                    # Each middle part gets "..." separator (3 chars)
+                    separators_needed = len(middle_parts) + 1  # +1 for root->middle, +N for middle->middle, +1 for middle->final
+                    min_separator_space = separators_needed * 3
+                    available_for_content = max_module_width - len(root) - len(final) - min_separator_space
+                    
+                    if available_for_content < 0:
+                        # Even minimal separators don't fit, truncate root/final
+                        if len(final) <= max_module_width - 3:
+                            available = max_module_width - 3 - len(final)
+                            return f"{root[:available]}...{final}"
+                        else:
+                            available = max_module_width - len(root) - 3
+                            return f"{root}...{final[-available:]}" if available > 0 else f"{root[:max_module_width-3]}..."
+                    
+                    # Process middle parts - abbreviate each
+                    # Use shorter separators: "..." after root, ".." between middles, "..." before final
+                    abbreviated_middles = []
+                    
+                    # Allocate space more evenly - each middle part gets some chars
+                    if middle_parts:
+                        # Reserve separators: "..." (3) after root, ".." (2) between each middle, "..." (3) before final
+                        separator_chars = 3 + (len(middle_parts) - 1) * 2 + 3
+                        available_for_middles = max_module_width - len(root) - len(final) - separator_chars
+                        chars_per_middle = max(3, available_for_middles // len(middle_parts)) if available_for_middles > 0 else 3
+                    else:
+                        chars_per_middle = 0
+                    
+                    for middle_part in middle_parts:
+                        if len(middle_part) <= chars_per_middle:
+                            abbreviated_middles.append(middle_part)
+                        else:
+                            # Show first few chars + ".." + last few chars for abbreviation
+                            # Prefer showing more at the start (as in user's example)
+                            start_chars = max(3, chars_per_middle - 2)  # Reserve 2 for ".."
+                            end_chars = 0  # Don't show end chars in middle parts to save space
+                            abbreviated = f"{middle_part[:start_chars]}.."
+                            abbreviated_middles.append(abbreviated)
+                    
+                    # Build the full path with appropriate separators
+                    result = root
+                    if abbreviated_middles:
+                        result += "..."  # Separator after root
+                        for i, abbrev in enumerate(abbreviated_middles):
+                            if i > 0:
+                                result += ".."  # Shorter separator between middles
+                            result += abbrev
+                        result += "..."  # Separator before final
+                    else:
+                        result += "..."  # Just root and final
+                    result += final
+                    
+                    # Final check - if still too long, truncate root or final
+                    if len(result) > max_module_width:
+                        excess = len(result) - max_module_width
+                        # Try truncating root first
+                        if len(root) > excess + 3:
+                            root = root[:len(root) - excess]
+                            result = root
+                            for abbrev in abbreviated_middles:
+                                result += f"...{abbrev}"
+                            result += f"...{final}"
+                        else:
+                            # Truncate final instead
+                            available = max_module_width - len(root) - (len(abbreviated_middles) + 1) * 3 - sum(len(a) for a in abbreviated_middles)
+                            if available > 0:
+                                result = root
+                                for abbrev in abbreviated_middles:
+                                    result += f"...{abbrev}"
+                                result += f"...{final[-available:]}"
+                            else:
+                                # Last resort - minimal display
+                                return f"{root[:10]}...{final[-20:]}" if len(final) > 20 else f"{root[:max_module_width-3-len(final)]}...{final}"
+                    
+                    return result
 
                 def format_record(record):
+                    """
+                    Format log record with fixed-width origin column.
+                    
+                    Ensures all log messages align at the same column by:
+                    1. Ellipsizing module path (preserving root and final module)
+                    2. Always showing function:line
+                    3. Right-aligning to fixed width
+                    """
                     module_name = record.get("module") or record.get("name", "")
                     function_name = record.get("function", "")
                     line_number = record.get("line", 0)
                     
-                    max_width = 55
+                    # Fixed width for entire origin column
+                    max_width = 70
                     
                     # Build the immutable suffix: function:line (NEVER truncate this)
                     if function_name:
@@ -113,13 +231,13 @@ class UnifiedLogger:
                     # Calculate available space for module path
                     available_for_module = max_width - suffix_len
                     
-                    # Truncate module path to fit (function:line is sacred)
-                    if available_for_module <= 3:
-                        # Very long function name - use minimal module indicator
+                    # Minimum space needed (root + "..." + final + suffix)
+                    if available_for_module < 10:
+                        # Very little space, use minimal display
                         module_display = "..."
                     else:
-                        # Truncate module path intelligently to fit available space
-                        module_display = _truncate_module_path(module_name, available_for_module)
+                        # Ellipsize module path intelligently
+                        module_display = _ellipsize_module_path(module_name, available_for_module)
                     
                     # Build final source location: module + function:line
                     source_location = f"{module_display}{suffix}"
