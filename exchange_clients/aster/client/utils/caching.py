@@ -28,6 +28,11 @@ class TickSizeCache:
         key = symbol.upper()
         self._cache[key] = tick_size
     
+    def __contains__(self, symbol: str) -> bool:
+        """Check if symbol is in cache (supports 'in' operator)."""
+        key = symbol.upper()
+        return key in self._cache
+    
     def clear(self) -> None:
         """Clear all cached tick sizes."""
         self._cache.clear()
@@ -52,6 +57,11 @@ class ContractIdCache:
         """Set contract ID for symbol."""
         key = symbol.upper()
         self._cache[key] = contract_id
+    
+    def __contains__(self, symbol: str) -> bool:
+        """Check if symbol is in cache (supports 'in' operator)."""
+        key = symbol.upper()
+        return key in self._cache
     
     def clear(self) -> None:
         """Clear all cached contract IDs."""
