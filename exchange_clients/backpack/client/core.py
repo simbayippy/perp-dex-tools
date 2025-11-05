@@ -21,7 +21,7 @@ from exchange_clients.backpack.common import (
     get_backpack_symbol_format,
     normalize_symbol as normalize_backpack_symbol,
 )
-from exchange_clients.backpack.websocket_manager import BackpackWebSocketManager
+from exchange_clients.backpack.websocket import BackpackWebSocketManager
 from helpers.unified_logger import get_exchange_logger
 
 from .utils import (
