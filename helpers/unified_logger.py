@@ -274,7 +274,7 @@ class UnifiedLogger:
 
         # Global history file (shared across all components)
         # Check if handler was removed (e.g., by funding_rate_service logger) and re-add if needed
-            history_file = logs_dir / "unified_history.log"
+        history_file = logs_dir / "unified_history.log"
         handler_exists = False
         
         # Check if our history handler still exists by looking for the file path in active handlers
