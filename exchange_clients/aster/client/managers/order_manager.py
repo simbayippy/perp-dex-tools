@@ -236,7 +236,7 @@ class AsterOrderManager:
                 if order_status_upper in {'FILLED', 'CANCELED', 'EXPIRED', 'REJECTED', 'PARTIALLY_FILLED'}:
                     break
             await asyncio.sleep(0.1)
-            order_info = await self.get_order_info(order_id)
+            order_info = await self.get_order_info(order_id, normalized_contract_id)
             if order_info is not None:
                 final_info = order_info
                 order_status_upper = (order_info.status or '').upper()
@@ -402,7 +402,7 @@ class AsterOrderManager:
             order_info = None
             while order_status != 'FILLED' and time.time() - start_time < 10:
                 await asyncio.sleep(0.2)
-                order_info = await self.get_order_info(order_id)
+                order_info = await self.get_order_info(order_id, normalized_contract_id)
                 if order_info is not None:
                     order_status = order_info.status
 
