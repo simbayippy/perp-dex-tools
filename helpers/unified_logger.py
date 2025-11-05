@@ -379,6 +379,15 @@ class UnifiedLogger:
         """Log error message."""
         self._logger.opt(depth=1).error(message, **kwargs)
     
+    def exception(self, message: str, **kwargs):
+        """
+        Log exception message with traceback.
+        
+        Equivalent to error(message, exc_info=True).
+        This is a convenience method for logging exceptions.
+        """
+        self._logger.opt(depth=1).error(message, exc_info=True, **kwargs)
+    
     def critical(self, message: str, **kwargs):
         """Log critical message."""
         self._logger.opt(depth=1).critical(message, **kwargs)
