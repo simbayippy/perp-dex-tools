@@ -409,8 +409,17 @@ class BaseExchangeClient(ABC):
         symbol_upper = symbol.upper()
         
         # Check per-symbol cache first (handles multi-symbol trading)
-        if symbol_upper in self._contract_id_cache:
-            return self._contract_id_cache[symbol_upper]
+        # Support both dict-like caches and our custom cache classes
+        cached_contract_id = None
+        if hasattr(self._contract_id_cache, 'get'):
+            # Custom cache class (ContractIdCache)
+            cached_contract_id = self._contract_id_cache.get(symbol_upper)
+        elif isinstance(self._contract_id_cache, dict):
+            # Plain dict cache
+            cached_contract_id = self._contract_id_cache.get(symbol_upper)
+        
+        if cached_contract_id:
+            return cached_contract_id
         
         # Fallback: check if this matches current config ticker
         current_ticker = getattr(self.config, "ticker", "").upper()
@@ -418,7 +427,12 @@ class BaseExchangeClient(ABC):
             contract_id = getattr(self.config, "contract_id", None)
             if contract_id:
                 # Cache it for future use
-                self._contract_id_cache[symbol_upper] = contract_id
+                if hasattr(self._contract_id_cache, 'set'):
+                    # Custom cache class (ContractIdCache)
+                    self._contract_id_cache.set(symbol_upper, contract_id)
+                elif isinstance(self._contract_id_cache, dict):
+                    # Plain dict cache
+                    self._contract_id_cache[symbol_upper] = contract_id
                 return contract_id
         
         # Final fallback: return symbol as-is (exchange will normalize it)
