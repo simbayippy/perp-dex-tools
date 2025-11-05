@@ -159,9 +159,11 @@ class UnifiedLogger:
             history_file = logs_dir / "unified_history.log"
 
             def ensure_component(record):
+                # Ensure component_id exists in extra dict (required for format string)
+                # This filter runs in the main thread before enqueue, so it's safe to modify
                 if "component_id" not in record["extra"]:
                     record["extra"]["component_id"] = "UNKNOWN"
-                return True
+                return True  # Always accept the log
 
             history_format = (
                 "{time:YYYY-MM-DD HH:mm:ss} | "
@@ -170,17 +172,22 @@ class UnifiedLogger:
                 "{message}"
             )
 
-            _logger.add(
+            # Use enqueue based on environment variable (default: True for performance)
+            # Set LOG_ENQUEUE=false to disable async logging if you need immediate writes
+            use_enqueue = os.getenv("LOG_ENQUEUE", "true").lower() == "true"
+
+            handler_id = _logger.add(
                 str(history_file),
                 format=history_format,
                 level="DEBUG",
                 filter=ensure_component,
                 backtrace=False,
                 diagnose=False,
-                enqueue=True,  # Thread-safe async writes (handles buffering internally)
+                enqueue=use_enqueue,  # Async writes for performance (configurable via LOG_ENQUEUE env var)
                 catch=True     # Catch handler errors to prevent silent failures
             )
             _logger._perp_dex_history_setup = True
+            _logger._perp_dex_history_handler_id = handler_id
 
         # Per-session log file
         if not hasattr(_logger, "_perp_dex_session_setup"):
@@ -188,9 +195,11 @@ class UnifiedLogger:
             session_file = logs_dir / f"session_{session_ts}.log"
 
             def ensure_component_session(record):
+                # Ensure component_id exists in extra dict (required for format string)
+                # This filter runs in the main thread before enqueue, so it's safe to modify
                 if "component_id" not in record["extra"]:
                     record["extra"]["component_id"] = "UNKNOWN"
-                return True
+                return True  # Always accept the log
 
             session_format = (
                 "{time:YYYY-MM-DD HH:mm:ss} | "
@@ -199,17 +208,23 @@ class UnifiedLogger:
                 "{message}"
             )
 
-            _logger.add(
+            # Use enqueue based on environment variable (default: True for performance)
+            # Set LOG_ENQUEUE=false to disable async logging if you need immediate writes
+            use_enqueue = os.getenv("LOG_ENQUEUE", "true").lower() == "true"
+
+            handler_id = _logger.add(
                 str(session_file),
                 format=session_format,
                 level="DEBUG",
                 filter=ensure_component_session,
                 backtrace=False,
                 diagnose=False,
-                enqueue=True,  # Thread-safe async writes (handles buffering internally)
+                enqueue=use_enqueue,  # Async writes for performance (configurable via LOG_ENQUEUE env var)
                 catch=True     # Catch handler errors to prevent silent failures
             )
             _logger._perp_dex_session_setup = True
+            _logger._perp_dex_session_handler_id = handler_id
+            _logger._perp_dex_session_file = str(session_file)
         
         # Bind component context to all log records
         self._logger = _logger.bind(component_id=self.component_id)
@@ -330,7 +345,8 @@ class UnifiedLogger:
             
             # Send a flush marker through the logger to trigger queue processing
             # This ensures any pending logs in the enqueue queue are processed
-            _logger.opt(depth=2).debug("LOG_FLUSH_MARKER")
+            # Use bind() to ensure component_id is set for the marker
+            _logger.bind(component_id="SYSTEM:FLUSH").opt(depth=2).debug("LOG_FLUSH_MARKER")
             
             # Wait for enqueued logs to be processed
             # With enqueue=True, loguru uses background threads, so we need to wait
@@ -344,9 +360,17 @@ class UnifiedLogger:
             # Additional wait to ensure file writes complete
             # File I/O operations may take longer, especially on slower systems
             time.sleep(0.1)
-        except Exception:
-            # Silent failure - don't break shutdown if flush fails
-            pass
+            
+            # Force one more flush marker to ensure everything is written
+            _logger.bind(component_id="SYSTEM:FLUSH").opt(depth=2).debug("LOG_FLUSH_COMPLETE")
+            time.sleep(0.05)
+        except Exception as e:
+            # Log the error but don't break shutdown
+            try:
+                import sys
+                sys.stderr.write(f"Warning: Log flush error: {e}\n")
+            except:
+                pass
 
 
 def get_logger(
