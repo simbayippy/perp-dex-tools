@@ -317,13 +317,13 @@ class LighterWebSocketManager(BaseWebSocketManager):
 
         try:
             await self.connection.open_connection()
+            # Update component references BEFORE subscribing (components need ws reference)
+            self._update_component_references()
             await self._subscribe_channels()
         except Exception:
             await self.connection._close_session()
             raise
 
-        # Update component references
-        self._update_component_references()
         self.running = True
         self.market_switcher.set_running(True)
 
