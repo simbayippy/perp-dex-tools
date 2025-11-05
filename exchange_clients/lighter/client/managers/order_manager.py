@@ -35,7 +35,7 @@ class LighterOrderManager:
         logger: Any,
         account_index: int,
         api_key_index: int,
-        order_cache: Dict[str, OrderInfo],
+        latest_orders: Dict[str, OrderInfo],
         order_update_events: Dict[str, asyncio.Event],
         client_to_server_order_index: Dict[str, str],
         market_data_manager: Optional[Any] = None,
@@ -52,7 +52,7 @@ class LighterOrderManager:
             logger: Logger instance
             account_index: Account index
             api_key_index: API key index
-            order_cache: Dictionary to cache order info (client._latest_orders)
+            latest_orders: Dictionary storing latest OrderInfo objects (client._latest_orders)
             order_update_events: Dictionary of events for order updates (client._order_update_events)
             client_to_server_order_index: Mapping from client to server order IDs
             market_data_manager: Optional market data manager (for BBO prices)
@@ -65,7 +65,7 @@ class LighterOrderManager:
         self.logger = logger
         self.account_index = account_index
         self.api_key_index = api_key_index
-        self.order_cache = order_cache
+        self.latest_orders = latest_orders
         self.order_update_events = order_update_events
         self.client_to_server_order_index = client_to_server_order_index
         self.market_data = market_data_manager
@@ -490,7 +490,7 @@ class LighterOrderManager:
             return None
 
         order_key_str = str(order_key)
-        cached = self.order_cache.get(order_key_str)
+        cached = self.latest_orders.get(order_key_str)
         if cached is not None:
             return cached
 
@@ -499,16 +499,16 @@ class LighterOrderManager:
 
         event = self.order_update_events.setdefault(order_key_str, asyncio.Event())
         if event.is_set():
-            return self.order_cache.get(order_key_str)
+            return self.latest_orders.get(order_key_str)
 
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
-            return self.order_cache.get(order_key_str)
+            return self.latest_orders.get(order_key_str)
         except Exception:
-            return self.order_cache.get(order_key_str)
+            return self.latest_orders.get(order_key_str)
 
-        return self.order_cache.get(order_key_str)
+        return self.latest_orders.get(order_key_str)
     
     async def lookup_inactive_order(
         self,
@@ -575,9 +575,9 @@ class LighterOrderManager:
             info = build_order_info_from_payload(order, order_id_str)
             if info is not None:
                 if server_idx >= 0:
-                    self.order_cache[str(server_idx)] = info
+                    self.latest_orders[str(server_idx)] = info
                     self.notify_order_update(str(server_idx))
-                self.order_cache[order_id_str] = info
+                self.latest_orders[order_id_str] = info
                 self.notify_order_update(order_id_str)
                 return info
 
@@ -692,8 +692,8 @@ class LighterOrderManager:
             # Check latest updates captured from WebSocket (client & server ids)
             server_order_id = self.client_to_server_order_index.get(order_id_str)
 
-            cached_primary = self.order_cache.get(order_id_str)
-            cached_server = self.order_cache.get(str(server_order_id)) if server_order_id else None
+            cached_primary = self.latest_orders.get(order_id_str)
+            cached_server = self.latest_orders.get(str(server_order_id)) if server_order_id else None
             cached_fallback = cached_primary or cached_server
 
             if not force_refresh:
@@ -739,7 +739,7 @@ class LighterOrderManager:
                         f"Rate limited while fetching order info for {order_id_str}; "
                         "falling back to cached websocket state"
                     )
-                    return self.order_cache.get(order_id_str)
+                    return self.latest_orders.get(order_id_str)
 
                 # Order might not be active anymore (filled or cancelled)
                 self.logger.debug(f"Order {order_id} not found in active orders (might be filled): {e}")
@@ -770,11 +770,11 @@ class LighterOrderManager:
 
                     if matches:
                         info = build_order_info_from_payload(order, order_id)
-                        self.order_cache[order_id_str] = info
+                        self.latest_orders[order_id_str] = info
                         self.notify_order_update(order_id_str)
                         if server_idx >= 0:
                             server_key = str(server_idx)
-                            self.order_cache[server_key] = info
+                            self.latest_orders[server_key] = info
                             self.notify_order_update(server_key)
                         return info
 
@@ -811,5 +811,5 @@ class LighterOrderManager:
             self.logger.error(f"Error getting order info: {e}")
             import traceback
             self.logger.debug(f"Traceback: {traceback.format_exc()}")
-            return self.order_cache.get(order_id_str)
+            return self.latest_orders.get(order_id_str)
 

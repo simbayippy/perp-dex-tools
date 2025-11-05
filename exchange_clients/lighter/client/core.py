@@ -94,7 +94,6 @@ class LighterClient(BaseExchangeClient):
         self.base_amount_multiplier = None
         self.price_multiplier = None
 
-        self.orders_cache = {}
         self.current_order_client_id = None
         self.current_order = None
         self._min_order_notional: Dict[str, Decimal] = {}
@@ -222,7 +221,7 @@ class LighterClient(BaseExchangeClient):
                 logger=self.logger,
                 account_index=self.account_index,
                 api_key_index=self.api_key_index,
-                order_cache=self.orders_cache,
+                latest_orders=self._latest_orders,
                 order_update_events=self._order_update_events,
                 client_to_server_order_index=self._client_to_server_order_index,
                 market_data_manager=self.market_data,
@@ -273,7 +272,6 @@ class LighterClient(BaseExchangeClient):
             self.ws_handlers = LighterWebSocketHandlers(
                 config=self.config,
                 logger=self.logger,
-                orders_cache=self.orders_cache,
                 latest_orders=self._latest_orders,
                 client_to_server_order_index=self._client_to_server_order_index,
                 current_order_client_id_ref=self,

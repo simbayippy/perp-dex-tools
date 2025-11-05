@@ -28,7 +28,6 @@ class LighterWebSocketHandlers:
         self,
         config: Any,
         logger: Any,
-        orders_cache: Dict[str, Dict[str, Any]],
         latest_orders: Dict[str, OrderInfo],
         client_to_server_order_index: Dict[str, str],
         current_order_client_id_ref: Any,
@@ -47,8 +46,7 @@ class LighterWebSocketHandlers:
         Args:
             config: Trading configuration object
             logger: Logger instance
-            orders_cache: Orders cache dictionary (client.orders_cache)
-            latest_orders: Latest orders dictionary (client._latest_orders)
+            latest_orders: Latest orders dictionary (client._latest_orders) - stores OrderInfo objects
             client_to_server_order_index: Mapping from client to server order IDs
             current_order_client_id_ref: Reference to client.current_order_client_id
             current_order_ref: Reference to client.current_order
@@ -62,7 +60,6 @@ class LighterWebSocketHandlers:
         """
         self.config = config
         self.logger = logger
-        self.orders_cache = orders_cache
         self.latest_orders = latest_orders
         self.client_to_server_order_index = client_to_server_order_index
         self.current_order_client_id_ref = current_order_client_id_ref
@@ -107,19 +104,16 @@ class LighterWebSocketHandlers:
             price = Decimal(str(order_data.get('price', '0')))
             remaining_size = Decimal(str(order_data.get('remaining_base_amount', '0')))
 
-            if order_id in self.orders_cache.keys():
-                if (self.orders_cache[order_id]['status'] == 'OPEN' and
+            # Deduplication: Skip duplicate OPEN updates with same filled_size
+            existing_order = self.latest_orders.get(order_id)
+            if existing_order:
+                if (existing_order.status == 'OPEN' and
                         status == 'OPEN' and
-                        filled_size == self.orders_cache[order_id]['filled_size']):
+                        filled_size == existing_order.filled_size):
                     continue
                 elif status in ['FILLED', 'CANCELED']:
-                    del self.orders_cache[order_id]
+                    # Clean up filled/canceled orders (but keep in latest_orders for querying)
                     self.client_to_server_order_index.pop(order_id, None)
-                else:
-                    self.orders_cache[order_id]['status'] = status
-                    self.orders_cache[order_id]['filled_size'] = filled_size
-            elif status == 'OPEN':
-                self.orders_cache[order_id] = {'status': status, 'filled_size': filled_size}
 
             if status == 'OPEN' and filled_size > 0:
                 status = 'PARTIALLY_FILLED'
