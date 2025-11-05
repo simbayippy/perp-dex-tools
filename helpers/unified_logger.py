@@ -218,7 +218,7 @@ class UnifiedLogger:
                     line_number = record.get("line", 0)
                     
                     # Fixed width for entire origin column
-                    max_width = 50
+                    max_width = 40
                     
                     # Build the immutable suffix: function:line (NEVER truncate this)
                     if function_name:
