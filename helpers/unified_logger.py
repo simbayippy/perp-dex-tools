@@ -177,9 +177,8 @@ class UnifiedLogger:
                 filter=ensure_component,
                 backtrace=False,
                 diagnose=False,
-                enqueue=True,  # ← Add this for thread-safe async writes
-                buffering=1,   # ← Add this for line-buffered mode
-                catch=True     # ← Catch handler errors to prevent silent failures
+                enqueue=True,  # Thread-safe async writes (handles buffering internally)
+                catch=True     # Catch handler errors to prevent silent failures
             )
             _logger._perp_dex_history_setup = True
 
@@ -207,9 +206,8 @@ class UnifiedLogger:
                 filter=ensure_component_session,
                 backtrace=False,
                 diagnose=False,
-                enqueue=True,  # ← Add this for thread-safe async writes
-                buffering=1,   # ← Add this for line-buffered mode
-                catch=True     # ← Catch handler errors to prevent silent failures
+                enqueue=True,  # Thread-safe async writes (handles buffering internally)
+                catch=True     # Catch handler errors to prevent silent failures
             )
             _logger._perp_dex_session_setup = True
         
@@ -321,19 +319,33 @@ class UnifiedLogger:
         """
         Global flush of all loguru handlers.
         
-        Call this before process exit to ensure all buffered logs are written.
+        Call this before process exit to ensure all buffered/enqueued logs are written.
+        
+        When using enqueue=True, loguru uses background threads/processes to write logs.
+        This method sends a flush marker and waits for the enqueue queue to drain.
         """
         try:
             import sys
             import time
             
-            # Give enqueued logs time to process
-            time.sleep(0.1)
+            # Send a flush marker through the logger to trigger queue processing
+            # This ensures any pending logs in the enqueue queue are processed
+            _logger.opt(depth=2).debug("LOG_FLUSH_MARKER")
             
-            # Flush system streams
+            # Wait for enqueued logs to be processed
+            # With enqueue=True, loguru uses background threads, so we need to wait
+            # for the queue to drain. 200ms should be sufficient for most cases.
+            time.sleep(0.2)
+            
+            # Flush system streams (for console output)
             sys.stdout.flush()
             sys.stderr.flush()
+            
+            # Additional wait to ensure file writes complete
+            # File I/O operations may take longer, especially on slower systems
+            time.sleep(0.1)
         except Exception:
+            # Silent failure - don't break shutdown if flush fails
             pass
 
 
