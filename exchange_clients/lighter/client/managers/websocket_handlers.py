@@ -2,6 +2,8 @@
 WebSocket handlers module for Lighter client.
 
 Handles WebSocket callback processing for orders, positions, liquidations, and user stats.
+
+Contains the business logic for the WebSocket handlers, what to do with Events received from the WebSocket.
 """
 
 import asyncio

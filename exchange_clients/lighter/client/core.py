@@ -26,7 +26,7 @@ import lighter
 from lighter import SignerClient, ApiClient, Configuration
 
 # Import custom WebSocket implementation
-from ..websocket_manager import LighterWebSocketManager
+from ..websocket import LighterWebSocketManager
 from .utils import decimal_or_none, build_order_info_from_payload, build_snapshot_from_raw, MarketIdCache
 from .managers.market_data import LighterMarketData
 from .managers.order_manager import LighterOrderManager
