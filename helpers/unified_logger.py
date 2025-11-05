@@ -211,14 +211,14 @@ class UnifiedLogger:
                     Ensures all log messages align at the same column by:
                     1. Ellipsizing module path (preserving root and final module)
                     2. Always showing function:line
-                    3. Right-aligning to fixed width
+                    3. Left-aligning to fixed width
                     """
                     module_name = record.get("module") or record.get("name", "")
                     function_name = record.get("function", "")
                     line_number = record.get("line", 0)
                     
                     # Fixed width for entire origin column
-                    max_width = 70
+                    max_width = 50
                     
                     # Build the immutable suffix: function:line (NEVER truncate this)
                     if function_name:
@@ -242,9 +242,9 @@ class UnifiedLogger:
                     # Build final source location: module + function:line
                     source_location = f"{module_display}{suffix}"
                     
-                    # Right-align to EXACTLY max_width characters
+                    # Left-align to EXACTLY max_width characters
                     # This ensures ALL log messages start at the same column
-                    record["extra"]["short_name"] = f"{source_location:>{max_width}}"
+                    record["extra"]["short_name"] = f"{source_location:<{max_width}}"
                     return True
                 
                 console_format = (
@@ -274,7 +274,7 @@ class UnifiedLogger:
 
         # Global history file (shared across all components)
         # Check if handler was removed (e.g., by funding_rate_service logger) and re-add if needed
-        history_file = logs_dir / "unified_history.log"
+            history_file = logs_dir / "unified_history.log"
         handler_exists = False
         
         # Check if our history handler still exists by looking for the file path in active handlers
