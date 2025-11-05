@@ -10,7 +10,6 @@ from typing import Any, Dict, Optional
 
 import lighter
 
-
 class LighterAccountManager:
     """
     Account manager for Lighter exchange.
