@@ -33,6 +33,18 @@ class TickSizeCache:
         key = symbol.upper()
         return key in self._cache
     
+    def __getitem__(self, symbol: str) -> Decimal:
+        """Get tick size for symbol (supports subscript notation)."""
+        key = symbol.upper()
+        if key not in self._cache:
+            raise KeyError(f"Tick size not found for symbol: {symbol}")
+        return self._cache[key]
+    
+    def __setitem__(self, symbol: str, tick_size: Decimal) -> None:
+        """Set tick size for symbol (supports subscript notation)."""
+        key = symbol.upper()
+        self._cache[key] = tick_size
+    
     def clear(self) -> None:
         """Clear all cached tick sizes."""
         self._cache.clear()
@@ -62,6 +74,18 @@ class ContractIdCache:
         """Check if symbol is in cache (supports 'in' operator)."""
         key = symbol.upper()
         return key in self._cache
+    
+    def __getitem__(self, symbol: str) -> str:
+        """Get contract ID for symbol (supports subscript notation)."""
+        key = symbol.upper()
+        if key not in self._cache:
+            raise KeyError(f"Contract ID not found for symbol: {symbol}")
+        return self._cache[key]
+    
+    def __setitem__(self, symbol: str, contract_id: str) -> None:
+        """Set contract ID for symbol (supports subscript notation)."""
+        key = symbol.upper()
+        self._cache[key] = contract_id
     
     def clear(self) -> None:
         """Clear all cached contract IDs."""
