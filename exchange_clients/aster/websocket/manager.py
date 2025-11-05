@@ -6,7 +6,7 @@ Orchestrates connection, order book, message handling, and market switching.
 
 import asyncio
 import json
-from typing import Dict, Any, Optional, Callable, Awaitable
+from typing import Dict, Any, Optional, Callable, Awaitable, List
 
 import websockets
 
