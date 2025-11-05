@@ -155,9 +155,21 @@ class UnifiedLogger:
         logs_dir.mkdir(exist_ok=True)
 
         # Global history file (shared across all components)
-        if not hasattr(_logger, "_perp_dex_history_setup"):
-            history_file = logs_dir / "unified_history.log"
-
+        # Check if handler was removed (e.g., by funding_rate_service logger) and re-add if needed
+        history_file = logs_dir / "unified_history.log"
+        handler_exists = False
+        
+        # Check if our history handler still exists by looking for the file path in active handlers
+        if hasattr(_logger, "_perp_dex_history_handler_id"):
+            try:
+                # Try to access the handler - if it doesn't exist, loguru will raise an error
+                _logger._core.handlers[_logger._perp_dex_history_handler_id]
+                handler_exists = True
+            except (KeyError, AttributeError, TypeError):
+                # Handler was removed, need to re-add
+                handler_exists = False
+        
+        if not hasattr(_logger, "_perp_dex_history_setup") or not handler_exists:
             def ensure_component(record):
                 if "component_id" not in record["extra"]:
                     record["extra"]["component_id"] = "UNKNOWN"
@@ -170,7 +182,7 @@ class UnifiedLogger:
                 "{message}"
             )
 
-            _logger.add(
+            handler_id = _logger.add(
                 str(history_file),
                 format=history_format,
                 level="DEBUG",
@@ -181,11 +193,29 @@ class UnifiedLogger:
                 catch=True     # Catch handler errors to prevent silent failures
             )
             _logger._perp_dex_history_setup = True
+            _logger._perp_dex_history_handler_id = handler_id
 
         # Per-session log file
-        if not hasattr(_logger, "_perp_dex_session_setup"):
+        # Check if handler was removed and re-add if needed
+        session_handler_exists = False
+        
+        if hasattr(_logger, "_perp_dex_session_handler_id"):
+            try:
+                _logger._core.handlers[_logger._perp_dex_session_handler_id]
+                session_handler_exists = True
+            except (KeyError, AttributeError, TypeError):
+                session_handler_exists = False
+        
+        if not hasattr(_logger, "_perp_dex_session_setup") or not session_handler_exists:
             session_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             session_file = logs_dir / f"session_{session_ts}.log"
+            
+            # Store session file path for later reference
+            if not hasattr(_logger, "_perp_dex_session_file"):
+                _logger._perp_dex_session_file = str(session_file)
+            else:
+                # Use existing session file if handler was removed but file still exists
+                session_file = Path(_logger._perp_dex_session_file)
 
             def ensure_component_session(record):
                 if "component_id" not in record["extra"]:
@@ -199,7 +229,7 @@ class UnifiedLogger:
                 "{message}"
             )
 
-            _logger.add(
+            handler_id = _logger.add(
                 str(session_file),
                 format=session_format,
                 level="DEBUG",
@@ -210,6 +240,7 @@ class UnifiedLogger:
                 catch=True     # Catch handler errors to prevent silent failures
             )
             _logger._perp_dex_session_setup = True
+            _logger._perp_dex_session_handler_id = handler_id
         
         # Bind component context to all log records
         self._logger = _logger.bind(component_id=self.component_id)
