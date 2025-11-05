@@ -104,11 +104,11 @@ class FundingArbitrageStrategy(BaseStrategy):
         
         missing_exchanges = [dex for dex in required_exchanges if dex not in exchange_clients]
         if missing_exchanges:
-            self.logger.log(f"ℹ️  Exchanges configured for scanning: {required_exchanges}")
-            self.logger.log(f"ℹ️  Exchanges with trading clients: {available_exchanges}")
+            self.logger.info(f"ℹ️  Exchanges configured for scanning: {required_exchanges}")
+            self.logger.info(f"ℹ️  Exchanges with trading clients: {available_exchanges}")
             if missing_exchanges:
-                self.logger.log(f"⚠️  Trading not available on: {missing_exchanges} (funding data only)")
-            self.logger.log(f"✅ Will scan ALL configured exchanges but only trade on {available_exchanges}")
+                self.logger.warning(f"⚠️  Trading not available on: {missing_exchanges} (funding data only)")
+            self.logger.info(f"✅ Will scan ALL configured exchanges but only trade on {available_exchanges}")
             
         if not available_exchanges:
             raise ValueError(f"No trading-capable exchange clients available. At least one exchange with full trading support is required.")
@@ -163,7 +163,8 @@ class FundingArbitrageStrategy(BaseStrategy):
         
         # Pass account_name for multi-account support
         account_name = getattr(funding_config, 'account_name', None)
-        self.position_manager = FundingArbPositionManager(account_name=account_name)
+        # Pass strategy logger to position manager for unified logging
+        self.position_manager = FundingArbPositionManager(account_name=account_name, logger=self.logger)
 
         # Tracking
         self.failed_symbols = set()  # Track symbols that failed validation (avoid retrying same cycle)
@@ -217,10 +218,10 @@ class FundingArbitrageStrategy(BaseStrategy):
 
         try:
             if not await self.opportunity_scanner.has_capacity():
-                self.logger.log("No capacity for new positions; skipping opportunity scan", "DEBUG")
+                self.logger.debug("No capacity for new positions; skipping opportunity scan")
                 return
 
-            self.logger.log("Scanning for new funding arbitrage opportunities", "INFO")
+            self.logger.info("Scanning for new funding arbitrage opportunities")
             opportunities = await self.opportunity_scanner.scan()
             for opportunity in opportunities:
                 if not await self.opportunity_scanner.has_capacity():
@@ -230,7 +231,7 @@ class FundingArbitrageStrategy(BaseStrategy):
                 await self.position_opener.open(opportunity)
 
         except Exception as exc:
-            self.logger.log(f"Strategy execution failed: {exc}", "ERROR")
+            self.logger.error(f"Strategy execution failed: {exc}")
 
     # ========================================================================
     # Abstract Method Implementations (Required by BaseStrategy)
@@ -243,11 +244,11 @@ class FundingArbitrageStrategy(BaseStrategy):
         """Strategy-specific initialization logic."""
         # Initialize position and state managers
         await self.position_manager.initialize()
-        self.logger.log("FundingArbitrageStrategy initialized successfully")
+        self.logger.info("FundingArbitrageStrategy initialized successfully")
         if self._monitor_task is None:
             self._monitor_stop_event = asyncio.Event()
             self._monitor_task = asyncio.create_task(self._monitor_positions_loop(), name="funding-arb-monitor")
-            self.logger.log("Started background monitor loop", "DEBUG")
+            self.logger.debug("Started background monitor loop")
     
     async def should_execute(self) -> bool:
         """
@@ -395,9 +396,8 @@ class FundingArbitrageStrategy(BaseStrategy):
                     await self.position_monitor.monitor()
                     await self.position_closer.evaluateAndClosePositions()
                 except Exception as exc:
-                    self.logger.log(
-                        f"Monitor loop error: {exc}\n{traceback.format_exc()}",
-                        "ERROR",
+                    self.logger.error(
+                        f"Monitor loop error: {exc}\n{traceback.format_exc()}"
                     )
 
                 if stop_event.is_set():
@@ -410,7 +410,7 @@ class FundingArbitrageStrategy(BaseStrategy):
         except asyncio.CancelledError:
             pass
         finally:
-            self.logger.log("Background monitor loop stopped", "DEBUG")
+            self.logger.debug("Background monitor loop stopped")
 
     # ========================================================================
     # Cleanup
@@ -476,9 +476,8 @@ class FundingArbitrageStrategy(BaseStrategy):
             try:
                 queue = client.liquidation_events_queue()
             except Exception as exc:
-                self.logger.log(
-                    f"⚠️ Unable to subscribe to liquidation stream for {name}: {exc}",
-                    "WARNING",
+                self.logger.warning(
+                    f"⚠️ Unable to subscribe to liquidation stream for {name}: {exc}"
                 )
                 continue
 
@@ -501,9 +500,8 @@ class FundingArbitrageStrategy(BaseStrategy):
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                self.logger.log(
-                    f"Error processing liquidation event from {exchange}: {exc}",
-                    "ERROR",
+                self.logger.error(
+                    f"Error processing liquidation event from {exchange}: {exc}"
                 )
     
 DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL = Decimal("0.0002283105")

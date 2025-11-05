@@ -111,16 +111,14 @@ class GridRecoveryOperator:
             
             # Log exit filled
             if exit_price:
-                self.logger.log(
-                    f"\n{'-'*80}\n🎯 Position {position.position_id} EXIT FILLED @ {exit_price}\n{'-'*80}",
-                    "INFO",
+                self.logger.info(
+                    f"\n{'-'*80}\n🎯 Position {position.position_id} EXIT FILLED @ {exit_price}\n{'-'*80}"
                 )
             
             # Log position complete
             exit_info = f" | Exit @ {exit_price}" if exit_price else ""
-            self.logger.log(
-                f"\n{'='*80}\n💰 POSITION {position.position_id} COMPLETE | Entry @ {position.entry_price} | Size: {position.size} | Side: {position.side.upper()}{exit_info}\n{'='*80}\n",
-                "INFO",
+            self.logger.info(
+                f"\n{'='*80}\n💰 POSITION {position.position_id} COMPLETE | Entry @ {position.entry_price} | Size: {position.size} | Side: {position.side.upper()}{exit_info}\n{'='*80}\n"
             )
 
         retry_ids = {pos.position_id for pos in retracked_positions}

@@ -41,8 +41,8 @@ class PositionCloser:
             liquidation_reason = self._detect_liquidation(position, snapshots)
             if liquidation_reason is not None:
                 await self.close(position, liquidation_reason, live_snapshots=snapshots)
-                strategy.logger.log(
-                    f"Closed {position.symbol}: {liquidation_reason}", "WARNING"
+                strategy.logger.warning(
+                    f"Closed {position.symbol}: {liquidation_reason}"
                 )
                 actions.append(f"Closed {position.symbol}: {liquidation_reason}")
                 continue
@@ -50,8 +50,8 @@ class PositionCloser:
             imbalance_reason = self._detect_imbalance(position, snapshots)
             if imbalance_reason is not None:
                 await self.close(position, imbalance_reason, live_snapshots=snapshots)
-                strategy.logger.log(
-                    f"Closed {position.symbol}: {imbalance_reason}", "WARNING"
+                strategy.logger.warning(
+                    f"Closed {position.symbol}: {imbalance_reason}"
                 )
                 actions.append(f"Closed {position.symbol}: {imbalance_reason}")
                 continue
@@ -59,11 +59,11 @@ class PositionCloser:
             should_close, reason = await self._should_close(position, snapshots)
             if should_close:
                 await self.close(position, reason or "UNKNOWN", live_snapshots=snapshots)
-                strategy.logger.log(f"Closed {position.symbol}: {reason}", "INFO")
+                strategy.logger.info(f"Closed {position.symbol}: {reason}")
                 actions.append(f"Closed {position.symbol}: {reason}")
             else:
-                strategy.logger.log(
-                    f"Position {position.symbol} not closing: {reason}", "DEBUG"
+                strategy.logger.debug(
+                    f"Position {position.symbol} not closing: {reason}"
                 )
 
         return actions
@@ -82,10 +82,9 @@ class PositionCloser:
             if event.exchange not in {position.long_dex, position.short_dex}:
                 continue
 
-            strategy.logger.log(
+            strategy.logger.error(
                 f"🚨 Liquidation event detected on {event.exchange.upper()} for {event.symbol} "
-                f"(side={event.side}, qty={event.quantity}, price={event.price}).",
-                "ERROR",
+                f"(side={event.side}, qty={event.quantity}, price={event.price})."
             )
 
             snapshots = await self._fetch_leg_snapshots(position)
@@ -116,9 +115,8 @@ class PositionCloser:
                         return False, "HOLD_TOP_OPPORTUNITY"
                     return True, reason
             except Exception as exc:  # pragma: no cover - defensive logging
-                strategy.logger.log(
-                    f"Risk manager evaluation failed for {position.symbol}: {exc}",
-                    "ERROR",
+                strategy.logger.error(
+                    f"Risk manager evaluation failed for {position.symbol}: {exc}"
                 )
 
         # Fallback heuristics if risk manager unavailable or declined
@@ -167,17 +165,15 @@ class PositionCloser:
             if refreshed:
                 position = refreshed
 
-            strategy.logger.log(
+            strategy.logger.info(
                 f"✅ Closed {position.symbol} ({reason}): "
                 f"PnL=${pnl:.2f} ({pnl_pct*100:.2f}%), "
-                f"Age={position.get_age_hours():.1f}h",
-                "INFO",
+                f"Age={position.get_age_hours():.1f}h"
             )
 
         except Exception as exc:  # pragma: no cover - defensive logging
-            strategy.logger.log(
-                f"Error closing position {position.id}: {exc}",
-                "ERROR",
+            strategy.logger.error(
+                f"Error closing position {position.id}: {exc}"
             )
             raise
 
@@ -196,9 +192,8 @@ class PositionCloser:
             }
             return get_risk_manager(risk_cfg.strategy, config_payload)
         except Exception as exc:
-            strategy.logger.log(
-                f"Failed to initialize risk manager '{risk_cfg.strategy}': {exc}",
-                "ERROR",
+            strategy.logger.error(
+                f"Failed to initialize risk manager '{risk_cfg.strategy}': {exc}"
             )
             return None
 
@@ -220,9 +215,8 @@ class PositionCloser:
                 position.short_dex, position.symbol
             )
         except Exception as exc:
-            self._strategy.logger.log(
-                f"Failed to fetch funding rates for {position.symbol}: {exc}",
-                "ERROR",
+            self._strategy.logger.error(
+                f"Failed to fetch funding rates for {position.symbol}: {exc}"
             )
             return None
 
@@ -247,10 +241,9 @@ class PositionCloser:
         long_rate = _extract(long_rate_row, "funding_rate")
         short_rate = _extract(short_rate_row, "funding_rate")
         if long_rate is None or short_rate is None:
-            self._strategy.logger.log(
+            self._strategy.logger.warning(
                 f"Funding rate data missing for {position.symbol}: "
-                f"long={long_rate_row}, short={short_rate_row}",
-                "WARNING",
+                f"long={long_rate_row}, short={short_rate_row}"
             )
             return None
         divergence = short_rate - long_rate
@@ -275,9 +268,8 @@ class PositionCloser:
         for dex in filter(None, [position.long_dex, position.short_dex]):
             client = self._strategy.exchange_clients.get(dex)
             if client is None:
-                self._strategy.logger.log(
-                    f"No exchange client for {dex} while evaluating {position.symbol}",
-                    "ERROR",
+                self._strategy.logger.error(
+                    f"No exchange client for {dex} while evaluating {position.symbol}"
                 )
                 snapshots[dex] = None
                 continue
@@ -295,9 +287,8 @@ class PositionCloser:
                 # THIS IS PROBABLY PROBLAMATIC (or the risk_controlelr) -> SPAMS GETTING POSITION SNAPSHOTS
                 snapshots[dex] = await client.get_position_snapshot(position.symbol)
             except Exception as exc:  # pragma: no cover - defensive logging
-                self._strategy.logger.log(
-                    f"[{dex}] Failed to fetch position snapshot for {position.symbol}: {exc}",
-                    "ERROR",
+                self._strategy.logger.error(
+                    f"[{dex}] Failed to fetch position snapshot for {position.symbol}: {exc}"
                 )
                 snapshots[dex] = None
 
@@ -323,9 +314,8 @@ class PositionCloser:
                 await client.ensure_market_feed(symbol)
                 # Note: ensure_market_feed now waits for book ticker to be ready
         except Exception as exc:  # pragma: no cover - defensive logging
-            self._strategy.logger.log(
-                f"⚠️ [{exchange_name}] WebSocket prep error during close: {exc}",
-                "DEBUG",
+            self._strategy.logger.debug(
+                f"⚠️ [{exchange_name}] WebSocket prep error during close: {exc}"
             )
         else:
             self._ws_prepared[exchange_name] = symbol_key
@@ -356,9 +346,8 @@ class PositionCloser:
             return "ALL_LEGS_CLOSED"
 
         leg_list = ", ".join(sorted(missing_legs))
-        self._strategy.logger.log(
-            f"⚠️ Detected missing legs {leg_list} for {position.symbol}; initiating emergency close.",
-            "WARNING",
+        self._strategy.logger.warning(
+            f"⚠️ Detected missing legs {leg_list} for {position.symbol}; initiating emergency close."
         )
         return "LEG_LIQUIDATED"
 
@@ -400,11 +389,10 @@ class PositionCloser:
         diff_pct = (max_tokens - min_tokens) / max_tokens
         
         if diff_pct > self._IMBALANCE_THRESHOLD:
-            self._strategy.logger.log(
+            self._strategy.logger.warning(
                 f"⚠️ Severe imbalance detected for {position.symbol}: "
                 f"{position.long_dex}={long_tokens:.0f} tokens vs {position.short_dex}={short_tokens:.0f} tokens "
-                f"(diff={diff_pct*100:.1f}%, threshold={self._IMBALANCE_THRESHOLD*100:.1f}%)",
-                "WARNING",
+                f"(diff={diff_pct*100:.1f}%, threshold={self._IMBALANCE_THRESHOLD*100:.1f}%)"
             )
             return "SEVERE_IMBALANCE"
         
@@ -510,10 +498,9 @@ class PositionCloser:
         try:
             opportunities = await opportunity_finder.find_opportunities(filters)
         except Exception as exc:
-            strategy.logger.log(
+            strategy.logger.error(
                 f"Failed to score opportunities while checking erosion guard for "
-                f"{position.symbol}: {exc}",
-                "ERROR",
+                f"{position.symbol}: {exc}"
             )
             return False
 
@@ -539,10 +526,9 @@ class PositionCloser:
             except Exception:
                 net_display = net_profit
 
-            strategy.logger.log(
+            strategy.logger.info(
                 f"Holding {position.symbol}: erosion trigger fired but opportunity "
-                f"still ranks highest ({net_display}% net).",
-                "INFO",
+                f"still ranks highest ({net_display}% net)."
             )
             return True
 
@@ -569,9 +555,8 @@ class PositionCloser:
         for dex in filter(None, [position.long_dex, position.short_dex]):
             client = strategy.exchange_clients.get(dex)
             if client is None:
-                strategy.logger.log(
-                    f"Skipping close for {dex}: no exchange client available",
-                    "ERROR",
+                strategy.logger.error(
+                    f"Skipping close for {dex}: no exchange client available"
                 )
                 continue
 
@@ -589,24 +574,21 @@ class PositionCloser:
                 try:
                     snapshot = await client.get_position_snapshot(position.symbol)
                 except Exception as exc:
-                    strategy.logger.log(
-                        f"[{dex}] Failed to fetch position snapshot for close: {exc}",
-                        "ERROR",
+                    strategy.logger.error(
+                        f"[{dex}] Failed to fetch position snapshot for close: {exc}"
                     )
                     continue
 
             if not self._has_open_position(snapshot):
-                strategy.logger.log(
-                    f"[{dex}] No open position detected for {position.symbol}; skipping close call.",
-                    "DEBUG",
+                strategy.logger.debug(
+                    f"[{dex}] No open position detected for {position.symbol}; skipping close call."
                 )
                 continue
 
             quantity = snapshot.quantity.copy_abs() if snapshot.quantity is not None else Decimal("0")
             if quantity <= self._ZERO_TOLERANCE:
-                strategy.logger.log(
-                    f"[{dex}] Snapshot quantity zero for {position.symbol}; skipping.",
-                    "DEBUG",
+                strategy.logger.debug(
+                    f"[{dex}] Snapshot quantity zero for {position.symbol}; skipping."
                 )
                 continue
 
@@ -640,8 +622,8 @@ class PositionCloser:
             )
 
         if not legs:
-            strategy.logger.log(
-                f"No exchange legs to close for {position.symbol}", "DEBUG"
+            strategy.logger.debug(
+                f"No exchange legs to close for {position.symbol}"
             )
             return
 
@@ -667,11 +649,10 @@ class PositionCloser:
             quantity = leg.get("quantity", Decimal("0"))
             leg_summary.append(f"{dex.upper()}:{side}:{quantity}")
         
-        strategy.logger.log(
+        strategy.logger.info(
             f"🔒 Closing position {position.symbol} atomically | "
             f"Reason: {reason} | "
-            f"Legs: [{', '.join(leg_summary)}]",
-            "INFO"
+            f"Legs: [{', '.join(leg_summary)}]"
         )
         
         order_specs: List[OrderSpec] = []
@@ -680,9 +661,8 @@ class PositionCloser:
             try:
                 spec = await self._build_order_spec(position.symbol, leg, reason=reason)
             except Exception as exc:
-                strategy.logger.log(
-                    f"[{leg['dex']}] Unable to prepare close order for {position.symbol}: {exc}",
-                    "ERROR",
+                strategy.logger.error(
+                    f"[{leg['dex']}] Unable to prepare close order for {position.symbol}: {exc}"
                 )
                 raise
             order_specs.append(spec)
@@ -714,11 +694,10 @@ class PositionCloser:
         side = leg.get("side", "?")
         quantity = leg.get("quantity", Decimal("0"))
         
-        strategy.logger.log(
+        strategy.logger.info(
             f"🔒 Closing single leg {symbol} | "
             f"Reason: {reason} | "
-            f"Leg: {dex.upper()}:{side}:{quantity}",
-            "INFO"
+            f"Leg: {dex.upper()}:{side}:{quantity}"
         )
         
         leg["contract_id"] = await self._prepare_contract_context(
@@ -733,9 +712,8 @@ class PositionCloser:
 
         size_usd = leg["quantity"] * price if price is not None else None
 
-        strategy.logger.log(
-            f"[{leg['dex']}] Emergency close {symbol} qty={leg['quantity']} via market order",
-            "WARNING",
+        strategy.logger.warning(
+            f"[{leg['dex']}] Emergency close {symbol} qty={leg['quantity']} via market order"
         )
 
         execution = await self._order_executor.execute_order(
@@ -841,9 +819,8 @@ class PositionCloser:
         try:
             best_bid, best_ask = await client.fetch_bbo_prices(symbol)
         except Exception as exc:
-            self._strategy.logger.log(
-                f"[{client.get_exchange_name()}] Failed to fetch BBO for {symbol}: {exc}",
-                "WARNING",
+            self._strategy.logger.warning(
+                f"[{client.get_exchange_name()}] Failed to fetch BBO for {symbol}: {exc}"
             )
             return None
 
@@ -966,10 +943,9 @@ class PositionCloser:
                 if _is_valid_contract(refreshed_id):
                     resolved_contract = refreshed_id
             except Exception as exc:
-                self._strategy.logger.log(
+                self._strategy.logger.warning(
                     f"⚠️ [{client.get_exchange_name().upper()}] Failed to refresh contract attributes "
-                    f"for {symbol}: {exc}",
-                    "WARNING",
+                    f"for {symbol}: {exc}"
                 )
             finally:
                 if ticker_restore is not None and config is not None:

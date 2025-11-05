@@ -17,7 +17,7 @@ from decimal import Decimal
 from datetime import datetime, date
 from uuid import UUID
 import json
-from helpers.unified_logger import get_core_logger
+from helpers.unified_logger import UnifiedLogger
 
 from strategies.components.base_components import BasePositionManager, Position
 from .models import FundingArbPosition
@@ -60,15 +60,22 @@ class FundingArbPositionManager(BasePositionManager):
     - Rebalance state management
     """
     
-    def __init__(self, account_name: Optional[str] = None):
+    def __init__(self, account_name: Optional[str] = None, logger: Optional[UnifiedLogger] = None):
         """Initialize funding arbitrage position manager.
         
         Args:
             account_name: Optional account name for multi-account support.
                          If provided, positions will be filtered by this account.
+            logger: Optional logger instance. If not provided, creates a new logger.
+                    Should use strategy logger for unified logging.
         """
         super().__init__()
-        self.logger = get_core_logger("funding_arb_position_manager")
+        # Use provided logger (strategy logger) or create new one for backward compatibility
+        if logger is not None:
+            self.logger = logger
+        else:
+            from helpers.unified_logger import get_core_logger
+            self.logger = get_core_logger("funding_arb_position_manager")
         self._initialized = False
         self.account_name = account_name
         self.account_id: Optional[UUID] = None  # Loaded during initialize()

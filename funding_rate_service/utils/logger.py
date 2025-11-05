@@ -1,41 +1,18 @@
 """
-Logging configuration using loguru
+Logging configuration for Funding Rate Service
+
+Migrated to UnifiedLogger for consistent logging across the application.
+Maintains backward compatibility with existing code.
 """
 
 import logging
-import sys
+import os
+from pathlib import Path
 
-from loguru import logger as _logger
+# Use UnifiedLogger for consistent logging
+from helpers.unified_logger import get_service_logger
 
 from funding_rate_service.config import settings
-
-
-def _configure_loguru() -> None:
-    """Configure loguru sinks."""
-    _logger.remove()
-    _logger.add(
-        sys.stdout,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | "
-        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-        level=settings.log_level,
-        colorize=True,
-    )
-    _logger.add(
-        "logs/error.log",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
-        level="ERROR",
-        rotation="10 MB",
-        retention="30 days",
-        compression="zip",
-    )
-    _logger.add(
-        "logs/app.log",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
-        level=settings.log_level,
-        rotation="100 MB",
-        retention="7 days",
-        compression="zip",
-    )
 
 
 def _configure_external_loggers() -> None:
@@ -60,11 +37,53 @@ def _configure_external_loggers() -> None:
             handler.setLevel(http_level)
 
 
-_configure_loguru()
+# Configure external loggers (for third-party libraries)
 _configure_external_loggers()
 
-# Export logger
-logger = _logger
+# Create UnifiedLogger instance for funding_rate_service
+# This will use UnifiedLogger's console handler with fixed-width formatting
+# and will write to unified_history.log and session logs
+logger = get_service_logger("funding_rate_service", log_level=settings.log_level)
+
+# Add service-specific file handlers for standalone mode (optional)
+# These will coexist with UnifiedLogger's handlers
+from loguru import logger as _loguru_logger
+
+# Only add file handlers if running standalone (not imported by trading bot)
+# Check if UnifiedLogger's console handler is already set up
+if hasattr(_loguru_logger, '_perp_dex_console_setup'):
+    # Running in trading bot context - UnifiedLogger handles everything
+    pass
+else:
+    # Running standalone - add service-specific file handlers
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+    
+    # Add error.log handler (for ERROR level and above)
+    _loguru_logger.add(
+        str(logs_dir / "error.log"),
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[component_id]:<35} | {message}",
+        level="ERROR",
+        rotation="10 MB",
+        retention="30 days",
+        compression="zip",
+        filter=lambda record: "component_id" in record["extra"],
+        enqueue=True,
+        catch=True
+    )
+    
+    # Add app.log handler (for all levels)
+    _loguru_logger.add(
+        str(logs_dir / "app.log"),
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[component_id]:<35} | {message}",
+        level=settings.log_level,
+        rotation="100 MB",
+        retention="7 days",
+        compression="zip",
+        filter=lambda record: "component_id" in record["extra"],
+        enqueue=True,
+        catch=True
+    )
 
 
 def clamp_external_logger_levels() -> None:

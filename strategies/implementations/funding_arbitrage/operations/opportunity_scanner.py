@@ -46,26 +46,21 @@ class OpportunityScanner:
                 limit=10,
             )
 
-            strategy.logger.log(
+            strategy.logger.debug(
                 f"Filters - min_profit: {strategy.config.min_profit}, "
                 f"mandatory_dex: {mandatory_dex}, max_oi_cap: {max_oi_cap}, "
-                f"configured_dexes: {strategy.config.exchanges}, available_dexes: {available_exchanges}",
-                "DEBUG",
+                f"configured_dexes: {strategy.config.exchanges}, available_dexes: {available_exchanges}"
             )
 
             opportunities = await strategy.opportunity_finder.find_opportunities(filters)
 
-            strategy.logger.log(
-                f"Found {len(opportunities)} opportunities",
-                "INFO",
-            )
+            strategy.logger.info(f"Found {len(opportunities)} opportunities")
 
             max_new = strategy.config.max_new_positions_per_cycle
             for opportunity in opportunities[:max_new]:
                 if opportunity.symbol in strategy.failed_symbols:
-                    strategy.logger.log(
-                        f"⏭️  Skipping {opportunity.symbol} - already failed validation this cycle",
-                        "DEBUG",
+                    strategy.logger.debug(
+                        f"⏭️  Skipping {opportunity.symbol} - already failed validation this cycle"
                     )
                     continue
 
@@ -76,7 +71,7 @@ class OpportunityScanner:
                     candidates.append(opportunity)
 
         except Exception as exc:  # pragma: no cover - defensive logging
-            strategy.logger.log(f"Error scanning opportunities: {exc}", "ERROR")
+            strategy.logger.error(f"Error scanning opportunities: {exc}")
       
         return candidates
 
@@ -86,18 +81,16 @@ class OpportunityScanner:
         short_dex = opportunity.short_dex
 
         if long_dex not in strategy.exchange_clients:
-            strategy.logger.log(
+            strategy.logger.warning(
                 f"⚠️  SAFETY CHECK: Skipping {opportunity.symbol} opportunity - "
-                f"{long_dex} (long side) not in available clients",
-                "WARNING",
+                f"{long_dex} (long side) not in available clients"
             )
             return False
 
         if short_dex not in strategy.exchange_clients:
-            strategy.logger.log(
+            strategy.logger.warning(
                 f"⚠️  SAFETY CHECK: Skipping {opportunity.symbol} opportunity - "
-                f"{short_dex} (short side) not in available clients",
-                "WARNING",
+                f"{short_dex} (short side) not in available clients"
             )
             return False
 
@@ -118,10 +111,9 @@ class OpportunityScanner:
 
         if open_count >= strategy.config.max_positions:
             if not strategy._max_position_warning_logged:
-                strategy.logger.log(
+                strategy.logger.info(
                     f"🚫 Max positions reached ({open_count}/{strategy.config.max_positions}). "
-                    "Skipping new opportunities until capacity frees up.",
-                    "INFO",
+                    "Skipping new opportunities until capacity frees up."
                 )
                 strategy._max_position_warning_logged = True
             return False

@@ -299,6 +299,10 @@ class TradingBot:
 
         except Exception as e:
             self.logger.error(f"Error during graceful shutdown: {e}")
+        finally:
+            # CRITICAL: Flush all logs to ensure buffered/enqueued logs are written
+            from helpers.unified_logger import UnifiedLogger
+            UnifiedLogger.flush_all_handlers()
 
     async def _on_proxy_unhealthy(self, failure_count: int) -> None:
         """Rotate to the next proxy when health checks continue to fail."""
