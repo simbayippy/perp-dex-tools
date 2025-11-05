@@ -63,19 +63,17 @@ class GridRiskController:
             self._max_symbol_leverage = leverage_info.max_leverage
 
             if leverage_info.max_leverage is not None:
-                self.logger.log(
-                    f"  - Exchange max leverage for {ticker}: {leverage_info.max_leverage}x",
-                    "INFO",
+                self.logger.info(
+                    f"  - Exchange max leverage for {ticker}: {leverage_info.max_leverage}x"
                 )
 
             applied: Optional[Decimal] = None
             if self._requested_leverage is not None:
                 applied = self._requested_leverage
                 if leverage_info.max_leverage is not None and applied > leverage_info.max_leverage:
-                    self.logger.log(
+                    self.logger.warning(
                         f"Requested leverage {applied}x exceeds exchange maximum {leverage_info.max_leverage}x. "
-                        "Using the maximum allowed leverage instead.",
-                        "WARNING",
+                        "Using the maximum allowed leverage instead."
                     )
                     applied = leverage_info.max_leverage
 
@@ -84,21 +82,18 @@ class GridRiskController:
                     try:
                         set_success = await self.exchange_client.set_account_leverage(ticker, leverage_to_set)
                         if set_success:
-                            self.logger.log(
-                                f"Applied leverage {leverage_to_set}x on {self.exchange_client.get_exchange_name().upper()}.",
-                                "INFO",
+                            self.logger.info(
+                                f"Applied leverage {leverage_to_set}x on {self.exchange_client.get_exchange_name().upper()}."
                             )
                             applied = Decimal(leverage_to_set)
                         else:
-                            self.logger.log(
+                            self.logger.warning(
                                 f"Failed to set leverage to {leverage_to_set}x on "
-                                f"{self.exchange_client.get_exchange_name().upper()}.",
-                                "WARNING",
+                                f"{self.exchange_client.get_exchange_name().upper()}."
                             )
                     except Exception as exc:
-                        self.logger.log(
-                            f"Error setting leverage on {self.exchange_client.get_exchange_name().upper()}: {exc}",
-                            "WARNING",
+                        self.logger.warning(
+                            f"Error setting leverage on {self.exchange_client.get_exchange_name().upper()}: {exc}"
                         )
 
             self._applied_leverage = applied
@@ -108,9 +103,8 @@ class GridRiskController:
                 self._fallback_margin_ratio = None
 
         except Exception as exc:
-            self.logger.log(
-                f"Grid: Failed to prepare leverage settings for {ticker}: {exc}",
-                "WARNING",
+            self.logger.warning(
+                f"Grid: Failed to prepare leverage settings for {ticker}: {exc}"
             )
 
     async def refresh_risk_snapshot(
@@ -123,7 +117,7 @@ class GridRiskController:
         try:
             current_position = await self.exchange_client.get_account_positions()
         except Exception as exc:
-            self.logger.log(f"Grid: Failed to fetch account positions: {exc}", "ERROR")
+            self.logger.error(f"Grid: Failed to fetch account positions: {exc}")
             current_position = Decimal("0")
 
         snapshot = await self._fetch_position_snapshot()
@@ -277,9 +271,8 @@ class GridRiskController:
                 # Some clients may not support the symbol format (skip to next hint)
                 continue
             except Exception as exc:
-                self.logger.log(
-                    f"Grid: Failed to fetch position snapshot for {symbol}: {exc}",
-                    "DEBUG",
+                self.logger.debug(
+                    f"Grid: Failed to fetch position snapshot for {symbol}: {exc}"
                 )
         return None
 

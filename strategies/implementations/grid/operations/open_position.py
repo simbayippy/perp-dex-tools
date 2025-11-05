@@ -68,10 +68,9 @@ class GridOpenPositionOperator:
         if min_notional is not None:
             min_notional_dec = Decimal(str(min_notional))
             if target_notional < min_notional_dec:
-                self.logger.log(
+                self.logger.warning(
                     f"Requested order notional ${float(target_notional):.2f} is below "
-                    f"exchange minimum ${float(min_notional_dec):.2f}. Using the minimum allowed.",
-                    "WARNING",
+                    f"exchange minimum ${float(min_notional_dec):.2f}. Using the minimum allowed."
                 )
                 adjusted_notional = min_notional_dec
 
@@ -100,7 +99,7 @@ class GridOpenPositionOperator:
             try:
                 quantity, applied_notional = self._determine_order_quantity(reference_price)
             except ValueError as exc:
-                self.logger.log(f"Grid: Unable to determine order size - {exc}", "WARNING")
+                self.logger.warning(f"Grid: Unable to determine order size - {exc}")
                 return {
                     "action": "wait",
                     "message": str(exc),
@@ -132,14 +131,11 @@ class GridOpenPositionOperator:
             position_id = self.grid_state.allocate_position_id()
             entry_client_index = client_order_index_from_position(position_id, "entry")
 
-            self.logger.log(
-                (
-                    f"Grid: Submitting {self.config.direction} order via "
-                    f"{self.exchange_client.get_exchange_name()} "
-                    f"(contract_id={contract_id}, quantity={quantity}, price={order_price}, "
-                    f"client_id={entry_client_index})"
-                ),
-                "INFO",
+            self.logger.info(
+                f"Grid: Submitting {self.config.direction} order via "
+                f"{self.exchange_client.get_exchange_name()} "
+                f"(contract_id={contract_id}, quantity={quantity}, price={order_price}, "
+                f"client_id={entry_client_index})"
             )
 
             try:
@@ -161,7 +157,7 @@ class GridOpenPositionOperator:
                     f"(status={http_exc.status}, url={request_url}, "
                     f"client_id={entry_client_index}): {http_exc}"
                 )
-                self.logger.log(message, "ERROR")
+                self.logger.error(message)
                 return {
                     "action": "error",
                     "message": message,
@@ -172,19 +168,16 @@ class GridOpenPositionOperator:
                     f"Grid: Timeout while placing order via {self.exchange_client.get_exchange_name()} "
                     f"(contract_id={contract_id}, client_id={entry_client_index})"
                 )
-                self.logger.log(message, "ERROR")
+                self.logger.error(message)
                 return {
                     "action": "error",
                     "message": message,
                     "wait_time": 5,
                 }
             except Exception as exc:
-                self.logger.log(
-                    (
-                        f"Grid: Unexpected exception from place_limit_order "
-                        f"(contract_id={contract_id}, client_id={entry_client_index}): {exc}"
-                    ),
-                    "ERROR",
+                self.logger.error(
+                    f"Grid: Unexpected exception from place_limit_order "
+                    f"(contract_id={contract_id}, client_id={entry_client_index}): {exc}"
                 )
                 raise
 
@@ -194,9 +187,8 @@ class GridOpenPositionOperator:
                 self.grid_state.order_index_to_position_id[entry_client_index] = position_id
                 
                 # Log separator for new position
-                self.logger.log(
-                    f"\n{'='*80}\n🔷 STARTING POSITION {position_id} | {self.config.direction.upper()} @ {order_result.price}\n{'='*80}",
-                    "INFO",
+                self.logger.info(
+                    f"\n{'='*80}\n🔷 STARTING POSITION {position_id} | {self.config.direction.upper()} @ {order_result.price}\n{'='*80}"
                 )
                 
                 # Update state to waiting for fill
@@ -216,10 +208,9 @@ class GridOpenPositionOperator:
                     self.grid_state.pending_open_order_id = order_result.order_id
                     self.grid_state.pending_open_quantity = quantity
 
-                self.logger.log(
+                self.logger.info(
                     f"Grid: Placed {self.config.direction} order for {quantity} "
-                    f"(@ ~${float(applied_notional):.2f}) at {order_result.price} (position {position_id})",
-                    "INFO",
+                    f"(@ ~${float(applied_notional):.2f}) at {order_result.price} (position {position_id})"
                 )
 
                 return {
@@ -233,7 +224,7 @@ class GridOpenPositionOperator:
                     "status": order_result.status,
                 }
 
-            self.logger.log(f"Grid: Failed to place open order: {order_result.error_message}", "ERROR")
+            self.logger.error(f"Grid: Failed to place open order: {order_result.error_message}")
             return {
                 "action": "error",
                 "message": order_result.error_message,
@@ -241,7 +232,7 @@ class GridOpenPositionOperator:
             }
 
         except Exception as exc:
-            self.logger.log(f"Error placing open order: {exc}", "ERROR")
+            self.logger.error(f"Error placing open order: {exc}")
             return {
                 "action": "error",
                 "message": str(exc),

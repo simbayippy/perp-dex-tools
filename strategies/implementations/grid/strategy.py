@@ -122,44 +122,40 @@ class GridStrategy(BaseStrategy):
             order_closer=self.order_closer,
         )
         
-        self.logger.log("Grid strategy initialized with parameters:", "INFO")
-        self.logger.log(f"  - Take Profit: {config.take_profit}%", "INFO")
-        self.logger.log(f"  - Grid Step: {config.grid_step}%", "INFO")
-        self.logger.log(f"  - Direction: {config.direction}", "INFO")
+        self.logger.info("Grid strategy initialized with parameters:")
+        self.logger.info(f"  - Take Profit: {config.take_profit}%")
+        self.logger.info(f"  - Grid Step: {config.grid_step}%")
+        self.logger.info(f"  - Direction: {config.direction}")
         if self.order_notional_usd is not None:
-            self.logger.log(f"  - Order Notional (USD): {self.order_notional_usd}", "INFO")
+            self.logger.info(f"  - Order Notional (USD): {self.order_notional_usd}")
         else:
             qty_display = getattr(self.exchange_client.config, "quantity", None)
-            self.logger.log(f"  - Order Quantity (base): {qty_display}", "INFO")
-        self.logger.log(f"  - Max Orders: {config.max_orders}", "INFO")
-        self.logger.log(f"  - Wait Time: {config.wait_time}s", "INFO")
-        self.logger.log(f"  - Max Margin (USD): {config.max_margin_usd}", "INFO")
-        self.logger.log(
+            self.logger.info(f"  - Order Quantity (base): {qty_display}")
+        self.logger.info(f"  - Max Orders: {config.max_orders}")
+        self.logger.info(f"  - Wait Time: {config.wait_time}s")
+        self.logger.info(f"  - Max Margin (USD): {config.max_margin_usd}")
+        self.logger.info(
             f"  - Stop Loss: {'enabled' if config.stop_loss_enabled else 'disabled'} "
-            f"(threshold {config.stop_loss_percentage}%)",
-            "INFO",
+            f"(threshold {config.stop_loss_percentage}%)"
         )
         if target_leverage is not None:
-            self.logger.log(f"  - Target Leverage: {target_leverage}x", "INFO")
-        self.logger.log(
-            f"  - Position Timeout: {config.position_timeout_minutes} minutes",
-            "INFO",
+            self.logger.info(f"  - Target Leverage: {target_leverage}x")
+        self.logger.info(
+            f"  - Position Timeout: {config.position_timeout_minutes} minutes"
         )
-        self.logger.log(f"  - Recovery Mode: {config.recovery_mode}", "INFO")
+        self.logger.info(f"  - Recovery Mode: {config.recovery_mode}")
         
         # Log safety parameters if set
         if config.stop_price is not None:
-            self.logger.log(
+            self.logger.warning(
                 f"  - Stop Price: {config.stop_price} "
-                f"(will stop if {'below' if config.direction == 'buy' else 'above'})", 
-                "WARNING"
+                f"(will stop if {'below' if config.direction == 'buy' else 'above'})"
             )
         
         if config.pause_price is not None:
-            self.logger.log(
+            self.logger.info(
                 f"  - Pause Price: {config.pause_price} "
-                f"(will pause if {'above' if config.direction == 'buy' else 'below'})", 
-                "INFO"
+                f"(will pause if {'above' if config.direction == 'buy' else 'below'})"
             )
     
     def _serialize_value(self, value: Any) -> Any:
@@ -180,7 +176,20 @@ class GridStrategy(BaseStrategy):
             **context,
         }
         serialized_payload = {key: self._serialize_value(val) for key, val in payload.items()}
-        self.logger.log(message, level.upper(), **serialized_payload)
+        # Use appropriate level method based on level string
+        level_upper = level.upper()
+        if level_upper == "DEBUG":
+            self.logger.debug(message, **serialized_payload)
+        elif level_upper == "INFO":
+            self.logger.info(message, **serialized_payload)
+        elif level_upper == "WARNING":
+            self.logger.warning(message, **serialized_payload)
+        elif level_upper == "ERROR":
+            self.logger.error(message, **serialized_payload)
+        elif level_upper == "CRITICAL":
+            self.logger.critical(message, **serialized_payload)
+        else:
+            self.logger.info(message, **serialized_payload)
 
         if self.event_notifier:
             self.event_notifier.notify(
@@ -198,9 +207,8 @@ class GridStrategy(BaseStrategy):
             try:
                 await self.exchange_client.ensure_market_feed(stream_symbol)
             except Exception as exc:
-                self.logger.log(
-                    f"Grid: Failed to align websocket market feed for {stream_symbol}: {exc}",
-                    "WARNING",
+                self.logger.warning(
+                    f"Grid: Failed to align websocket market feed for {stream_symbol}: {exc}"
                 )
     
     async def should_execute(self) -> bool:
@@ -430,9 +438,8 @@ class GridStrategy(BaseStrategy):
         try:
             active_orders = await self.exchange_client.get_active_orders(contract_id)
         except Exception as exc:  # pragma: no cover - defensive logging
-            self.logger.log(
-                f"Grid: Failed to fetch active orders while checking for canceled entry: {exc}",
-                "DEBUG",
+            self.logger.debug(
+                f"Grid: Failed to fetch active orders while checking for canceled entry: {exc}"
             )
             return False
 
@@ -455,12 +462,9 @@ class GridStrategy(BaseStrategy):
         # Give the websocket stream a short grace period to emit the fill before assuming cancellation.
         grace_seconds = 2.0
         if pending_placed_at is not None and now - pending_placed_at < grace_seconds:
-            self.logger.log(
-                (
-                    "Grid: Pending entry missing from active orders but still within fill grace window; "
-                    "waiting for fill confirmation."
-                ),
-                "DEBUG",
+            self.logger.debug(
+                "Grid: Pending entry missing from active orders but still within fill grace window; "
+                "waiting for fill confirmation.",
                 order_id=pending_id,
                 elapsed_seconds=round(now - pending_placed_at, 3),
             )
@@ -475,12 +479,9 @@ class GridStrategy(BaseStrategy):
             except TypeError:
                 order_info = await get_order_info(pending_str)  # type: ignore[call-arg]
             except Exception as exc:  # pragma: no cover - defensive logging
-                self.logger.log(
-                    (
-                        "Grid: Failed to refresh order info while validating pending entry "
-                        f"{pending_id}: {exc}"
-                    ),
-                    "DEBUG",
+                self.logger.debug(
+                    f"Grid: Failed to refresh order info while validating pending entry "
+                    f"{pending_id}: {exc}",
                     order_id=pending_id,
                     error=str(exc),
                 )
@@ -516,12 +517,9 @@ class GridStrategy(BaseStrategy):
                     )
                     return False
                 else:  # pragma: no cover - defensive guard
-                    self.logger.log(
-                        (
-                            "Grid: Order info reported FILLED without price/quantity; "
-                            "deferring cancellation."
-                        ),
-                        "WARNING",
+                    self.logger.warning(
+                        "Grid: Order info reported FILLED without price/quantity; "
+                        "deferring cancellation.",
                         order_id=pending_id,
                         raw_order_info=str(order_info),
                     )
@@ -555,9 +553,8 @@ class GridStrategy(BaseStrategy):
         
         # Log position attempt failure with clear separator
         if position_id:
-            self.logger.log(
-                f"\n{'='*80}\n❌ POSITION {position_id} CANCELED | Entry order removed before fill\n{'='*80}\n",
-                "INFO",
+            self.logger.info(
+                f"\n{'='*80}\n❌ POSITION {position_id} CANCELED | Entry order removed before fill\n{'='*80}\n"
             )
         
         self._reset_pending_entry_state()
@@ -656,7 +653,7 @@ class GridStrategy(BaseStrategy):
                 return new_order_close_price / next_close_price > 1 + self.config.grid_step / 100
                 
         except Exception as e:
-            self.logger.log(f"Error in grid step condition: {e}", "ERROR")
+            self.logger.error(f"Error in grid step condition: {e}")
             return False
     
     

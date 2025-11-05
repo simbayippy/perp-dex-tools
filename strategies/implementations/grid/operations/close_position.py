@@ -119,9 +119,8 @@ class GridOrderCloser:
             try:
                 await self.exchange_client.cancel_order(order_id)
             except Exception as exc:  # pragma: no cover - defensive logging
-                self.logger.log(
-                    f"Grid: Failed to cancel close order {order_id} after market close: {exc}",
-                    "DEBUG",
+                self.logger.debug(
+                    f"Grid: Failed to cancel close order {order_id} after market close: {exc}"
                 )
 
         if cancel_ids:
@@ -239,15 +238,13 @@ class GridOrderCloser:
                     self.grid_state.pending_client_order_index = None
                     self.grid_state.last_open_order_time = time.time()
 
-                    self.logger.log(
-                        f"Grid: Placed close order at {close_price} for position {position_id}",
-                        "INFO",
+                    self.logger.info(
+                        f"Grid: Placed close order at {close_price} for position {position_id}"
                     )
                     
                     # Log position entry completion with visual separator
-                    self.logger.log(
-                        f"\n{'-'*80}\n✅ Position {position_id} ENTRY COMPLETE | CLOSE ORDER PLACED | Waiting for exit @ {close_price}\n{'-'*80}",
-                        "INFO",
+                    self.logger.info(
+                        f"\n{'-'*80}\n✅ Position {position_id} ENTRY COMPLETE | CLOSE ORDER PLACED | Waiting for exit @ {close_price}\n{'-'*80}"
                     )
 
                     return {
@@ -260,9 +257,8 @@ class GridOrderCloser:
                         "wait_time": 1 if self.exchange_client.get_exchange_name() == "lighter" else 0,
                     }
 
-                self.logger.log(
-                    f"Grid: Failed to place close order for position {position_id}: {order_result.error_message}",
-                    "ERROR",
+                self.logger.error(
+                    f"Grid: Failed to place close order for position {position_id}: {order_result.error_message}"
                 )
                 return {
                     "action": "error",
@@ -272,7 +268,7 @@ class GridOrderCloser:
                 }
 
             except Exception as exc:
-                self.logger.log(f"Error placing close order for position {position_id}: {exc}", "ERROR")
+                self.logger.error(f"Error placing close order for position {position_id}: {exc}")
                 return {
                     "action": "error",
                     "message": str(exc),
@@ -491,9 +487,8 @@ class GridOrderCloser:
                 or client_index not in self.grid_state.order_index_to_position_id
             )
         ):
-            self.logger.log(
+            self.logger.debug(
                 "Grid: Ignoring fill for order outside pending context",
-                "DEBUG",
                 order_id=order_id,
             )
             return
@@ -504,9 +499,8 @@ class GridOrderCloser:
             and expected_index != client_index
         ):
             if mapped_position_id:
-                self.logger.log(
+                self.logger.warning(
                     "Grid: Fill for non-pending order detected; realigning state",
-                    "WARNING",
                     expected_order_index=expected_index,
                     received_order_index=client_index,
                     position_id=mapped_position_id,
@@ -514,9 +508,8 @@ class GridOrderCloser:
                 self.grid_state.pending_position_id = mapped_position_id
                 self.grid_state.pending_client_order_index = client_index
             else:
-                self.logger.log(
+                self.logger.warning(
                     "Grid: Ignoring unexpected fill for unknown order index",
-                    "WARNING",
                     order_id=order_id,
                     expected_order_index=expected_index,
                 )
@@ -536,9 +529,8 @@ class GridOrderCloser:
             self.grid_state.filled_client_order_index = self.grid_state.pending_client_order_index
         self.grid_state.pending_open_order_id = None
         self.grid_state.pending_open_quantity = None
-        self.logger.log(
-            f"Grid: Order filled at {filled_price} for {filled_quantity} (position {self.grid_state.filled_position_id})",
-            "INFO",
+        self.logger.info(
+            f"Grid: Order filled at {filled_price} for {filled_quantity} (position {self.grid_state.filled_position_id})"
         )
 
     def _calculate_close_price(self, filled_price: Decimal) -> Decimal:
@@ -612,26 +604,25 @@ class GridOrderCloser:
             ]
 
         except Exception as exc:
-            self.logger.log(f"Error updating active orders: {exc}", "ERROR")
+            self.logger.error(f"Error updating active orders: {exc}")
 
     async def cancel_all_orders(self) -> None:
         """Cancel all active orders (used when stop price is triggered)."""
         try:
-            self.logger.log(
-                f"Canceling {len(self.grid_state.active_close_orders)} active orders...",
-                "INFO",
+            self.logger.info(
+                f"Canceling {len(self.grid_state.active_close_orders)} active orders..."
             )
 
             for order in self.grid_state.active_close_orders:
                 try:
                     await self.exchange_client.cancel_order(order.order_id)
-                    self.logger.log(f"Canceled order {order.order_id}", "INFO")
+                    self.logger.info(f"Canceled order {order.order_id}")
                 except Exception as exc:
-                    self.logger.log(f"Error canceling order {order.order_id}: {exc}", "ERROR")
+                    self.logger.error(f"Error canceling order {order.order_id}: {exc}")
 
             # Clear active close orders from state
             self.grid_state.active_close_orders = []
-            self.logger.log("All orders canceled", "INFO")
+            self.logger.info("All orders canceled")
 
         except Exception as exc:
-            self.logger.log(f"Error in cancel_all_orders: {exc}", "ERROR")
+            self.logger.error(f"Error in cancel_all_orders: {exc}")
