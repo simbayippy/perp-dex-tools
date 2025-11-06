@@ -363,6 +363,7 @@ class LighterPositionManager:
                 return []
                 
             account_data = await self.account_api.account(by="index", value=str(self.account_index))
+            self.logger.info(f"[LIGHTER] Account data: {account_data}")
             if account_data and account_data.accounts:
                 positions = []
                 for pos in account_data.accounts[0].positions:
