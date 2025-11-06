@@ -5,6 +5,7 @@ Handles position tracking, snapshots, funding calculations, and enrichment.
 """
 
 import asyncio
+import time
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
@@ -256,33 +257,61 @@ class LighterPositionManager:
                 self.logger.debug(f"[LIGHTER] REST account() refresh failed for {normalized_symbol}: {exc}")
                 funding = None
             
-            # Fallback to expensive position_funding() API only if REST account() didn't provide funding
-            # ⚠️ WARNING: position_funding() returns ALL historical funding, not just current position
-            # This should rarely be needed since REST account() always includes total_funding_paid_out
+            # Fallback to position_funding() API if REST account() didn't provide funding
+            # This is the reliable method since REST account() optional field is often missing
             if funding is None:
-                try:
-                    self.logger.warning(
-                        f"[LIGHTER] Falling back to position_funding() API for {normalized_symbol} "
-                        "(expensive, returns ALL historical funding - may include previous positions). "
-                        "REST account() API should have provided funding."
-                    )
-                    funding = await self.get_cumulative_funding(
-                        raw.get("market_id"),
-                        snapshot.side,
-                        quantity=snapshot.quantity,
-                    )
-                    # get_cumulative_funding() returns None when cumulative is 0, but we need to cache 0
-                    # to avoid re-querying every cycle. Convert None → Decimal("0") to mark as "checked"
-                    if funding is None:
-                        funding = Decimal("0")
-                        self.logger.debug(
-                            f"[LIGHTER] Funding is 0 for {normalized_symbol} (no funding paid yet). "
-                            "Caching to avoid re-querying. Websocket will update when funding arrives."
+                # Check if we have cached funding that's still fresh (< 1 hour old)
+                # Funding settles every 1 hour on Lighter, so 1 hour cache is safe
+                async with self.positions_lock:
+                    cached_raw = self.raw_positions.get(normalized_symbol)
+                    funding_cache_timestamp = cached_raw.get("funding_cache_timestamp") if cached_raw else None
+                    cached_funding_value = cached_raw.get("funding_accrued") if cached_raw else None
+                    
+                    cache_age_seconds = None
+                    if funding_cache_timestamp:
+                        cache_age_seconds = time.time() - funding_cache_timestamp
+                        cache_age_hours = cache_age_seconds / 3600
+                        
+                        # Use cached funding if less than 1 hour old
+                        if cache_age_seconds < 3600 and cached_funding_value is not None:
+                            funding = decimal_or_none(cached_funding_value)
+                            self.logger.debug(
+                                f"[LIGHTER] Using cached funding for {normalized_symbol}: {funding} "
+                                f"(cached {cache_age_hours:.2f} hours ago)"
+                            )
+                
+                # Query position_funding() API if no fresh cache
+                if funding is None:
+                    try:
+                        self.logger.info(
+                            f"[LIGHTER] Querying position_funding() API for {normalized_symbol} "
+                            f"({'cache expired' if cache_age_seconds else 'no cache'}, "
+                            f"{'cache age: ' + f'{cache_age_seconds/3600:.2f}h' if cache_age_seconds else ''})"
                         )
-                except Exception as exc:
-                    self.logger.debug(f"[LIGHTER] Funding lookup failed for {normalized_symbol}: {exc}")
-                    # Don't cache on error - might be transient, allow retry next cycle
-                    funding = None
+                        funding = await self.get_cumulative_funding(
+                            raw.get("market_id"),
+                            snapshot.side,
+                            quantity=snapshot.quantity,
+                        )
+                        # get_cumulative_funding() returns None when cumulative is 0
+                        # Convert None → Decimal("0") to mark as "checked"
+                        if funding is None:
+                            funding = Decimal("0")
+                        
+                        # Cache the funding value with timestamp
+                        async with self.positions_lock:
+                            cached = self.raw_positions.get(normalized_symbol)
+                            if cached is not None:
+                                cached["funding_accrued"] = funding
+                                cached["funding_cache_timestamp"] = time.time()
+                                self.logger.debug(
+                                    f"[LIGHTER] Cached funding for {normalized_symbol}: {funding} "
+                                    "(will refresh after 1 hour or on websocket update)"
+                                )
+                    except Exception as exc:
+                        self.logger.debug(f"[LIGHTER] Funding lookup failed for {normalized_symbol}: {exc}")
+                        # Don't cache on error - might be transient, allow retry next cycle
+                        funding = None
 
             # Always cache the result (including Decimal("0")) to avoid re-querying
             # Websocket will update when funding actually arrives (event-driven)
@@ -612,7 +641,8 @@ class LighterPositionManager:
             response = await self.account_api.position_funding(
                 account_index=account_index,
                 market_id=market_id,
-                limit=100,  # Get recent funding payments
+                limit=30,  # Reduced from 100: funding settles every 1h on Lighter, so 30 records = ~30 hours
+                # Since we filter by position_start_time, we don't need all historical records
                 side=side if side else 'all',
                 auth=auth_token,  # Query parameter
                 authorization=auth_token,  # Header parameter - required for main accounts
