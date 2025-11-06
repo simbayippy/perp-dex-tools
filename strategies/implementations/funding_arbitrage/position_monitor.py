@@ -117,7 +117,17 @@ class PositionMonitor:
                 visited.add(key)
 
                 try:
-                    snapshot = await client.get_position_snapshot(pos.symbol)
+                    # Convert position.opened_at (datetime) to Unix timestamp (float) for Lighter API
+                    # This avoids expensive trades() API call (300 weight) by using our database timestamp
+                    position_opened_at_ts = None
+                    if dex_key == "lighter" and pos.opened_at:
+                        # Convert datetime to Unix timestamp (seconds)
+                        position_opened_at_ts = pos.opened_at.timestamp()
+                    
+                    snapshot = await client.get_position_snapshot(
+                        pos.symbol,
+                        position_opened_at=position_opened_at_ts if dex_key == "lighter" else None,
+                    )
                 except Exception as exc:
                     self._logger.warning(
                         f"[{dex_key}] Failed to fetch position snapshot for {symbol_key}: {exc}"

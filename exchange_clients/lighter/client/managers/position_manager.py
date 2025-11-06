@@ -141,7 +141,11 @@ class LighterPositionManager:
             if snapshot.unrealized_pnl is not None:
                 cached["unrealized_pnl"] = str(snapshot.unrealized_pnl)
     
-    async def snapshot_from_cache(self, normalized_symbol: str) -> Optional[ExchangePositionSnapshot]:
+    async def snapshot_from_cache(
+        self, 
+        normalized_symbol: str,
+        position_opened_at: Optional[float] = None,
+    ) -> Optional[ExchangePositionSnapshot]:
         """Retrieve a cached snapshot if available, optionally enriching with funding data."""
         async with self.positions_lock:
             raw = self.raw_positions.get(normalized_symbol)
@@ -242,6 +246,7 @@ class LighterPositionManager:
                         raw.get("market_id"),
                         snapshot.side,
                         quantity=snapshot.quantity,
+                        position_opened_at=position_opened_at,
                     )
                     # get_cumulative_funding() returns None when cumulative is 0
                     # Convert None → Decimal("0") to mark as "checked"
@@ -506,21 +511,21 @@ class LighterPositionManager:
         market_id: int,
         side: Optional[str] = None,
         quantity: Optional[Decimal] = None,
+        position_opened_at: Optional[float] = None,
     ) -> Optional[Decimal]:
         """
         Fetch cumulative funding fees for the CURRENT position only (not historical positions).
         
         ⚠️ WARNING: This uses position_funding() API which returns ALL funding history for the account/market.
-        It attempts to filter by position_start_time, but this is fragile and may include historical funding
-        if position_start_time detection fails.
-        
-        PREFERRED: Use REST account() API's total_funding_paid_out field instead, which is already
-        filtered for the current position. This method should only be used as a last resort.
+        It filters by position_start_time to only include funding after the position was opened.
         
         Args:
             market_id: The market ID for the position
             side: Position side ('long' or 'short'), optional filter
-            quantity: Current position quantity (used to determine when position was opened)
+            quantity: Current position quantity (used to determine when position was opened if position_opened_at not provided)
+            position_opened_at: Optional Unix timestamp (seconds) when position was opened. 
+                              If provided, skips expensive trades() API call (300 weight).
+                              Should be from FundingArbPosition.opened_at.timestamp().
             
         Returns:
             Cumulative funding fees as Decimal, None if unavailable
@@ -551,19 +556,30 @@ class LighterPositionManager:
         # CRITICAL: Without position_start_time, we cannot filter historical funding correctly
         # and would incorrectly sum ALL funding history (including previous positions)
         position_start_time = None
-        if quantity is not None and quantity != Decimal("0"):
+        
+        # If position_opened_at is provided (e.g., from our database), use it directly
+        # This avoids expensive trades() API call (300 weight)
+        if position_opened_at is not None:
+            position_start_time = position_opened_at
+            self.logger.debug(
+                f"[LIGHTER] Using provided position_opened_at timestamp {position_start_time} "
+                "(skipping trades API call)"
+            )
+        elif quantity is not None and quantity != Decimal("0"):
+            # Fallback: Query trades API to find when position sign changed
+            # This is expensive (300 weight) but necessary if we don't have opened_at from database
             position_start_time = await self.get_position_open_time(market_id, quantity)
             if position_start_time:
                 self.logger.debug(
-                    f"[LIGHTER] Filtering funding to only after position opened at timestamp {position_start_time}"
+                    f"[LIGHTER] Filtering funding to only after position opened at timestamp {position_start_time} "
+                    "(from trades API)"
                 )
             else:
                 # Position start time detection failed - cannot safely filter funding
                 # Return None rather than summing all history (which would be incorrect)
                 self.logger.warning(
                     f"[LIGHTER] Cannot determine position start time for market_id={market_id}. "
-                    "Cannot safely filter funding history. Returning None to avoid incorrect data. "
-                    "REST account() API should have provided funding."
+                    "Cannot safely filter funding history. Returning None to avoid incorrect data."
                 )
                 return None
         else:
@@ -572,7 +588,7 @@ class LighterPositionManager:
             self.logger.warning(
                 f"[LIGHTER] No quantity provided for market_id={market_id}. "
                 "Cannot determine position start time. Cannot safely filter funding history. "
-                "Returning None to avoid incorrect data. REST account() API should have provided funding."
+                "Returning None to avoid incorrect data."
             )
             return None
         
@@ -601,6 +617,7 @@ class LighterPositionManager:
             # NOTE: position_start_time is guaranteed to be set at this point (we return None if it's missing)
             # Normalize timestamps to seconds (Unix timestamp) for comparison
             # position_start_time might be in milliseconds (13 digits) or seconds (10 digits)
+            # If provided from database (position_opened_at), it's already in seconds from datetime.timestamp()
             position_start_seconds = position_start_time
             if position_start_time > 10**12:  # If > 1 trillion, it's milliseconds
                 position_start_seconds = position_start_time // 1000
@@ -657,11 +674,15 @@ class LighterPositionManager:
             )
             return None
     
-    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+    async def get_position_snapshot(
+        self, 
+        symbol: str,
+        position_opened_at: Optional[float] = None,
+    ) -> Optional[ExchangePositionSnapshot]:
         """Return the latest cached position snapshot for a symbol, falling back to REST if required."""
         normalized_symbol = self.normalize_symbol(symbol).upper()
 
-        snapshot = await self.snapshot_from_cache(normalized_symbol)
+        snapshot = await self.snapshot_from_cache(normalized_symbol, position_opened_at=position_opened_at)
         if snapshot:
             return snapshot
 
@@ -670,12 +691,12 @@ class LighterPositionManager:
         except asyncio.TimeoutError:
             pass
 
-        snapshot = await self.snapshot_from_cache(normalized_symbol)
+        snapshot = await self.snapshot_from_cache(normalized_symbol, position_opened_at=position_opened_at)
         if snapshot:
             return snapshot
 
         await self.refresh_positions_via_rest()
-        return await self.snapshot_from_cache(normalized_symbol)
+        return await self.snapshot_from_cache(normalized_symbol, position_opened_at=position_opened_at)
     
     async def get_account_pnl(self) -> Optional[Decimal]:
         """Get account P&L using Lighter SDK."""
