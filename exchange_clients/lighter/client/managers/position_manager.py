@@ -324,10 +324,20 @@ class LighterPositionManager:
             if account_data and account_data.accounts:
                 positions = []
                 for pos in account_data.accounts[0].positions:
+                    # Log ALL positions being processed (especially those with non-zero position)
+                    position_qty = Decimal(pos.position)
+                    has_position = abs(position_qty) > Decimal("0.0001")
+                    
+                    if has_position:
+                        self.logger.debug(
+                            f"[LIGHTER] Processing position: symbol={pos.symbol}, "
+                            f"qty={position_qty}, market_id={pos.market_id}"
+                        )
+                    
                     pos_dict = {
                         'market_id': pos.market_id,
                         'symbol': pos.symbol,
-                        'position': Decimal(pos.position),
+                        'position': position_qty,
                         'avg_entry_price': Decimal(pos.avg_entry_price),
                         'position_value': Decimal(pos.position_value),
                         'unrealized_pnl': Decimal(pos.unrealized_pnl),
@@ -343,21 +353,33 @@ class LighterPositionManager:
                         raw_funding_value = pos.total_funding_paid_out
                         funding_str = str(raw_funding_value).strip() if raw_funding_value is not None else ""
                         
-                        # Debug: Log raw value to understand what we're receiving
-                        self.logger.debug(
-                            f"[LIGHTER] REST account() API raw total_funding_paid_out for {pos.symbol}: "
-                            f"type={type(raw_funding_value)}, value={repr(raw_funding_value)}, "
-                            f"str={repr(funding_str)}"
-                        )
+                        # Debug: Log raw value for ALL positions (especially those with positions)
+                        if has_position:
+                            self.logger.info(
+                                f"[LIGHTER] REST account() API raw total_funding_paid_out for {pos.symbol} "
+                                f"(qty={position_qty}): type={type(raw_funding_value)}, "
+                                f"value={repr(raw_funding_value)}, str={repr(funding_str)}"
+                            )
+                        else:
+                            self.logger.debug(
+                                f"[LIGHTER] REST account() API raw total_funding_paid_out for {pos.symbol}: "
+                                f"type={type(raw_funding_value)}, value={repr(raw_funding_value)}, "
+                                f"str={repr(funding_str)}"
+                            )
                         
                         # Handle empty string, None, or "0" - all valid (means no funding paid yet)
                         if funding_str and funding_str.lower() not in ('none', 'null', ''):
                             try:
                                 parsed_funding = Decimal(funding_str)
                                 pos_dict['funding_accrued'] = parsed_funding
-                                self.logger.debug(
-                                    f"[LIGHTER] Parsed funding for {pos.symbol}: {parsed_funding}"
-                                )
+                                if has_position:
+                                    self.logger.info(
+                                        f"[LIGHTER] Parsed funding for {pos.symbol} (qty={position_qty}): {parsed_funding}"
+                                    )
+                                else:
+                                    self.logger.debug(
+                                        f"[LIGHTER] Parsed funding for {pos.symbol}: {parsed_funding}"
+                                    )
                             except (ValueError, InvalidOperation) as exc:
                                 # If parsing fails, treat as 0
                                 self.logger.warning(
@@ -367,16 +389,22 @@ class LighterPositionManager:
                                 pos_dict['funding_accrued'] = Decimal("0")
                         else:
                             # Empty/None means no funding yet
-                            self.logger.debug(
-                                f"[LIGHTER] total_funding_paid_out is empty/None for {pos.symbol}, "
-                                "setting funding_accrued to 0"
-                            )
+                            if has_position:
+                                self.logger.info(
+                                    f"[LIGHTER] total_funding_paid_out is empty/None for {pos.symbol} "
+                                    f"(qty={position_qty}), setting funding_accrued to 0"
+                                )
+                            else:
+                                self.logger.debug(
+                                    f"[LIGHTER] total_funding_paid_out is empty/None for {pos.symbol}, "
+                                    "setting funding_accrued to 0"
+                                )
                             pos_dict['funding_accrued'] = Decimal("0")
                     else:
                         # Attribute doesn't exist - this shouldn't happen per API docs
                         self.logger.warning(
                             f"[LIGHTER] Position object for {pos.symbol} missing total_funding_paid_out attribute. "
-                            "Available attributes: " + ", ".join(dir(pos))
+                            "Available attributes: " + ", ".join([a for a in dir(pos) if not a.startswith('_')])
                         )
                         pos_dict['funding_accrued'] = Decimal("0")
                     
