@@ -110,6 +110,39 @@ class OrderResult:
     filled_size: Optional[Decimal] = None
 
 
+class CancelReason:
+    """Standard cancellation reason constants for cross-exchange compatibility."""
+    
+    # User-initiated or normal cancellations
+    USER_CANCELED = "user_canceled"
+    TIMEOUT = "timeout"
+    EXPIRED = "expired"
+    
+    # Exchange-initiated cancellations (retryable)
+    POST_ONLY_VIOLATION = "post_only_violation"  # Order crossed book, violates post-only
+    INSUFFICIENT_BALANCE = "insufficient_balance"
+    REJECTED = "rejected"
+    
+    # Unknown/fallback
+    UNKNOWN = "unknown"
+
+
+def is_retryable_cancellation(cancel_reason: str) -> bool:
+    """Check if a cancellation reason indicates we should retry the order.
+    
+    Args:
+        cancel_reason: Cancellation reason string (e.g., CancelReason.POST_ONLY_VIOLATION)
+        
+    Returns:
+        True if the cancellation is retryable (e.g., post-only violation due to price movement)
+    """
+    retryable_reasons = {
+        CancelReason.POST_ONLY_VIOLATION,
+        # Could add others like INSUFFICIENT_BALANCE if it's transient
+    }
+    return cancel_reason in retryable_reasons
+
+
 @dataclass
 class OrderInfo:
     """Standardized order information structure returned by order queries."""
@@ -166,6 +199,8 @@ __all__ = [
     "query_retry",
     "OrderResult",
     "OrderInfo",
+    "CancelReason",
+    "is_retryable_cancellation",
     "ExchangePositionSnapshot",
     "FundingRateSample",
 ]

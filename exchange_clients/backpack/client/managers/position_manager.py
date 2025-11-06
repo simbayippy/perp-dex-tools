@@ -76,7 +76,11 @@ class BackpackPositionManager:
 
         return Decimal("0")
 
-    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+    async def get_position_snapshot(
+        self, 
+        symbol: str,
+        position_opened_at: Optional[float] = None,
+    ) -> Optional[ExchangePositionSnapshot]:
         """
         Return a normalized position snapshot for a given symbol.
         

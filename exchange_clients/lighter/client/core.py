@@ -562,9 +562,13 @@ class LighterClient(BaseExchangeClient):
         """Get current account balance (WebSocket-first for 0 weight)."""
         return await self.account_manager.get_account_balance()
 
-    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+    async def get_position_snapshot(
+        self, 
+        symbol: str,
+        position_opened_at: Optional[float] = None,
+    ) -> Optional[ExchangePositionSnapshot]:
         """Return the latest cached position snapshot for a symbol, falling back to REST if required."""
-        return await self.position_manager.get_position_snapshot(symbol)
+        return await self.position_manager.get_position_snapshot(symbol, position_opened_at=position_opened_at)
 
     async def get_account_pnl(self) -> Optional[Decimal]:
         """Get account P&L using Lighter SDK."""

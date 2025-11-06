@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
-from exchange_clients.base_models import OrderInfo
+from exchange_clients.base_models import CancelReason, OrderInfo
 from exchange_clients.events import LiquidationEvent
 
 
@@ -100,11 +100,24 @@ class LighterWebSocketHandlers:
 
             order_id = str(client_order_index)
             linked_order_index = str(server_order_index) if server_order_index is not None else "?"
-            status = str(order_data.get('status', '')).upper()
+            status_raw = str(order_data.get('status', '')).upper()
             filled_size = Decimal(str(order_data.get('filled_base_amount', '0')))
             size = Decimal(str(order_data.get('initial_base_amount', '0')))
             price = Decimal(str(order_data.get('price', '0')))
             remaining_size = Decimal(str(order_data.get('remaining_base_amount', '0')))
+
+            # Parse cancellation reason from status
+            # Lighter sends "CANCELED-POST-ONLY" for post-only violations
+            cancel_reason = ""
+            status = status_raw
+            if status_raw.startswith("CANCELED"):
+                if status_raw == "CANCELED-POST-ONLY":
+                    cancel_reason = CancelReason.POST_ONLY_VIOLATION
+                    # Normalize status to CANCELED for consistency
+                    status = "CANCELED"
+                else:
+                    # Other cancellation types - default to unknown
+                    cancel_reason = CancelReason.UNKNOWN
 
             # Deduplication: Skip duplicate OPEN updates with same filled_size
             existing_order = self.latest_orders.get(order_id)
@@ -143,7 +156,7 @@ class LighterWebSocketHandlers:
                     status=status,
                     filled_size=filled_size,
                     remaining_size=remaining_size,
-                    cancel_reason=''
+                    cancel_reason=cancel_reason
                 )
                 if self.current_order_ref is not None:
                     setattr(self.current_order_ref, 'current_order', current_order)
@@ -169,7 +182,7 @@ class LighterWebSocketHandlers:
                             status=status,
                             filled_size=filled_size,
                             remaining_size=remaining_size,
-                            cancel_reason='unknown'
+                            cancel_reason=cancel_reason or CancelReason.UNKNOWN
                         )
                 self.latest_orders[order_id] = current_order
                 if self.order_manager:

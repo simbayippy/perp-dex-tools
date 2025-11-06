@@ -193,8 +193,24 @@ class AtomicMultiOrderExecutor:
                     trigger_ctx = newly_filled[0]
                     other_contexts = [c for c in contexts if c is not trigger_ctx]
 
+                    # One leg filled completely → cancel other legs and hedge to prevent directional exposure
+                    trigger_exchange = trigger_ctx.spec.exchange_client.get_exchange_name().upper()
+                    trigger_symbol = trigger_ctx.spec.symbol
+                    trigger_qty = trigger_ctx.filled_quantity
+                    
+                    self.logger.info(
+                        f"✅ {trigger_exchange} {trigger_symbol} fully filled ({trigger_qty}). "
+                        f"Cancelling remaining limit orders and hedging to prevent directional exposure."
+                    )
+                    
                     # Cancel in-flight limits for the sibling legs.
                     for ctx in other_contexts:
+                        exchange_name = ctx.spec.exchange_client.get_exchange_name().upper()
+                        symbol = ctx.spec.symbol
+                        self.logger.info(
+                            f"🔄 Cancelling limit order for {exchange_name} {symbol} "
+                            f"(remaining: {ctx.remaining_quantity}) → will hedge with market order"
+                        )
                         ctx.cancel_event.set()
 
                     pending_contexts = [ctx for ctx in other_contexts if not ctx.completed]
@@ -280,6 +296,18 @@ class AtomicMultiOrderExecutor:
                             if remaining:
                                 await asyncio.gather(*remaining, return_exceptions=True)
                             rollback_performed = True
+                            
+                            # Log context state for debugging
+                            for c in contexts:
+                                if c.filled_quantity > Decimal("0"):
+                                    result_qty = Decimal("0")
+                                    if c.result:
+                                        result_qty = coerce_decimal(c.result.get("filled_quantity")) or Decimal("0")
+                                    self.logger.debug(
+                                        f"Rollback (hedge failure) context for {c.spec.symbol} ({c.spec.side}): "
+                                        f"accumulated={c.filled_quantity}, result_dict={result_qty}"
+                                    )
+                            
                             rollback_payload = [
                                 context_to_filled_dict(c)
                                 for c in contexts
@@ -308,7 +336,15 @@ class AtomicMultiOrderExecutor:
             RETRY_THRESHOLD_PCT = Decimal("0.01")  # 1% of planned quantity
             
             needs_retry = False
+            retryable_failures = []
             for ctx in contexts:
+                # Check if result indicates retryable failure (e.g., post-only violation)
+                result_retryable = False
+                if ctx.result:
+                    result_retryable = ctx.result.get("retryable", False)
+                    if result_retryable:
+                        retryable_failures.append(ctx.spec.symbol)
+                
                 if ctx.remaining_quantity > Decimal("0"):
                     # Calculate what % of the planned quantity is remaining
                     planned_qty = ctx.spec.quantity or (ctx.spec.size_usd / Decimal("100"))  # rough estimate
@@ -321,10 +357,25 @@ class AtomicMultiOrderExecutor:
                             )
                             needs_retry = True
                         else:
-                            self.logger.debug(
-                                f"[{ctx.spec.exchange_client.get_exchange_name().upper()}] {ctx.spec.symbol}: "
-                                f"Ignoring rounding dust {ctx.remaining_quantity} ({remaining_pct*100:.2f}% of {planned_qty})"
-                            )
+                            # Even if below threshold, retry if marked as retryable (e.g., post-only violation)
+                            if result_retryable:
+                                self.logger.info(
+                                    f"[{ctx.spec.exchange_client.get_exchange_name().upper()}] {ctx.spec.symbol}: "
+                                    f"Retryable failure (e.g., post-only violation), retrying despite "
+                                    f"small remainder {ctx.remaining_quantity} ({remaining_pct*100:.2f}% of {planned_qty})"
+                                )
+                                needs_retry = True
+                            else:
+                                self.logger.debug(
+                                    f"[{ctx.spec.exchange_client.get_exchange_name().upper()}] {ctx.spec.symbol}: "
+                                    f"Ignoring rounding dust {ctx.remaining_quantity} ({remaining_pct*100:.2f}% of {planned_qty})"
+                                )
+            
+            if retryable_failures:
+                self.logger.info(
+                    f"🔁 Retryable failures detected for: {', '.join(retryable_failures)}. "
+                    "Will retry with fresh BBO."
+                )
             
             if needs_retry and retry_policy and retry_policy.max_attempts > 0:
                 self.logger.info("🔁 Initiating retry cycle for unmatched legs.")
@@ -366,6 +417,20 @@ class AtomicMultiOrderExecutor:
                             )
                             # Emergency rollback of all filled orders
                             rollback_performed = True
+                            
+                            # Log context state for debugging (shows accumulated vs last-order fills)
+                            for c in contexts:
+                                if c.filled_quantity > Decimal("0"):
+                                    result_qty = Decimal("0")
+                                    if c.result:
+                                        result_qty = coerce_decimal(c.result.get("filled_quantity")) or Decimal("0")
+                                    self.logger.debug(
+                                        f"Rollback context for {c.spec.symbol} ({c.spec.side}): "
+                                        f"accumulated={c.filled_quantity}, "
+                                        f"result_dict={result_qty}, "
+                                        f"match={'✓' if abs(c.filled_quantity - result_qty) < Decimal('0.0001') else '✗ MISMATCH'}"
+                                    )
+                            
                             rollback_payload = [
                                 context_to_filled_dict(c)
                                 for c in contexts
@@ -440,6 +505,19 @@ class AtomicMultiOrderExecutor:
                         f"imbalance=${imbalance:.2f} ({final_imbalance_pct*100:.1f}%). Triggering emergency rollback."
                     )
                     # Emergency rollback of all filled orders
+                    rollback_performed = True
+                    
+                    # Log context state for debugging
+                    for c in contexts:
+                        if c.filled_quantity > Decimal("0"):
+                            result_qty = Decimal("0")
+                            if c.result:
+                                result_qty = coerce_decimal(c.result.get("filled_quantity")) or Decimal("0")
+                            self.logger.debug(
+                                f"Rollback (all filled imbalance) context for {c.spec.symbol} ({c.spec.side}): "
+                                f"accumulated={c.filled_quantity}, result_dict={result_qty}"
+                            )
+                    
                     rollback_payload = [
                         context_to_filled_dict(c)
                         for c in contexts
@@ -521,6 +599,18 @@ class AtomicMultiOrderExecutor:
                         f"⚠️ Critical imbalance ${imbalance:.2f} detected after retries exhausted. "
                         f"Initiating rollback to close {len(filled_orders)} filled positions."
                     )
+                    
+                    # Log context state for debugging
+                    for c in contexts:
+                        if c.filled_quantity > Decimal("0"):
+                            result_qty = Decimal("0")
+                            if c.result:
+                                result_qty = coerce_decimal(c.result.get("filled_quantity")) or Decimal("0")
+                            self.logger.debug(
+                                f"Rollback (retries exhausted) context for {c.spec.symbol} ({c.spec.side}): "
+                                f"accumulated={c.filled_quantity}, result_dict={result_qty}"
+                            )
+                    
                     rollback_payload = [
                         context_to_filled_dict(c)
                         for c in contexts
@@ -941,6 +1031,12 @@ class AtomicMultiOrderExecutor:
             fallback_quantity = coerce_decimal(order.get("filled_quantity"))
             fallback_price = coerce_decimal(order.get("fill_price")) or Decimal("0")
 
+            self.logger.debug(
+                f"Rollback order info: {symbol} ({side}), "
+                f"order_id={order_id}, "
+                f"payload_quantity={fallback_quantity}"
+            )
+
             actual_quantity: Optional[Decimal] = None
 
             if order_id:
@@ -1000,14 +1096,27 @@ class AtomicMultiOrderExecutor:
         for fill in actual_fills:
             try:
                 close_side = "sell" if fill["side"] == "buy" else "buy"
-
-                self.logger.info(
-                    f"Rollback: {close_side} {fill['symbol']} {fill['filled_quantity']} @ market"
-                )
-
+                close_quantity = fill["filled_quantity"]
                 exchange_client = fill["exchange_client"]
                 exchange_config = getattr(exchange_client, "config", None)
                 contract_id = getattr(exchange_config, "contract_id", fill["symbol"])
+
+                self.logger.info(
+                    f"Rollback: {close_side} {fill['symbol']} {close_quantity} @ market "
+                    f"(contract_id={contract_id}, exchange={exchange_client.get_exchange_name()})"
+                )
+                
+                # Log multiplier info if available
+                try:
+                    multiplier = exchange_client.get_quantity_multiplier(fill["symbol"])
+                    if multiplier != 1:
+                        actual_tokens = close_quantity * Decimal(str(multiplier))
+                        self.logger.debug(
+                            f"Rollback quantity multiplier: {close_quantity} units × {multiplier} = "
+                            f"{actual_tokens} actual tokens"
+                        )
+                except Exception:
+                    pass  # Ignore multiplier errors
 
                 self.logger.debug(
                     f"Rollback: Using contract_id='{contract_id}' for symbol '{fill['symbol']}'"
@@ -1015,7 +1124,7 @@ class AtomicMultiOrderExecutor:
 
                 close_task = exchange_client.place_market_order(
                     contract_id=contract_id,
-                    quantity=float(fill["filled_quantity"]),
+                    quantity=float(close_quantity),
                     side=close_side,
                 )
                 rollback_tasks.append((close_task, fill))

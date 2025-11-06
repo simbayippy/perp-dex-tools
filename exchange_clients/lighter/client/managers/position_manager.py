@@ -5,7 +5,8 @@ Handles position tracking, snapshots, funding calculations, and enrichment.
 """
 
 import asyncio
-from decimal import Decimal
+import time
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
 from exchange_clients.base_models import ExchangePositionSnapshot
@@ -140,14 +141,59 @@ class LighterPositionManager:
             if snapshot.unrealized_pnl is not None:
                 cached["unrealized_pnl"] = str(snapshot.unrealized_pnl)
     
-    async def snapshot_from_cache(self, normalized_symbol: str) -> Optional[ExchangePositionSnapshot]:
+    async def snapshot_from_cache(
+        self, 
+        normalized_symbol: str,
+        position_opened_at: Optional[float] = None,
+    ) -> Optional[ExchangePositionSnapshot]:
         """Retrieve a cached snapshot if available, optionally enriching with funding data."""
         async with self.positions_lock:
             raw = self.raw_positions.get(normalized_symbol)
-            needs_funding = False
+            funding_in_cache = None
+            total_funding_ws = None
             if raw is not None:
                 # raw from websocket data
-                needs_funding = raw.get("funding_accrued") is None
+                funding_in_cache = raw.get("funding_accrued")
+                total_funding_ws = raw.get("total_funding_paid_out")
+                
+                # CRITICAL: Always check websocket total_funding_paid_out, even if cached funding exists
+                # Websocket is the source of truth for real-time funding updates
+                if total_funding_ws is not None:
+                    ws_funding = decimal_or_none(total_funding_ws)
+                    # Update cache if websocket has funding (even if cached was 0)
+                    if ws_funding is not None:
+                        raw["funding_accrued"] = ws_funding
+                        funding_in_cache = ws_funding
+                        self.logger.debug(
+                            f"[LIGHTER] Updated funding from websocket for {normalized_symbol}: {ws_funding}"
+                        )
+                
+                # If websocket has total_funding_paid_out but it wasn't mapped to funding_accrued yet, map it now
+                elif funding_in_cache is None and total_funding_ws is not None:
+                    raw["funding_accrued"] = total_funding_ws
+                    funding_in_cache = total_funding_ws
+                    self.logger.debug(
+                        f"[LIGHTER] Mapped total_funding_paid_out → funding_accrued for {normalized_symbol}: {funding_in_cache}"
+                    )
+                
+                # Determine if we need to query REST for funding:
+                # - If funding is None (never checked) → query REST
+                # - If funding is 0 but websocket doesn't have total_funding_paid_out → query REST
+                #   (websocket might not have sent update yet, REST account() API should have latest)
+                needs_funding = (
+                    funding_in_cache is None  # Never checked
+                    or (
+                        funding_in_cache == Decimal("0")  # Cached as 0
+                        and total_funding_ws is None  # But websocket doesn't have it
+                    )
+                )
+                
+                if needs_funding:
+                    self.logger.debug(
+                        f"[LIGHTER] Funding missing for {normalized_symbol}: "
+                        f"funding_accrued={funding_in_cache}, "
+                        f"total_funding_paid_out={total_funding_ws}"
+                    )
 
         if raw is None:
             return None
@@ -159,27 +205,71 @@ class LighterPositionManager:
         await self.enrich_snapshot_with_live_market_data(normalized_symbol, raw, snapshot)
 
         if (
-            needs_funding  # ⚠️ Only True if funding_accrued is None
+            needs_funding  # True if funding is None OR cached as 0 but websocket doesn't have it
             and snapshot.side
             and snapshot.quantity != 0
             and raw.get("market_id") is not None
         ):
-            try:
-                funding = await self.get_cumulative_funding(
-                    raw.get("market_id"),
-                    snapshot.side,
-                    quantity=snapshot.quantity,
-                )
-            except Exception as exc:
-                self.logger.debug(f"[LIGHTER] Funding lookup failed for {normalized_symbol}: {exc}")
-                funding = None
+            # Skip REST account() API - it returns ALL symbols and total_funding_paid_out is often None
+            # Go straight to position_funding() API which is reliable
+            funding = None
+            
+            # Check if we have cached funding that's still fresh (< 1 hour old)
+            # Funding settles every 1 hour on Lighter, so 1 hour cache is safe
+            async with self.positions_lock:
+                cached_raw = self.raw_positions.get(normalized_symbol)
+                funding_cache_timestamp = cached_raw.get("funding_cache_timestamp") if cached_raw else None
+                cached_funding_value = cached_raw.get("funding_accrued") if cached_raw else None
+                
+                cache_age_seconds = None
+                if funding_cache_timestamp:
+                    cache_age_seconds = time.time() - funding_cache_timestamp
+                    cache_age_hours = cache_age_seconds / 3600
+                    
+                    # Use cached funding if less than 1 hour old
+                    if cache_age_seconds < 3600 and cached_funding_value is not None:
+                        funding = decimal_or_none(cached_funding_value)
+                        self.logger.debug(
+                            f"[LIGHTER] Using cached funding for {normalized_symbol}: {funding} "
+                            f"(cached {cache_age_hours:.2f} hours ago)"
+                        )
+            
+            # Query position_funding() API if no fresh cache
+            if funding is None:
+                try:
+                    self.logger.info(
+                        f"[LIGHTER] Querying position_funding() API for {normalized_symbol} "
+                        f"({'cache expired' if cache_age_seconds else 'no cache'}, "
+                        f"{'cache age: ' + f'{cache_age_seconds/3600:.2f}h' if cache_age_seconds else ''})"
+                    )
+                    funding = await self.get_cumulative_funding(
+                        raw.get("market_id"),
+                        snapshot.side,
+                        quantity=snapshot.quantity,
+                        position_opened_at=position_opened_at,
+                    )
+                    # get_cumulative_funding() returns None when cumulative is 0
+                    # Convert None → Decimal("0") to mark as "checked"
+                    if funding is None:
+                        funding = Decimal("0")
+                    
+                    # Cache the funding value with timestamp
+                    async with self.positions_lock:
+                        cached = self.raw_positions.get(normalized_symbol)
+                        if cached is not None:
+                            cached["funding_accrued"] = funding
+                            cached["funding_cache_timestamp"] = time.time()
+                            self.logger.debug(
+                                f"[LIGHTER] Cached funding for {normalized_symbol}: {funding} "
+                                "(will refresh after 1 hour or on websocket update)"
+                            )
+                except Exception as exc:
+                    self.logger.debug(f"[LIGHTER] Funding lookup failed for {normalized_symbol}: {exc}")
+                    # Don't cache on error - might be transient, allow retry next cycle
+                    funding = None
 
+            # Set funding on snapshot (may be from cache or fresh query)
             snapshot.funding_accrued = funding
-            if funding is not None:
-                async with self.positions_lock:
-                    cached = self.raw_positions.get(normalized_symbol)
-                    if cached is not None:
-                        cached["funding_accrued"] = funding
         else:
             snapshot.funding_accrued = snapshot.funding_accrued or decimal_or_none(raw.get("funding_accrued"))
 
@@ -221,10 +311,21 @@ class LighterPositionManager:
             if account_data and account_data.accounts:
                 positions = []
                 for pos in account_data.accounts[0].positions:
+                    # Log ALL positions being processed (especially those with non-zero position)
+                    position_qty = Decimal(pos.position)
+                    has_position = abs(position_qty) > Decimal("0.0001")
+                    is_toshi = pos.symbol and ('TOSHI' in pos.symbol.upper() or '1000TOSHI' in pos.symbol.upper())
+                    
+                    if has_position:
+                        self.logger.debug(
+                            f"[LIGHTER] Processing position: symbol={pos.symbol}, "
+                            f"qty={position_qty}, market_id={pos.market_id}"
+                        )
+                    
                     pos_dict = {
                         'market_id': pos.market_id,
                         'symbol': pos.symbol,
-                        'position': Decimal(pos.position),
+                        'position': position_qty,
                         'avg_entry_price': Decimal(pos.avg_entry_price),
                         'position_value': Decimal(pos.position_value),
                         'unrealized_pnl': Decimal(pos.unrealized_pnl),
@@ -234,10 +335,8 @@ class LighterPositionManager:
                         'sign': pos.sign  # 1 for Long, -1 for Short
                     }
                     
-                    # Map funding field (same as WebSocket) to avoid REST funding lookup
-                    # Note: total_funding_paid_out is optional (omitted when empty/None)
-                    if hasattr(pos, 'total_funding_paid_out') and pos.total_funding_paid_out is not None:
-                        pos_dict['funding_accrued'] = Decimal(pos.total_funding_paid_out)
+                    # Note: We don't parse total_funding_paid_out from account() API anymore
+                    # because it's optional and often None. We use position_funding() API instead.
                     
                     positions.append(pos_dict)
                 return positions
@@ -330,6 +429,7 @@ class LighterPositionManager:
         market_id: int,
         side: Optional[str] = None,
         quantity: Optional[Decimal] = None,
+        position_opened_at: Optional[float] = None,
     ) -> Optional[Decimal]:
         """
         Fetch cumulative funding fees for the CURRENT position only (not historical positions).
@@ -337,7 +437,10 @@ class LighterPositionManager:
         Args:
             market_id: The market ID for the position
             side: Position side ('long' or 'short'), optional filter
-            quantity: Current position quantity (used to determine when position was opened)
+            quantity: Current position quantity (used to determine when position was opened if position_opened_at not provided)
+            position_opened_at: Optional Unix timestamp (seconds) when position was opened. 
+                              If provided, skips expensive trades() API call (300 weight).
+                              Should be from FundingArbPosition.opened_at.timestamp().
             
         Returns:
             Cumulative funding fees as Decimal, None if unavailable
@@ -365,13 +468,44 @@ class LighterPositionManager:
             return None
         
         # Try to determine when the current position was opened
+        # CRITICAL: Without position_start_time, we cannot filter historical funding correctly
+        # and would incorrectly sum ALL funding history (including previous positions)
         position_start_time = None
-        if quantity is not None and quantity != Decimal("0"):
+        
+        # If position_opened_at is provided (e.g., from our database), use it directly
+        # This avoids expensive trades() API call (300 weight)
+        if position_opened_at is not None:
+            position_start_time = position_opened_at
+            self.logger.debug(
+                f"[LIGHTER] Using provided position_opened_at timestamp {position_start_time} "
+                "(skipping trades API call)"
+            )
+        elif quantity is not None and quantity != Decimal("0"):
+            # Fallback: Query trades API to find when position sign changed
+            # This is expensive (300 weight) but necessary if we don't have opened_at from database
             position_start_time = await self.get_position_open_time(market_id, quantity)
             if position_start_time:
                 self.logger.debug(
-                    f"[LIGHTER] Filtering funding to only after position opened at timestamp {position_start_time}"
+                    f"[LIGHTER] Filtering funding to only after position opened at timestamp {position_start_time} "
+                    "(from trades API)"
                 )
+            else:
+                # Position start time detection failed - cannot safely filter funding
+                # Return None rather than summing all history (which would be incorrect)
+                self.logger.warning(
+                    f"[LIGHTER] Cannot determine position start time for market_id={market_id}. "
+                    "Cannot safely filter funding history. Returning None to avoid incorrect data."
+                )
+                return None
+        else:
+            # No quantity provided - cannot determine position start time
+            # Return None rather than summing all history (which would be incorrect)
+            self.logger.warning(
+                f"[LIGHTER] No quantity provided for market_id={market_id}. "
+                "Cannot determine position start time. Cannot safely filter funding history. "
+                "Returning None to avoid incorrect data."
+            )
+            return None
         
         try:
             # Fetch position funding history with authentication
@@ -379,7 +513,7 @@ class LighterPositionManager:
             response = await self.account_api.position_funding(
                 account_index=account_index,
                 market_id=market_id,
-                limit=100,  # Get recent funding payments
+                limit=50,  # Reduced from 100: funding settles every 1h on Lighter, so 50 records = ~50 hours
                 side=side if side else 'all',
                 auth=auth_token,  # Query parameter
                 authorization=auth_token,  # Header parameter - required for main accounts
@@ -393,15 +527,41 @@ class LighterPositionManager:
             if not fundings:
                 return Decimal("0")  # No funding yet for this position
             
-            # Sum up funding 'change' values for this position only
+            # We normalize ALL timestamps to seconds for accurate comparison.
+            # The check `> 10**12` detects milliseconds (Unix timestamp > 1 trillion = milliseconds)
+            
+            def normalize_to_seconds(timestamp: float) -> float:
+                """Normalize timestamp to seconds (Unix timestamp format)."""
+                if timestamp > 10**12:  # If > 1 trillion, it's milliseconds
+                    return timestamp / 1000.0
+                return timestamp
+            
+            position_start_seconds = normalize_to_seconds(position_start_time)
+            
+            # Log conversion only if it was actually converted (helps debug timestamp format issues)
+            if position_start_time != position_start_seconds:
+                self.logger.debug(
+                    f"[LIGHTER] Converted position_start_time from milliseconds ({position_start_time}) "
+                    f"to seconds ({position_start_seconds})"
+                )
+            
             cumulative = Decimal("0")
+            filtered_count = 0
             for funding in fundings:
                 try:
-                    # If we have position start time, only count funding after position opened
-                    if position_start_time:
-                        funding_timestamp = getattr(funding, 'timestamp', None)
-                        if funding_timestamp and funding_timestamp < position_start_time:
-                            continue
+                    # Only count funding after position opened (position_start_time is guaranteed to be set)
+                    funding_timestamp = getattr(funding, 'timestamp', None)
+                    
+                    if funding_timestamp is None:
+                        continue
+                    
+                    # Normalize funding timestamp to seconds (might be milliseconds or seconds)
+                    # Use same normalization function for consistency
+                    funding_seconds = normalize_to_seconds(funding_timestamp)
+                    
+                    if funding_seconds < position_start_seconds:
+                        filtered_count += 1
+                        continue
                     
                     change = Decimal(str(funding.change))
                     cumulative += change
@@ -409,9 +569,9 @@ class LighterPositionManager:
                     self.logger.debug(f"[LIGHTER] Failed to parse funding change: {exc}")
                     continue
             
-            self.logger.debug(
+            self.logger.info(
                 f"[LIGHTER] Funding for current position (market_id={market_id}): ${cumulative:.4f} "
-                f"(from {len(fundings)} records{' after position opened' if position_start_time else ' (all history)'})"
+                f"(from {len(fundings)} records, filtered {filtered_count} before position opened at {position_start_time})"
             )
             
             return cumulative if cumulative != Decimal("0") else None
@@ -422,11 +582,15 @@ class LighterPositionManager:
             )
             return None
     
-    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+    async def get_position_snapshot(
+        self, 
+        symbol: str,
+        position_opened_at: Optional[float] = None,
+    ) -> Optional[ExchangePositionSnapshot]:
         """Return the latest cached position snapshot for a symbol, falling back to REST if required."""
         normalized_symbol = self.normalize_symbol(symbol).upper()
 
-        snapshot = await self.snapshot_from_cache(normalized_symbol)
+        snapshot = await self.snapshot_from_cache(normalized_symbol, position_opened_at=position_opened_at)
         if snapshot:
             return snapshot
 
@@ -435,12 +599,12 @@ class LighterPositionManager:
         except asyncio.TimeoutError:
             pass
 
-        snapshot = await self.snapshot_from_cache(normalized_symbol)
+        snapshot = await self.snapshot_from_cache(normalized_symbol, position_opened_at=position_opened_at)
         if snapshot:
             return snapshot
 
         await self.refresh_positions_via_rest()
-        return await self.snapshot_from_cache(normalized_symbol)
+        return await self.snapshot_from_cache(normalized_symbol, position_opened_at=position_opened_at)
     
     async def get_account_pnl(self) -> Optional[Decimal]:
         """Get account P&L using Lighter SDK."""

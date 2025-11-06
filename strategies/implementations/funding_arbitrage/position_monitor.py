@@ -117,7 +117,18 @@ class PositionMonitor:
                 visited.add(key)
 
                 try:
-                    snapshot = await client.get_position_snapshot(pos.symbol)
+                    # Convert position.opened_at (datetime) to Unix timestamp (float) for exchange APIs
+                    # This avoids expensive trades API calls (300 weight) by using our database timestamp
+                    position_opened_at_ts = None
+                    if pos.opened_at:
+                        # Convert datetime to Unix timestamp (seconds)
+                        position_opened_at_ts = pos.opened_at.timestamp()
+                        # Both Lighter and Aster can use this to optimize funding fee fetching
+                    
+                    snapshot = await client.get_position_snapshot(
+                        pos.symbol,
+                        position_opened_at=position_opened_at_ts,
+                    )
                 except Exception as exc:
                     self._logger.warning(
                         f"[{dex_key}] Failed to fetch position snapshot for {symbol_key}: {exc}"

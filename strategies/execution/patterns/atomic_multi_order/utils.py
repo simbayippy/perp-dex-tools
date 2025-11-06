@@ -34,6 +34,7 @@ def execution_result_to_dict(spec, execution_result, hedge: bool = False) -> Dic
         "exchange_client": spec.exchange_client,
         "symbol": spec.symbol,
         "side": spec.side,
+        "retryable": getattr(execution_result, "retryable", False),
     }
     if hedge:
         data["hedge"] = True
@@ -41,12 +42,20 @@ def execution_result_to_dict(spec, execution_result, hedge: bool = False) -> Dic
 
 
 def apply_result_to_context(ctx: OrderContext, result: Dict[str, Any]) -> None:
-    """Persist an execution result onto the associated context."""
-    ctx.result = result
+    """Persist an execution result onto the associated context.
+    
+    Records the fill to accumulate ctx.filled_quantity, then updates ctx.result
+    to reflect the accumulated total (not just this order's fill).
+    """
+    ctx.result = result.copy()  # Copy to avoid mutating original
     ctx.completed = True
     fill_qty = coerce_decimal(result.get("filled_quantity"))
     fill_price = coerce_decimal(result.get("fill_price"))
     ctx.record_fill(fill_qty, fill_price)
+    
+    # Update ctx.result to reflect accumulated total (may include multiple fills)
+    # This ensures consistency between ctx.result and ctx.filled_quantity
+    ctx.result["filled_quantity"] = ctx.filled_quantity
 
 
 async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
@@ -115,7 +124,7 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
             "success": True,
             "filled": True,
             "fill_price": reported_price,
-            "filled_quantity": reported_qty,
+            "filled_quantity": ctx.filled_quantity,  # Use accumulated total after record_fill
             "slippage_usd": Decimal("0"),
             "execution_mode_used": "limit",
             "order_id": order_id,
@@ -125,15 +134,27 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
         }
     else:
         ctx.result["filled"] = True
-        ctx.result["filled_quantity"] = reported_qty
+        ctx.result["filled_quantity"] = ctx.filled_quantity  # Use accumulated total after record_fill
         if reported_price is not None:
             ctx.result["fill_price"] = reported_price
 
 
 def context_to_filled_dict(ctx: OrderContext) -> Dict[str, Any]:
-    """Convert a context into the structure expected by rollback helpers."""
+    """Convert a context into the structure expected by rollback helpers.
+    
+    CRITICAL: Always uses ctx.filled_quantity (accumulated total across all fills)
+    instead of ctx.result["filled_quantity"] (which may only contain last order's fill).
+    
+    This ensures rollback closes the FULL accumulated position, not just the last order.
+    """
     if ctx.result:
-        return ctx.result
+        # Use accumulated filled_quantity (may include multiple fills: initial + retry + hedge)
+        # but preserve other fields from ctx.result (order_id, fill_price, etc.)
+        result_dict = ctx.result.copy()
+        result_dict["filled_quantity"] = ctx.filled_quantity  # Use accumulated total
+        return result_dict
+    
+    # Fallback if no result dict exists (shouldn't happen, but defensive)
     return {
         "success": True,
         "filled": True,
