@@ -147,7 +147,25 @@ class LighterPositionManager:
             needs_funding = False
             if raw is not None:
                 # raw from websocket data
-                needs_funding = raw.get("funding_accrued") is None
+                funding_in_cache = raw.get("funding_accrued")
+                total_funding_ws = raw.get("total_funding_paid_out")
+                
+                # If websocket has total_funding_paid_out but it wasn't mapped to funding_accrued yet, map it now
+                if funding_in_cache is None and total_funding_ws is not None:
+                    raw["funding_accrued"] = total_funding_ws
+                    funding_in_cache = total_funding_ws
+                    self.logger.debug(
+                        f"[LIGHTER] Mapped total_funding_paid_out → funding_accrued for {normalized_symbol}: {funding_in_cache}"
+                    )
+                
+                needs_funding = funding_in_cache is None
+                
+                if needs_funding:
+                    self.logger.debug(
+                        f"[LIGHTER] Funding missing for {normalized_symbol}: "
+                        f"funding_accrued={funding_in_cache}, "
+                        f"total_funding_paid_out={total_funding_ws}"
+                    )
 
         if raw is None:
             return None
@@ -164,22 +182,68 @@ class LighterPositionManager:
             and snapshot.quantity != 0
             and raw.get("market_id") is not None
         ):
+            # First try cheaper REST account() API which includes total_funding_paid_out
+            # This avoids expensive position_funding() API call
             try:
-                funding = await self.get_cumulative_funding(
-                    raw.get("market_id"),
-                    snapshot.side,
-                    quantity=snapshot.quantity,
+                self.logger.debug(
+                    f"[LIGHTER] Funding missing from cache for {normalized_symbol}, "
+                    "trying REST account() API first (cheaper than position_funding)"
                 )
+                await self.refresh_positions_via_rest()
+                
+                # Re-check cache after REST refresh
+                async with self.positions_lock:
+                    refreshed_raw = self.raw_positions.get(normalized_symbol)
+                    if refreshed_raw and refreshed_raw.get("funding_accrued") is not None:
+                        funding = decimal_or_none(refreshed_raw.get("funding_accrued"))
+                        snapshot.funding_accrued = funding
+                        self.logger.debug(
+                            f"[LIGHTER] Funding found via REST account() API for {normalized_symbol}: {funding}"
+                        )
+                    else:
+                        # REST account() didn't have funding either (might be 0 or missing)
+                        funding = None
             except Exception as exc:
-                self.logger.debug(f"[LIGHTER] Funding lookup failed for {normalized_symbol}: {exc}")
+                self.logger.debug(f"[LIGHTER] REST account() refresh failed for {normalized_symbol}: {exc}")
                 funding = None
+            
+            # Fallback to expensive position_funding() API only if REST account() didn't provide funding
+            if funding is None:
+                try:
+                    self.logger.debug(
+                        f"[LIGHTER] Falling back to position_funding() API for {normalized_symbol} "
+                        "(expensive, but necessary if account() doesn't include funding)"
+                    )
+                    funding = await self.get_cumulative_funding(
+                        raw.get("market_id"),
+                        snapshot.side,
+                        quantity=snapshot.quantity,
+                    )
+                    # get_cumulative_funding() returns None when cumulative is 0, but we need to cache 0
+                    # to avoid re-querying every cycle. Convert None → Decimal("0") to mark as "checked"
+                    if funding is None:
+                        funding = Decimal("0")
+                        self.logger.debug(
+                            f"[LIGHTER] Funding is 0 for {normalized_symbol} (no funding paid yet). "
+                            "Caching to avoid re-querying. Websocket will update when funding arrives."
+                        )
+                except Exception as exc:
+                    self.logger.debug(f"[LIGHTER] Funding lookup failed for {normalized_symbol}: {exc}")
+                    # Don't cache on error - might be transient, allow retry next cycle
+                    funding = None
 
+            # Always cache the result (including Decimal("0")) to avoid re-querying
+            # Websocket will update when funding actually arrives (event-driven)
             snapshot.funding_accrued = funding
             if funding is not None:
                 async with self.positions_lock:
                     cached = self.raw_positions.get(normalized_symbol)
                     if cached is not None:
                         cached["funding_accrued"] = funding
+                        self.logger.debug(
+                            f"[LIGHTER] Cached funding for {normalized_symbol}: {funding} "
+                            "(websocket will update when funding arrives)"
+                        )
         else:
             snapshot.funding_accrued = snapshot.funding_accrued or decimal_or_none(raw.get("funding_accrued"))
 
