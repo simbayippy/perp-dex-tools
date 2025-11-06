@@ -193,8 +193,24 @@ class AtomicMultiOrderExecutor:
                     trigger_ctx = newly_filled[0]
                     other_contexts = [c for c in contexts if c is not trigger_ctx]
 
+                    # One leg filled completely → cancel other legs and hedge to prevent directional exposure
+                    trigger_exchange = trigger_ctx.spec.exchange_client.get_exchange_name().upper()
+                    trigger_symbol = trigger_ctx.spec.symbol
+                    trigger_qty = trigger_ctx.filled_quantity
+                    
+                    self.logger.info(
+                        f"✅ {trigger_exchange} {trigger_symbol} fully filled ({trigger_qty}). "
+                        f"Cancelling remaining limit orders and hedging to prevent directional exposure."
+                    )
+                    
                     # Cancel in-flight limits for the sibling legs.
                     for ctx in other_contexts:
+                        exchange_name = ctx.spec.exchange_client.get_exchange_name().upper()
+                        symbol = ctx.spec.symbol
+                        self.logger.info(
+                            f"🔄 Cancelling limit order for {exchange_name} {symbol} "
+                            f"(remaining: {ctx.remaining_quantity}) → will hedge with market order"
+                        )
                         ctx.cancel_event.set()
 
                     pending_contexts = [ctx for ctx in other_contexts if not ctx.completed]
