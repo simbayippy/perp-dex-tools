@@ -527,14 +527,19 @@ class LighterPositionManager:
             if not fundings:
                 return Decimal("0")  # No funding yet for this position
             
-            # Sum up funding 'change' values for this position only
-            # NOTE: position_start_time is guaranteed to be set at this point (we return None if it's missing)
-            # Normalize timestamps to seconds (Unix timestamp) for comparison
-            # position_start_time might be in milliseconds (13 digits) or seconds (10 digits)
-            # If provided from database (position_opened_at), it's already in seconds from datetime.timestamp()
-            position_start_seconds = position_start_time
-            if position_start_time > 10**12:  # If > 1 trillion, it's milliseconds
-                position_start_seconds = position_start_time // 1000
+            # We normalize ALL timestamps to seconds for accurate comparison.
+            # The check `> 10**12` detects milliseconds (Unix timestamp > 1 trillion = milliseconds)
+            
+            def normalize_to_seconds(timestamp: float) -> float:
+                """Normalize timestamp to seconds (Unix timestamp format)."""
+                if timestamp > 10**12:  # If > 1 trillion, it's milliseconds
+                    return timestamp / 1000.0
+                return timestamp
+            
+            position_start_seconds = normalize_to_seconds(position_start_time)
+            
+            # Log conversion only if it was actually converted (helps debug timestamp format issues)
+            if position_start_time != position_start_seconds:
                 self.logger.debug(
                     f"[LIGHTER] Converted position_start_time from milliseconds ({position_start_time}) "
                     f"to seconds ({position_start_seconds})"
@@ -551,9 +556,8 @@ class LighterPositionManager:
                         continue
                     
                     # Normalize funding timestamp to seconds (might be milliseconds or seconds)
-                    funding_seconds = funding_timestamp
-                    if funding_timestamp > 10**12:  # If > 1 trillion, it's milliseconds
-                        funding_seconds = funding_timestamp // 1000
+                    # Use same normalization function for consistency
+                    funding_seconds = normalize_to_seconds(funding_timestamp)
                     
                     if funding_seconds < position_start_seconds:
                         filtered_count += 1
