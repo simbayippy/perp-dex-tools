@@ -308,7 +308,6 @@ class LighterPositionManager:
                 return []
                 
             account_data = await self.account_api.account(by="index", value=str(self.account_index))
-            self.logger.info(f"[LIGHTER] Account data: {account_data}")
             if account_data and account_data.accounts:
                 positions = []
                 for pos in account_data.accounts[0].positions:
@@ -336,89 +335,8 @@ class LighterPositionManager:
                         'sign': pos.sign  # 1 for Long, -1 for Short
                     }
                     
-                    # Map funding field from REST account() API (position-specific, filtered for current position)
-                    # total_funding_paid_out is always present in account() response (may be "0" string)
-                    if has_position and is_toshi:
-                        # Log ALL attributes of the position object to see what's available (only for TOSHI)
-                        all_attrs = [a for a in dir(pos) if not a.startswith('_')]
-                        funding_related = [a for a in all_attrs if 'funding' in a.lower() or 'paid' in a.lower()]
-                        self.logger.info(
-                            f"[LIGHTER] Position object attributes for {pos.symbol}: "
-                            f"funding-related={funding_related}, "
-                            f"all_attrs_count={len(all_attrs)}"
-                        )
-                        # Try to get funding value using different possible attribute names
-                        for attr in funding_related:
-                            try:
-                                value = getattr(pos, attr, None)
-                                self.logger.info(
-                                    f"[LIGHTER]   {attr} = {repr(value)} (type={type(value)})"
-                                )
-                            except Exception:
-                                pass
-                    
-                    if hasattr(pos, 'total_funding_paid_out'):
-                        raw_funding_value = pos.total_funding_paid_out
-                        funding_str = str(raw_funding_value).strip() if raw_funding_value is not None else ""
-                        
-                        # Debug: Log raw value for ALL positions (especially those with positions)
-                        # But only show detailed logs for TOSHI to reduce noise
-                        if has_position and is_toshi:
-                            self.logger.info(
-                                f"[LIGHTER] REST account() API raw total_funding_paid_out for {pos.symbol} "
-                                f"(qty={position_qty}): type={type(raw_funding_value)}, "
-                                f"value={repr(raw_funding_value)}, str={repr(funding_str)}"
-                            )
-                        elif has_position:
-                            # Other positions: minimal log
-                            self.logger.debug(
-                                f"[LIGHTER] REST account() API total_funding_paid_out for {pos.symbol}: {funding_str or 'None'}"
-                            )
-                        else:
-                            # No position: skip logging to reduce noise
-                            pass
-                        
-                        # Handle the optional field:
-                        # - If None/empty: API didn't include the field (optional) → leave as None to trigger fallback
-                        # - If "0": API included field with 0 value → use Decimal("0")
-                        # - If non-zero string: Parse and use
-                        if funding_str and funding_str.lower() not in ('none', 'null', ''):
-                            try:
-                                parsed_funding = Decimal(funding_str)
-                                pos_dict['funding_accrued'] = parsed_funding
-                                if has_position and is_toshi:
-                                    self.logger.info(
-                                        f"[LIGHTER] Parsed funding for {pos.symbol} (qty={position_qty}): {parsed_funding}"
-                                    )
-                                # Skip logging for other positions
-                            except (ValueError, InvalidOperation) as exc:
-                                # If parsing fails, treat as missing (None) to trigger fallback
-                                if is_toshi:
-                                    self.logger.warning(
-                                        f"[LIGHTER] Failed to parse total_funding_paid_out '{funding_str}' "
-                                        f"for {pos.symbol}: {exc}. Will fall back to position_funding() API."
-                                    )
-                                pos_dict['funding_accrued'] = None  # Leave as None to trigger fallback
-                        else:
-                            # Empty/None means API didn't include the optional field
-                            # Leave as None (don't set to 0) so we can fall back to position_funding()
-                            if has_position and is_toshi:
-                                self.logger.info(
-                                    f"[LIGHTER] total_funding_paid_out is None/empty for {pos.symbol} "
-                                    f"(qty={position_qty}) - API didn't include optional field. "
-                                    "Will fall back to position_funding() API."
-                                )
-                            # Don't set funding_accrued - leave it missing so fallback triggers
-                            pos_dict['funding_accrued'] = None
-                    else:
-                        # Attribute doesn't exist - this shouldn't happen per API docs
-                        if has_position and is_toshi:
-                            self.logger.warning(
-                                f"[LIGHTER] Position object for {pos.symbol} missing total_funding_paid_out attribute. "
-                                f"Available attributes: {', '.join([a for a in dir(pos) if not a.startswith('_')])}"
-                            )
-                        # Skip logging for other positions
-                        pos_dict['funding_accrued'] = Decimal("0")
+                    # Note: We don't parse total_funding_paid_out from account() API anymore
+                    # because it's optional and often None. We use position_funding() API instead.
                     
                     positions.append(pos_dict)
                 return positions
