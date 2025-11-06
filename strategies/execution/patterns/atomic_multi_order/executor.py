@@ -308,7 +308,15 @@ class AtomicMultiOrderExecutor:
             RETRY_THRESHOLD_PCT = Decimal("0.01")  # 1% of planned quantity
             
             needs_retry = False
+            retryable_failures = []
             for ctx in contexts:
+                # Check if result indicates retryable failure (e.g., post-only violation)
+                result_retryable = False
+                if ctx.result:
+                    result_retryable = ctx.result.get("retryable", False)
+                    if result_retryable:
+                        retryable_failures.append(ctx.spec.symbol)
+                
                 if ctx.remaining_quantity > Decimal("0"):
                     # Calculate what % of the planned quantity is remaining
                     planned_qty = ctx.spec.quantity or (ctx.spec.size_usd / Decimal("100"))  # rough estimate
@@ -321,10 +329,25 @@ class AtomicMultiOrderExecutor:
                             )
                             needs_retry = True
                         else:
-                            self.logger.debug(
-                                f"[{ctx.spec.exchange_client.get_exchange_name().upper()}] {ctx.spec.symbol}: "
-                                f"Ignoring rounding dust {ctx.remaining_quantity} ({remaining_pct*100:.2f}% of {planned_qty})"
-                            )
+                            # Even if below threshold, retry if marked as retryable (e.g., post-only violation)
+                            if result_retryable:
+                                self.logger.info(
+                                    f"[{ctx.spec.exchange_client.get_exchange_name().upper()}] {ctx.spec.symbol}: "
+                                    f"Retryable failure (e.g., post-only violation), retrying despite "
+                                    f"small remainder {ctx.remaining_quantity} ({remaining_pct*100:.2f}% of {planned_qty})"
+                                )
+                                needs_retry = True
+                            else:
+                                self.logger.debug(
+                                    f"[{ctx.spec.exchange_client.get_exchange_name().upper()}] {ctx.spec.symbol}: "
+                                    f"Ignoring rounding dust {ctx.remaining_quantity} ({remaining_pct*100:.2f}% of {planned_qty})"
+                                )
+            
+            if retryable_failures:
+                self.logger.info(
+                    f"🔁 Retryable failures detected for: {', '.join(retryable_failures)}. "
+                    "Will retry with fresh BBO."
+                )
             
             if needs_retry and retry_policy and retry_policy.max_attempts > 0:
                 self.logger.info("🔁 Initiating retry cycle for unmatched legs.")

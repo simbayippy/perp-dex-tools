@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, Optional
 
-from exchange_clients.base_models import OrderInfo
+from exchange_clients.base_models import CancelReason, OrderInfo
 from exchange_clients.events import LiquidationEvent
 from exchange_clients.aster.client.utils.helpers import to_decimal
 
@@ -85,6 +85,14 @@ class AsterWebSocketHandlers:
             if status == "OPEN" and filled and filled > Decimal("0"):
                 status = "PARTIALLY_FILLED"
 
+            # Parse cancellation reason if applicable
+            cancel_reason = ""
+            if status in {"CANCELED", "CANCELLED", "REJECTED", "EXPIRED"}:
+                if status == "EXPIRED":
+                    cancel_reason = CancelReason.EXPIRED
+                else:
+                    cancel_reason = CancelReason.UNKNOWN
+
             previous = self.latest_orders.get(order_id)
             prev_filled = previous.filled_size if previous else Decimal("0")
 
@@ -96,6 +104,7 @@ class AsterWebSocketHandlers:
                 status=status,
                 filled_size=filled or Decimal("0"),
                 remaining_size=remaining or Decimal("0"),
+                cancel_reason=cancel_reason,
             )
             self.latest_orders[order_id] = info
 

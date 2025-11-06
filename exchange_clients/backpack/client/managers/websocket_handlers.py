@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable, Dict, Optional
 
-from exchange_clients.base_models import OrderInfo
+from exchange_clients.base_models import CancelReason, OrderInfo
 from exchange_clients.events import LiquidationEvent
 from exchange_clients.backpack.client.utils.helpers import to_decimal, to_internal_symbol
 
@@ -103,6 +103,11 @@ class BackpackWebSocketHandlers:
                 status = order_data.get("X") or order_data.get("status")
             status = (status or "").upper()
 
+            # Parse cancellation reason if applicable
+            cancel_reason = ""
+            if status == "CANCELED":
+                cancel_reason = CancelReason.UNKNOWN
+
             previous = self.latest_orders.get(order_id)
             prev_filled = previous.filled_size if previous else Decimal("0")
 
@@ -114,6 +119,7 @@ class BackpackWebSocketHandlers:
                 status=status,
                 filled_size=filled or Decimal("0"),
                 remaining_size=remaining or Decimal("0"),
+                cancel_reason=cancel_reason,
             )
             self.latest_orders[order_id] = info
 

@@ -34,6 +34,7 @@ def execution_result_to_dict(spec, execution_result, hedge: bool = False) -> Dic
         "exchange_client": spec.exchange_client,
         "symbol": spec.symbol,
         "side": spec.side,
+        "retryable": getattr(execution_result, "retryable", False),
     }
     if hedge:
         data["hedge"] = True

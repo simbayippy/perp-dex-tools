@@ -22,6 +22,7 @@ import time
 import asyncio
 from helpers.unified_logger import get_core_logger
 from exchange_clients import BaseExchangeClient
+from exchange_clients.base_models import CancelReason, is_retryable_cancellation
 
 logger = get_core_logger("order_executor")
 
@@ -63,6 +64,9 @@ class ExecutionResult:
     # Error handling
     error_message: Optional[str] = None
     order_id: Optional[str] = None
+    
+    # Retry handling
+    retryable: bool = False  # True if order failure is retryable (e.g., post-only violation)
 
 
 class OrderExecutor:
@@ -351,6 +355,7 @@ class OrderExecutor:
             def _build_partial_execution_result(
                 execution_mode: str,
                 message: str,
+                retryable: bool = False,
             ) -> ExecutionResult:
                 filled_qty = partial_filled_qty if partial_filled_qty > Decimal("0") else None
                 fill_price = None
@@ -381,6 +386,7 @@ class OrderExecutor:
                     execution_mode_used=execution_mode,
                     order_id=order_id,
                     error_message=message,
+                    retryable=retryable,
                 )
 
             # Wait for fill (with timeout)
@@ -452,6 +458,35 @@ class OrderExecutor:
                         execution_mode_used="limit",
                         order_id=order_id
                     )
+                
+                # NEW: Check for CANCELED status early (not just at timeout)
+                elif order_info and order_info.status in {"CANCELED", "CANCELLED"}:
+                    cancel_reason = getattr(order_info, "cancel_reason", "") or CancelReason.UNKNOWN
+                    exchange_name = exchange_client.get_exchange_name()
+                    
+                    # Check if it's a retryable cancellation (e.g., post-only violation)
+                    if is_retryable_cancellation(cancel_reason):
+                        self.logger.warning(
+                            f"[{exchange_name.upper()}] Limit order cancelled due to {cancel_reason} "
+                            f"(order_id={order_id}). Order will be retried with fresh BBO."
+                        )
+                        # Return result indicating retry is needed
+                        return _build_partial_execution_result(
+                            execution_mode="limit_cancelled_post_only",
+                            message=f"Order cancelled: {cancel_reason}. Retryable.",
+                            retryable=True,
+                        )
+                    else:
+                        # Non-retryable cancellation (user cancelled, expired, etc.)
+                        self.logger.info(
+                            f"[{exchange_name.upper()}] Limit order cancelled: {cancel_reason} "
+                            f"(order_id={order_id})"
+                        )
+                        return _build_partial_execution_result(
+                            execution_mode="limit_cancelled",
+                            message=f"Limit order cancelled: {cancel_reason}",
+                            retryable=False,
+                        )
                 
                 # Check more frequently near the end
                 wait_interval = 0.5 if (timeout_seconds - (time.time() - start_wait)) > 5 else 0.2
