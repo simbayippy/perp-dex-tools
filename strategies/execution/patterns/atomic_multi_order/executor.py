@@ -280,6 +280,18 @@ class AtomicMultiOrderExecutor:
                             if remaining:
                                 await asyncio.gather(*remaining, return_exceptions=True)
                             rollback_performed = True
+                            
+                            # Log context state for debugging
+                            for c in contexts:
+                                if c.filled_quantity > Decimal("0"):
+                                    result_qty = Decimal("0")
+                                    if c.result:
+                                        result_qty = coerce_decimal(c.result.get("filled_quantity")) or Decimal("0")
+                                    self.logger.debug(
+                                        f"Rollback (hedge failure) context for {c.spec.symbol} ({c.spec.side}): "
+                                        f"accumulated={c.filled_quantity}, result_dict={result_qty}"
+                                    )
+                            
                             rollback_payload = [
                                 context_to_filled_dict(c)
                                 for c in contexts
@@ -389,6 +401,20 @@ class AtomicMultiOrderExecutor:
                             )
                             # Emergency rollback of all filled orders
                             rollback_performed = True
+                            
+                            # Log context state for debugging (shows accumulated vs last-order fills)
+                            for c in contexts:
+                                if c.filled_quantity > Decimal("0"):
+                                    result_qty = Decimal("0")
+                                    if c.result:
+                                        result_qty = coerce_decimal(c.result.get("filled_quantity")) or Decimal("0")
+                                    self.logger.debug(
+                                        f"Rollback context for {c.spec.symbol} ({c.spec.side}): "
+                                        f"accumulated={c.filled_quantity}, "
+                                        f"result_dict={result_qty}, "
+                                        f"match={'✓' if abs(c.filled_quantity - result_qty) < Decimal('0.0001') else '✗ MISMATCH'}"
+                                    )
+                            
                             rollback_payload = [
                                 context_to_filled_dict(c)
                                 for c in contexts
@@ -463,6 +489,19 @@ class AtomicMultiOrderExecutor:
                         f"imbalance=${imbalance:.2f} ({final_imbalance_pct*100:.1f}%). Triggering emergency rollback."
                     )
                     # Emergency rollback of all filled orders
+                    rollback_performed = True
+                    
+                    # Log context state for debugging
+                    for c in contexts:
+                        if c.filled_quantity > Decimal("0"):
+                            result_qty = Decimal("0")
+                            if c.result:
+                                result_qty = coerce_decimal(c.result.get("filled_quantity")) or Decimal("0")
+                            self.logger.debug(
+                                f"Rollback (all filled imbalance) context for {c.spec.symbol} ({c.spec.side}): "
+                                f"accumulated={c.filled_quantity}, result_dict={result_qty}"
+                            )
+                    
                     rollback_payload = [
                         context_to_filled_dict(c)
                         for c in contexts
@@ -544,6 +583,18 @@ class AtomicMultiOrderExecutor:
                         f"⚠️ Critical imbalance ${imbalance:.2f} detected after retries exhausted. "
                         f"Initiating rollback to close {len(filled_orders)} filled positions."
                     )
+                    
+                    # Log context state for debugging
+                    for c in contexts:
+                        if c.filled_quantity > Decimal("0"):
+                            result_qty = Decimal("0")
+                            if c.result:
+                                result_qty = coerce_decimal(c.result.get("filled_quantity")) or Decimal("0")
+                            self.logger.debug(
+                                f"Rollback (retries exhausted) context for {c.spec.symbol} ({c.spec.side}): "
+                                f"accumulated={c.filled_quantity}, result_dict={result_qty}"
+                            )
+                    
                     rollback_payload = [
                         context_to_filled_dict(c)
                         for c in contexts
@@ -964,6 +1015,12 @@ class AtomicMultiOrderExecutor:
             fallback_quantity = coerce_decimal(order.get("filled_quantity"))
             fallback_price = coerce_decimal(order.get("fill_price")) or Decimal("0")
 
+            self.logger.debug(
+                f"Rollback order info: {symbol} ({side}), "
+                f"order_id={order_id}, "
+                f"payload_quantity={fallback_quantity}"
+            )
+
             actual_quantity: Optional[Decimal] = None
 
             if order_id:
@@ -1023,14 +1080,27 @@ class AtomicMultiOrderExecutor:
         for fill in actual_fills:
             try:
                 close_side = "sell" if fill["side"] == "buy" else "buy"
-
-                self.logger.info(
-                    f"Rollback: {close_side} {fill['symbol']} {fill['filled_quantity']} @ market"
-                )
-
+                close_quantity = fill["filled_quantity"]
                 exchange_client = fill["exchange_client"]
                 exchange_config = getattr(exchange_client, "config", None)
                 contract_id = getattr(exchange_config, "contract_id", fill["symbol"])
+
+                self.logger.info(
+                    f"Rollback: {close_side} {fill['symbol']} {close_quantity} @ market "
+                    f"(contract_id={contract_id}, exchange={exchange_client.get_exchange_name()})"
+                )
+                
+                # Log multiplier info if available
+                try:
+                    multiplier = exchange_client.get_quantity_multiplier(fill["symbol"])
+                    if multiplier != 1:
+                        actual_tokens = close_quantity * Decimal(str(multiplier))
+                        self.logger.debug(
+                            f"Rollback quantity multiplier: {close_quantity} units × {multiplier} = "
+                            f"{actual_tokens} actual tokens"
+                        )
+                except Exception:
+                    pass  # Ignore multiplier errors
 
                 self.logger.debug(
                     f"Rollback: Using contract_id='{contract_id}' for symbol '{fill['symbol']}'"
@@ -1038,7 +1108,7 @@ class AtomicMultiOrderExecutor:
 
                 close_task = exchange_client.place_market_order(
                     contract_id=contract_id,
-                    quantity=float(fill["filled_quantity"]),
+                    quantity=float(close_quantity),
                     side=close_side,
                 )
                 rollback_tasks.append((close_task, fill))

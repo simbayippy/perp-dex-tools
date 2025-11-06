@@ -192,26 +192,13 @@
 2025-11-05 16:22:54 | INFO     | EXCHANGE:ASTER:ticker=ALL           | 📡 [ASTER] Using real-time BBO from WebSocket
 2025-11-05 16:22:54 | INFO     | CORE:PRICE_PROVIDER                 | ✅ [ASTER] BBO: bid=0.000554, ask=0.0005554
 2025-11-05 16:22:54 | INFO     | CORE:ORDER_EXECUTOR                 | [ASTER] Placing limit sell TOSHI (contract_id=TOSHIUSDT): 128427 @ $0.0005541108 (mid: $0.0005547, offset: 0.0200%)
-2025-11-05 16:22:54 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | Using contract_id for order: 'TOSHIUSDT'
-2025-11-05 16:22:54 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | Rounded quantity: 128427.0 → 128427 (step_size=1)
-2025-11-05 16:22:54 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | Rounded price to tick_size: 0.0005541108 → 0.0005541 (tick_size=1E-7, symbol=TOSHIUSDT)
-2025-11-05 16:22:54 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | Placing SELL limit order: 128427 @ 0.0005541
-2025-11-05 16:22:54 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | POST /fapi/v1/order - Params: {'timestamp': 1762359774134, 'recvWindow': 5000}, Data: {'symbol': 'TOSHIUSDT', 'side': 'SELL', 'type': 'LIMIT', 'quantity': '128427', 'price': '0.0005541', 'timeInForce': 'GTX'}
-2025-11-05 16:22:54 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | Response 200: 130167264
 2025-11-05 16:22:54 | INFO     | EXCHANGE:ASTER:ticker=ALL           | [WEBSOCKET] [ASTER] OPEN 128427 @ 0.0005541
-2025-11-05 16:22:56 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | Unknown WebSocket message: {'e': 'ACCOUNT_UPDATE', 'T': 1762359775969, 'E': 1762359775970, 'a': {'B': [{'a': 'USDT', 'wb': '256.24817333', 'cw': '256.24817333', 'bc': '0'}], 'P': [{'s': 'TOSHIUSDT', 'pa': '-113348', 'ep': '0.00055456', 'cr': '-8.03919723', 'up': '-0.02266960', 'mt': 'cross', 'iw': '0', 'ps': 'BOTH', 'ma': 'USDT'}], 'm': 'ORDER'}}
 2025-11-05 16:22:56 | INFO     | EXCHANGE:ASTER:ticker=ALL           | [WEBSOCKET] [ASTER] PARTIALLY_FILLED 25685 @ 0.0005541
-2025-11-05 16:22:57 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | Unknown WebSocket message: {'e': 'ACCOUNT_UPDATE', 'T': 1762359777555, 'E': 1762359777556, 'a': {'B': [{'a': 'USDT', 'wb': '256.24760405', 'cw': '256.24760405', 'bc': '0'}], 'P': [{'s': 'TOSHIUSDT', 'pa': '-133896', 'ep': '0.00055449', 'cr': '-8.03919723', 'up': '-0.00803376', 'mt': 'cross', 'iw': '0', 'ps': 'BOTH', 'ma': 'USDT'}], 'm': 'ORDER'}}
 2025-11-05 16:22:57 | INFO     | EXCHANGE:ASTER:ticker=ALL           | [WEBSOCKET] [ASTER] PARTIALLY_FILLED 46233 @ 0.0005541
-2025-11-05 16:22:58 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | Unknown WebSocket message: {'e': 'ACCOUNT_UPDATE', 'T': 1762359778784, 'E': 1762359778787, 'a': {'B': [{'a': 'USDT', 'wb': '256.24714861', 'cw': '256.24714861', 'bc': '0'}], 'P': [{'s': 'TOSHIUSDT', 'pa': '-150335', 'ep': '0.00055445', 'cr': '-8.03919723', 'up': '-0.00902010', 'mt': 'cross', 'iw': '0', 'ps': 'BOTH', 'ma': 'USDT'}], 'm': 'ORDER'}}
 2025-11-05 16:22:58 | INFO     | EXCHANGE:ASTER:ticker=ALL           | [WEBSOCKET] [ASTER] PARTIALLY_FILLED 62672 @ 0.0005541
-2025-11-05 16:23:00 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | Unknown WebSocket message: {'e': 'ACCOUNT_UPDATE', 'T': 1762359780441, 'E': 1762359780443, 'a': {'B': [{'a': 'USDT', 'wb': '256.24678427', 'cw': '256.24678427', 'bc': '0'}], 'P': [{'s': 'TOSHIUSDT', 'pa': '-163486', 'ep': '0.00055442', 'cr': '-8.03919723', 'up': '-0.03433206', 'mt': 'cross', 'iw': '0', 'ps': 'BOTH', 'ma': 'USDT'}], 'm': 'ORDER'}}
 2025-11-05 16:23:00 | INFO     | EXCHANGE:ASTER:ticker=ALL           | [WEBSOCKET] [ASTER] PARTIALLY_FILLED 75823 @ 0.0005541
-2025-11-05 16:23:01 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | Unknown WebSocket message: {'e': 'ACCOUNT_UPDATE', 'T': 1762359781761, 'E': 1762359781763, 'a': {'B': [{'a': 'USDT', 'wb': '256.24649279', 'cw': '256.24649279', 'bc': '0'}], 'P': [{'s': 'TOSHIUSDT', 'pa': '-174007', 'ep': '0.00055440', 'cr': '-8.03919723', 'up': '-0.03654147', 'mt': 'cross', 'iw': '0', 'ps': 'BOTH', 'ma': 'USDT'}], 'm': 'ORDER'}}
 2025-11-05 16:23:01 | INFO     | EXCHANGE:ASTER:ticker=ALL           | [WEBSOCKET] [ASTER] PARTIALLY_FILLED 86344 @ 0.0005541
-2025-11-05 16:23:03 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | Unknown WebSocket message: {'e': 'ACCOUNT_UPDATE', 'T': 1762359783320, 'E': 1762359783321, 'a': {'B': [{'a': 'USDT', 'wb': '256.24643068', 'cw': '256.24643068', 'bc': '0'}], 'P': [{'s': 'TOSHIUSDT', 'pa': '-176249', 'ep': '0.00055440', 'cr': '-8.03919723', 'up': '-0.04582474', 'mt': 'cross', 'iw': '0', 'ps': 'BOTH', 'ma': 'USDT'}], 'm': 'ORDER'}}
 2025-11-05 16:23:03 | INFO     | EXCHANGE:ASTER:ticker=ALL           | [WEBSOCKET] [ASTER] PARTIALLY_FILLED 88586 @ 0.0005541
-2025-11-05 16:23:06 | DEBUG    | STRATEGY:FUNDING_RATE_ARBITRAGE:exchange=lighter:ticker=ALL:account=acc1 | No open positions to monitor for account acc1
 2025-11-05 16:23:16 | WARNING  | CORE:ORDER_EXECUTOR                 | [ASTER] Limit order timeout after 20.0s, canceling 130167264
 2025-11-05 16:23:16 | INFO     | CORE:ORDER_EXECUTOR                 | [ASTER] Limit order 130167264 limit_timeout after partial fill 88586 @ $0.0005541
 2025-11-05 16:23:16 | WARNING  | CORE:ATOMIC_MULTI_ORDER             | ⚠️ Critical imbalance detected during retry attempt 1: longs=$119.99, shorts=$97.71, imbalance=$22.28 (18.6%). Aborting retries for safety.
@@ -222,23 +209,16 @@
 2025-11-05 16:23:18 | INFO     | CORE:ATOMIC_MULTI_ORDER             | Step 2/3: Querying actual filled amounts...
 2025-11-05 16:23:18 | INFO     | CORE:ATOMIC_MULTI_ORDER             | Step 3/3: Closing 2 filled positions...
 2025-11-05 16:23:18 | INFO     | CORE:ATOMIC_MULTI_ORDER             | Rollback: sell TOSHI 216.09 @ market
-2025-11-05 16:23:18 | DEBUG    | CORE:ATOMIC_MULTI_ORDER             | Rollback: Using contract_id='81' for symbol 'TOSHI'
 2025-11-05 16:23:18 | INFO     | CORE:ATOMIC_MULTI_ORDER             | Rollback: buy TOSHI 88586 @ market
 2025-11-05 16:23:18 | DEBUG    | CORE:ATOMIC_MULTI_ORDER             | Rollback: Using contract_id='TOSHIUSDT' for symbol 'TOSHI'
 2025-11-05 16:23:18 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | 📤 [LIGHTER] Placing market order: market=81, client_id=798767, side=SELL, base_amount=21609, avg_execution_price=5271
-2025-11-05 16:23:18 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | 🔍 [ASTER] Using contract_id for market order: 'TOSHIUSDT'
-2025-11-05 16:23:18 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | 📐 [ASTER] Rounded quantity: 88586.0 → 88586
 2025-11-05 16:23:18 | INFO     | EXCHANGE:ASTER:ticker=ALL           | 📡 [ASTER] Using real-time BBO from WebSocket
 2025-11-05 16:23:18 | INFO     | EXCHANGE:ASTER:ticker=ALL           | 📊 [ASTER] Market order BBO check: bid=0.0005546, ask=0.0005561
 2025-11-05 16:23:18 | INFO     | EXCHANGE:ASTER:ticker=ALL           | 📤 [ASTER] Placing market BUY order: 88586 @ ~$0.0005561
-2025-11-05 16:23:18 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | POST /fapi/v1/order - Params: {'timestamp': 1762359798783, 'recvWindow': 5000}, Data: {'symbol': 'TOSHIUSDT', 'side': 'BUY', 'type': 'MARKET', 'quantity': '88586'}
-2025-11-05 16:23:19 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | Response 200: 130167356
 2025-11-05 16:23:19 | INFO     | EXCHANGE:ASTER:ticker=ALL           | [WEBSOCKET] [ASTER] OPEN 88586 @ n/a
-2025-11-05 16:23:19 | DEBUG    | EXCHANGE:ASTER:ticker=ALL           | Unknown WebSocket message: {'e': 'ACCOUNT_UPDATE', 'T': 1762359799180, 'E': 1762359799183, 'a': {'B': [{'a': 'USDT', 'wb': '256.06712810', 'cw': '256.06712810', 'bc': '0'}], 'P': [{'s': 'TOSHIUSDT', 'pa': '-87663', 'ep': '0.00055440', 'cr': '-8.19879120', 'up': '-0.02629890', 'mt': 'cross', 'iw': '0', 'ps': 'BOTH', 'ma': 'USDT'}], 'm': 'ORDER'}}
 2025-11-05 16:23:19 | INFO     | EXCHANGE:ASTER:ticker=ALL           | [WEBSOCKET] [ASTER] FILLED 88586 @ n/a
 2025-11-05 16:23:19 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | [WEBSOCKET] [LIGHTER] FILLED 216.09 @ 0.5271
 2025-11-05 16:23:19 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | TRANSACTION: SELL 216.09 @ 0.5271 | Order: 798767 | Status: FILLED
-2025-11-05 16:23:19 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Received user stats via WebSocket: balance=11.044576 (0 weight)
 2025-11-05 16:23:19 | INFO     | EXCHANGE:ASTER:ticker=ALL           | ✅ [ASTER] Market order filled: 130167356
 2025-11-05 16:23:19 | WARNING  | CORE:ATOMIC_MULTI_ORDER             | Rollback cost for TOSHI: $0.00 (entry: $0.5557, exit: $0.5557)
 2025-11-05 16:23:19 | WARNING  | CORE:ATOMIC_MULTI_ORDER             | Rollback cost for TOSHI: $0.00 (entry: $0.0005541, exit: $0.0005541)
