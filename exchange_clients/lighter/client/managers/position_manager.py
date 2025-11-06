@@ -217,19 +217,32 @@ class LighterPositionManager:
                 await self.refresh_positions_via_rest()
                 
                 # Re-check cache after REST refresh
-                # REST account() API always includes total_funding_paid_out (position-specific)
+                # REST account() API may include total_funding_paid_out (but it's optional per API docs)
                 async with self.positions_lock:
                     refreshed_raw = self.raw_positions.get(normalized_symbol)
                     if refreshed_raw:
-                        # REST account() always includes funding_accrued (even if 0)
-                        # Check if it exists (should always exist after get_detailed_positions())
+                        # REST account() may include funding_accrued (but field is optional)
+                        # Check if it exists and is not None/0
                         if "funding_accrued" in refreshed_raw:
                             funding = decimal_or_none(refreshed_raw.get("funding_accrued"))
-                            snapshot.funding_accrued = funding
-                            self.logger.info(
-                                f"[LIGHTER] Funding from REST account() API for {normalized_symbol}: {funding} "
-                                "(position-specific, filtered for current position)"
-                            )
+                            # If funding is None or 0, it might mean:
+                            # 1. No funding paid yet (0 is valid)
+                            # 2. API didn't include the optional field (None means missing)
+                            # We'll check if it's None (missing) vs 0 (no funding) to decide if we need fallback
+                            if funding is not None:
+                                snapshot.funding_accrued = funding
+                                self.logger.info(
+                                    f"[LIGHTER] Funding from REST account() API for {normalized_symbol}: {funding} "
+                                    "(position-specific, filtered for current position)"
+                                )
+                            else:
+                                # funding_accrued is None - API didn't include the optional field
+                                # This means we need to fall back to position_funding() API
+                                funding = None
+                                self.logger.info(
+                                    f"[LIGHTER] REST account() API didn't include total_funding_paid_out "
+                                    f"(optional field) for {normalized_symbol}. Will fall back to position_funding() API."
+                                )
                         else:
                             # Shouldn't happen if get_detailed_positions() worked correctly
                             self.logger.warning(
@@ -390,7 +403,10 @@ class LighterPositionManager:
                             # No position: skip logging to reduce noise
                             pass
                         
-                        # Handle empty string, None, or "0" - all valid (means no funding paid yet)
+                        # Handle the optional field:
+                        # - If None/empty: API didn't include the field (optional) → leave as None to trigger fallback
+                        # - If "0": API included field with 0 value → use Decimal("0")
+                        # - If non-zero string: Parse and use
                         if funding_str and funding_str.lower() not in ('none', 'null', ''):
                             try:
                                 parsed_funding = Decimal(funding_str)
@@ -401,22 +417,24 @@ class LighterPositionManager:
                                     )
                                 # Skip logging for other positions
                             except (ValueError, InvalidOperation) as exc:
-                                # If parsing fails, treat as 0
+                                # If parsing fails, treat as missing (None) to trigger fallback
                                 if is_toshi:
                                     self.logger.warning(
                                         f"[LIGHTER] Failed to parse total_funding_paid_out '{funding_str}' "
-                                        f"for {pos.symbol}: {exc}. Treating as 0."
+                                        f"for {pos.symbol}: {exc}. Will fall back to position_funding() API."
                                     )
-                                pos_dict['funding_accrued'] = Decimal("0")
+                                pos_dict['funding_accrued'] = None  # Leave as None to trigger fallback
                         else:
-                            # Empty/None means no funding yet
+                            # Empty/None means API didn't include the optional field
+                            # Leave as None (don't set to 0) so we can fall back to position_funding()
                             if has_position and is_toshi:
                                 self.logger.info(
-                                    f"[LIGHTER] total_funding_paid_out is empty/None for {pos.symbol} "
-                                    f"(qty={position_qty}), setting funding_accrued to 0"
+                                    f"[LIGHTER] total_funding_paid_out is None/empty for {pos.symbol} "
+                                    f"(qty={position_qty}) - API didn't include optional field. "
+                                    "Will fall back to position_funding() API."
                                 )
-                            # Skip logging for other positions
-                            pos_dict['funding_accrued'] = Decimal("0")
+                            # Don't set funding_accrued - leave it missing so fallback triggers
+                            pos_dict['funding_accrued'] = None
                     else:
                         # Attribute doesn't exist - this shouldn't happen per API docs
                         if has_position and is_toshi:
