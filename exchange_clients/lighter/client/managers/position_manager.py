@@ -340,17 +340,45 @@ class LighterPositionManager:
                     # Map funding field from REST account() API (position-specific, filtered for current position)
                     # total_funding_paid_out is always present in account() response (may be "0" string)
                     if hasattr(pos, 'total_funding_paid_out'):
-                        funding_str = str(pos.total_funding_paid_out).strip()
+                        raw_funding_value = pos.total_funding_paid_out
+                        funding_str = str(raw_funding_value).strip() if raw_funding_value is not None else ""
+                        
+                        # Debug: Log raw value to understand what we're receiving
+                        self.logger.debug(
+                            f"[LIGHTER] REST account() API raw total_funding_paid_out for {pos.symbol}: "
+                            f"type={type(raw_funding_value)}, value={repr(raw_funding_value)}, "
+                            f"str={repr(funding_str)}"
+                        )
+                        
                         # Handle empty string, None, or "0" - all valid (means no funding paid yet)
                         if funding_str and funding_str.lower() not in ('none', 'null', ''):
                             try:
-                                pos_dict['funding_accrued'] = Decimal(funding_str)
-                            except (ValueError, InvalidOperation):
+                                parsed_funding = Decimal(funding_str)
+                                pos_dict['funding_accrued'] = parsed_funding
+                                self.logger.debug(
+                                    f"[LIGHTER] Parsed funding for {pos.symbol}: {parsed_funding}"
+                                )
+                            except (ValueError, InvalidOperation) as exc:
                                 # If parsing fails, treat as 0
+                                self.logger.warning(
+                                    f"[LIGHTER] Failed to parse total_funding_paid_out '{funding_str}' "
+                                    f"for {pos.symbol}: {exc}. Treating as 0."
+                                )
                                 pos_dict['funding_accrued'] = Decimal("0")
                         else:
                             # Empty/None means no funding yet
+                            self.logger.debug(
+                                f"[LIGHTER] total_funding_paid_out is empty/None for {pos.symbol}, "
+                                "setting funding_accrued to 0"
+                            )
                             pos_dict['funding_accrued'] = Decimal("0")
+                    else:
+                        # Attribute doesn't exist - this shouldn't happen per API docs
+                        self.logger.warning(
+                            f"[LIGHTER] Position object for {pos.symbol} missing total_funding_paid_out attribute. "
+                            "Available attributes: " + ", ".join(dir(pos))
+                        )
+                        pos_dict['funding_accrued'] = Decimal("0")
                     
                     positions.append(pos_dict)
                 return positions
