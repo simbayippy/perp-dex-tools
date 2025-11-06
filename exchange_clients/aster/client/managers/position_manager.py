@@ -116,13 +116,19 @@ class AsterPositionManager:
             )
             return None
 
-    async def _get_cumulative_funding(self, symbol: str, quantity: Optional[Decimal] = None) -> Optional[Decimal]:
+    async def _get_cumulative_funding(
+        self, 
+        symbol: str, 
+        quantity: Optional[Decimal] = None,
+        position_opened_at: Optional[float] = None,
+    ) -> Optional[Decimal]:
         """
         Fetch cumulative funding fees for the CURRENT position only (not historical positions).
         
         Args:
             symbol: Trading symbol (e.g., "BTCUSDT", "ETHUSDT")
-            quantity: Current position quantity (used to determine when position was opened)
+            quantity: Current position quantity (used to determine when position was opened if position_opened_at not provided)
+            position_opened_at: Optional Unix timestamp (seconds) when position was opened.
             
         Returns:
             Cumulative funding fees as Decimal (negative means paid, positive means received), None if unavailable
@@ -135,8 +141,25 @@ class AsterPositionManager:
             
             # Try to determine when the current position was opened
             position_start_time = None
-            if quantity is not None and quantity != Decimal("0"):
+            
+            # If position_opened_at is provided (e.g., from our database), use it directly
+            # This avoids expensive userTrades API call
+            if position_opened_at is not None:
+                # Convert seconds to milliseconds (Aster API expects milliseconds)
+                position_start_time = int(position_opened_at * 1000)
+                self.logger.debug(
+                    f"[ASTER] Using provided position_opened_at timestamp {position_opened_at}s "
+                    f"({position_start_time}ms) - skipping userTrades API call"
+                )
+            elif quantity is not None and quantity != Decimal("0"):
+                # Fallback: Query userTrades API to find when position sign changed
+                # This is expensive but necessary if we don't have opened_at from database
                 position_start_time = await self._get_position_open_time(formatted_symbol, quantity)
+                if position_start_time:
+                    self.logger.debug(
+                        f"[ASTER] Filtering funding to only after position opened at {position_start_time} "
+                        "(from userTrades API)"
+                    )
             
             # Fetch income history filtered by FUNDING_FEE
             params = {
@@ -197,9 +220,19 @@ class AsterPositionManager:
             )
             return None
 
-    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+    async def get_position_snapshot(
+        self, 
+        symbol: str,
+        position_opened_at: Optional[float] = None,
+    ) -> Optional[ExchangePositionSnapshot]:
         """
         Return the current position snapshot for a symbol.
+        
+        Args:
+            symbol: Trading symbol (e.g., "BTC", "TOSHI")
+            position_opened_at: Optional Unix timestamp (seconds) when position was opened.
+                              If provided, can be used to optimize funding fee fetching
+                              by skipping expensive trades API calls.
         """
         formatted_symbol = symbol.upper()
         if not formatted_symbol.endswith("USDT"):
@@ -243,7 +276,11 @@ class AsterPositionManager:
             # Fetch cumulative funding fees for THIS SPECIFIC position (not all historical positions)
             funding_accrued = None
             try:
-                funding_accrued = await self._get_cumulative_funding(formatted_symbol, quantity=quantity)
+                funding_accrued = await self._get_cumulative_funding(
+                    formatted_symbol, 
+                    quantity=quantity,
+                    position_opened_at=position_opened_at,
+                )
             except Exception as exc:
                 self.logger.debug(
                     f"[ASTER] Failed to fetch funding for {formatted_symbol}: {exc}"

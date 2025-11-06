@@ -390,9 +390,13 @@ class AsterClient(BaseExchangeClient):
         """Get account positions from Aster."""
         return await self.position_manager.get_account_positions(self.config.contract_id)
 
-    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+    async def get_position_snapshot(
+        self, 
+        symbol: str,
+        position_opened_at: Optional[float] = None,
+    ) -> Optional[ExchangePositionSnapshot]:
         """Return the current position snapshot for a symbol."""
-        return await self.position_manager.get_position_snapshot(symbol)
+        return await self.position_manager.get_position_snapshot(symbol, position_opened_at=position_opened_at)
 
     # Account management delegates
     async def get_account_balance(self) -> Optional[Decimal]:

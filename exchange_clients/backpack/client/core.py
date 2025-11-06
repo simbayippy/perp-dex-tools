@@ -321,9 +321,13 @@ class BackpackClient(BaseExchangeClient):
         """Return absolute position size for configured contract."""
         return await self.position_manager.get_account_positions()
 
-    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+    async def get_position_snapshot(
+        self, 
+        symbol: str,
+        position_opened_at: Optional[float] = None,
+    ) -> Optional[ExchangePositionSnapshot]:
         """Return a normalized position snapshot for a given symbol."""
-        return await self.position_manager.get_position_snapshot(symbol)
+        return await self.position_manager.get_position_snapshot(symbol, position_opened_at=position_opened_at)
 
     # --------------------------------------------------------------------- #
     # Account management (delegated)

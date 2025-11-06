@@ -557,13 +557,27 @@ class BaseExchangeClient(ABC):
         pass
 
     @abstractmethod 
-    async def get_position_snapshot(self, symbol: str) -> Optional[ExchangePositionSnapshot]:
+    async def get_position_snapshot(
+        self, 
+        symbol: str,
+        position_opened_at: Optional[float] = None,
+    ) -> Optional[ExchangePositionSnapshot]:
         """
         Fetch a live snapshot for a specific symbol/contract.
 
         Exchanges that support richer position data should override this method.
         The returned instance must populate standardized fields (quantity, prices,
         PnL, margin, etc.) so strategies can consume it without venue-specific logic.
+
+        Args:
+            symbol: Trading symbol (normalized format, e.g., "BTC", "TOSHI")
+            position_opened_at: Optional Unix timestamp (seconds) when position was opened.
+                              If provided, exchanges can use this to optimize funding fee
+                              fetching (e.g., skip expensive trades API calls).
+                              Should be from FundingArbPosition.opened_at.timestamp().
+
+        Returns:
+            ExchangePositionSnapshot with position details, or None if position not found
 
         TODO: promote to abstract once most clients implement it.
         """

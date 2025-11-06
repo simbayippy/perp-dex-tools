@@ -434,9 +434,6 @@ class LighterPositionManager:
         """
         Fetch cumulative funding fees for the CURRENT position only (not historical positions).
         
-        ⚠️ WARNING: This uses position_funding() API which returns ALL funding history for the account/market.
-        It filters by position_start_time to only include funding after the position was opened.
-        
         Args:
             market_id: The market ID for the position
             side: Position side ('long' or 'short'), optional filter
@@ -516,8 +513,7 @@ class LighterPositionManager:
             response = await self.account_api.position_funding(
                 account_index=account_index,
                 market_id=market_id,
-                limit=30,  # Reduced from 100: funding settles every 1h on Lighter, so 30 records = ~30 hours
-                # Since we filter by position_start_time, we don't need all historical records
+                limit=50,  # Reduced from 100: funding settles every 1h on Lighter, so 50 records = ~50 hours
                 side=side if side else 'all',
                 auth=auth_token,  # Query parameter
                 authorization=auth_token,  # Header parameter - required for main accounts
@@ -530,19 +526,6 @@ class LighterPositionManager:
             fundings = response.position_fundings
             if not fundings:
                 return Decimal("0")  # No funding yet for this position
-            
-            # Sum up funding 'change' values for this position only
-            # NOTE: position_start_time is guaranteed to be set at this point (we return None if it's missing)
-            # Normalize timestamps to seconds (Unix timestamp) for comparison
-            # position_start_time might be in milliseconds (13 digits) or seconds (10 digits)
-            # If provided from database (position_opened_at), it's already in seconds from datetime.timestamp()
-            position_start_seconds = position_start_time
-            if position_start_time > 10**12:  # If > 1 trillion, it's milliseconds
-                position_start_seconds = position_start_time // 1000
-                self.logger.debug(
-                    f"[LIGHTER] Converted position_start_time from milliseconds ({position_start_time}) "
-                    f"to seconds ({position_start_seconds})"
-                )
             
             cumulative = Decimal("0")
             filtered_count = 0
@@ -558,16 +541,6 @@ class LighterPositionManager:
                     funding_seconds = funding_timestamp
                     if funding_timestamp > 10**12:  # If > 1 trillion, it's milliseconds
                         funding_seconds = funding_timestamp // 1000
-                    
-                    # Debug: Log first few funding records to understand timestamp format
-                    if filtered_count < 3:
-                        self.logger.info(
-                            f"[LIGHTER] Funding record {filtered_count + 1}: "
-                            f"timestamp={funding_timestamp} ({'ms' if funding_timestamp > 10**12 else 's'}) → {funding_seconds}s, "
-                            f"change={getattr(funding, 'change', None)}, "
-                            f"position_start={position_start_time} ({'ms' if position_start_time > 10**12 else 's'}) → {position_start_seconds}s, "
-                            f"comparison: {funding_seconds} < {position_start_seconds} = {funding_seconds < position_start_seconds}"
-                        )
                     
                     if funding_seconds < position_start_seconds:
                         filtered_count += 1
