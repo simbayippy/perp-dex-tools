@@ -327,6 +327,7 @@ class LighterPositionManager:
                     # Log ALL positions being processed (especially those with non-zero position)
                     position_qty = Decimal(pos.position)
                     has_position = abs(position_qty) > Decimal("0.0001")
+                    is_toshi = pos.symbol and ('TOSHI' in pos.symbol.upper() or '1000TOSHI' in pos.symbol.upper())
                     
                     if has_position:
                         self.logger.debug(
@@ -349,63 +350,81 @@ class LighterPositionManager:
                     
                     # Map funding field from REST account() API (position-specific, filtered for current position)
                     # total_funding_paid_out is always present in account() response (may be "0" string)
+                    if has_position and is_toshi:
+                        # Log ALL attributes of the position object to see what's available (only for TOSHI)
+                        all_attrs = [a for a in dir(pos) if not a.startswith('_')]
+                        funding_related = [a for a in all_attrs if 'funding' in a.lower() or 'paid' in a.lower()]
+                        self.logger.info(
+                            f"[LIGHTER] Position object attributes for {pos.symbol}: "
+                            f"funding-related={funding_related}, "
+                            f"all_attrs_count={len(all_attrs)}"
+                        )
+                        # Try to get funding value using different possible attribute names
+                        for attr in funding_related:
+                            try:
+                                value = getattr(pos, attr, None)
+                                self.logger.info(
+                                    f"[LIGHTER]   {attr} = {repr(value)} (type={type(value)})"
+                                )
+                            except Exception:
+                                pass
+                    
                     if hasattr(pos, 'total_funding_paid_out'):
                         raw_funding_value = pos.total_funding_paid_out
                         funding_str = str(raw_funding_value).strip() if raw_funding_value is not None else ""
                         
                         # Debug: Log raw value for ALL positions (especially those with positions)
-                        if has_position:
+                        # But only show detailed logs for TOSHI to reduce noise
+                        if has_position and is_toshi:
                             self.logger.info(
                                 f"[LIGHTER] REST account() API raw total_funding_paid_out for {pos.symbol} "
                                 f"(qty={position_qty}): type={type(raw_funding_value)}, "
                                 f"value={repr(raw_funding_value)}, str={repr(funding_str)}"
                             )
-                        else:
+                        elif has_position:
+                            # Other positions: minimal log
                             self.logger.debug(
-                                f"[LIGHTER] REST account() API raw total_funding_paid_out for {pos.symbol}: "
-                                f"type={type(raw_funding_value)}, value={repr(raw_funding_value)}, "
-                                f"str={repr(funding_str)}"
+                                f"[LIGHTER] REST account() API total_funding_paid_out for {pos.symbol}: {funding_str or 'None'}"
                             )
+                        else:
+                            # No position: skip logging to reduce noise
+                            pass
                         
                         # Handle empty string, None, or "0" - all valid (means no funding paid yet)
                         if funding_str and funding_str.lower() not in ('none', 'null', ''):
                             try:
                                 parsed_funding = Decimal(funding_str)
                                 pos_dict['funding_accrued'] = parsed_funding
-                                if has_position:
+                                if has_position and is_toshi:
                                     self.logger.info(
                                         f"[LIGHTER] Parsed funding for {pos.symbol} (qty={position_qty}): {parsed_funding}"
                                     )
-                                else:
-                                    self.logger.debug(
-                                        f"[LIGHTER] Parsed funding for {pos.symbol}: {parsed_funding}"
-                                    )
+                                # Skip logging for other positions
                             except (ValueError, InvalidOperation) as exc:
                                 # If parsing fails, treat as 0
-                                self.logger.warning(
-                                    f"[LIGHTER] Failed to parse total_funding_paid_out '{funding_str}' "
-                                    f"for {pos.symbol}: {exc}. Treating as 0."
-                                )
+                                if is_toshi:
+                                    self.logger.warning(
+                                        f"[LIGHTER] Failed to parse total_funding_paid_out '{funding_str}' "
+                                        f"for {pos.symbol}: {exc}. Treating as 0."
+                                    )
                                 pos_dict['funding_accrued'] = Decimal("0")
                         else:
                             # Empty/None means no funding yet
-                            if has_position:
+                            if has_position and is_toshi:
                                 self.logger.info(
                                     f"[LIGHTER] total_funding_paid_out is empty/None for {pos.symbol} "
                                     f"(qty={position_qty}), setting funding_accrued to 0"
                                 )
-                            else:
-                                self.logger.debug(
-                                    f"[LIGHTER] total_funding_paid_out is empty/None for {pos.symbol}, "
-                                    "setting funding_accrued to 0"
-                                )
+                            # Skip logging for other positions
                             pos_dict['funding_accrued'] = Decimal("0")
                     else:
                         # Attribute doesn't exist - this shouldn't happen per API docs
-                        self.logger.warning(
-                            f"[LIGHTER] Position object for {pos.symbol} missing total_funding_paid_out attribute. "
-                            "Available attributes: " + ", ".join([a for a in dir(pos) if not a.startswith('_')])
-                        )
+                        if has_position and is_toshi:
+                            self.logger.warning(
+                                f"[LIGHTER] Position object for {pos.symbol} missing total_funding_paid_out attribute. "
+                                f"Available attributes: {', '.join([a for a in dir(pos) if not a.startswith('_')])}"
+                            )
+                        # Skip logging for other positions
                         pos_dict['funding_accrued'] = Decimal("0")
                     
                     positions.append(pos_dict)
