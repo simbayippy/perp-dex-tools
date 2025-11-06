@@ -527,6 +527,19 @@ class LighterPositionManager:
             if not fundings:
                 return Decimal("0")  # No funding yet for this position
             
+            # Sum up funding 'change' values for this position only
+            # NOTE: position_start_time is guaranteed to be set at this point (we return None if it's missing)
+            # Normalize timestamps to seconds (Unix timestamp) for comparison
+            # position_start_time might be in milliseconds (13 digits) or seconds (10 digits)
+            # If provided from database (position_opened_at), it's already in seconds from datetime.timestamp()
+            position_start_seconds = position_start_time
+            if position_start_time > 10**12:  # If > 1 trillion, it's milliseconds
+                position_start_seconds = position_start_time // 1000
+                self.logger.debug(
+                    f"[LIGHTER] Converted position_start_time from milliseconds ({position_start_time}) "
+                    f"to seconds ({position_start_seconds})"
+                )
+            
             cumulative = Decimal("0")
             filtered_count = 0
             for funding in fundings:
