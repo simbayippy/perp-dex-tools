@@ -6,7 +6,7 @@ Handles connection lifecycle, reconnection, session management, and proxy config
 
 import asyncio
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 from urllib.parse import urlparse
 
 import aiohttp
@@ -132,11 +132,21 @@ class LighterWebSocketConnection:
         if self.ws and not self.ws.closed:
             try:
                 await self.ws.close()
+                # Wait a brief moment for the close to complete
+                # This helps prevent "Cannot write to closing transport" errors
+                await asyncio.sleep(0.1)
             except Exception as exc:
-                self._log(f"Error closing websocket: {exc}", "ERROR")
+                # Ignore errors during cleanup (websocket might already be closed)
+                self._log(f"Error closing websocket during cleanup: {exc}", "DEBUG")
         self.ws = None
 
-    async def reconnect(self, reset_order_book_fn, subscribe_channels_fn, running: bool) -> None:
+    async def reconnect(
+        self, 
+        reset_order_book_fn, 
+        subscribe_channels_fn, 
+        running: bool,
+        update_component_references_fn: Optional[Callable[[], None]] = None,
+    ) -> None:
         """
         Attempt to reconnect with exponential backoff.
         
@@ -144,6 +154,10 @@ class LighterWebSocketConnection:
             reset_order_book_fn: Function to reset order book state
             subscribe_channels_fn: Function to subscribe to channels
             running: Whether the manager is still running
+            update_component_references_fn: Optional function to update component references
+                                          after opening new connection (should be called
+                                          before subscribe_channels_fn to ensure components
+                                          use the new websocket)
         """
         delay = self.RECONNECT_BACKOFF_INITIAL
         attempt = 1
@@ -155,6 +169,13 @@ class LighterWebSocketConnection:
             try:
                 await reset_order_book_fn()
                 await self.open_connection()
+                
+                # CRITICAL: Update component references BEFORE subscribing
+                # This ensures market_switcher and message_handler use the NEW websocket
+                # instead of the old closing one (which causes "Cannot write to closing transport")
+                if update_component_references_fn:
+                    update_component_references_fn()
+                
                 await subscribe_channels_fn()
                 self._log("[LIGHTER] Websocket reconnect successful", "INFO")
                 return
