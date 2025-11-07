@@ -27,16 +27,17 @@ class ParadexFundingAdapter(BaseFundingAdapter):
     for all available perpetual markets on Paradex.
     
     Key features:
-    - Uses Paradex API to fetch funding rates and market data
+    - Uses /v1/markets endpoint to get market metadata (funding_period_hours)
+    - Uses /v1/markets_summary endpoint to get current funding rates, OI, and volume
     - Normalizes symbols from Paradex format to standard format
+    - Normalizes funding rates to canonical 8h interval based on each market's funding_period_hours
     - No authentication required (public endpoints)
-    - Returns all available funding rates in one API call
     
     Funding Rate Interval:
-    - Paradex uses 8-hour funding intervals (matches CANONICAL_INTERVAL_HOURS)
+    - Paradex markets have varying funding intervals (4h, 8h, 120h) per market
+    - The /v1/markets endpoint provides funding_period_hours for each market
+    - Raw funding rates from /v1/markets_summary are normalized to 8h intervals
     - Funding rates are stored in our database normalized to 8-hour intervals
-    - Uses /v1/funding/data endpoint with page_size=1 to get current normalized 8h rates
-    - Note: fetch_markets_summary() returns raw rates (not normalized to 8h)
     """
     
     def __init__(
