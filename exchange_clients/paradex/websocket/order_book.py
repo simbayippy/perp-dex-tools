@@ -65,6 +65,12 @@ class ParadexOrderBook:
             inserts = data.get('inserts', [])
             updates = data.get('updates', [])
             
+            # If snapshot (update_type == 's'), clear existing state first
+            if update_type == 's':
+                self.order_book['bids'].clear()
+                self.order_book['asks'].clear()
+                self._log(f"[PARADEX] Order book snapshot received for {market}, clearing old state", "DEBUG")
+            
             # Process deletes
             for delete_item in deletes:
                 side = delete_item.get('side', '').upper()
@@ -79,9 +85,9 @@ class ParadexOrderBook:
                 side = insert_item.get('side', '').upper()
                 price = to_decimal(insert_item.get('price'))
                 size = to_decimal(insert_item.get('size'))
-                if side == 'BUY' and price and size:
+                if side == 'BUY' and price and size and size > 0:
                     self.order_book['bids'][float(price)] = float(size)
-                elif side == 'SELL' and price and size:
+                elif side == 'SELL' and price and size and size > 0:
                     self.order_book['asks'][float(price)] = float(size)
             
             # Process updates
@@ -90,9 +96,17 @@ class ParadexOrderBook:
                 price = to_decimal(update_item.get('price'))
                 size = to_decimal(update_item.get('size'))
                 if side == 'BUY' and price and size:
-                    self.order_book['bids'][float(price)] = float(size)
+                    if size > 0:
+                        self.order_book['bids'][float(price)] = float(size)
+                    else:
+                        # Size 0 means remove this level
+                        self.order_book['bids'].pop(float(price), None)
                 elif side == 'SELL' and price and size:
-                    self.order_book['asks'][float(price)] = float(size)
+                    if size > 0:
+                        self.order_book['asks'][float(price)] = float(size)
+                    else:
+                        # Size 0 means remove this level
+                        self.order_book['asks'].pop(float(price), None)
             
             # Update best bid/ask
             if self.order_book['bids']:
@@ -100,10 +114,15 @@ class ParadexOrderBook:
             if self.order_book['asks']:
                 self.best_ask = Decimal(str(min(self.order_book['asks'].keys())))
             
-            # Mark as ready after first update
-            if not self.snapshot_loaded:
+            # Mark as ready after first snapshot or when we have data
+            if update_type == 's' or (not self.snapshot_loaded and (self.order_book['bids'] or self.order_book['asks'])):
                 self.snapshot_loaded = True
                 self.order_book_ready = True
+                self._log(
+                    f"[PARADEX] Order book ready for {market}: "
+                    f"{len(self.order_book['bids'])} bids, {len(self.order_book['asks'])} asks",
+                    "INFO"
+                )
             
             # Update timestamp
             self.last_update_timestamp = time.time()

@@ -143,57 +143,151 @@ class ParadexMarketData:
         Get order book depth for a symbol.
         
         Tries WebSocket first (real-time, zero latency), falls back to REST API.
+        Always fetches full depth (not just BBO) for liquidity analysis.
         
         Args:
-            contract_id: Contract/symbol identifier (e.g., "BTC-USD-PERP")
-            levels: Number of price levels to fetch (default: 10)
+            contract_id: Contract/symbol identifier (e.g., "BTC-USD-PERP" or "BTC")
+                        If symbol format, will be resolved to contract_id format
+            levels: Number of price levels to fetch (default: 10, liquidity checks use 20)
             
         Returns:
             Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
         """
+        # Resolve symbol to contract_id format if needed (e.g., "RESOLV" -> "RESOLV-USD-PERP")
+        resolved_contract_id = contract_id
+        if not contract_id.endswith('-USD-PERP'):
+            # Try to resolve from cache first
+            normalized_symbol = contract_id.upper()
+            if hasattr(self.contract_id_cache, 'get'):
+                cached_contract_id = self.contract_id_cache.get(normalized_symbol)
+            elif isinstance(self.contract_id_cache, dict):
+                cached_contract_id = self.contract_id_cache.get(normalized_symbol)
+            else:
+                cached_contract_id = None
+            
+            if cached_contract_id:
+                resolved_contract_id = cached_contract_id
+            else:
+                # Convert to Paradex format (assume PERP)
+                resolved_contract_id = f"{contract_id.upper()}-USD-PERP"
+        
         try:
             # Try WebSocket manager's order book first (real-time, zero latency)
             if self.ws_manager and self.ws_manager.order_book_ready:
                 order_book = self.ws_manager.get_order_book(levels=levels)
                 if order_book and order_book.get('bids') and order_book.get('asks'):
-                    self.logger.debug(
-                        f"Using WebSocket manager order book: {contract_id} "
+                    self.logger.info(
+                        f"📡 [PARADEX] Using WebSocket order book: {resolved_contract_id} "
                         f"({len(order_book['bids'])} bids, {len(order_book['asks'])} asks)"
                     )
                     return order_book
+                else:
+                    self.logger.warning(
+                        f"⚠️ [PARADEX] WebSocket order book not ready or empty for {resolved_contract_id}, "
+                        f"falling back to REST API"
+                    )
             
-            # Fall back to REST API
-            self.logger.debug(f"Fetching order book via REST API: {contract_id}, levels={levels}")
+            # Fall back to REST API - always fetch full depth for liquidity checks
+            self.logger.info(
+                f"📞 [REST][PARADEX] Fetching order book via REST API: {resolved_contract_id}, levels={levels}"
+            )
             
             # Fetch order book from API
-            orderbook_data = self.api_client.fetch_orderbook(contract_id, {"depth": levels})
+            orderbook_data = self.api_client.fetch_orderbook(resolved_contract_id, {"depth": levels})
             
             if not orderbook_data:
+                self.logger.warning(f"⚠️ [PARADEX] Empty order book response for {resolved_contract_id}")
                 return {'bids': [], 'asks': []}
             
             bids_raw = orderbook_data.get('bids', [])
             asks_raw = orderbook_data.get('asks', [])
             
+            if not bids_raw or not asks_raw:
+                self.logger.warning(
+                    f"⚠️ [PARADEX] Order book has no bids/asks for {resolved_contract_id}: "
+                    f"bids={len(bids_raw)}, asks={len(asks_raw)}"
+                )
+                return {'bids': [], 'asks': []}
+            
+            # Debug: Log first bid/ask to understand format
+            if bids_raw and len(bids_raw[0]) >= 2:
+                self.logger.debug(
+                    f"🔍 [PARADEX] First bid raw: {bids_raw[0]} "
+                    f"(assuming [price, size] format)"
+                )
+            if asks_raw and len(asks_raw[0]) >= 2:
+                self.logger.debug(
+                    f"🔍 [PARADEX] First ask raw: {asks_raw[0]} "
+                    f"(assuming [price, size] format)"
+                )
+            
             # Parse bids (sorted descending by price)
+            # Paradex API format: [price, size] (standard order book format)
             bids = []
             for bid in bids_raw[:levels]:
                 if isinstance(bid, (list, tuple)) and len(bid) >= 2:
+                    # Standard format: [price, size]
                     price = to_decimal(bid[0], Decimal("0")) or Decimal("0")
                     size = to_decimal(bid[1], Decimal("0")) or Decimal("0")
-                    bids.append({'price': price, 'size': size})
+                    
+                    # Validate: price should be reasonable (not too small, not too large)
+                    # For RESOLV, price should be around 0.08, not 0.00001
+                    if price > 0 and size > 0:
+                        # Additional validation: if price seems wrong (too small), try swapping
+                        # This handles potential [size, price] format
+                        if price < Decimal("0.001") and size > Decimal("0.01"):
+                            # Likely [size, price] format - swap them
+                            self.logger.warning(
+                                f"⚠️ [PARADEX] Detected potential [size, price] format for bid: "
+                                f"swapping {price}/{size} -> {size}/{price}"
+                            )
+                            price, size = size, price
+                        
+                        bids.append({'price': price, 'size': size})
             
             # Parse asks (sorted ascending by price)
             asks = []
             for ask in asks_raw[:levels]:
                 if isinstance(ask, (list, tuple)) and len(ask) >= 2:
+                    # Standard format: [price, size]
                     price = to_decimal(ask[0], Decimal("0")) or Decimal("0")
                     size = to_decimal(ask[1], Decimal("0")) or Decimal("0")
-                    asks.append({'price': price, 'size': size})
+                    
+                    # Validate: price should be reasonable
+                    if price > 0 and size > 0:
+                        # Additional validation: if price seems wrong (too small), try swapping
+                        if price < Decimal("0.001") and size > Decimal("0.01"):
+                            # Likely [size, price] format - swap them
+                            self.logger.warning(
+                                f"⚠️ [PARADEX] Detected potential [size, price] format for ask: "
+                                f"swapping {price}/{size} -> {size}/{price}"
+                            )
+                            price, size = size, price
+                        
+                        asks.append({'price': price, 'size': size})
+            
+            # Log best bid/ask for validation
+            if bids and asks:
+                best_bid_price = bids[0]['price']
+                best_ask_price = asks[0]['price']
+                self.logger.info(
+                    f"📚 [PARADEX] REST order book: {resolved_contract_id} "
+                    f"({len(bids)} bids, {len(asks)} asks) | "
+                    f"Best: {best_bid_price}/{best_ask_price} | "
+                    f"Spread: {((best_ask_price - best_bid_price) / best_bid_price * 10000):.0f} bps"
+                )
+            else:
+                self.logger.warning(
+                    f"⚠️ [PARADEX] Empty parsed order book for {resolved_contract_id}"
+                )
             
             return {'bids': bids, 'asks': asks}
             
         except Exception as e:
-            self.logger.error(f"Failed to fetch order book depth for {contract_id}: {e}")
+            self.logger.error(
+                f"❌ [PARADEX] Failed to fetch order book depth for {contract_id} "
+                f"(resolved: {resolved_contract_id}): {e}"
+            )
             return {'bids': [], 'asks': []}
     
     async def get_market_metadata(self, contract_id: str) -> Optional[Dict[str, Any]]:
@@ -339,8 +433,8 @@ class ParadexMarketData:
         metadata = await self.get_market_metadata(contract_id)
         
         if not metadata:
-            self.logger.error(f"Ticker '{ticker}' not found in Paradex markets")
-            raise ValueError(f"Ticker '{ticker}' not found in Paradex markets")
+            self.logger.error(f"Ticker '{ticker}' not found in Paradex markets. This is an edge case in paradex {ticker} has funding but is not tradable")
+            raise ValueError(f"Ticker '{ticker}' not found in Paradex markets. This is an edge case in paradex {ticker} has funding but is not tradable")
         
         tick_size = metadata.get('tick_size')
         if not tick_size:
