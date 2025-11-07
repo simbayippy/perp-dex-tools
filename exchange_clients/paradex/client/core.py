@@ -32,14 +32,22 @@ def patch_paradex_http_client():
     try:
         from paradex_py.api.http_client import HttpClient
 
-        def patched_request(self, url, http_method, params=None, payload=None, headers=None):
-            res = self.client.request(
-                method=http_method.value,
-                url=url,
-                params=params,
-                json=payload,
-                headers=headers,
-            )
+        def patched_request(self, url, http_method, params=None, payload=None, headers=None, timeout=None):
+            # Prepare request kwargs
+            request_kwargs = {
+                "method": http_method.value,
+                "url": url,
+                "params": params,
+                "json": payload,
+                "headers": headers,
+            }
+            
+            # Add timeout if provided
+            if timeout is not None:
+                request_kwargs["timeout"] = timeout
+            
+            res = self.client.request(**request_kwargs)
+            
             if res.status_code >= 300:
                 from paradex_py.api.models import ApiErrorSchema
                 error = ApiErrorSchema().loads(res.text)
