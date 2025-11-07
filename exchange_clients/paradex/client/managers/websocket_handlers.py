@@ -143,12 +143,87 @@ class ParadexWebSocketHandlers:
     
     async def handle_liquidation_notification(self, payload: Dict[str, Any]) -> None:
         """
-        Handle liquidation notifications from Paradex WebSocket.
+        Handle liquidation notifications from Paradex WebSocket FILLS channel.
+        
+        Liquidations come through FILLS channel with fill_type="LIQUIDATION".
         
         Args:
-            payload: Liquidation event payload from WebSocket
+            payload: Fill data dictionary from WebSocket (with fill_type="LIQUIDATION")
         """
-        # TODO: Implement when Paradex liquidation stream is available
-        # For now, this is a placeholder
-        self.logger.debug(f"[PARADEX] Liquidation notification received: {payload}")
+        try:
+            from exchange_clients.events import LiquidationEvent
+            from datetime import datetime, timezone
+            
+            # Extract liquidation details from fill data
+            fill_type = payload.get('fill_type') or payload.get('trade_type')
+            if fill_type != "LIQUIDATION":
+                return
+            
+            market = payload.get('market')
+            if not market:
+                return
+            
+            # Normalize symbol
+            normalized_symbol = self.normalize_symbol(market)
+            
+            # Extract quantity and price
+            size_str = payload.get('size')
+            price_str = payload.get('price')
+            
+            if not size_str or not price_str:
+                return
+            
+            quantity = to_decimal(size_str)
+            price = to_decimal(price_str)
+            
+            if quantity is None or price is None or quantity <= 0:
+                return
+            
+            # Extract side (BUY/SELL)
+            side_raw = payload.get('side', '').upper()
+            side = "buy" if side_raw == "BUY" else "sell" if side_raw == "SELL" else "sell"
+            
+            # Extract timestamp
+            created_at_ms = payload.get('created_at')
+            if created_at_ms:
+                try:
+                    timestamp = datetime.fromtimestamp(int(created_at_ms) / 1000, tz=timezone.utc)
+                except (ValueError, TypeError, OSError):
+                    timestamp = datetime.now(timezone.utc)
+            else:
+                timestamp = datetime.now(timezone.utc)
+            
+            # Create liquidation event
+            event = LiquidationEvent(
+                exchange=self.get_exchange_name(),
+                symbol=normalized_symbol,
+                side=side,
+                quantity=abs(quantity),  # Always positive
+                price=price,
+                timestamp=timestamp,
+                metadata={
+                    "fill_id": payload.get('id'),
+                    "order_id": payload.get('order_id'),
+                    "account": payload.get('account'),
+                    "market": market,
+                    "fill_type": fill_type,
+                    "raw": payload,
+                },
+            )
+            
+            # Emit liquidation event if callback is available
+            if self.emit_liquidation_event:
+                await self.emit_liquidation_event(event)
+                self.logger.info(
+                    f"[PARADEX] Liquidation detected: {normalized_symbol} {side} "
+                    f"{abs(quantity)} @ {price}"
+                )
+            else:
+                self.logger.debug(
+                    f"[PARADEX] Liquidation detected but no callback: {normalized_symbol} "
+                    f"{side} {abs(quantity)} @ {price}"
+                )
+                
+        except Exception as e:
+            self.logger.error(f"[PARADEX] Error handling liquidation notification: {e}")
 

@@ -294,6 +294,14 @@ class ParadexClient(BaseExchangeClient):
                 }
             )
             self.logger.info(f"Subscribed to order book updates for {contract_id}")
+            
+            # Subscribe to fills channel (includes liquidations)
+            await self.paradex.ws_client.subscribe(
+                ParadexWebsocketChannel.FILLS,
+                callback=self._handle_fill_update,
+                params={"market": contract_id}
+            )
+            self.logger.info(f"Subscribed to fills updates for {contract_id} (includes liquidations)")
         except Exception as e:
             self.logger.error(f"Failed to subscribe to WebSocket channels: {e}")
     
@@ -318,6 +326,33 @@ class ParadexClient(BaseExchangeClient):
             
         except Exception as e:
             self.logger.error(f"Error handling order book update: {e}")
+    
+    async def _handle_fill_update(self, ws_channel: Any, message: Dict[str, Any]) -> None:
+        """
+        Handle fill update from WebSocket (includes liquidations).
+        
+        Paradex sends fills via FILLS channel. Liquidations have fill_type="LIQUIDATION".
+        
+        Args:
+            ws_channel: WebSocket channel enum
+            message: WebSocket message dictionary
+        """
+        try:
+            params = message.get('params', {})
+            data = params.get('data', {})
+            
+            # Check if this is a liquidation
+            fill_type = data.get('fill_type') or data.get('trade_type')
+            if fill_type == "LIQUIDATION":
+                # Delegate to WebSocket handlers for liquidation processing
+                if self.ws_handlers:
+                    await self.ws_handlers.handle_liquidation_notification(data)
+            
+            # Note: Regular fills are handled via order updates (ORDERS channel)
+            # This channel is primarily for detecting liquidations
+            
+        except Exception as e:
+            self.logger.error(f"Error handling fill update: {e}")
 
     # ========================================================================
     # MARKET DATA & PRICING
