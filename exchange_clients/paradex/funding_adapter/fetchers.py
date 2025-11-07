@@ -178,12 +178,15 @@ class ParadexFundingFetchers:
         Uses fetch_markets_summary() endpoint to get volume and open interest
         data for all perpetual markets.
         
+        Note: Open interest is returned in base currency by the API, so we convert
+        it to USD by multiplying by mark_price (similar to Lighter adapter).
+        
         Returns:
             Dictionary mapping normalized symbols to market data
             Example: {
                 "BTC": {
-                    "volume_24h": Decimal("1500000.0"),
-                    "open_interest": Decimal("5000000.0")
+                    "volume_24h": Decimal("1500000.0"),  # Already in USD
+                    "open_interest": Decimal("5000000.0")  # Converted to USD
                 }
             }
             
@@ -221,9 +224,24 @@ class ParadexFundingFetchers:
                     # Normalize symbol
                     normalized_symbol = self.normalize_symbol(market_symbol)
                     
-                    # Get volume and open interest from summary
+                    # Get volume (already in USD)
                     volume_24h = market.get('volume_24h') or market.get('volume') or market.get('total_volume')
-                    open_interest = market.get('open_interest') or market.get('open_interest_usd')
+                    
+                    # Get open interest - API returns in base currency, convert to USD
+                    # Check if already in USD first
+                    open_interest_usd = market.get('open_interest_usd')
+                    if open_interest_usd is None:
+                        # Convert from base currency to USD using mark_price
+                        open_interest_base = market.get('open_interest')
+                        mark_price = market.get('mark_price') or market.get('last_traded_price')
+                        
+                        if open_interest_base is not None and mark_price is not None:
+                            try:
+                                open_interest_usd = Decimal(str(open_interest_base)) * Decimal(str(mark_price))
+                            except (ValueError, TypeError):
+                                open_interest_usd = None
+                        else:
+                            open_interest_usd = None
                     
                     # Create market data entry
                     data = {}
@@ -231,8 +249,8 @@ class ParadexFundingFetchers:
                     if volume_24h is not None:
                         data['volume_24h'] = Decimal(str(volume_24h))
                     
-                    if open_interest is not None:
-                        data['open_interest'] = Decimal(str(open_interest))
+                    if open_interest_usd is not None:
+                        data['open_interest'] = open_interest_usd
                     
                     if data:  # Only add if we have some data
                         market_data[normalized_symbol] = data
