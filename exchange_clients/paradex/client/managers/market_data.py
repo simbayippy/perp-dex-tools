@@ -53,11 +53,10 @@ class ParadexMarketData:
         # Market metadata cache (tick_size, order_size_increment, etc.)
         self._market_metadata: Dict[str, Dict[str, Any]] = {}
         self._min_order_notional: Dict[str, Decimal] = {}
-        
-        # WebSocket order book state (price -> size mapping)
-        self._order_book_bids: Dict[str, Dict[Decimal, Decimal]] = {}  # contract_id -> {price: size}
-        self._order_book_asks: Dict[str, Dict[Decimal, Decimal]] = {}  # contract_id -> {price: size}
-        self._order_book_ready: Dict[str, bool] = {}  # contract_id -> ready flag
+    
+    def set_ws_manager(self, ws_manager: Any) -> None:
+        """Set the WebSocket manager (called after ws_manager is created)."""
+        self.ws_manager = ws_manager
     
     @query_retry(default_return=(Decimal("0"), Decimal("0")))
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
@@ -65,7 +64,8 @@ class ParadexMarketData:
         Get best bid/offer prices, preferring WebSocket data when available.
         
         Args:
-            contract_id: Contract/symbol identifier (e.g., "BTC-USD-PERP")
+            contract_id: Contract/symbol identifier (e.g., "BTC-USD-PERP" or "BTC")
+                        If symbol format, will be resolved to contract_id format
             
         Returns:
             Tuple of (best_bid, best_ask) as Decimals
@@ -73,27 +73,41 @@ class ParadexMarketData:
         Raises:
             ValueError: If fetching fails or data is invalid
         """
-        # Try WebSocket order book first (real-time, zero latency)
-        if contract_id in self._order_book_bids and contract_id in self._order_book_asks:
-            bids = self._order_book_bids[contract_id]
-            asks = self._order_book_asks[contract_id]
+        # Resolve symbol to contract_id format if needed (e.g., "RESOLV" -> "RESOLV-USD-PERP")
+        resolved_contract_id = contract_id
+        if not contract_id.endswith('-USD-PERP'):
+            # Try to resolve from cache first
+            normalized_symbol = contract_id.upper()
+            if hasattr(self.contract_id_cache, 'get'):
+                cached_contract_id = self.contract_id_cache.get(normalized_symbol)
+            elif isinstance(self.contract_id_cache, dict):
+                cached_contract_id = self.contract_id_cache.get(normalized_symbol)
+            else:
+                cached_contract_id = None
             
-            if bids and asks:
-                # Get best bid (highest price) and best ask (lowest price)
-                best_bid = max(bids.keys())
-                best_ask = min(asks.keys())
-                
+            if cached_contract_id:
+                resolved_contract_id = cached_contract_id
+            else:
+                # Convert to Paradex format (assume PERP)
+                resolved_contract_id = f"{contract_id.upper()}-USD-PERP"
+        
+        # Try WebSocket manager's order book first (if available and ready)
+        if self.ws_manager and self.ws_manager.order_book_ready:
+            order_book = self.ws_manager.get_order_book(levels=1)
+            if order_book and order_book.get('bids') and order_book.get('asks'):
+                best_bid = order_book['bids'][0]['price']
+                best_ask = order_book['asks'][0]['price']
                 if best_bid > 0 and best_ask > 0:
-                    self.logger.debug(f"Using WebSocket order book for BBO: {best_bid}/{best_ask}")
+                    self.logger.debug(f"Using WebSocket manager order book for BBO: {best_bid}/{best_ask}")
                     return best_bid, best_ask
         
         # Fall back to REST API
         try:
             # Use fetch_bbo endpoint (more efficient than full orderbook)
-            bbo_data = self.api_client.fetch_bbo(contract_id)
+            bbo_data = self.api_client.fetch_bbo(resolved_contract_id)
             
             if not bbo_data:
-                raise ValueError(f"Empty BBO response for {contract_id}")
+                raise ValueError(f"Empty BBO response for {resolved_contract_id}")
             
             # Extract bid and ask
             bid = to_decimal(bbo_data.get('bid') or bbo_data.get('best_bid'))
@@ -101,24 +115,24 @@ class ParadexMarketData:
             
             if bid is None or ask is None:
                 # Fallback: use orderbook with depth=1
-                orderbook_data = self.api_client.fetch_orderbook(contract_id, {"depth": 1})
+                orderbook_data = self.api_client.fetch_orderbook(resolved_contract_id, {"depth": 1})
                 bids = orderbook_data.get('bids', [])
                 asks = orderbook_data.get('asks', [])
                 
                 if not bids or not asks:
-                    raise ValueError(f"Failed to get bid/ask data for {contract_id}")
+                    raise ValueError(f"Failed to get bid/ask data for {resolved_contract_id}")
                 
                 bid = Decimal(str(bids[0][0]))
                 ask = Decimal(str(asks[0][0]))
             
             if bid is None or ask is None or bid <= 0 or ask <= 0:
-                raise ValueError(f"Invalid bid/ask prices for {contract_id}")
+                raise ValueError(f"Invalid bid/ask prices for {resolved_contract_id}")
             
             return bid, ask
             
         except Exception as e:
-            self.logger.error(f"Failed to fetch BBO prices for {contract_id}: {e}")
-            raise ValueError(f"Unable to fetch BBO prices for {contract_id}: {e}")
+            self.logger.error(f"Failed to fetch BBO prices for {resolved_contract_id}: {e}")
+            raise ValueError(f"Unable to fetch BBO prices for {resolved_contract_id}: {e}")
     
     async def get_order_book_depth(
         self,
@@ -138,25 +152,15 @@ class ParadexMarketData:
             Dictionary with 'bids' and 'asks' lists of dicts with 'price' and 'size'
         """
         try:
-            # Try WebSocket order book first (real-time, zero latency)
-            if contract_id in self._order_book_bids and contract_id in self._order_book_asks:
-                bids_dict = self._order_book_bids[contract_id]
-                asks_dict = self._order_book_asks[contract_id]
-                
-                if bids_dict and asks_dict:
-                    # Convert dict to sorted lists
-                    bids_sorted = sorted(bids_dict.items(), reverse=True)[:levels]
-                    asks_sorted = sorted(asks_dict.items())[:levels]
-                    
-                    bids = [{'price': price, 'size': size} for price, size in bids_sorted]
-                    asks = [{'price': price, 'size': size} for price, size in asks_sorted]
-                    
-                    if bids and asks:
-                        self.logger.debug(
-                            f"Using WebSocket order book: {contract_id} "
-                            f"({len(bids)} bids, {len(asks)} asks)"
-                        )
-                        return {'bids': bids, 'asks': asks}
+            # Try WebSocket manager's order book first (real-time, zero latency)
+            if self.ws_manager and self.ws_manager.order_book_ready:
+                order_book = self.ws_manager.get_order_book(levels=levels)
+                if order_book and order_book.get('bids') and order_book.get('asks'):
+                    self.logger.debug(
+                        f"Using WebSocket manager order book: {contract_id} "
+                        f"({len(order_book['bids'])} bids, {len(order_book['asks'])} asks)"
+                    )
+                    return order_book
             
             # Fall back to REST API
             self.logger.debug(f"Fetching order book via REST API: {contract_id}, levels={levels}")
@@ -364,80 +368,4 @@ class ParadexMarketData:
         )
         
         return contract_id, tick_size
-    
-    def handle_order_book_update(self, contract_id: str, order_book_data: Dict[str, Any]) -> None:
-        """
-        Handle order book update from WebSocket.
-        
-        Paradex sends order book updates with:
-        - update_type: 's' (snapshot) or 'd' (delta)
-        - inserts: array of {price, side, size} to add
-        - updates: array of {price, side, size} to update
-        - deletes: array of {price, side, size} to remove
-        
-        Args:
-            contract_id: Contract/symbol identifier
-            order_book_data: Order book update data from WebSocket
-        """
-        try:
-            update_type = order_book_data.get('update_type', 'd')
-            
-            # Initialize order book dicts for this contract if needed
-            if contract_id not in self._order_book_bids:
-                self._order_book_bids[contract_id] = {}
-            if contract_id not in self._order_book_asks:
-                self._order_book_asks[contract_id] = {}
-            
-            bids_dict = self._order_book_bids[contract_id]
-            asks_dict = self._order_book_asks[contract_id]
-            
-            # If snapshot, clear existing state
-            if update_type == 's':
-                bids_dict.clear()
-                asks_dict.clear()
-            
-            # Process deletes
-            for delete in order_book_data.get('deletes', []):
-                price = to_decimal(delete.get('price'))
-                side = delete.get('side', '').upper()
-                if price:
-                    if side == 'BUY':
-                        bids_dict.pop(price, None)
-                    elif side == 'SELL':
-                        asks_dict.pop(price, None)
-            
-            # Process updates
-            for update in order_book_data.get('updates', []):
-                price = to_decimal(update.get('price'))
-                side = update.get('side', '').upper()
-                size = to_decimal(update.get('size'))
-                if price and size is not None:
-                    if side == 'BUY':
-                        if size > 0:
-                            bids_dict[price] = size
-                        else:
-                            bids_dict.pop(price, None)
-                    elif side == 'SELL':
-                        if size > 0:
-                            asks_dict[price] = size
-                        else:
-                            asks_dict.pop(price, None)
-            
-            # Process inserts
-            for insert in order_book_data.get('inserts', []):
-                price = to_decimal(insert.get('price'))
-                side = insert.get('side', '').upper()
-                size = to_decimal(insert.get('size'))
-                if price and size is not None and size > 0:
-                    if side == 'BUY':
-                        bids_dict[price] = size
-                    elif side == 'SELL':
-                        asks_dict[price] = size
-            
-            # Mark as ready after first snapshot
-            if update_type == 's' or not self._order_book_ready.get(contract_id, False):
-                self._order_book_ready[contract_id] = True
-            
-        except Exception as e:
-            self.logger.error(f"Error handling order book update for {contract_id}: {e}")
 

@@ -276,6 +276,20 @@ class ParadexAccountManager:
                 if mmf_factor is not None and imf_base is not None:
                     maintenance_margin = imf_base * mmf_factor
                     leverage_info['maintenance_margin'] = maintenance_margin
+                
+                # Log leverage info (similar to Lighter)
+                account_leverage = None  # Paradex doesn't have account-level leverage setting
+                margin_req = leverage_info.get('margin_requirement')
+                margin_req_str = f"{margin_req:.4f} ({margin_req*100:.1f}%)" if margin_req else "N/A"
+                max_notional_str = str(leverage_info.get('max_notional', 'N/A'))
+                
+                self.logger.info(
+                    f"📊 [PARADEX] Leverage info for {symbol}:\n"
+                    f"  - Symbol max leverage: {max_leverage:.1f}x\n"
+                    f"  - Account leverage: N/Ax\n"
+                    f"  - Max notional: {max_notional_str}\n"
+                    f"  - Margin requirement: {margin_req_str}"
+                )
             else:
                 leverage_info['error'] = f"Symbol {symbol} not found on Paradex"
             

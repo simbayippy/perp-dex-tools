@@ -25,6 +25,7 @@ from .managers.position_manager import ParadexPositionManager
 from .managers.account_manager import ParadexAccountManager
 from .managers.websocket_handlers import ParadexWebSocketHandlers
 from .utils.caching import ContractIdCache
+from exchange_clients.paradex.websocket import ParadexWebSocketManager
 
 
 def suppress_paradex_sdk_logging():
@@ -143,6 +144,7 @@ class ParadexClient(BaseExchangeClient):
         self.position_manager: Optional[ParadexPositionManager] = None
         self.account_manager: Optional[ParadexAccountManager] = None
         self.ws_handlers: Optional[ParadexWebSocketHandlers] = None
+        self.ws_manager: Optional[ParadexWebSocketManager] = None
         
         # Order tracking
         self._latest_orders: Dict[str, OrderInfo] = {}
@@ -150,9 +152,6 @@ class ParadexClient(BaseExchangeClient):
         
         # Contract ID cache (for multi-symbol trading)
         self._contract_id_cache = ContractIdCache()
-        
-        # WebSocket connection state
-        self._ws_connected = False
 
     def _validate_config(self) -> None:
         """Validate Paradex configuration."""
@@ -259,20 +258,24 @@ class ParadexClient(BaseExchangeClient):
                 normalize_symbol_fn=normalize_symbol,
             )
             
-            # Connect to WebSocket
-            is_connected = False
-            while not is_connected:
-                is_connected = await self.paradex.ws_client.connect()
-                if not is_connected:
-                    self.logger.log("Connection failed, retrying in 1 second...", "WARN")
-                    await asyncio.sleep(1)
+            # Initialize WebSocket manager (using custom implementation)
+            self.ws_manager = ParadexWebSocketManager(
+                config=self.config,
+                paradex_ws_client=self.paradex.ws_client,
+                order_update_callback=self.ws_handlers.handle_websocket_order_update,
+                liquidation_callback=self.ws_handlers.handle_liquidation_notification,
+                positions_callback=None,  # Paradex doesn't have positions stream
+                user_stats_callback=None,  # Paradex doesn't have user stats stream
+            )
             
-            # Wait a moment for connection to establish
-            await asyncio.sleep(2)
-            self._ws_connected = True
+            # Set logger for WebSocket manager
+            self.ws_manager.set_logger(self.logger)
             
-            # Setup WebSocket subscription for order updates
-            await self._setup_websocket_subscription()
+            # Update market_data to use ws_manager
+            self.market_data.set_ws_manager(self.ws_manager)
+            
+            # Connect WebSocket manager
+            await self.ws_manager.connect()
             
         except Exception as e:
             self.logger.error(f"Error connecting to Paradex: {e}")
@@ -281,9 +284,8 @@ class ParadexClient(BaseExchangeClient):
     async def disconnect(self) -> None:
         """Disconnect from Paradex."""
         try:
-            if hasattr(self, 'paradex') and self.paradex:
-                await self.paradex.ws_client._close_connection()
-                self._ws_connected = False
+            if self.ws_manager:
+                await self.ws_manager.disconnect()
         except Exception as e:
             self.logger.error(f"Error during Paradex disconnect: {e}")
 
@@ -291,105 +293,6 @@ class ParadexClient(BaseExchangeClient):
         """Get the exchange name."""
         return "paradex"
 
-    async def _setup_websocket_subscription(self) -> None:
-        """Setup WebSocket subscription for order updates and order book."""
-        if not self.ws_handlers:
-            return
-        
-        # Ensure WebSocket is connected
-        if not self._ws_connected:
-            is_connected = False
-            while not is_connected:
-                is_connected = await self.paradex.ws_client.connect()
-                if not is_connected:
-                    self.logger.log("WebSocket connection failed, retrying in 1 second...", "WARN")
-                    await asyncio.sleep(1)
-            self._ws_connected = True
-        
-        # Subscribe to orders channel for the specific market
-        from paradex_py.api.ws_client import ParadexWebsocketChannel
-        
-        contract_id = self.config.contract_id
-        try:
-            # Subscribe to order updates
-            await self.paradex.ws_client.subscribe(
-                ParadexWebsocketChannel.ORDERS,
-                callback=self.ws_handlers.handle_websocket_order_update,
-                params={"market": contract_id}
-            )
-            self.logger.info(f"Subscribed to order updates for {contract_id}")
-            
-            # Subscribe to order book updates
-            await self.paradex.ws_client.subscribe(
-                ParadexWebsocketChannel.ORDER_BOOK,
-                callback=self._handle_order_book_update,
-                params={
-                    "market": contract_id,
-                    "depth": 15,  # Paradex supports up to depth 15
-                    "refresh_rate": "100ms",  # 50ms or 100ms
-                    "price_tick": "0_1",  # Optional price grouping
-                }
-            )
-            self.logger.info(f"Subscribed to order book updates for {contract_id}")
-            
-            # Subscribe to fills channel (includes liquidations)
-            await self.paradex.ws_client.subscribe(
-                ParadexWebsocketChannel.FILLS,
-                callback=self._handle_fill_update,
-                params={"market": contract_id}
-            )
-            self.logger.info(f"Subscribed to fills updates for {contract_id} (includes liquidations)")
-        except Exception as e:
-            self.logger.error(f"Failed to subscribe to WebSocket channels: {e}")
-    
-    async def _handle_order_book_update(self, ws_channel: Any, message: Dict[str, Any]) -> None:
-        """
-        Handle order book update from WebSocket.
-        
-        Args:
-            ws_channel: WebSocket channel enum
-            message: WebSocket message dictionary
-        """
-        try:
-            params = message.get('params', {})
-            data = params.get('data', {})
-            market = data.get('market')
-            
-            if not market or not self.market_data:
-                return
-            
-            # Delegate to market_data manager
-            self.market_data.handle_order_book_update(market, data)
-            
-        except Exception as e:
-            self.logger.error(f"Error handling order book update: {e}")
-    
-    async def _handle_fill_update(self, ws_channel: Any, message: Dict[str, Any]) -> None:
-        """
-        Handle fill update from WebSocket (includes liquidations).
-        
-        Paradex sends fills via FILLS channel. Liquidations have fill_type="LIQUIDATION".
-        
-        Args:
-            ws_channel: WebSocket channel enum
-            message: WebSocket message dictionary
-        """
-        try:
-            params = message.get('params', {})
-            data = params.get('data', {})
-            
-            # Check if this is a liquidation
-            fill_type = data.get('fill_type') or data.get('trade_type')
-            if fill_type == "LIQUIDATION":
-                # Delegate to WebSocket handlers for liquidation processing
-                if self.ws_handlers:
-                    await self.ws_handlers.handle_liquidation_notification(data)
-            
-            # Note: Regular fills are handled via order updates (ORDERS channel)
-            # This channel is primarily for detecting liquidations
-            
-        except Exception as e:
-            self.logger.error(f"Error handling fill update: {e}")
 
     # ========================================================================
     # MARKET DATA & PRICING
