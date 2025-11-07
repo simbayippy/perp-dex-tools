@@ -191,9 +191,18 @@ class ParadexMarketData:
                         # Replace the best bid/ask with exact prices from BBO stream for accurate spread calculation.
                         # This ensures LiquidityAnalyzer gets exact prices without needing exchange-specific changes.
                         latest_bbo = self.ws_manager.get_latest_bbo()
+                        
                         if latest_bbo:
                             bbo_symbol = latest_bbo.symbol
-                            if bbo_symbol == resolved_contract_id or bbo_symbol == contract_id:
+                            # Try multiple symbol matching strategies
+                            symbol_matches = (
+                                bbo_symbol == resolved_contract_id or
+                                bbo_symbol == contract_id or
+                                bbo_symbol.upper() == resolved_contract_id.upper() or
+                                bbo_symbol.upper() == contract_id.upper()
+                            )
+                            
+                            if symbol_matches:
                                 exact_bid = to_decimal(latest_bbo.bid)
                                 exact_ask = to_decimal(latest_bbo.ask)
                                 
@@ -204,42 +213,52 @@ class ParadexMarketData:
                                     asks[0] = {'price': exact_ask, 'size': asks[0].get('size', Decimal("0"))}
                                     
                                     spread_bps = ((exact_ask - exact_bid) / exact_bid * 10000) if exact_bid > 0 else 0
-                                    self.logger.debug(
+                                    self.logger.info(
                                         f"📡 [PARADEX] Using WebSocket order book with exact BBO prices: {resolved_contract_id} "
                                         f"({len(bids)} bids, {len(asks)} asks) | "
                                         f"Best: {exact_bid}/{exact_ask} | "
                                         f"Spread: {spread_bps:.0f} bps"
                                     )
                                     return order_book
-                        
-                        # Fallback: Validate tick-grouped prices
-                        # If we don't have BBO data, check if tick-grouped prices are reasonable
-                        best_bid_price = bids[0].get('price', Decimal("0"))
-                        best_ask_price = asks[0].get('price', Decimal("0"))
-                        
-                        if best_bid_price > 0 and best_ask_price > 0:
-                            spread_bps = ((best_ask_price - best_bid_price) / best_bid_price * 10000) if best_bid_price > 0 else 0
-                            
-                            # If price is suspiciously small (< 0.001) or spread is too wide (> 1000 bps), use REST
-                            if best_bid_price < Decimal("0.001") or best_ask_price < Decimal("0.001") or spread_bps > 1000:
-                                self.logger.warning(
-                                    f"⚠️ [PARADEX] WebSocket order book has suspicious prices for {resolved_contract_id}: "
-                                    f"bid={best_bid_price}, ask={best_ask_price}, spread={spread_bps:.0f} bps | "
-                                    f"Falling back to REST API"
-                                )
                             else:
-                                self.logger.info(
-                                    f"📡 [PARADEX] Using WebSocket order book (tick-grouped): {resolved_contract_id} "
-                                    f"({len(bids)} bids, {len(asks)} asks) | "
-                                    f"Best: {best_bid_price}/{best_ask_price} | "
-                                    f"Spread: {spread_bps:.0f} bps"
+                                self.logger.debug(
+                                    f"🔍 [PARADEX] BBO symbol mismatch: BBO={bbo_symbol}, "
+                                    f"requested={resolved_contract_id}/{contract_id}, falling back to REST"
                                 )
-                                return order_book
                         else:
-                            self.logger.warning(
-                                f"⚠️ [PARADEX] WebSocket order book has invalid prices for {resolved_contract_id}, "
-                                f"falling back to REST API"
+                            # BBO WebSocket data not available, try fetching via REST API
+                            self.logger.debug(
+                                f"🔍 [PARADEX] BBO WebSocket data not available for {resolved_contract_id}, "
+                                f"trying REST API to get exact prices"
                             )
+                            try:
+                                # Fetch exact BBO prices from REST API
+                                bbo_data = self.api_client.fetch_bbo(resolved_contract_id)
+                                if bbo_data:
+                                    rest_bid = to_decimal(bbo_data.get('bid') or bbo_data.get('best_bid'))
+                                    rest_ask = to_decimal(bbo_data.get('ask') or bbo_data.get('best_ask'))
+                                    
+                                    if rest_bid and rest_ask and rest_bid > 0 and rest_ask > 0:
+                                        # Replace first level prices with exact REST BBO prices
+                                        bids[0] = {'price': rest_bid, 'size': bids[0].get('size', Decimal("0"))}
+                                        asks[0] = {'price': rest_ask, 'size': asks[0].get('size', Decimal("0"))}
+                                        
+                                        spread_bps = ((rest_ask - rest_bid) / rest_bid * 10000) if rest_bid > 0 else 0
+                                        self.logger.info(
+                                            f"📡 [PARADEX] Using WebSocket order book with REST BBO prices: {resolved_contract_id} "
+                                            f"({len(bids)} bids, {len(asks)} asks) | "
+                                            f"Best: {rest_bid}/{rest_ask} | "
+                                            f"Spread: {spread_bps:.0f} bps"
+                                        )
+                                        return order_book
+                            except Exception as e:
+                                self.logger.debug(f"Failed to fetch BBO from REST API: {e}")
+                        
+                        # If we couldn't get exact BBO prices, fall back to full REST API order book
+                        self.logger.debug(
+                            f"📞 [PARADEX] Falling back to REST API for {resolved_contract_id} "
+                            f"(ORDER_BOOK has tick-grouped prices, need exact BBO prices)"
+                        )
                     else:
                         self.logger.warning(
                             f"⚠️ [PARADEX] WebSocket order book empty for {resolved_contract_id}, "
