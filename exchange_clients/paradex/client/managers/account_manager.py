@@ -308,4 +308,95 @@ class ParadexAccountManager:
                 'brackets': None,
                 'error': f"Failed to query leverage info: {str(e)}",
             }
+    
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_fixed(3),
+        retry=retry_if_exception_type(Exception),
+        reraise=True
+    )
+    def _set_account_margin_sync(self, market: str, leverage: int, margin_type: str = "CROSS") -> Dict[str, Any]:
+        """
+        Set account margin configuration synchronously (SDK is blocking).
+        
+        Args:
+            market: Market symbol (e.g., "BTC-USD-PERP", "PROVE-USD-PERP")
+            leverage: Target leverage (1 to market's maximum leverage)
+            margin_type: Margin type ("CROSS" or "ISOLATED"), default "CROSS"
+            
+        Returns:
+            Response dictionary from API
+        """
+        payload = {
+            "leverage": leverage,
+            "margin_type": margin_type
+        }
+        return self.api_client._post_authorized(path=f"account/margin/{market}", payload=payload)
+    
+    async def set_account_leverage(self, symbol: str, leverage: int) -> bool:
+        """
+        Set account leverage for a symbol on Paradex.
+        
+        ⚠️ WARNING: Only call this if you want to change leverage settings!
+        This is a TRADE endpoint that modifies account settings.
+        
+        Endpoint: POST /account/margin/{market}
+        
+        Args:
+            symbol: Trading symbol (normalized format, e.g., "PROVE", "BTC")
+            leverage: Target leverage (1 to market's maximum leverage)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if leverage < 1:
+                self.logger.error(
+                    f"[PARADEX] Invalid leverage value: {leverage}. Must be at least 1"
+                )
+                return False
+            
+            # Convert symbol to Paradex contract_id format (e.g., "PROVE" -> "PROVE-USD-PERP")
+            contract_id = f"{symbol.upper()}-USD-PERP"
+            
+            self.logger.info(
+                f"[PARADEX] Setting leverage for {symbol} ({contract_id}) to {leverage}x..."
+            )
+            
+            # Use CROSS margin type (default for Paradex)
+            # ISOLATED margin can be set per-position, but CROSS is the account-level setting
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                self._set_account_margin_sync,
+                contract_id,
+                leverage,
+                "CROSS"
+            )
+            
+            # Check if request was successful
+            if result:
+                # Response should contain: account, leverage, margin_type, market
+                result_leverage = result.get('leverage')
+                result_market = result.get('market')
+                
+                if result_leverage == leverage:
+                    self.logger.info(
+                        f"✅ [PARADEX] Successfully set leverage to {leverage}x for {symbol} ({result_market})"
+                    )
+                    return True
+                else:
+                    self.logger.warning(
+                        f"⚠️ [PARADEX] Leverage setting returned unexpected value: "
+                        f"requested={leverage}, returned={result_leverage}"
+                    )
+                    # Still consider it successful if we got a response
+                    return True
+            else:
+                self.logger.error(f"❌ [PARADEX] Failed to set leverage: Empty response")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"❌ [PARADEX] Error setting leverage to {leverage}x for {symbol}: {e}")
+            return False
 

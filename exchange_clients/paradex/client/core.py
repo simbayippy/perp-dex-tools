@@ -444,6 +444,12 @@ class ParadexClient(BaseExchangeClient):
         if not self.account_manager:
             raise RuntimeError("Account manager not initialized. Call connect() first.")
         return await self.account_manager.get_leverage_info(symbol)
+    
+    async def set_account_leverage(self, symbol: str, leverage: int) -> bool:
+        """Set account leverage for a symbol on Paradex."""
+        if not self.account_manager:
+            raise RuntimeError("Account manager not initialized. Call connect() first.")
+        return await self.account_manager.set_account_leverage(symbol, leverage)
 
     # ========================================================================
     # CONFIGURATION & UTILITIES

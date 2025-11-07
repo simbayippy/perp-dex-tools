@@ -233,12 +233,6 @@ class ParadexOrderBook:
                 self.order_book_ready = True
                 best_bid_str = str(self.best_bid) if self.best_bid else "N/A"
                 best_ask_str = str(self.best_ask) if self.best_ask else "N/A"
-                if self.logger:
-                    self.logger.info(
-                        f"[PARADEX] Order book ready for {market}: "
-                        f"{len(self.order_book['bids'])} bids, {len(self.order_book['asks'])} asks | "
-                        f"Best: {best_bid_str}/{best_ask_str}"
-                    )
             
             # Update timestamp
             self.last_update_timestamp = time.time()
