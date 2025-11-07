@@ -60,9 +60,9 @@ class RiskManagementConfig(BaseModel):
         description="How often to check positions (seconds)"
     )
     
-    min_hold_hours: int = Field(
-        default=0,
-        description="Minimum hours to hold a position before risk exits are considered"
+    min_hold_hours: float = Field(
+        default=0.0,
+        description="Minimum hours to hold a position before risk exits are considered (supports fractional hours, e.g., 1.5 = 1 hour 30 minutes)"
     )
     
     class Config:

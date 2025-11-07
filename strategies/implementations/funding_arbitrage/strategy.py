@@ -342,9 +342,11 @@ class FundingArbitrageStrategy(BaseStrategy):
                 'check_interval_seconds',
                 risk_defaults.check_interval_seconds,
             ),
-            min_hold_hours=strategy_params.get(
-                'min_hold_hours',
-                risk_defaults.min_hold_hours,
+            min_hold_hours=float(
+                strategy_params.get(
+                    'min_hold_hours',
+                    risk_defaults.min_hold_hours,
+                ) or 0.0
             ),
         )
 

@@ -159,12 +159,12 @@ FUNDING_ARB_SCHEMA = StrategySchema(
         ParameterSchema(
             key="min_hold_hours",
             prompt="Minimum position hold time (hours) before exits are considered?",
-            param_type=ParameterType.INTEGER,
-            default=0,
-            min_value=0,
-            max_value=720,
+            param_type=ParameterType.DECIMAL,
+            default=Decimal("0.0"),
+            min_value=Decimal("0"),
+            max_value=Decimal("720"),
             required=False,
-            help_text="Set to >0 to suppress risk-based exits (funding flip, erosion) until the position has aged at least this many hours.",
+            help_text="Set to >0 to suppress risk-based exits (funding flip, erosion) until the position has aged at least this many hours. Supports fractional hours (e.g., 1.5 = 1 hour 30 minutes).",
             show_default_in_prompt=True,
         ),
         ParameterSchema(
