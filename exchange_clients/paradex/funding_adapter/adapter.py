@@ -35,7 +35,8 @@ class ParadexFundingAdapter(BaseFundingAdapter):
     Funding Rate Interval:
     - Paradex uses 8-hour funding intervals (matches CANONICAL_INTERVAL_HOURS)
     - Funding rates are stored in our database normalized to 8-hour intervals
-    - The API returns funding_rate or funding_rate_8h fields
+    - Uses /v1/funding/data endpoint with page_size=1 to get current normalized 8h rates
+    - Note: fetch_markets_summary() returns raw rates (not normalized to 8h)
     """
     
     def __init__(

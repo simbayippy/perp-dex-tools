@@ -57,8 +57,12 @@ class ParadexFundingFetchers:
         """
         Fetch all funding rates from Paradex.
         
-        Uses the fetch_markets_summary() endpoint which includes funding rate
-        information for each perpetual market.
+        Uses the /v1/funding/data endpoint with page_size=1 to get the most recent
+        normalized 8h funding rate for each market. This provides current rates that
+        are already normalized to 8-hour intervals.
+        
+        Note: The fetch_markets_summary() endpoint returns raw funding rates that are
+        NOT normalized to 8h, so we use the funding/data endpoint instead.
         
         Args:
             canonical_interval_hours: Canonical funding interval (typically 8 hours)
@@ -75,9 +79,7 @@ class ParadexFundingFetchers:
             raise RuntimeError("Paradex client not initialized")
         
         try:
-            # Fetch markets summary which includes funding rates
-            # SDK is synchronous, so use run_in_executor
-            # Note: Must pass {"market": "ALL"} to get all markets
+            # First, get all perpetual markets from markets summary
             paradex_client = self.funding_client.paradex
             markets_summary = await asyncio.get_event_loop().run_in_executor(
                 None,
@@ -92,53 +94,82 @@ class ParadexFundingFetchers:
             if not markets:
                 return {}
             
-            # Convert to our format
-            rates_dict: Dict[str, FundingRateSample] = {}
+            # Extract all perpetual market symbols
+            perpetual_markets = []
             for market in markets:
+                market_symbol = market.get('market', '') or market.get('symbol', '') or market.get('name', '')
+                if market_symbol and market_symbol.endswith('-USD-PERP'):
+                    perpetual_markets.append(market_symbol)
+            
+            if not perpetual_markets:
+                return {}
+            
+            # Fetch current normalized 8h funding rate for each market
+            # Use funding/data endpoint with page_size=1 to get most recent entry
+            rates_dict: Dict[str, FundingRateSample] = {}
+            loop = asyncio.get_event_loop()
+            
+            # Fetch funding data for all markets concurrently
+            async def fetch_single_market_funding(market_symbol: str) -> Optional[tuple[str, FundingRateSample]]:
+                """Fetch funding rate for a single market."""
                 try:
-                    # Try multiple possible field names for market symbol
-                    market_symbol = market.get('market', '') or market.get('symbol', '') or market.get('name', '')
-                    
-                    if not market_symbol:
-                        continue
-                    
-                    # Only process perpetual markets (ending with -USD-PERP)
-                    if not market_symbol.endswith('-USD-PERP'):
-                        continue
-                    
-                    # Get funding rate - check multiple possible fields
-                    funding_rate = (
-                        market.get('funding_rate') or 
-                        market.get('funding_rate_8h') or 
-                        market.get('fundingRate') or
-                        market.get('fundingRate8h') or
-                        market.get('current_funding_rate')
+                    # Use api_client.get() to call /v1/funding/data endpoint
+                    funding_data = await loop.run_in_executor(
+                        None,
+                        lambda: paradex_client.api_client.get(
+                            paradex_client.api_client.api_url,
+                            "funding/data",
+                            params={"market": market_symbol, "page_size": 1}
+                        )
                     )
                     
+                    if not funding_data or 'results' not in funding_data:
+                        return None
+                    
+                    results = funding_data['results']
+                    if not results:
+                        return None
+                    
+                    # Get the most recent entry (first result)
+                    latest_entry = results[0]
+                    
+                    # Extract normalized 8h funding rate
+                    funding_rate = latest_entry.get('funding_rate')
                     if funding_rate is None:
-                        continue
+                        return None
                     
-                    # Normalize symbol (e.g., "BTC-USD-PERP" -> "BTC")
                     normalized_symbol = self.normalize_symbol(market_symbol)
-                    
-                    # Convert to Decimal
                     funding_rate_decimal = Decimal(str(funding_rate))
                     
-                    # Parse next funding time if available
+                    # Parse timestamp from funding data
                     next_funding_time = self.parse_next_funding_time(
-                        market.get('next_funding_time')
+                        latest_entry.get('created_at')
                     )
                     
-                    rates_dict[normalized_symbol] = FundingRateSample(
+                    sample = FundingRateSample(
                         normalized_rate=funding_rate_decimal,
                         raw_rate=funding_rate_decimal,
                         interval_hours=canonical_interval_hours,
                         next_funding_time=next_funding_time,
                         metadata={'symbol': market_symbol, 'market': market_symbol},
                     )
-                
-                except Exception as e:
+                    
+                    return (normalized_symbol, sample)
+                    
+                except Exception:
+                    return None
+            
+            # Fetch all markets concurrently (with reasonable concurrency limit)
+            tasks = [fetch_single_market_funding(market) for market in perpetual_markets]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Process results
+            for result in results:
+                if isinstance(result, Exception):
                     continue
+                if result is not None:
+                    normalized_symbol, sample = result
+                    rates_dict[normalized_symbol] = sample
             
             return rates_dict
         
