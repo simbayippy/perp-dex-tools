@@ -334,37 +334,6 @@ class ParadexMarketData:
         metadata = await self.get_market_metadata(contract_id)
         
         if not metadata:
-            # Check if market exists in markets_summary but not in markets
-            # This indicates the market has funding data but is not tradeable
-            try:
-                markets_summary_response = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: self.api_client.fetch_markets_summary({"market": contract_id})
-                )
-                
-                if markets_summary_response and 'results' in markets_summary_response:
-                    markets_summary = markets_summary_response['results']
-                    if markets_summary and any(
-                        m.get('market') == contract_id or m.get('symbol') == contract_id
-                        for m in markets_summary
-                    ):
-                        # Market exists in summary but not in markets - not tradeable
-                        self.logger.warning(
-                            f"Market '{contract_id}' exists in funding data but is not tradeable "
-                            "(not found in /v1/markets endpoint)"
-                        )
-                        raise ValueError(
-                            f"Ticker '{ticker}' is not tradeable on Paradex "
-                            "(market exists in funding data but trading is not available)"
-                        )
-            except ValueError:
-                # Re-raise our custom ValueError
-                raise
-            except Exception as e:
-                # If markets_summary check fails, log but continue with original error
-                self.logger.debug(f"Could not verify market tradeability via markets_summary: {e}")
-            
-            # Market not found in either endpoint
             self.logger.error(f"Ticker '{ticker}' not found in Paradex markets")
             raise ValueError(f"Ticker '{ticker}' not found in Paradex markets")
         
