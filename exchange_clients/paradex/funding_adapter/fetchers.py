@@ -10,6 +10,7 @@ from typing import Dict, Optional, Callable
 from decimal import Decimal
 
 from exchange_clients.base_models import FundingRateSample
+from funding_rate_service.utils.logger import logger
 
 
 class ParadexFundingFetchers:
@@ -85,27 +86,52 @@ class ParadexFundingFetchers:
             )
             
             if not markets_summary or 'results' not in markets_summary:
+                # Debug: log the actual response structure
+                logger.warning(f"Paradex API response missing 'results': {type(markets_summary)} - {list(markets_summary.keys()) if isinstance(markets_summary, dict) else 'not a dict'}")
                 return {}
             
             markets = markets_summary['results']
             
             if not markets:
+                logger.warning(f"Paradex API returned empty markets list")
                 return {}
+            
+            # Debug: log first market structure to understand fields
+            if markets:
+                first_market = markets[0]
+                logger.debug(f"Paradex market structure sample: {list(first_market.keys()) if isinstance(first_market, dict) else type(first_market)}")
+                logger.debug(f"Paradex first market: {first_market}")
             
             # Convert to our format
             rates_dict: Dict[str, FundingRateSample] = {}
+            skipped_no_funding = 0
+            skipped_not_perp = 0
             for market in markets:
                 try:
-                    market_symbol = market.get('market', '')
+                    # Try multiple possible field names for market symbol
+                    market_symbol = market.get('market', '') or market.get('symbol', '') or market.get('name', '')
+                    
+                    if not market_symbol:
+                        continue
                     
                     # Only process perpetual markets (ending with -USD-PERP)
                     if not market_symbol.endswith('-USD-PERP'):
+                        skipped_not_perp += 1
                         continue
                     
                     # Get funding rate - check multiple possible fields
-                    funding_rate = market.get('funding_rate') or market.get('funding_rate_8h')
+                    funding_rate = (
+                        market.get('funding_rate') or 
+                        market.get('funding_rate_8h') or 
+                        market.get('fundingRate') or
+                        market.get('fundingRate8h') or
+                        market.get('current_funding_rate')
+                    )
                     
                     if funding_rate is None:
+                        skipped_no_funding += 1
+                        # Debug: log what fields this market has
+                        logger.debug(f"Market {market_symbol} has no funding_rate field. Available fields: {list(market.keys()) if isinstance(market, dict) else 'not a dict'}")
                         continue
                     
                     # Normalize symbol (e.g., "BTC-USD-PERP" -> "BTC")
@@ -128,7 +154,18 @@ class ParadexFundingFetchers:
                     )
                 
                 except Exception as e:
+                    logger.debug(f"Error processing market {market.get('market', 'unknown')}: {e}")
                     continue
+            
+            # Debug logging
+            if rates_dict:
+                logger.info(f"Paradex: Successfully parsed {len(rates_dict)} funding rates")
+            else:
+                logger.warning(
+                    f"Paradex: No funding rates found. "
+                    f"Skipped {skipped_not_perp} non-perp markets, "
+                    f"{skipped_no_funding} markets without funding_rate field"
+                )
             
             return rates_dict
         
