@@ -229,6 +229,11 @@ class ParadexMarketData:
             if not market_data:
                 return None
             
+            # Extract delta1_cross_margin_params for leverage calculation
+            delta1_params = market_data.get('delta1_cross_margin_params', {})
+            imf_base = to_decimal(delta1_params.get('imf_base') if isinstance(delta1_params, dict) else None)
+            mmf_factor = to_decimal(delta1_params.get('mmf_factor') if isinstance(delta1_params, dict) else None)
+            
             # Extract metadata
             metadata = {
                 'symbol': market_data.get('symbol') or contract_id,
@@ -236,9 +241,13 @@ class ParadexMarketData:
                 'order_size_increment': to_decimal(market_data.get('order_size_increment')),
                 'min_notional': to_decimal(market_data.get('min_notional')),
                 'max_order_size': to_decimal(market_data.get('max_order_size')),
-                'max_leverage': to_decimal(market_data.get('max_leverage')),
+                'position_limit': to_decimal(market_data.get('position_limit')),
                 'base_currency': market_data.get('base_currency'),
                 'quote_currency': market_data.get('quote_currency'),
+                # IMF parameters for leverage calculation (similar to Lighter/Backpack)
+                # Note: max_leverage is calculated from imf_base: max_leverage = 1 / imf_base
+                'imf_base': imf_base,  # Initial Margin Base (e.g., 0.11 = 11% margin = 9.09x leverage)
+                'mmf_factor': mmf_factor,  # Maintenance Margin Factor (e.g., 0.51 = 51% of initial margin)
             }
             
             # Cache it

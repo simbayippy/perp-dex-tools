@@ -218,10 +218,16 @@ class ParadexAccountManager:
                     markets = markets_response['results']
                     if markets:
                         market = markets[0]
+                        # Extract delta1_cross_margin_params for leverage calculation
+                        delta1_params = market.get('delta1_cross_margin_params', {})
+                        imf_base = to_decimal(delta1_params.get('imf_base') if isinstance(delta1_params, dict) else None)
+                        mmf_factor = to_decimal(delta1_params.get('mmf_factor') if isinstance(delta1_params, dict) else None)
+                        
                         metadata = {
-                            'max_leverage': to_decimal(market.get('max_leverage')),
                             'max_order_size': to_decimal(market.get('max_order_size')),
                             'position_limit': to_decimal(market.get('position_limit')),
+                            'imf_base': imf_base,
+                            'mmf_factor': mmf_factor,
                         }
                     else:
                         metadata = None
@@ -237,12 +243,26 @@ class ParadexAccountManager:
             }
             
             if metadata:
-                max_leverage = metadata.get('max_leverage')
+                # Calculate max leverage from IMF (Paradex doesn't provide max_leverage directly)
+                # Similar to Lighter: max_leverage = 1 / initial_margin_fraction
+                # Similar to Backpack: max_leverage = 1 / imf_base
+                imf_base = metadata.get('imf_base')  # Initial Margin Base (e.g., 0.11 = 11%)
+                mmf_factor = metadata.get('mmf_factor')  # Maintenance Margin Factor
                 max_order_size = metadata.get('max_order_size')
                 position_limit = metadata.get('position_limit')
                 
+                max_leverage = None
+                if imf_base is not None and imf_base > 0:
+                    # imf_base is the margin fraction (e.g., 0.11 = 11% margin = 9.09x leverage)
+                    max_leverage = Decimal('1') / imf_base
+                    self.logger.debug(
+                        f"[PARADEX] Calculated max_leverage from imf_base: {max_leverage:.2f}x "
+                        f"(imf_base={imf_base})"
+                    )
+                
                 if max_leverage:
                     leverage_info['max_leverage'] = max_leverage
+                    # Margin requirement is the inverse of leverage
                     leverage_info['margin_requirement'] = Decimal('1') / max_leverage
                 
                 # Use position_limit as max_notional if available
@@ -251,6 +271,11 @@ class ParadexAccountManager:
                 elif max_order_size:
                     # Estimate max_notional from max_order_size (approximate)
                     leverage_info['max_notional'] = max_order_size
+                
+                # Include maintenance margin info if available
+                if mmf_factor is not None and imf_base is not None:
+                    maintenance_margin = imf_base * mmf_factor
+                    leverage_info['maintenance_margin'] = maintenance_margin
             else:
                 leverage_info['error'] = f"Symbol {symbol} not found on Paradex"
             
