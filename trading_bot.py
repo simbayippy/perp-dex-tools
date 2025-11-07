@@ -207,6 +207,23 @@ class TradingBot:
         """Log the current trading configuration."""
         multi_symbol_strategies = ['funding_arbitrage']
         
+        # Sensitive keys that should not be logged
+        SENSITIVE_KEYS = {
+            '_account_credentials',
+            'secret_key',
+            'api_key',
+            'private_key',
+            'public_key',
+            'l2_private_key_hex',
+            'l1_address',
+            'l2_address',
+        }
+        
+        def _is_sensitive_key(key: str) -> bool:
+            """Check if a key or any part of it contains sensitive information."""
+            key_lower = key.lower()
+            return any(sensitive in key_lower for sensitive in SENSITIVE_KEYS)
+        
         self.logger.info("=== Trading Configuration ===")
         self.logger.info(f"Ticker: {self.config.ticker}")
         if self.config.strategy not in multi_symbol_strategies:
@@ -219,11 +236,14 @@ class TradingBot:
         self.logger.info(f"Exchange: {self.config.exchange}")
         self.logger.info(f"Strategy: {self.config.strategy}")
         
-        # Log strategy parameters
+        # Log strategy parameters (excluding sensitive credentials)
         if self.config.strategy_params:
             self.logger.info("Strategy Parameters:")
             for key, value in self.config.strategy_params.items():
-                self.logger.info(f"  {key}: {value}")
+                if _is_sensitive_key(key):
+                    self.logger.info(f"  {key}: [REDACTED]")
+                else:
+                    self.logger.info(f"  {key}: {value}")
             
         self.logger.info("=============================")
 
