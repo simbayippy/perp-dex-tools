@@ -214,8 +214,8 @@ class LighterPositionManager:
             # Go straight to position_funding() API which is reliable
             funding = None
             
-            # Check if we have cached funding that's still fresh (< 1 hour old)
-            # Funding settles every 1 hour on Lighter, so 1 hour cache is safe
+            # Check if we have cached funding that's still fresh (< 20 minutes old)
+            # Funding settles every 1 hour on Lighter, but we refresh cache every 20 minutes for more frequent updates
             async with self.positions_lock:
                 cached_raw = self.raw_positions.get(normalized_symbol)
                 funding_cache_timestamp = cached_raw.get("funding_cache_timestamp") if cached_raw else None
@@ -224,14 +224,14 @@ class LighterPositionManager:
                 cache_age_seconds = None
                 if funding_cache_timestamp:
                     cache_age_seconds = time.time() - funding_cache_timestamp
-                    cache_age_hours = cache_age_seconds / 3600
+                    cache_age_minutes = cache_age_seconds / 60
                     
-                    # Use cached funding if less than 1 hour old
-                    if cache_age_seconds < 3600 and cached_funding_value is not None:
+                    # Use cached funding if less than 20 minutes old
+                    if cache_age_seconds < 1200 and cached_funding_value is not None:  # 20 minutes = 1200 seconds
                         funding = decimal_or_none(cached_funding_value)
                         self.logger.debug(
                             f"[LIGHTER] Using cached funding for {normalized_symbol}: {funding} "
-                            f"(cached {cache_age_hours:.2f} hours ago)"
+                            f"(cached {cache_age_minutes:.1f} minutes ago)"
                         )
             
             # Query position_funding() API if no fresh cache
@@ -240,7 +240,7 @@ class LighterPositionManager:
                     self.logger.info(
                         f"[LIGHTER] Querying position_funding() API for {normalized_symbol} "
                         f"({'cache expired' if cache_age_seconds else 'no cache'}, "
-                        f"{'cache age: ' + f'{cache_age_seconds/3600:.2f}h' if cache_age_seconds else ''})"
+                        f"{'cache age: ' + f'{cache_age_seconds/60:.1f}m' if cache_age_seconds else ''})"
                     )
                     funding = await self.get_cumulative_funding(
                         raw.get("market_id"),
@@ -261,7 +261,7 @@ class LighterPositionManager:
                             cached["funding_cache_timestamp"] = time.time()
                             self.logger.debug(
                                 f"[LIGHTER] Cached funding for {normalized_symbol}: {funding} "
-                                "(will refresh after 1 hour or on websocket update)"
+                                "(will refresh after 20 minutes or on websocket update)"
                             )
                 except Exception as exc:
                     self.logger.debug(f"[LIGHTER] Funding lookup failed for {normalized_symbol}: {exc}")

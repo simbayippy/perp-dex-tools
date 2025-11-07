@@ -289,10 +289,10 @@ class LighterWebSocketManager(BaseWebSocketManager):
                     reset_order_book_fn=self.order_book.reset_order_book,
                     subscribe_channels_fn=self._subscribe_channels,
                     running=self.running,
+                    update_component_references_fn=self._update_component_references,
                 )
-                # Update component references after reconnection
-                if self.connection.ws:
-                    self._update_component_references()
+                # Note: Component references are now updated INSIDE reconnect() before subscribing
+                # This ensures market_switcher and message_handler use the new websocket
         except asyncio.CancelledError:
             pass
         finally:
