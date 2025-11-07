@@ -289,6 +289,77 @@ class ParadexMarketData:
         """
         return self._min_order_notional.get(symbol.upper())
     
+    async def get_contract_attributes(self, ticker: str) -> Tuple[str, Decimal]:
+        """
+        Get contract ID and tick size for a ticker.
+        
+        This method modifies client state (config, caches).
+        
+        Args:
+            ticker: Trading symbol (e.g., "BTC", "AI16Z")
+            
+        Returns:
+            Tuple of (contract_id, tick_size)
+        """
+        if not ticker:
+            self.logger.error("Ticker is empty")
+            raise ValueError("Ticker is empty")
+        
+        # Convert ticker to Paradex format (e.g., "BTC" -> "BTC-USD-PERP")
+        contract_id = f"{ticker.upper()}-USD-PERP"
+        
+        # Normalize ticker for caching (use ticker, not contract_id)
+        normalized_ticker = ticker.upper()
+        cache_key = normalized_ticker
+        
+        # Check cache first
+        if contract_id in self._market_metadata:
+            metadata = self._market_metadata[contract_id]
+            tick_size = metadata.get('tick_size')
+            if tick_size:
+                # Update config
+                self.config.contract_id = contract_id
+                self.config.tick_size = tick_size
+                
+                # Cache contract_id for multi-symbol trading
+                if cache_key not in self.contract_id_cache:
+                    self.contract_id_cache[cache_key] = contract_id
+                
+                return contract_id, tick_size
+        
+        # Fetch market metadata (this will cache it)
+        metadata = await self.get_market_metadata(contract_id)
+        
+        if not metadata:
+            self.logger.error(f"Ticker '{ticker}' not found in Paradex markets")
+            raise ValueError(f"Ticker '{ticker}' not found in Paradex markets")
+        
+        tick_size = metadata.get('tick_size')
+        if not tick_size:
+            self.logger.error(f"Failed to get tick size for {ticker}")
+            raise ValueError(f"Failed to get tick size for {ticker}")
+        
+        # Update config
+        self.config.contract_id = contract_id
+        self.config.tick_size = tick_size
+        
+        # Cache contract_id for multi-symbol trading
+        if cache_key not in self.contract_id_cache:
+            self.contract_id_cache[cache_key] = contract_id
+        
+        # Cache min order notional if available
+        min_notional = metadata.get('min_notional')
+        if min_notional:
+            self._min_order_notional[cache_key] = min_notional
+            setattr(self.config, "min_order_notional", min_notional)
+        
+        self.logger.debug(
+            f"[PARADEX] Contract attributes for {ticker}: "
+            f"contract_id={contract_id}, tick_size={tick_size}"
+        )
+        
+        return contract_id, tick_size
+    
     def handle_order_book_update(self, contract_id: str, order_book_data: Dict[str, Any]) -> None:
         """
         Handle order book update from WebSocket.

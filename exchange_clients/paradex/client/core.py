@@ -410,6 +410,18 @@ class ParadexClient(BaseExchangeClient):
         if not self.market_data:
             raise RuntimeError("Market data manager not initialized. Call connect() first.")
         return await self.market_data.get_order_book_depth(contract_id, levels)
+    
+    async def get_contract_attributes(self) -> Tuple[str, Decimal]:
+        """Get contract ID and tick size for current ticker."""
+        ticker = getattr(self.config, "ticker", "")
+        if not ticker:
+            self.logger.error("Ticker is empty")
+            raise ValueError("Ticker is empty")
+        
+        if not self.market_data:
+            raise RuntimeError("Market data manager not initialized. Call connect() first.")
+        
+        return await self.market_data.get_contract_attributes(ticker)
 
     # ========================================================================
     # ORDER MANAGEMENT
