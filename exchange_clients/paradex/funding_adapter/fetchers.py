@@ -77,10 +77,11 @@ class ParadexFundingFetchers:
         try:
             # Fetch markets summary which includes funding rates
             # SDK is synchronous, so use run_in_executor
+            # Note: Must pass {"market": "ALL"} to get all markets
             paradex_client = self.funding_client.paradex
             markets_summary = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: paradex_client.api_client.fetch_markets_summary()
+                lambda: paradex_client.api_client.fetch_markets_summary({"market": "ALL"})
             )
             
             if not markets_summary or 'results' not in markets_summary:
@@ -167,9 +168,10 @@ class ParadexFundingFetchers:
                 None,
                 lambda: paradex_client.api_client.fetch_markets()
             )
+            # Note: Must pass {"market": "ALL"} to get all markets
             markets_summary_task = loop.run_in_executor(
                 None,
-                lambda: paradex_client.api_client.fetch_markets_summary()
+                lambda: paradex_client.api_client.fetch_markets_summary({"market": "ALL"})
             )
             
             markets_info, markets_summary = await asyncio.gather(

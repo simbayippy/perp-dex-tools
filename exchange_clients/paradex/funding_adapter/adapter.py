@@ -31,6 +31,11 @@ class ParadexFundingAdapter(BaseFundingAdapter):
     - Normalizes symbols from Paradex format to standard format
     - No authentication required (public endpoints)
     - Returns all available funding rates in one API call
+    
+    Funding Rate Interval:
+    - Paradex uses 8-hour funding intervals (matches CANONICAL_INTERVAL_HOURS)
+    - Funding rates are stored in our database normalized to 8-hour intervals
+    - The API returns funding_rate or funding_rate_8h fields
     """
     
     def __init__(
