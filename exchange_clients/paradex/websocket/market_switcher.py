@@ -49,11 +49,6 @@ class ParadexMarketSwitcher:
         """Set the running state."""
         self.running = running
 
-    def _log(self, message: str, level: str = "INFO"):
-        """Log message using the logger if available."""
-        if self.logger:
-            self.logger.log(message, level)
-
     def lookup_contract_id(self, symbol: str) -> Optional[str]:
         """
         Look up the contract_id for a given symbol.
@@ -84,11 +79,13 @@ class ParadexMarketSwitcher:
             True if switch is needed, False if already on target
         """
         if not self.ws_client or not self.running:
-            self._log(f"Cannot switch market: WebSocket not connected", "WARNING")
+            if self.logger:
+                self.logger.warning(f"Cannot switch market: WebSocket not connected")
             return False
         
         if self.current_contract_id == target_contract_id:
-            self._log(f"Already subscribed to market {target_contract_id}", "DEBUG")
+            if self.logger:
+                self.logger.debug(f"Already subscribed to market {target_contract_id}")
             return False
         
         return True
@@ -124,9 +121,11 @@ class ParadexMarketSwitcher:
                 if channel_name in subscriptions and subscriptions[channel_name]:
                     await self.ws_client.unsubscribe_by_name(channel_name)
                     self._subscriptions.pop(channel_name, None)
-                    self._log(f"Unsubscribed from {channel_type} for {contract_id}", "DEBUG")
+                    if self.logger:
+                        self.logger.debug(f"Unsubscribed from {channel_type} for {contract_id}")
             except Exception as e:
-                self._log(f"Error unsubscribing from {channel_type} for {contract_id}: {e}", "WARNING")
+                if self.logger:
+                    self.logger.warning(f"Error unsubscribing from {channel_type} for {contract_id}: {e}")
     
     async def subscribe_market(
         self,
@@ -195,10 +194,12 @@ class ParadexMarketSwitcher:
                 )
                 self._subscriptions[channel_names['fills']] = True
             
-            self._log(f"Subscribed to all channels for {contract_id}", "DEBUG")
+            if self.logger:
+                self.logger.debug(f"Subscribed to all channels for {contract_id}")
             
         except Exception as e:
-            self._log(f"Error subscribing to channels for {contract_id}: {e}", "ERROR")
+            if self.logger:
+                self.logger.error(f"Error subscribing to channels for {contract_id}: {e}")
             raise
 
     async def subscribe_channels(
@@ -247,17 +248,17 @@ class ParadexMarketSwitcher:
         order_book_size: Dict[str, int]
     ) -> None:
         """Log the result of a market switch operation."""
+        if not self.logger:
+            return
         if success:
-            self._log(
+            self.logger.info(
                 f"[PARADEX] ✅ Switched from {old_contract_id} to {new_contract_id} "
                 f"({order_book_size.get('bids', 0)} bids, {order_book_size.get('asks', 0)} asks) | "
-                f"config.contract_id updated to {new_contract_id}",
-                "INFO"
+                f"config.contract_id updated to {new_contract_id}"
             )
         else:
-            self._log(
+            self.logger.warning(
                 f"[PARADEX] ⚠️  Switched to {new_contract_id} but order book not ready yet "
-                f"(timeout after 5.0s)",
-                "WARNING"
+                f"(timeout after 5.0s)"
             )
 

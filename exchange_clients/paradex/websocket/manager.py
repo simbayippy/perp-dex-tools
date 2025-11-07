@@ -77,11 +77,6 @@ class ParadexWebSocketManager(BaseWebSocketManager):
         self.market_switcher.set_logger(logger)
         self.message_handler.set_logger(logger)
 
-    def _log(self, message: str, level: str = "INFO"):
-        """Log message using the logger if available."""
-        if self.logger:
-            self.logger.log(message, level)
-
     # Delegate order book methods
     def get_order_book(self, levels: Optional[int] = None) -> Optional[Dict[str, List[Dict[str, Any]]]]:
         """Get formatted order book with optional level limiting."""
@@ -111,7 +106,8 @@ class ParadexWebSocketManager(BaseWebSocketManager):
     async def connect(self) -> None:
         """Establish websocket connections and start background processing."""
         if self.running:
-            self._log("[PARADEX] WebSocket manager already running", "WARNING")
+            if self.logger:
+                self.logger.warning("[PARADEX] WebSocket manager already running")
             return
         
         # Connect using connection manager
@@ -127,7 +123,8 @@ class ParadexWebSocketManager(BaseWebSocketManager):
         if contract_id:
             await self._subscribe_to_market(contract_id)
         
-        self._log("[PARADEX] 🔗 WebSocket connected and subscribed", "INFO")
+        if self.logger:
+            self.logger.info("[PARADEX] 🔗 WebSocket connected and subscribed")
 
     async def disconnect(self) -> None:
         """Tear down websocket connections and cancel background tasks."""
@@ -141,9 +138,11 @@ class ParadexWebSocketManager(BaseWebSocketManager):
             # Close connection using connection manager
             await self.connection.cleanup_current_ws()
         except Exception as e:
-            self._log(f"Error closing WebSocket connection: {e}", "ERROR")
+            if self.logger:
+                self.logger.error(f"Error closing WebSocket connection: {e}")
         
-        self._log("[PARADEX] WebSocket disconnected", "INFO")
+        if self.logger:
+            self.logger.info("[PARADEX] WebSocket disconnected")
 
     async def prepare_market_feed(self, symbol: Optional[str]) -> None:
         """
@@ -163,7 +162,8 @@ class ParadexWebSocketManager(BaseWebSocketManager):
             # Step 1: Lookup target contract_id for the symbol
             target_contract_id = self.market_switcher.lookup_contract_id(symbol)
             if target_contract_id is None:
-                self._log(f"[PARADEX] Cannot resolve contract_id for symbol {symbol}", "WARNING")
+                if self.logger:
+                    self.logger.warning(f"[PARADEX] Cannot resolve contract_id for symbol {symbol}")
                 return
             
             # Step 2: Validate if switch is needed
@@ -187,14 +187,15 @@ class ParadexWebSocketManager(BaseWebSocketManager):
             )
             
         except Exception as exc:
-            self._log(f"[PARADEX] Error switching market: {exc}", "ERROR")
+            if self.logger:
+                self.logger.error(f"[PARADEX] Error switching market: {exc}")
 
     async def _perform_market_switch(self, old_contract_id: Optional[str], new_contract_id: str) -> None:
         """Execute the market switch: unsubscribe old, subscribe new, update config."""
-        self._log(
-            f"[PARADEX] 🔄 Switching from {old_contract_id} to {new_contract_id}",
-            "INFO"
-        )
+        if self.logger:
+            self.logger.info(
+                f"[PARADEX] 🔄 Switching from {old_contract_id} to {new_contract_id}"
+            )
         
         # Reset order book state
         self.order_book.reset_order_book()
@@ -253,7 +254,8 @@ class ParadexWebSocketManager(BaseWebSocketManager):
                     else:
                         self.order_update_callback(data)
             except Exception as e:
-                self._log(f"Error in order update callback: {e}", "ERROR")
+                if self.logger:
+                    self.logger.error(f"Error in order update callback: {e}")
 
     async def _handle_order_book_update(self, ws_channel: Any, message: Dict[str, Any]) -> None:
         """Handle order book update from WebSocket."""
@@ -265,7 +267,8 @@ class ParadexWebSocketManager(BaseWebSocketManager):
             if market:
                 self.order_book.update_order_book(market, data)
         except Exception as e:
-            self._log(f"Error handling order book update: {e}", "ERROR")
+            if self.logger:
+                self.logger.error(f"Error handling order book update: {e}")
 
     async def _handle_bbo_update(self, ws_channel: Any, message: Dict[str, Any]) -> None:
         """Handle BBO (Best Bid/Offer) update from WebSocket."""
@@ -294,7 +297,8 @@ class ParadexWebSocketManager(BaseWebSocketManager):
                 # Notify listeners
                 await self._notify_bbo_update(bbo)
         except Exception as e:
-            self._log(f"Error handling BBO update: {e}", "ERROR")
+            if self.logger:
+                self.logger.error(f"Error handling BBO update: {e}")
 
     async def _handle_fill_update(self, ws_channel: Any, message: Dict[str, Any]) -> None:
         """Handle fill update from WebSocket (includes liquidations)."""
@@ -311,5 +315,6 @@ class ParadexWebSocketManager(BaseWebSocketManager):
                 else:
                     self.liquidation_callback([data])
         except Exception as e:
-            self._log(f"Error handling fill update: {e}", "ERROR")
+            if self.logger:
+                self.logger.error(f"Error handling fill update: {e}")
 

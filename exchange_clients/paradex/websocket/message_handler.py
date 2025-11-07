@@ -54,11 +54,6 @@ class ParadexMessageHandler:
         """Set the logger instance."""
         self.logger = logger
 
-    def _log(self, message: str, level: str = "INFO"):
-        """Log message using the logger if available."""
-        if self.logger:
-            self.logger.log(message, level)
-
     def parse_message(self, raw_message: str) -> Optional[Dict[str, Any]]:
         """
         Parse a raw WebSocket message string into a dictionary.
@@ -83,7 +78,8 @@ class ParadexMessageHandler:
             data = json.loads(raw_message)
             return data
         except json.JSONDecodeError as exc:
-            self._log(f"JSON parsing error in Paradex websocket: {exc}", "ERROR")
+            if self.logger:
+                self.logger.error(f"JSON parsing error in Paradex websocket: {exc}")
             return None
 
     def extract_channel_name(self, message: Dict[str, Any]) -> Optional[str]:
@@ -139,7 +135,8 @@ class ParadexMessageHandler:
         try:
             self.order_book_manager.update_order_book(market, data)
         except Exception as e:
-            self._log(f"Error handling order book message: {e}", "ERROR")
+            if self.logger:
+                self.logger.error(f"Error handling order book message: {e}")
 
     def handle_bbo_message(self, channel: str, data: Dict[str, Any], market: str) -> None:
         """
@@ -163,12 +160,13 @@ class ParadexMessageHandler:
                 )
                 # Note: notify_bbo_update is async, but we can't await here
                 # The actual callback invocation happens in manager
-                self._log(
-                    f"[PARADEX] BBO update for {market}: bid={bid}, ask={ask}",
-                    "DEBUG"
-                )
+                if self.logger:
+                    self.logger.debug(
+                        f"[PARADEX] BBO update for {market}: bid={bid}, ask={ask}"
+                    )
         except Exception as e:
-            self._log(f"Error handling BBO message: {e}", "ERROR")
+            if self.logger:
+                self.logger.error(f"Error handling BBO message: {e}")
 
     def handle_order_message(self, channel: str, data: Dict[str, Any]) -> None:
         """
@@ -182,11 +180,13 @@ class ParadexMessageHandler:
             if self.order_update_callback:
                 if asyncio.iscoroutinefunction(self.order_update_callback):
                     # Note: Can't await here, callback will be invoked in manager
-                    self._log(f"[PARADEX] Order update received on {channel}", "DEBUG")
+                    if self.logger:
+                        self.logger.debug(f"[PARADEX] Order update received on {channel}")
                 else:
                     self.order_update_callback(data)
         except Exception as e:
-            self._log(f"Error handling order message: {e}", "ERROR")
+            if self.logger:
+                self.logger.error(f"Error handling order message: {e}")
 
     def handle_fill_message(self, channel: str, data: Dict[str, Any]) -> None:
         """
@@ -199,10 +199,12 @@ class ParadexMessageHandler:
         try:
             fill_type = data.get('fill_type') or data.get('trade_type')
             if fill_type == "LIQUIDATION" and self.liquidation_callback:
-                self._log(f"[PARADEX] Liquidation detected on {channel}", "INFO")
+                if self.logger:
+                    self.logger.info(f"[PARADEX] Liquidation detected on {channel}")
                 # Note: Callback will be invoked in manager
         except Exception as e:
-            self._log(f"Error handling fill message: {e}", "ERROR")
+            if self.logger:
+                self.logger.error(f"Error handling fill message: {e}")
 
     async def dispatch_liquidations(self, notifs: List[Dict[str, Any]]) -> None:
         """Forward liquidation notifications to the registered callback."""
@@ -212,7 +214,8 @@ class ParadexMessageHandler:
         try:
             await self.liquidation_callback(notifs)
         except Exception as exc:
-            self._log(f"Error dispatching liquidation notifications: {exc}", "ERROR")
+            if self.logger:
+                self.logger.error(f"Error dispatching liquidation notifications: {exc}")
 
     async def dispatch_positions(self, payload: Dict[str, Any]) -> None:
         """Forward positions update to the registered callback."""
@@ -222,7 +225,8 @@ class ParadexMessageHandler:
         try:
             await self.positions_callback(payload)
         except Exception as exc:
-            self._log(f"Error dispatching positions update: {exc}", "ERROR")
+            if self.logger:
+                self.logger.error(f"Error dispatching positions update: {exc}")
 
     async def dispatch_user_stats(self, payload: Dict[str, Any]) -> None:
         """Forward user stats update to the registered callback."""
@@ -232,5 +236,6 @@ class ParadexMessageHandler:
         try:
             await self.user_stats_callback(payload)
         except Exception as exc:
-            self._log(f"Error dispatching user stats update: {exc}", "ERROR")
+            if self.logger:
+                self.logger.error(f"Error dispatching user stats update: {exc}")
 

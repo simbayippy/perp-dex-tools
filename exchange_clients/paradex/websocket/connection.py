@@ -34,11 +34,6 @@ class ParadexWebSocketConnection:
         """Set the logger instance."""
         self.logger = logger
 
-    def _log(self, message: str, level: str = "INFO"):
-        """Log message using the logger if available."""
-        if self.logger:
-            self.logger.log(message, level)
-
     async def open_connection(self) -> bool:
         """
         Establish the websocket connection using Paradex SDK.
@@ -51,10 +46,12 @@ class ParadexWebSocketConnection:
             if is_connected:
                 self._connected = True
                 self._reconnect_attempts = 0
-                self._log("[PARADEX] 🔗 Connected to websocket", "INFO")
+                if self.logger:
+                    self.logger.info("[PARADEX] 🔗 Connected to websocket")
             return is_connected
         except Exception as exc:
-            self._log(f"Failed to connect to Paradex websocket: {exc}", "ERROR")
+            if self.logger:
+                self.logger.error(f"Failed to connect to Paradex websocket: {exc}")
             self._connected = False
             return False
 
@@ -69,7 +66,8 @@ class ParadexWebSocketConnection:
                 await asyncio.sleep(0.1)
             except Exception as exc:
                 # Ignore errors during cleanup (websocket might already be closed)
-                self._log(f"Error closing websocket during cleanup: {exc}", "DEBUG")
+                if self.logger:
+                    self.logger.debug(f"Error closing websocket during cleanup: {exc}")
                 self._connected = False
 
     def is_connected(self) -> bool:
@@ -97,10 +95,10 @@ class ParadexWebSocketConnection:
         attempt = 1
         
         while running and attempt <= self.RECONNECT_MAX_ATTEMPTS:
-            self._log(
-                f"[PARADEX] Reconnecting websocket (attempt {attempt}/{self.RECONNECT_MAX_ATTEMPTS})",
-                "WARNING",
-            )
+            if self.logger:
+                self.logger.warning(
+                    f"[PARADEX] Reconnecting websocket (attempt {attempt}/{self.RECONNECT_MAX_ATTEMPTS})"
+                )
             
             try:
                 # Reset order book if function provided
@@ -115,7 +113,8 @@ class ParadexWebSocketConnection:
                     if subscribe_channels_fn:
                         await subscribe_channels_fn()
                     
-                    self._log("[PARADEX] Websocket reconnect successful", "INFO")
+                    if self.logger:
+                        self.logger.info("[PARADEX] Websocket reconnect successful")
                     return True
                 else:
                     raise Exception("Connection failed")
@@ -123,17 +122,17 @@ class ParadexWebSocketConnection:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self._log(
-                    f"[PARADEX] Reconnect attempt {attempt} failed: {exc}. Retrying in {delay:.1f}s",
-                    "ERROR",
-                )
+                if self.logger:
+                    self.logger.error(
+                        f"[PARADEX] Reconnect attempt {attempt} failed: {exc}. Retrying in {delay:.1f}s"
+                    )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, self.RECONNECT_BACKOFF_MAX)
                 attempt += 1
         
-        self._log(
-            f"[PARADEX] Reconnect aborted after {attempt-1} attempts",
-            "WARNING"
-        )
+        if self.logger:
+            self.logger.warning(
+                f"[PARADEX] Reconnect aborted after {attempt-1} attempts"
+            )
         return False
 

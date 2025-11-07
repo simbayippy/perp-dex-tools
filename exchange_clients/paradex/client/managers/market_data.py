@@ -176,11 +176,45 @@ class ParadexMarketData:
             if self.ws_manager and self.ws_manager.order_book_ready:
                 order_book = self.ws_manager.get_order_book(levels=levels)
                 if order_book and order_book.get('bids') and order_book.get('asks'):
-                    self.logger.info(
-                        f"📡 [PARADEX] Using WebSocket order book: {resolved_contract_id} "
-                        f"({len(order_book['bids'])} bids, {len(order_book['asks'])} asks)"
-                    )
-                    return order_book
+                    bids = order_book.get('bids', [])
+                    asks = order_book.get('asks', [])
+                    
+                    # Validate order book quality: check if prices seem reasonable
+                    # If best bid/ask prices are suspiciously low or spread is too wide, fall back to REST
+                    if bids and asks:
+                        best_bid_price = bids[0].get('price', Decimal("0"))
+                        best_ask_price = asks[0].get('price', Decimal("0"))
+                        
+                        # Check for suspicious prices (too small, likely wrong format)
+                        # For RESOLV, price should be around 0.08, not 0.00001
+                        if best_bid_price > 0 and best_ask_price > 0:
+                            spread_bps = ((best_ask_price - best_bid_price) / best_bid_price * 10000) if best_bid_price > 0 else 0
+                            
+                            # If price is suspiciously small (< 0.001) or spread is too wide (> 1000 bps), use REST
+                            if best_bid_price < Decimal("0.001") or best_ask_price < Decimal("0.001") or spread_bps > 1000:
+                                self.logger.warning(
+                                    f"⚠️ [PARADEX] WebSocket order book has suspicious prices for {resolved_contract_id}: "
+                                    f"bid={best_bid_price}, ask={best_ask_price}, spread={spread_bps:.0f} bps | "
+                                    f"Falling back to REST API"
+                                )
+                            else:
+                                self.logger.info(
+                                    f"📡 [PARADEX] Using WebSocket order book: {resolved_contract_id} "
+                                    f"({len(bids)} bids, {len(asks)} asks) | "
+                                    f"Best: {best_bid_price}/{best_ask_price} | "
+                                    f"Spread: {spread_bps:.0f} bps"
+                                )
+                                return order_book
+                        else:
+                            self.logger.warning(
+                                f"⚠️ [PARADEX] WebSocket order book has invalid prices for {resolved_contract_id}, "
+                                f"falling back to REST API"
+                            )
+                    else:
+                        self.logger.warning(
+                            f"⚠️ [PARADEX] WebSocket order book empty for {resolved_contract_id}, "
+                            f"falling back to REST API"
+                        )
                 else:
                     self.logger.warning(
                         f"⚠️ [PARADEX] WebSocket order book not ready or empty for {resolved_contract_id}, "
