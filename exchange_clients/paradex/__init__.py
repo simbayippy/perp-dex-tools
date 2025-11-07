@@ -4,7 +4,7 @@ Paradex Exchange Client Module
 Provides both trading execution and funding rate collection for Paradex DEX.
 """
 
-from .client import ParadexClient
+from .client.core import ParadexClient
 from .funding_adapter import ParadexFundingAdapter  # Now imports from funding_adapter/ package
 from .common import (
     normalize_symbol,
