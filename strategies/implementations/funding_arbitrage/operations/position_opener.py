@@ -55,6 +55,11 @@ class OrderPlan:
 
 class PositionOpener:
     """Encapsulates the complex flow required to open a funding arb position."""
+    
+    # Class-level cache for untradeable symbols per exchange
+    # Format: {exchange_name: {symbol: True}}
+    # This prevents retrying symbols that are known to be untradeable
+    _untradeable_symbols_cache: Dict[str, Dict[str, bool]] = {}
 
     def __init__(self, strategy: "FundingArbitrageStrategy") -> None:
         self._strategy = strategy
@@ -760,8 +765,8 @@ class PositionOpener:
         strategy = self._strategy
         try:
             exchange_name = exchange_client.get_exchange_name()
-
-            config_ticker = getattr(exchange_client.config, "ticker", "")
+            
+            # Normalize symbol for cache lookup
             if hasattr(exchange_client, "normalize_symbol"):
                 try:
                     normalized_symbol = exchange_client.normalize_symbol(symbol).upper()
@@ -769,6 +774,17 @@ class PositionOpener:
                     normalized_symbol = symbol.upper()
             else:
                 normalized_symbol = symbol.upper()
+            
+            # Check if this symbol is already known to be untradeable on this exchange
+            if exchange_name in self._untradeable_symbols_cache:
+                if normalized_symbol in self._untradeable_symbols_cache[exchange_name]:
+                    strategy.logger.debug(
+                        f"⏭️  [{exchange_name.upper()}] Skipping {symbol} - known to be untradeable "
+                        "(cached from previous attempt)"
+                    )
+                    return False
+            
+            config_ticker = getattr(exchange_client.config, "ticker", "")
             contract_cache = getattr(exchange_client, "_contract_id_cache", {})
             has_cached_contract = normalized_symbol in contract_cache
             base_missing = getattr(exchange_client, "base_amount_multiplier", None) is None
@@ -817,6 +833,10 @@ class PositionOpener:
                         strategy.logger.warning(
                             f"❌ [{exchange_name.upper()}] Symbol {symbol} initialization returned empty contract_id"
                         )
+                        # Cache as untradeable
+                        if exchange_name not in self._untradeable_symbols_cache:
+                            self._untradeable_symbols_cache[exchange_name] = {}
+                        self._untradeable_symbols_cache[exchange_name][normalized_symbol] = True
                         return False
 
                     if needs_refresh:
@@ -826,10 +846,14 @@ class PositionOpener:
 
                 except ValueError as exc:
                     error_msg = str(exc).lower()
-                    if "not found" in error_msg or "not supported" in error_msg:
+                    if "not found" in error_msg or "not supported" in error_msg or "not tradeable" in error_msg:
                         strategy.logger.warning(
                             f"⚠️  [{exchange_name.upper()}] Symbol {symbol} is NOT TRADEABLE on {exchange_name}"
                         )
+                        # Cache as untradeable to prevent future retries
+                        if exchange_name not in self._untradeable_symbols_cache:
+                            self._untradeable_symbols_cache[exchange_name] = {}
+                        self._untradeable_symbols_cache[exchange_name][normalized_symbol] = True
                         return False
                     raise
                 finally:
@@ -841,4 +865,5 @@ class PositionOpener:
             strategy.logger.error(
                 f"❌ [{exchange_client.get_exchange_name().upper()}] Failed to ensure contract attributes for {symbol}: {exc}"
             )
+            # Don't cache on unexpected errors - might be transient
             return False
