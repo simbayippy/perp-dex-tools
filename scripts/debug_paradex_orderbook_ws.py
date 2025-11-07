@@ -18,7 +18,6 @@ sys.path.insert(0, str(project_root))
 
 from paradex_py import Paradex
 from paradex_py.api.ws_client import ParadexWebsocketChannel
-from paradex_py.environment import PRODUCTION, TESTNET
 
 
 async def order_book_callback(ws_channel, message: dict) -> None:
@@ -140,8 +139,8 @@ async def bbo_callback(ws_channel, message: dict) -> None:
 
 async def main():
     """Main function to connect and subscribe to Paradex WebSocket."""
-    # Use production by default, can be changed to TESTNET
-    env = PRODUCTION
+    # Hardcoded to production
+    env = "prod"
     
     print("🚀 Starting Paradex WebSocket ORDER_BOOK Debug Script")
     print(f"📡 Environment: {env}")
