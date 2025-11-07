@@ -325,6 +325,7 @@ class ParadexMarketData:
                 self.config.tick_size = tick_size
                 
                 # Cache contract_id for multi-symbol trading
+                # ContractIdCache supports dict-like access, so we can use [] syntax
                 if cache_key not in self.contract_id_cache:
                     self.contract_id_cache[cache_key] = contract_id
                 
@@ -347,6 +348,7 @@ class ParadexMarketData:
         self.config.tick_size = tick_size
         
         # Cache contract_id for multi-symbol trading
+        # ContractIdCache supports dict-like access, so we can use [] syntax
         if cache_key not in self.contract_id_cache:
             self.contract_id_cache[cache_key] = contract_id
         

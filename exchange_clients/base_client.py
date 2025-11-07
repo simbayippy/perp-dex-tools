@@ -467,12 +467,8 @@ class BaseExchangeClient(ABC):
             contract_id = getattr(self.config, "contract_id", None)
             if contract_id:
                 # Cache it for future use
-                if hasattr(self._contract_id_cache, 'set'):
-                    # Custom cache class (ContractIdCache)
-                    self._contract_id_cache.set(symbol_upper, contract_id)
-                elif isinstance(self._contract_id_cache, dict):
-                    # Plain dict cache
-                    self._contract_id_cache[symbol_upper] = contract_id
+                # ContractIdCache supports dict-like access via __setitem__
+                self._contract_id_cache[symbol_upper] = contract_id
                 return contract_id
         
         # Final fallback: return symbol as-is (exchange will normalize it)

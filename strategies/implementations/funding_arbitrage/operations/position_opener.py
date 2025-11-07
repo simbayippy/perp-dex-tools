@@ -782,11 +782,26 @@ class PositionOpener:
             
             config_ticker = getattr(exchange_client.config, "ticker", "")
             contract_cache = getattr(exchange_client, "_contract_id_cache", {})
-            has_cached_contract = normalized_symbol in contract_cache
+            
+            # ContractIdCache supports dict-like access (__contains__, __getitem__)
+            # and also has .get() method, so we can use either pattern
+            # Using .get() is safer as it returns None for missing keys
+            if hasattr(contract_cache, 'get'):
+                # ContractIdCache or dict - both support .get() and 'in' operator
+                has_cached_contract = normalized_symbol in contract_cache
+                cached_contract = contract_cache.get(normalized_symbol)
+            elif isinstance(contract_cache, dict):
+                # Plain dict cache
+                has_cached_contract = normalized_symbol in contract_cache
+                cached_contract = contract_cache.get(normalized_symbol)
+            else:
+                # Fallback: assume no cache
+                has_cached_contract = False
+                cached_contract = None
+            
             base_missing = getattr(exchange_client, "base_amount_multiplier", None) is None
             price_missing = getattr(exchange_client, "price_multiplier", None) is None
             current_contract = getattr(exchange_client.config, "contract_id", None)
-            cached_contract = contract_cache.get(normalized_symbol)
             contract_mismatch = (
                 has_cached_contract
                 and cached_contract is not None
