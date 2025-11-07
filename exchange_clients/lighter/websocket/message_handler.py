@@ -171,6 +171,8 @@ class LighterMessageHandler:
             self.order_book_manager.update_order_book("asks", order_book.get("asks", []))
             self.order_book_manager.snapshot_loaded = True
             self.order_book_manager.order_book_ready = True
+            # Mark snapshot as fresh update (ensure timestamp is set even if order book was empty)
+            self.order_book_manager.last_update_timestamp = time.time()
 
             # Extract BBO from the snapshot
             (best_bid_price, _), (best_ask_price, _) = self.order_book_manager.get_best_levels(min_size_usd=0)

@@ -38,6 +38,7 @@ class LighterPositionManager:
         positions_ready: asyncio.Event,
         ws_manager: Optional[Any] = None,
         normalize_symbol_fn: Optional[Any] = None,
+        market_data: Optional[Any] = None,
     ):
         """
         Initialize position manager.
@@ -54,6 +55,7 @@ class LighterPositionManager:
             positions_ready: Event signaling positions are ready
             ws_manager: Optional WebSocket manager (for live mark prices)
             normalize_symbol_fn: Function to normalize symbols
+            market_data: Optional MarketData manager (for REST fallback when websocket unavailable)
         """
         self.account_api = account_api
         self.order_api = order_api
@@ -65,6 +67,7 @@ class LighterPositionManager:
         self.positions_lock = positions_lock
         self.positions_ready = positions_ready
         self.ws_manager = ws_manager
+        self.market_data = market_data
         self.normalize_symbol = normalize_symbol_fn or (lambda s: s.upper())
     
     def get_live_mark_price(self, normalized_symbol: str) -> Optional[Decimal]:
@@ -75,6 +78,8 @@ class LighterPositionManager:
         changes when the exchange pushes a fresh position update. We reuse the best bid/ask
         tracked by the WebSocket to keep the mark current without hitting the heavy REST
         endpoint.
+        
+        Automatically detects stale order book and triggers refresh if needed.
         """
         if self.ws_manager is None:
             self.logger.warning("[LIGHTER] Skipping live mark enrichment – websocket manager unavailable")
@@ -85,6 +90,36 @@ class LighterPositionManager:
             active_symbol = self.normalize_symbol(str(config_symbol)).upper()
             if normalized_symbol != active_symbol:
                 return None
+
+        # Check if order book is stale and trigger refresh/reconnect if needed
+        if self.ws_manager.order_book.is_stale():
+            staleness_seconds = self.ws_manager.order_book.get_staleness_seconds()
+            
+            # Helper to trigger async task without blocking
+            def _trigger_async_task(coro):
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.create_task(coro)
+                except RuntimeError:
+                    pass  # No event loop, skip (will use REST fallback)
+            
+            if self.ws_manager.order_book.needs_reconnect():
+                # Order book is stale for extended period (>3 minutes) - force full reconnect
+                self.logger.warning(
+                    f"[LIGHTER] Order book is stale for extended period ({staleness_seconds:.1f}s). "
+                    "Forcing full websocket reconnect..."
+                )
+                _trigger_async_task(self.ws_manager.force_reconnect())
+            else:
+                # Order book is stale but not long enough for reconnect - try refresh first
+                self.logger.warning(
+                    f"[LIGHTER] Order book is stale ({staleness_seconds:.1f}s since last update). "
+                    "Requesting fresh snapshot..."
+                )
+                _trigger_async_task(self.ws_manager.request_fresh_snapshot())
+            
+            return None  # Return None to trigger REST fallback
 
         midpoint_candidates: List[Decimal] = []
         for price in (self.ws_manager.best_bid, self.ws_manager.best_ask):
@@ -111,35 +146,97 @@ class LighterPositionManager:
     ) -> None:
         """
         Refresh mark price, exposure, and unrealized PnL using the latest order-book data.
+        
+        Falls back to REST API when websocket is unavailable, then cached mark_price or raw unrealized_pnl.
+        
+        Note: Even though websocket reconnection exists, it only triggers when the connection
+        breaks. After server hours, the websocket may stay connected (ping/pong keeps it alive)
+        but order book updates stop, causing best_bid/best_ask to become stale. In this case,
+        we fetch fresh mark price from REST API, then prefer exchange-provided unrealized_pnl
+        from position updates (source of truth) over calculated values from stale order book data.
         """
         live_mark = self.get_live_mark_price(normalized_symbol)
-        if live_mark is None:
-            return
+        
+        # If live mark is unavailable (websocket stopped), try REST API fallback
+        mark_price_to_use = live_mark
+        if mark_price_to_use is None:
+            # Try REST API to get fresh mark price (when websocket order book stops updating)
+            if self.market_data is not None:
+                try:
+                    contract_id = getattr(self.config, "contract_id", None)
+                    if contract_id:
+                        bid, ask = await self.market_data.fetch_bbo_prices(str(contract_id))
+                        if bid is not None and ask is not None:
+                            mark_price_to_use = (bid + ask) / Decimal("2")
+                            self.logger.debug(
+                                f"[LIGHTER] Using REST API mark_price for {normalized_symbol} "
+                                f"(websocket unavailable): {mark_price_to_use}"
+                            )
+                except Exception as exc:
+                    self.logger.debug(
+                        f"[LIGHTER] Failed to fetch mark price from REST API for {normalized_symbol}: {exc}"
+                    )
+            
+            # If REST API also failed, try cached mark_price from raw data
+            if mark_price_to_use is None:
+                cached_mark = decimal_or_none(raw.get("mark_price"))
+                if cached_mark is not None:
+                    mark_price_to_use = cached_mark
+                    self.logger.debug(
+                        f"[LIGHTER] Using cached mark_price for {normalized_symbol} "
+                        "(websocket and REST unavailable)"
+                    )
+        
+        # If we have a mark price (live or cached), update snapshot
+        if mark_price_to_use is not None:
+            snapshot.mark_price = mark_price_to_use
 
-        snapshot.mark_price = live_mark
+            quantity = snapshot.quantity or Decimal("0")
+            quantity_abs = quantity.copy_abs()
+            if quantity_abs != 0:
+                snapshot.exposure_usd = quantity_abs * mark_price_to_use
 
-        quantity = snapshot.quantity or Decimal("0")
-        quantity_abs = quantity.copy_abs()
-        if quantity_abs != 0:
-            snapshot.exposure_usd = quantity_abs * live_mark
+            # When live mark is unavailable (websocket stopped), prefer exchange-provided unrealized_pnl
+            # over calculated value, as exchange is the source of truth
+            raw_unrealized = decimal_or_none(raw.get("unrealized_pnl"))
+            if live_mark is None and raw_unrealized is not None:
+                # Websocket order book stopped, but position updates may still be coming
+                # Use exchange-provided unrealized_pnl (more accurate than calculated from cached mark)
+                snapshot.unrealized_pnl = raw_unrealized
+                self.logger.debug(
+                    f"[LIGHTER] Using exchange unrealized_pnl for {normalized_symbol} "
+                    f"(websocket unavailable): {raw_unrealized}"
+                )
+            else:
+                # Calculate uPnL from mark price if we have entry price
+                # (only when live mark is available, or when exchange unrealized_pnl is not available)
+                entry_price = snapshot.entry_price
+                if entry_price is not None and quantity != 0:
+                    try:
+                        snapshot.unrealized_pnl = (mark_price_to_use - entry_price) * quantity
+                    except Exception:
+                        pass
 
-        entry_price = snapshot.entry_price
-        if entry_price is not None and quantity != 0:
-            try:
-                snapshot.unrealized_pnl = (live_mark - entry_price) * quantity
-            except Exception:
-                pass
-
-        async with self.positions_lock:
-            cached = self.raw_positions.get(normalized_symbol)
-            if cached is None:
-                return
-
-            cached["mark_price"] = str(live_mark)
-            if snapshot.exposure_usd is not None:
-                cached["position_value"] = str(snapshot.exposure_usd)
-            if snapshot.unrealized_pnl is not None:
-                cached["unrealized_pnl"] = str(snapshot.unrealized_pnl)
+            async with self.positions_lock:
+                cached = self.raw_positions.get(normalized_symbol)
+                if cached is not None:
+                    cached["mark_price"] = str(mark_price_to_use)
+                    if snapshot.exposure_usd is not None:
+                        cached["position_value"] = str(snapshot.exposure_usd)
+                    if snapshot.unrealized_pnl is not None:
+                        cached["unrealized_pnl"] = str(snapshot.unrealized_pnl)
+        else:
+            # No mark price available (neither live nor cached)
+            # Fall back to unrealized_pnl from raw data if available
+            # This is important when websocket stops updating - exchange still sends position updates
+            # with updated unrealized_pnl, so we should use that instead of stale calculated value
+            raw_unrealized = decimal_or_none(raw.get("unrealized_pnl"))
+            if raw_unrealized is not None:
+                snapshot.unrealized_pnl = raw_unrealized
+                self.logger.debug(
+                    f"[LIGHTER] Using unrealized_pnl from raw data for {normalized_symbol} "
+                    "(websocket unavailable, no cached mark_price): {raw_unrealized}"
+                )
     
     async def snapshot_from_cache(
         self, 

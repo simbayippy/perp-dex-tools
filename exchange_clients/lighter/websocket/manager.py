@@ -211,6 +211,26 @@ class LighterWebSocketManager(BaseWebSocketManager):
         except Exception as e:
             self._log(f"Error requesting fresh snapshot: {e}", "ERROR")
             raise
+    
+    async def force_reconnect(self):
+        """
+        Force a full websocket reconnect by closing the current connection.
+        
+        This will cause _consume_messages() to fail, triggering the reconnect mechanism
+        in _listen_loop(). Use this when order book is stale for extended period.
+        """
+        self._log(
+            "[LIGHTER] Forcing websocket reconnect due to stale order book",
+            "WARNING"
+        )
+        try:
+            # Close the current connection - this will cause _consume_messages() to fail
+            # and trigger the reconnect mechanism in _listen_loop()
+            await self.connection.cleanup_current_ws()
+            self.order_book.order_book_ready = False
+            self.order_book.snapshot_loaded = False
+        except Exception as e:
+            self._log(f"Error forcing reconnect: {e}", "ERROR")
 
     async def _subscribe_channels(self) -> None:
         """Subscribe to the required Lighter channels."""

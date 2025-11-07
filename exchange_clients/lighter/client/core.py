@@ -250,6 +250,7 @@ class LighterClient(BaseExchangeClient):
                 positions_ready=self._positions_ready,
                 ws_manager=None,  # Will be set after ws_manager is created
                 normalize_symbol_fn=self.normalize_symbol,
+                market_data=self.market_data,  # For REST fallback when websocket unavailable
             )
             
             # Initialize account manager
