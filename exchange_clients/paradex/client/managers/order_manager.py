@@ -110,6 +110,11 @@ class ParadexOrderManager:
             else:
                 order_size_increment = getattr(self.config, 'order_size_increment', Decimal('0.001'))
             
+            # CRITICAL: Ensure quantity and price are Decimal before any operations
+            # Paradex SDK Order class uses .scaleb(8) which requires Decimal
+            quantity = Decimal(str(quantity)) if not isinstance(quantity, Decimal) else quantity
+            price = Decimal(str(price)) if not isinstance(price, Decimal) else price
+            
             # Round quantity to order size increment
             if order_size_increment:
                 # Ensure order_size_increment is Decimal
@@ -118,8 +123,6 @@ class ParadexOrderManager:
                 quantity = quantity.quantize(order_size_increment, rounding=ROUND_HALF_UP)
             
             # Round price to tick size
-            # Ensure price and tick_size are Decimal before quantizing
-            price = Decimal(str(price)) if not isinstance(price, Decimal) else price
             tick_size = getattr(self.config, 'tick_size', None)
             if tick_size:
                 # Ensure tick_size is Decimal
@@ -242,8 +245,15 @@ class ParadexOrderManager:
             else:
                 order_size_increment = getattr(self.config, 'order_size_increment', Decimal('0.001'))
             
+            # CRITICAL: Ensure quantity is Decimal before any operations
+            # Paradex SDK Order class uses .scaleb(8) which requires Decimal
+            quantity = Decimal(str(quantity)) if not isinstance(quantity, Decimal) else quantity
+            
             # Round quantity to order size increment
             if order_size_increment:
+                # Ensure order_size_increment is Decimal
+                if not isinstance(order_size_increment, Decimal):
+                    order_size_increment = Decimal(str(order_size_increment))
                 quantity = quantity.quantize(order_size_increment, rounding=ROUND_HALF_UP)
             
             # Convert side string to OrderSide enum
