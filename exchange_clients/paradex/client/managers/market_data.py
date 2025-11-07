@@ -91,15 +91,19 @@ class ParadexMarketData:
                 # Convert to Paradex format (assume PERP)
                 resolved_contract_id = f"{contract_id.upper()}-USD-PERP"
         
-        # Try WebSocket manager's order book first (if available and ready)
-        if self.ws_manager and self.ws_manager.order_book_ready:
-            order_book = self.ws_manager.get_order_book(levels=1)
-            if order_book and order_book.get('bids') and order_book.get('asks'):
-                best_bid = order_book['bids'][0]['price']
-                best_ask = order_book['asks'][0]['price']
-                if best_bid > 0 and best_ask > 0:
-                    self.logger.debug(f"Using WebSocket manager order book for BBO: {best_bid}/{best_ask}")
-                    return best_bid, best_ask
+        # Try WebSocket manager's BBO stream first (most accurate and real-time)
+        # BBO stream has correct prices (e.g., "0.07631"), unlike ORDER_BOOK stream
+        if self.ws_manager:
+            latest_bbo = self.ws_manager.get_latest_bbo()
+            if latest_bbo:
+                # Match symbol (BBO stream sends full format like "RESOLV-USD-PERP")
+                bbo_symbol = latest_bbo.symbol
+                if bbo_symbol == resolved_contract_id or bbo_symbol == contract_id:
+                    bid = to_decimal(latest_bbo.bid)
+                    ask = to_decimal(latest_bbo.ask)
+                    if bid and ask and bid > 0 and ask > 0:
+                        self.logger.debug(f"📡 [PARADEX] Using BBO stream for {resolved_contract_id}: {bid}/{ask}")
+                        return bid, ask
         
         # Fall back to REST API
         try:
@@ -173,20 +177,46 @@ class ParadexMarketData:
         
         try:
             # Try WebSocket manager's order book first (real-time, zero latency)
+            # NOTE: ORDER_BOOK stream with price_tick="0_1" groups prices into tick buckets (0.1 increments).
+            # The prices represent tick levels, not exact prices. For exact BBO prices, use BBO stream.
+            # For liquidity depth analysis, tick-grouped prices are still useful to see depth at different levels.
             if self.ws_manager and self.ws_manager.order_book_ready:
                 order_book = self.ws_manager.get_order_book(levels=levels)
                 if order_book and order_book.get('bids') and order_book.get('asks'):
                     bids = order_book.get('bids', [])
                     asks = order_book.get('asks', [])
                     
-                    # Validate order book quality: check if prices seem reasonable
-                    # If best bid/ask prices are suspiciously low or spread is too wide, fall back to REST
                     if bids and asks:
+                        # IMPORTANT: ORDER_BOOK stream has tick-grouped prices (not exact).
+                        # Replace the best bid/ask with exact prices from BBO stream for accurate spread calculation.
+                        # This ensures LiquidityAnalyzer gets exact prices without needing exchange-specific changes.
+                        latest_bbo = self.ws_manager.get_latest_bbo()
+                        if latest_bbo:
+                            bbo_symbol = latest_bbo.symbol
+                            if bbo_symbol == resolved_contract_id or bbo_symbol == contract_id:
+                                exact_bid = to_decimal(latest_bbo.bid)
+                                exact_ask = to_decimal(latest_bbo.ask)
+                                
+                                if exact_bid and exact_ask and exact_bid > 0 and exact_ask > 0:
+                                    # Replace first level prices with exact BBO prices
+                                    # Keep sizes from ORDER_BOOK (they're still valid for depth)
+                                    bids[0] = {'price': exact_bid, 'size': bids[0].get('size', Decimal("0"))}
+                                    asks[0] = {'price': exact_ask, 'size': asks[0].get('size', Decimal("0"))}
+                                    
+                                    spread_bps = ((exact_ask - exact_bid) / exact_bid * 10000) if exact_bid > 0 else 0
+                                    self.logger.debug(
+                                        f"📡 [PARADEX] Using WebSocket order book with exact BBO prices: {resolved_contract_id} "
+                                        f"({len(bids)} bids, {len(asks)} asks) | "
+                                        f"Best: {exact_bid}/{exact_ask} | "
+                                        f"Spread: {spread_bps:.0f} bps"
+                                    )
+                                    return order_book
+                        
+                        # Fallback: Validate tick-grouped prices
+                        # If we don't have BBO data, check if tick-grouped prices are reasonable
                         best_bid_price = bids[0].get('price', Decimal("0"))
                         best_ask_price = asks[0].get('price', Decimal("0"))
                         
-                        # Check for suspicious prices (too small, likely wrong format)
-                        # For RESOLV, price should be around 0.08, not 0.00001
                         if best_bid_price > 0 and best_ask_price > 0:
                             spread_bps = ((best_ask_price - best_bid_price) / best_bid_price * 10000) if best_bid_price > 0 else 0
                             
@@ -199,7 +229,7 @@ class ParadexMarketData:
                                 )
                             else:
                                 self.logger.info(
-                                    f"📡 [PARADEX] Using WebSocket order book: {resolved_contract_id} "
+                                    f"📡 [PARADEX] Using WebSocket order book (tick-grouped): {resolved_contract_id} "
                                     f"({len(bids)} bids, {len(asks)} asks) | "
                                     f"Best: {best_bid_price}/{best_ask_price} | "
                                     f"Spread: {spread_bps:.0f} bps"

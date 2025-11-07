@@ -51,6 +51,10 @@ class ParadexOrderBook:
         Paradex sends order book updates with 'deletes', 'inserts', and 'updates' arrays.
         Alternatively, it may send 'bids' and 'asks' arrays directly.
         
+        IMPORTANT: When using price_tick parameter (e.g., "0_1"), Paradex groups prices
+        into tick buckets. The prices in inserts/updates/deletes represent tick levels,
+        not exact prices. For exact BBO prices, use the BBO stream instead.
+        
         Args:
             market: Market symbol (e.g., "BTC-USD-PERP")
             data: Order book update data from WebSocket
