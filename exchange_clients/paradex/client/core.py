@@ -27,6 +27,30 @@ from .managers.websocket_handlers import ParadexWebSocketHandlers
 from .utils.caching import ContractIdCache
 
 
+def suppress_paradex_sdk_logging():
+    """Suppress Paradex SDK's native logging to prevent interference with unified logger."""
+    try:
+        import logging
+        
+        # Suppress SDK's native logging by setting log level to WARNING or higher
+        # This prevents SDK from emitting INFO/DEBUG logs via Python's logging module
+        sdk_loggers = [
+            'paradex_py',
+            'paradex_py.api',
+            'paradex_py.api.api_client',
+            'paradex_py.api.http_client',
+            'paradex_py.api.ws_client',
+            'paradex_py.paradex',
+            'paradex_py.account',
+            'httpx',  # Also suppress httpx logging (used by SDK)
+        ]
+        for logger_name in sdk_loggers:
+            logging.getLogger(logger_name).setLevel(logging.WARNING)
+    except Exception:
+        # Silently fail if logging module is not available
+        pass
+
+
 def patch_paradex_http_client():
     """Patch Paradex SDK HttpClient to suppress unwanted print statements."""
     try:
@@ -90,6 +114,9 @@ class ParadexClient(BaseExchangeClient):
             environment: Optional environment name (falls back to env var, default 'prod')
             order_fill_callback: Optional callback for order fills
         """
+        # Suppress SDK logging BEFORE any SDK imports
+        suppress_paradex_sdk_logging()
+        
         # Apply HTTP client patch
         patch_paradex_http_client()
         
@@ -138,6 +165,8 @@ class ParadexClient(BaseExchangeClient):
             from paradex_py import Paradex
             from paradex_py.environment import TESTNET, PROD
             
+            # SDK logging is already suppressed in __init__ via suppress_paradex_sdk_logging()
+            
             # Convert environment string to proper enum
             env_map = {
                 'prod': PROD,
@@ -153,10 +182,10 @@ class ParadexClient(BaseExchangeClient):
             except Exception as e:
                 raise ValueError(f"Invalid L2 private key format: {e}")
             
-            # Initialize Paradex client
+            # Initialize Paradex client with logger=None to prevent SDK from creating its own logger
             self.paradex = Paradex(
                 env=self.env,
-                logger=None  # Disabled native logging
+                logger=None  # Disabled native logging - SDK will use suppressed loggers
             )
             
             # Initialize account with L2 private key
