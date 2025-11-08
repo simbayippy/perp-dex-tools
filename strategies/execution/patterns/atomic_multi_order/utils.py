@@ -103,7 +103,20 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
         return
 
     reported_qty = coerce_decimal(getattr(order_info, "filled_size", None))
-    if reported_qty is None or reported_qty <= ctx.filled_quantity:
+    if reported_qty is None or reported_qty <= Decimal("0"):
+        # No fill reported, or zero fill - nothing to reconcile
+        logger.debug(
+            f"Reconcile: {ctx.spec.symbol} order {order_id} reported filled_size={reported_qty}, "
+            f"current ctx.filled_quantity={ctx.filled_quantity}. No reconciliation needed."
+        )
+        return
+    
+    if reported_qty <= ctx.filled_quantity:
+        # Already accounted for this fill (or less than what we have)
+        logger.debug(
+            f"Reconcile: {ctx.spec.symbol} order {order_id} reported filled_size={reported_qty} "
+            f"<= current ctx.filled_quantity={ctx.filled_quantity}. No reconciliation needed."
+        )
         return
 
     price_candidates = [
@@ -117,6 +130,25 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
             break
 
     additional = reported_qty - ctx.filled_quantity
+    
+    # Safety check: if additional is suspiciously large (more than spec quantity), log warning
+    spec_qty = getattr(ctx.spec, "quantity", None)
+    if spec_qty is not None:
+        spec_qty_dec = Decimal(str(spec_qty))
+        if additional > spec_qty_dec * Decimal("1.1"):  # More than 10% over expected
+            logger.warning(
+                f"⚠️ Reconcile: Suspicious fill detected for {ctx.spec.symbol} order {order_id}: "
+                f"additional={additional} exceeds spec.quantity={spec_qty_dec} by >10%. "
+                f"reported_qty={reported_qty}, ctx.filled_quantity={ctx.filled_quantity}. "
+                f"Skipping reconciliation to prevent incorrect position tracking."
+            )
+            return
+    
+    logger.info(
+        f"Reconcile: {ctx.spec.symbol} order {order_id} - adding fill: "
+        f"additional={additional} @ {reported_price or 'unknown price'}, "
+        f"total will be {ctx.filled_quantity + additional}"
+    )
     ctx.record_fill(additional, reported_price)
 
     if ctx.result is None:

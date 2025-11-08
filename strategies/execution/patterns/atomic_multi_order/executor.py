@@ -214,6 +214,15 @@ class AtomicMultiOrderExecutor:
             for ctx in contexts:
                 await reconcile_context_after_cancel(ctx, self.logger)
 
+            # Debug: Log context state before retry check
+            for ctx in contexts:
+                self.logger.debug(
+                    f"[RETRY-CHECK] {ctx.spec.exchange_client.get_exchange_name().upper()} {ctx.spec.symbol} "
+                    f"({ctx.spec.side}): filled_qty={ctx.filled_quantity}, "
+                    f"filled_usd={ctx.filled_usd}, remaining_qty={ctx.remaining_quantity}, "
+                    f"remaining_usd={ctx.remaining_usd}, has_result={ctx.result is not None}"
+                )
+            
             # Check if retries are needed and execute them
             retry_executed, retry_attempts, retry_success, retry_rollback_cost = await self._check_and_execute_retries(
                 contexts=contexts,
@@ -493,11 +502,26 @@ class AtomicMultiOrderExecutor:
                     f"match={'✓' if abs(c.filled_quantity - result_qty) < Decimal('0.0001') else '✗ MISMATCH'}"
                 )
         
-        rollback_payload = [
-            context_to_filled_dict(c)
-            for c in contexts
-            if c.filled_quantity > Decimal("0") and c.result
-        ]
+        # Safety check: Only rollback contexts with actual fills
+        # Double-check that filled_quantity matches what the exchange reports
+        rollback_payload = []
+        for c in contexts:
+            if c.filled_quantity > Decimal("0") and c.result:
+                # Additional safety: verify filled_quantity is reasonable
+                spec_qty = getattr(c.spec, "quantity", None)
+                if spec_qty is not None:
+                    spec_qty_dec = Decimal(str(spec_qty))
+                    # If filled_quantity exceeds spec.quantity significantly, something is wrong
+                    if c.filled_quantity > spec_qty_dec * Decimal("1.1"):
+                        self.logger.error(
+                            f"⚠️ ROLLBACK SKIP: {c.spec.symbol} ({c.spec.side}) has suspicious filled_quantity: "
+                            f"{c.filled_quantity} exceeds spec.quantity={spec_qty_dec} by >10%. "
+                            f"This likely indicates a bug. Skipping rollback for this context."
+                        )
+                        continue
+                
+                rollback_payload.append(context_to_filled_dict(c))
+        
         rollback_cost = await self._rollback_filled_orders(rollback_payload)
         self.logger.warning(
             f"🛡️ Emergency rollback completed; cost=${rollback_cost:.4f}. "
@@ -712,11 +736,25 @@ class AtomicMultiOrderExecutor:
                             f"accumulated={c.filled_quantity}, result_dict={result_qty}"
                         )
                 
-                rollback_payload = [
-                    context_to_filled_dict(c)
-                    for c in contexts
-                    if c.filled_quantity > Decimal("0") and c.result
-                ]
+                # Safety check: Only rollback contexts with actual fills
+                rollback_payload = []
+                for c in contexts:
+                    if c.filled_quantity > Decimal("0") and c.result:
+                        # Additional safety: verify filled_quantity is reasonable
+                        spec_qty = getattr(c.spec, "quantity", None)
+                        if spec_qty is not None:
+                            spec_qty_dec = Decimal(str(spec_qty))
+                            # If filled_quantity exceeds spec.quantity significantly, something is wrong
+                            if c.filled_quantity > spec_qty_dec * Decimal("1.1"):
+                                self.logger.error(
+                                    f"⚠️ ROLLBACK SKIP: {c.spec.symbol} ({c.spec.side}) has suspicious filled_quantity: "
+                                    f"{c.filled_quantity} exceeds spec.quantity={spec_qty_dec} by >10%. "
+                                    f"This likely indicates a bug. Skipping rollback for this context."
+                                )
+                                continue
+                        
+                        rollback_payload.append(context_to_filled_dict(c))
+                
                 rollback_cost = await self._rollback_filled_orders(rollback_payload)
                 self.logger.warning(
                     f"Rollback completed after hedge failure; total cost ${rollback_cost:.4f}"

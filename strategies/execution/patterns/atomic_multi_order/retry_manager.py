@@ -57,6 +57,7 @@ class RetryManager:
         Returns:
             Tuple[success, attempts_used]
         """
+        self._logger = logger  # Store logger for _collect_deficits
         if policy.max_attempts <= 0:
             return False, 0
 
@@ -140,8 +141,8 @@ class RetryManager:
 
         return False, attempts_used
 
-    @staticmethod
     def _collect_deficits(
+        self,
         contexts: Sequence[Any],
         policy: RetryPolicy,
     ) -> List[Tuple[Any, Decimal]]:
@@ -150,10 +151,35 @@ class RetryManager:
             remaining_qty = getattr(ctx, "remaining_quantity", None)
             if remaining_qty is None:
                 remaining_qty = Decimal("0")
+            
+            # Debug logging
+            exchange_name = getattr(ctx.spec.exchange_client, "get_exchange_name", lambda: "UNKNOWN")()
+            spec_qty = getattr(ctx.spec, "quantity", None)
+            filled_qty = getattr(ctx, "filled_quantity", Decimal("0"))
+            hedge_target = getattr(ctx, "hedge_target_quantity", None)
+            
             if remaining_qty <= Decimal("0"):
+                # Log why we're skipping
+                if self._logger:
+                    self._logger.debug(
+                        f"[RETRY] Skipping {exchange_name.upper()} {ctx.spec.symbol}: "
+                        f"remaining_qty={remaining_qty} (spec_qty={spec_qty}, filled={filled_qty}, "
+                        f"hedge_target={hedge_target})"
+                    )
                 continue
             if policy.min_retry_quantity and remaining_qty < policy.min_retry_quantity:
+                if self._logger:
+                    self._logger.debug(
+                        f"[RETRY] Skipping {exchange_name.upper()} {ctx.spec.symbol}: "
+                        f"remaining_qty={remaining_qty} below min_retry_quantity={policy.min_retry_quantity}"
+                    )
                 continue
+            
+            if self._logger:
+                self._logger.info(
+                    f"[RETRY] Including {exchange_name.upper()} {ctx.spec.symbol}: "
+                    f"remaining_qty={remaining_qty} (spec_qty={spec_qty}, filled={filled_qty})"
+                )
             deficits.append((ctx, remaining_qty))
         return deficits
 
