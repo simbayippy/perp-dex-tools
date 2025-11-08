@@ -35,13 +35,42 @@ class HedgeManager:
             if ctx is trigger_ctx:
                 continue
 
+            spec = ctx.spec
+            exchange_name = spec.exchange_client.get_exchange_name().upper()
+            
+            # CRITICAL: When hedging after a trigger fill, prioritize hedge_target_quantity
+            # This ensures we hedge the correct amount to match the trigger fill, accounting
+            # for quantity multipliers across exchanges.
+            # Example: Aster fills 233960 TOSHI → Lighter should hedge 233.96 (233960/1000)
+            remaining_qty = Decimal("0")
+            
+            # If hedge_target_quantity is set, use it directly (it's already calculated with multipliers)
+            # This is the authoritative target quantity after accounting for cross-exchange multipliers
+            if ctx.hedge_target_quantity is not None:
+                hedge_target = Decimal(str(ctx.hedge_target_quantity))
+                remaining_qty = hedge_target - ctx.filled_quantity
+                if remaining_qty < Decimal("0"):
+                    remaining_qty = Decimal("0")
+                logger.debug(
+                    f"📊 [HEDGE] {exchange_name} {spec.symbol}: "
+                    f"hedge_target={hedge_target}, filled={ctx.filled_quantity}, "
+                    f"remaining_qty={remaining_qty}"
+                )
+            else:
+                # Fallback to remaining_quantity property (uses spec.quantity)
+                remaining_qty = ctx.remaining_quantity
+                logger.debug(
+                    f"📊 [HEDGE] {exchange_name} {spec.symbol}: "
+                    f"no hedge_target_quantity, using remaining_quantity={remaining_qty}"
+                )
+            
+            # remaining_usd is unreliable after cancellation (may be based on wrong spec.size_usd)
+            # Only use it as fallback if remaining_qty is 0
             remaining_usd = ctx.remaining_usd
-            remaining_qty = ctx.remaining_quantity
+            
             if remaining_usd <= Decimal("0") and remaining_qty <= Decimal("0"):
                 continue
 
-            spec = ctx.spec
-            exchange_name = spec.exchange_client.get_exchange_name().upper()
             log_parts = []
             if remaining_qty > Decimal("0"):
                 log_parts.append(f"qty={remaining_qty}")
@@ -55,6 +84,7 @@ class HedgeManager:
             size_usd_arg: Optional[Decimal] = None
             quantity_arg: Optional[Decimal] = None
             try:
+                # Always prioritize quantity over USD when hedging (more accurate)
                 if remaining_qty > Decimal("0"):
                     quantity_arg = remaining_qty
                 elif remaining_usd > Decimal("0"):

@@ -269,13 +269,31 @@ class AtomicMultiOrderExecutor:
                                 f"target_qty={target_qty} (×{ctx_multiplier})"
                             )
 
+                        # Don't cap target_qty to spec.quantity when hedging after trigger fill
+                        # The trigger fill is the source of truth, and we need to match it exactly
+                        # (accounting for multipliers). spec.quantity might be from the original
+                        # order plan and could be wrong if there were rounding differences.
+                        # Only cap if target_qty exceeds spec.quantity significantly (safety check)
                         spec_qty = getattr(ctx.spec, "quantity", None)
                         if spec_qty is not None:
-                            target_qty = min(target_qty, Decimal(str(spec_qty)))
+                            spec_qty_dec = Decimal(str(spec_qty))
+                            # Only cap if target is significantly larger (more than 10% over)
+                            # This allows for small rounding differences but prevents huge errors
+                            if target_qty > spec_qty_dec * Decimal("1.1"):
+                                self.logger.warning(
+                                    f"⚠️ [HEDGE] Calculated hedge target {target_qty} exceeds "
+                                    f"spec quantity {spec_qty_dec} by >10%. Capping to spec quantity."
+                                )
+                                target_qty = spec_qty_dec
 
                         if target_qty < Decimal("0"):
                             target_qty = Decimal("0")
                         ctx.hedge_target_quantity = target_qty
+                        
+                        self.logger.debug(
+                            f"📊 [HEDGE] Set hedge_target_quantity for {ctx.spec.symbol}: "
+                            f"{target_qty} (trigger={trigger_qty}, multipliers={trigger_multiplier}×{ctx_multiplier})"
+                        )
 
                     hedge_success, hedge_error = await self._hedge_manager.hedge(
                         trigger_ctx, contexts, self.logger
