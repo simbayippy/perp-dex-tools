@@ -60,18 +60,6 @@ class ParadexOrderBook:
             data: Order book update data from WebSocket
         """
         try:
-            # Debug: Log raw data structure to understand format
-            if self.logger:
-                self.logger.debug(
-                    f"[PARADEX] 🔍 Raw order book data keys: {list(data.keys())} | "
-                    f"update_type={data.get('update_type')} | "
-                    f"has_deletes={bool(data.get('deletes'))} | "
-                    f"has_inserts={bool(data.get('inserts'))} | "
-                    f"has_updates={bool(data.get('updates'))} | "
-                    f"has_bids={bool(data.get('bids'))} | "
-                    f"has_asks={bool(data.get('asks'))}"
-                )
-            
             update_type = data.get('update_type')
             deletes = data.get('deletes', [])
             inserts = data.get('inserts', [])
@@ -85,17 +73,9 @@ class ParadexOrderBook:
             if update_type == 's':
                 self.order_book['bids'].clear()
                 self.order_book['asks'].clear()
-                if self.logger:
-                    self.logger.debug(f"[PARADEX] Order book snapshot received for {market}, clearing old state")
             
             # Handle direct bids/asks format (if present)
             if bids_raw or asks_raw:
-                if self.logger:
-                    self.logger.debug(
-                        f"[PARADEX] Processing direct bids/asks format: "
-                        f"{len(bids_raw)} bids, {len(asks_raw)} asks"
-                    )
-                
                 # Process bids
                 for bid_item in bids_raw:
                     if isinstance(bid_item, (list, tuple)) and len(bid_item) >= 2:
@@ -160,15 +140,6 @@ class ParadexOrderBook:
                 price = to_decimal(insert_item.get('price'))
                 size = to_decimal(insert_item.get('size'))
                 
-                # Debug: Log first few inserts to see format
-                if inserts_processed < 3 and self.logger:
-                    self.logger.debug(
-                        f"[PARADEX] 🔍 Insert item {inserts_processed}: "
-                        f"side={insert_item.get('side')} -> {side}, "
-                        f"price={insert_item.get('price')} -> {price}, "
-                        f"size={insert_item.get('size')} -> {size}"
-                    )
-                
                 if side == 'BUY' and price and size and size > 0:
                     self.order_book['bids'][float(price)] = float(size)
                     inserts_processed += 1
@@ -180,11 +151,6 @@ class ParadexOrderBook:
                 # Log sample prices to validate
                 sample_bids = list(self.order_book['bids'].keys())[:3] if self.order_book['bids'] else []
                 sample_asks = list(self.order_book['asks'].keys())[:3] if self.order_book['asks'] else []
-                self.logger.debug(
-                    f"[PARADEX] Processed {inserts_processed} inserts: "
-                    f"{len(self.order_book['bids'])} bids, {len(self.order_book['asks'])} asks | "
-                    f"Sample bid prices: {sample_bids} | Sample ask prices: {sample_asks}"
-                )
             
             # Process updates
             for update_item in updates:
@@ -222,10 +188,6 @@ class ParadexOrderBook:
             # Log best prices for validation
             if self.best_bid and self.best_ask and self.logger:
                 spread_bps = ((self.best_ask - self.best_bid) / self.best_bid * 10000) if self.best_bid > 0 else 0
-                self.logger.debug(
-                    f"[PARADEX] Best prices: bid={self.best_bid}, ask={self.best_ask}, "
-                    f"spread={spread_bps:.0f} bps"
-                )
             
             # Mark as ready after first snapshot or when we have data
             if update_type == 's' or (not self.snapshot_loaded and (self.order_book['bids'] or self.order_book['asks'])):

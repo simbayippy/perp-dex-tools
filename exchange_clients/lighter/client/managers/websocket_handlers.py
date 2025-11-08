@@ -7,9 +7,11 @@ Contains the business logic for the WebSocket handlers, what to do with Events r
 """
 
 import asyncio
+import time
+from collections import deque
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from exchange_clients.base_models import CancelReason, OrderInfo
 from exchange_clients.events import LiquidationEvent
@@ -73,6 +75,12 @@ class LighterWebSocketHandlers:
         self.emit_liquidation_event = emit_liquidation_event_fn
         self.get_exchange_name = get_exchange_name_fn or (lambda: "lighter")
         self.normalize_symbol = normalize_symbol_fn or (lambda s: s.upper())
+        
+        # Track recent liquidations to correlate with order fills
+        # Format: deque of (market_id, quantity, price, timestamp, symbol)
+        # Keep for 30 seconds - liquidations and order fills should arrive nearly simultaneously
+        # (within seconds, not minutes)
+        self._recent_liquidations: deque[Tuple[int, Decimal, Decimal, float, str]] = deque(maxlen=100)
     
     def handle_websocket_order_update(self, order_data_list: List[Dict[str, Any]]) -> None:
         """Handle order updates from WebSocket."""
@@ -133,11 +141,34 @@ class LighterWebSocketHandlers:
             if status == 'OPEN' and filled_size > 0:
                 status = 'PARTIALLY_FILLED'
 
+            # Check if this fill is from a liquidation
+            is_liquidation_fill = False
+            if status == 'FILLED' and filled_size > 0:
+                is_liquidation_fill = self._is_liquidation_fill(
+                    market_id=int(market_index),
+                    filled_size=filled_size,
+                    price=price
+                )
+                
+                if is_liquidation_fill:
+                    symbol = getattr(self.config, "ticker", "UNKNOWN")
+                    self.logger.error(
+                        f"🚨 [LIGHTER] LIQUIDATION FILL DETECTED: Order {order_id} | "
+                        f"Symbol: {symbol} | Side: {side.upper()} | "
+                        f"Qty: {filled_size} @ {price} | Market ID: {market_index}"
+                    )
+
             # log websocket order update
             if status == 'OPEN':
                 self.logger.info(
                     f"[WEBSOCKET] [LIGHTER] {status} "
                     f"{size} @ {price}"
+                )
+            elif is_liquidation_fill:
+                # Already logged above with ERROR level, just log transaction
+                self.logger.info(
+                    f"[WEBSOCKET] [LIGHTER] {status} (LIQUIDATION) "
+                    f"{filled_size} @ {price}"
                 )
             else:
                 self.logger.info(
@@ -207,8 +238,61 @@ class LighterWebSocketHandlers:
                         )
                     )
     
+    def _is_liquidation_fill(
+        self, 
+        market_id: int, 
+        filled_size: Decimal, 
+        price: Decimal,
+        timestamp: Optional[float] = None
+    ) -> bool:
+        """
+        Check if an order fill matches a recent liquidation event.
+        
+        Args:
+            market_id: Market ID of the order
+            filled_size: Filled quantity
+            price: Fill price
+            timestamp: Optional timestamp of the fill (defaults to now)
+            
+        Returns:
+            True if this fill matches a recent liquidation
+        """
+        if timestamp is None:
+            timestamp = time.time()
+        
+        # Check against recent liquidations (within 30 seconds)
+        # Liquidations and order fills should arrive nearly simultaneously (within seconds)
+        for liq_market_id, liq_quantity, liq_price, liq_timestamp, _ in self._recent_liquidations:
+            # Check if market matches
+            if liq_market_id != market_id:
+                continue
+            
+            # Check if timestamp is within 30 seconds
+            # Liquidations happen instantly, so notification and order fill should arrive
+            # within seconds of each other (accounting for network/processing delays)
+            if abs(timestamp - liq_timestamp) > 30:  # 30 seconds
+                continue
+            
+            # Check if quantity matches (within 1% tolerance for rounding)
+            quantity_diff = abs(filled_size - liq_quantity)
+            if quantity_diff / max(filled_size, liq_quantity, Decimal("1")) > Decimal("0.01"):
+                continue
+            
+            # Check if price is reasonably close (within 5% - liquidations can have different prices)
+            price_diff = abs(price - liq_price)
+            if price_diff / max(price, liq_price, Decimal("0.0001")) > Decimal("0.05"):
+                continue
+            
+            return True
+        
+        return False
+
     async def handle_liquidation_notification(self, notifications: List[Dict[str, Any]]) -> None:
-        """Normalize liquidation notifications from the Lighter stream."""
+        """
+        Normalize liquidation notifications from the Lighter stream.
+        
+        Also tracks recent liquidations to correlate with order fills.
+        """
         for notification in notifications:
             try:
                 if notification.get("kind") != "liquidation":
@@ -230,22 +314,45 @@ class LighterWebSocketHandlers:
                 if raw_timestamp is not None:
                     try:
                         timestamp = datetime.fromtimestamp(int(raw_timestamp), tz=timezone.utc)
+                        timestamp_seconds = int(raw_timestamp)
                     except (ValueError, OSError, OverflowError):
                         timestamp = datetime.now(timezone.utc)
+                        timestamp_seconds = time.time()
                 else:
                     timestamp = datetime.now(timezone.utc)
+                    timestamp_seconds = time.time()
+
+                market_index = content.get("market_index")
+                symbol = getattr(self.config, "ticker", "")
+                
+                # Track this liquidation for correlation with order fills
+                if market_index is not None:
+                    self._recent_liquidations.append((
+                        int(market_index),
+                        quantity,
+                        price,
+                        timestamp_seconds,
+                        symbol
+                    ))
+                    
+                    # Log liquidation prominently
+                    self.logger.error(
+                        f"🚨 [LIGHTER] LIQUIDATION DETECTED: {symbol} | "
+                        f"Side: {side.upper()} | Qty: {quantity} | Price: {price} | "
+                        f"Market ID: {market_index} | Timestamp: {timestamp.isoformat()}"
+                    )
 
                 metadata = {
                     "notification_id": notification.get("id"),
                     "usdc_amount": content.get("usdc_amount"),
-                    "market_index": content.get("market_index"),
+                    "market_index": market_index,
                     "acknowledged": notification.get("ack"),
                     "raw": notification,
                 }
 
                 event = LiquidationEvent(
                     exchange=self.get_exchange_name(),
-                    symbol=getattr(self.config, "ticker", ""),
+                    symbol=symbol,
                     side=side,
                     quantity=quantity,
                     price=price,
@@ -260,7 +367,11 @@ class LighterWebSocketHandlers:
                 )
     
     async def handle_positions_stream_update(self, payload: Dict[str, Any]) -> None:
-        """Process account positions update received from websocket stream."""
+        """
+        Process account positions update received from websocket stream.
+        
+        Detects when positions suddenly go to zero, which may indicate liquidation.
+        """
         positions_map = payload.get("positions") or {}
         if not isinstance(positions_map, dict):
             return
@@ -288,6 +399,41 @@ class LighterWebSocketHandlers:
                 symbol_raw = str(market_idx)
 
             position_dict["symbol"] = symbol_raw
+            
+            # Detect if position suddenly went to zero (potential liquidation)
+            if self.position_manager:
+                async with self.position_manager.positions_lock:
+                    normalized_symbol = self.normalize_symbol(str(symbol_raw)).upper()
+                    previous_position = self.position_manager.raw_positions.get(normalized_symbol)
+                    
+                    if previous_position:
+                        prev_qty = Decimal(str(previous_position.get("position", "0")))
+                        current_qty = Decimal(str(position_dict.get("position", "0")))
+                        
+                        # If we had a position and now it's zero, this might be a liquidation
+                        if prev_qty != 0 and current_qty == 0:
+                            # Check if this matches a recent liquidation
+                            is_known_liquidation = False
+                            if market_id is not None:
+                                is_known_liquidation = self._is_liquidation_fill(
+                                    market_id=int(market_id),
+                                    filled_size=prev_qty,
+                                    price=Decimal(str(position_dict.get("avg_entry_price", "0")))
+                                )
+                            
+                            if not is_known_liquidation:
+                                # Position went to zero but we didn't see liquidation notification
+                                # This could be a liquidation we missed, or a manual close
+                                self.logger.warning(
+                                    f"⚠️ [LIGHTER] Position suddenly zeroed: {normalized_symbol} | "
+                                    f"Previous qty: {prev_qty} | Market ID: {market_id} | "
+                                    f"Possible liquidation (no liquidation notification received)"
+                                )
+                            else:
+                                self.logger.info(
+                                    f"[LIGHTER] Position zeroed (matches known liquidation): {normalized_symbol} | "
+                                    f"Previous qty: {prev_qty} | Market ID: {market_id}"
+                                )
             
             # WebSocket provides "total_funding_paid_out", but snapshot_from_cache() expects "funding_accrued"
             # Note: total_funding_paid_out is optional (omitted when empty/None)
