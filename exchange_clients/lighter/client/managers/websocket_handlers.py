@@ -127,19 +127,26 @@ class LighterWebSocketHandlers:
                     # Other cancellation types - default to unknown
                     cancel_reason = CancelReason.UNKNOWN
 
-            # Deduplication: Skip duplicate OPEN updates with same filled_size
+            # Determine final status before deduplication check
+            final_status = status
+            if status == 'OPEN' and filled_size > 0:
+                final_status = 'PARTIALLY_FILLED'
+
+            # Deduplication: Skip duplicate OPEN and PARTIALLY_FILLED updates with same filled_size
             existing_order = self.latest_orders.get(order_id)
+            should_skip_log = False
             if existing_order:
-                if (existing_order.status == 'OPEN' and
-                        status == 'OPEN' and
-                        filled_size == existing_order.filled_size):
-                    continue
-                elif status in ['FILLED', 'CANCELED']:
+                # Skip logging if status and filled_size haven't changed
+                if ((existing_order.status == 'OPEN' and final_status == 'OPEN') or
+                    (existing_order.status == 'PARTIALLY_FILLED' and final_status == 'PARTIALLY_FILLED')):
+                    if filled_size == existing_order.filled_size:
+                        should_skip_log = True
+                elif final_status in ['FILLED', 'CANCELED']:
                     # Clean up filled/canceled orders (but keep in latest_orders for querying)
                     self.client_to_server_order_index.pop(order_id, None)
 
-            if status == 'OPEN' and filled_size > 0:
-                status = 'PARTIALLY_FILLED'
+            # Use final_status for rest of processing
+            status = final_status
 
             # Check if this fill is from a liquidation
             is_liquidation_fill = False
@@ -158,23 +165,24 @@ class LighterWebSocketHandlers:
                         f"Qty: {filled_size} @ {price} | Market ID: {market_index}"
                     )
 
-            # log websocket order update
-            if status == 'OPEN':
-                self.logger.info(
-                    f"[WEBSOCKET] [LIGHTER] {status} "
-                    f"{size} @ {price}"
-                )
-            elif is_liquidation_fill:
-                # Already logged above with ERROR level, just log transaction
-                self.logger.info(
-                    f"[WEBSOCKET] [LIGHTER] {status} (LIQUIDATION) "
-                    f"{filled_size} @ {price}"
-                )
-            else:
-                self.logger.info(
-                    f"[WEBSOCKET] [LIGHTER] {status} "
-                    f"{filled_size} @ {price}"
-                )
+            # log websocket order update (skip if duplicate)
+            if not should_skip_log:
+                if status == 'OPEN':
+                    self.logger.info(
+                        f"[WEBSOCKET] [LIGHTER] {status} "
+                        f"{size} @ {price}"
+                    )
+                elif is_liquidation_fill:
+                    # Already logged above with ERROR level, just log transaction
+                    self.logger.info(
+                        f"[WEBSOCKET] [LIGHTER] {status} (LIQUIDATION) "
+                        f"{filled_size} @ {price}"
+                    )
+                else:
+                    self.logger.info(
+                        f"[WEBSOCKET] [LIGHTER] {status} "
+                        f"{filled_size} @ {price}"
+                    )
 
             current_order = None
             current_order_client_id = getattr(self.current_order_client_id_ref, 'current_order_client_id', None) if self.current_order_client_id_ref else None

@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any, Awaitable, Callable, Iterable, List, Optional, Sequence, Tuple
 
 from helpers.unified_logger import log_stage
+from strategies.execution.core.order_executor import ExecutionMode
 
 from .utils import apply_result_to_context
 
@@ -178,7 +179,10 @@ class RetryManager:
 
             size_usd = base_spec.size_usd
             quantity = deficit_qty
+            execution_mode = base_spec.execution_mode  # Default to original mode
 
+            # Fetch current BBO prices for notional calculation and min check
+            price_reference = None
             if self._price_provider:
                 try:
                     bid, ask = await self._price_provider.get_bbo_prices(
@@ -198,6 +202,32 @@ class RetryManager:
             else:
                 size_usd = _scale_notional(base_spec.size_usd, base_spec.quantity, quantity)
 
+            # Check minimum notional - if below threshold, use market order fallback
+            if price_reference is not None:
+                try:
+                    exchange_client = base_spec.exchange_client
+                    min_notional = exchange_client.get_min_order_notional(base_spec.symbol)
+                    
+                    if min_notional is not None and min_notional > Decimal("0"):
+                        deficit_notional = quantity * price_reference
+                        
+                        # If below min notional, use market order instead of limit order
+                        if deficit_notional < min_notional:
+                            exchange_name = exchange_client.get_exchange_name().upper()
+                            logger.info(
+                                f"⚠️ [{exchange_name}] Retry quantity {quantity} "
+                                f"(${deficit_notional:.2f}) below min notional ${min_notional:.2f}. "
+                                f"Using market order fallback for faster execution."
+                            )
+                            execution_mode = "market_only"  # Use string value for OrderSpec
+                            # Market orders don't need limit_price_offset_pct
+                            limit_offset = None
+                except Exception as exc:
+                    logger.debug(
+                        f"Could not check min notional for {base_spec.symbol}: {exc}. "
+                        f"Proceeding with original execution mode."
+                    )
+
             try:
                 new_spec = replace(
                     base_spec,
@@ -205,6 +235,7 @@ class RetryManager:
                     quantity=quantity,
                     timeout_seconds=timeout,
                     limit_price_offset_pct=limit_offset,
+                    execution_mode=execution_mode,
                 )
             except TypeError:
                 # dataclass replace may fail if spec is not frozen; fall back to manual copy
@@ -214,7 +245,7 @@ class RetryManager:
                     side=base_spec.side,
                     size_usd=size_usd,
                     quantity=quantity,
-                    execution_mode=base_spec.execution_mode,
+                    execution_mode=execution_mode,
                     timeout_seconds=timeout,
                     limit_price_offset_pct=limit_offset,
                 )
