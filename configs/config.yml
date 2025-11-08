@@ -5,6 +5,7 @@ config:
   scan_exchanges:
   - aster
   - lighter
+  - paradex
   mandatory_exchange: lighter
   target_exposure: !!float '120'
   max_positions: 1
