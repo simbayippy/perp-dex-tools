@@ -41,7 +41,6 @@ from strategies.execution.patterns.atomic_multi_order import (
     AtomicMultiOrderExecutor,
     OrderSpec,
     AtomicExecutionResult,
-    RetryPolicy,
 )
 from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer
 from exchange_clients.events import LiquidationEvent
@@ -139,17 +138,6 @@ class FundingArbitrageStrategy(BaseStrategy):
         
         # ⭐ Execution Common layer (atomic delta-neutral execution)
         self.atomic_executor = AtomicMultiOrderExecutor(price_provider=self.price_provider)
-        self.atomic_retry_policy: Optional[RetryPolicy] = None
-        retry_cfg = getattr(self.config, "atomic_retry", None)
-        if retry_cfg and getattr(retry_cfg, "enabled", False):
-            self.atomic_retry_policy = RetryPolicy(
-                max_attempts=retry_cfg.max_attempts,
-                per_attempt_timeout=retry_cfg.per_attempt_timeout_seconds,
-                delay_seconds=retry_cfg.retry_delay_seconds,
-                max_total_duration=retry_cfg.max_retry_duration_seconds,
-                min_retry_quantity=retry_cfg.min_retry_quantity,
-                limit_price_offset_pct_override=retry_cfg.limit_price_offset_pct_override,
-            )
         self.liquidity_analyzer = LiquidityAnalyzer(
             max_slippage_pct=Decimal("0.005"),  # 0.5% max slippage
             max_spread_bps=50,  # 50 basis points

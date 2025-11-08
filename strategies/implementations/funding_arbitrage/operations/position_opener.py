@@ -194,7 +194,6 @@ class PositionOpener:
             pre_flight_check=True,
             skip_preflight_leverage=True,
             stage_prefix="3",
-            retry_policy=strategy.atomic_retry_policy,
         )
 
         if not result.all_filled:
