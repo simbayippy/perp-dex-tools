@@ -541,6 +541,7 @@ class BaseExchangeClient(ABC):
         """
         pass
 
+    @abstractmethod
     async def await_order_update(
         self, 
         order_id: str, 
@@ -549,9 +550,9 @@ class BaseExchangeClient(ABC):
         """
         Wait for websocket order update with optional timeout.
         
-        This is an optional method that exchanges can implement for efficient
-        order confirmation via websocket. If not implemented, OrderExecutor
-        will fall back to REST API polling.
+        This is a required method that all exchanges must implement for efficient
+        order confirmation via websocket. If websocket is not available, implementations
+        should fall back to REST API polling.
         
         Args:
             order_id: Order identifier to wait for
@@ -564,10 +565,11 @@ class BaseExchangeClient(ABC):
             This method should return immediately if order is already in cache
             (e.g., already filled/canceled). It should only wait if order status
             is unknown or still pending.
+            
+            Implementations should prioritize websocket updates for speed, but can
+            fall back to REST polling if websocket is unavailable.
         """
-        # Default implementation: return None (indicates websocket wait not available)
-        # Exchanges can override this to provide websocket-based order confirmation
-        return None
+        pass
 
     # ========================================================================
     # POSITION & ACCOUNT MANAGEMENT

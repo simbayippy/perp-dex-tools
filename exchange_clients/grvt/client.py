@@ -447,6 +447,20 @@ class GrvtClient(BaseExchangeClient):
             ))
 
         return order_list
+    
+    async def await_order_update(
+        self, 
+        order_id: str, 
+        timeout: float = 10.0
+    ) -> Optional[OrderInfo]:
+        """
+        Wait for order update (not implemented for GRVT yet).
+        
+        Returns None to trigger REST fallback in OrderExecutor.
+        """
+        # Empty implementation - not working with GRVT yet
+        # OrderExecutor will fall back to REST polling
+        return None
 
     @query_retry(reraise=True)
     async def get_account_positions(self) -> Decimal:
