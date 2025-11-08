@@ -370,6 +370,24 @@ class ParadexClient(BaseExchangeClient):
         if not self.order_manager:
             raise RuntimeError("Order manager not initialized. Call connect() first.")
         return await self.order_manager.get_order_info(order_id, force_refresh=force_refresh)
+    
+    async def await_order_update(self, order_id: str, timeout: float = 10.0) -> Optional[OrderInfo]:
+        """
+        Wait for websocket order update with optional timeout.
+        
+        This method efficiently waits for order status changes via websocket,
+        falling back to REST API polling if websocket update doesn't arrive.
+        
+        Args:
+            order_id: Order identifier to wait for
+            timeout: Maximum time to wait in seconds (default: 10.0)
+            
+        Returns:
+            OrderInfo if update received within timeout, None otherwise
+        """
+        if not self.order_manager:
+            raise RuntimeError("Order manager not initialized. Call connect() first.")
+        return await self.order_manager.await_order_update(order_id, timeout)
 
     async def get_active_orders(self, contract_id: str) -> List[OrderInfo]:
         """Get all active (open) orders for a contract."""

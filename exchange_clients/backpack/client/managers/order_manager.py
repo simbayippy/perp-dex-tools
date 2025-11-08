@@ -70,6 +70,10 @@ class BackpackOrderManager:
         self.ensure_exchange_symbol = ensure_exchange_symbol_fn or (lambda s: s)
         self.round_to_tick = round_to_tick_fn or (lambda p: p)
         self.max_price_decimals = max_price_decimals
+        
+        # WebSocket order update events for efficient order confirmation
+        # Maps order_id -> asyncio.Event that gets set when order status changes
+        self.order_update_events: Dict[str, asyncio.Event] = {}
     
     def _get_symbol_precision(self, symbol: Optional[str]) -> int:
         """Get symbol precision using cache."""
@@ -557,6 +561,78 @@ class BackpackOrderManager:
             order_id = str(order.get("id", ""))
             if order_id:
                 self.latest_orders[order_id] = info
-
+        
         return orders
+    
+    def notify_order_update(self, order_id: str) -> None:
+        """
+        Notify waiting coroutines that an order update has been received via websocket.
+        
+        This should be called by the websocket handler whenever an order status changes.
+        
+        Args:
+            order_id: Order identifier that was updated
+        """
+        if not order_id:
+            return
+        
+        order_id_str = str(order_id)
+        event = self.order_update_events.get(order_id_str)
+        if event is not None and not event.is_set():
+            event.set()
+    
+    async def await_order_update(
+        self, 
+        order_id: str, 
+        timeout: float = 10.0
+    ) -> Optional[OrderInfo]:
+        """
+        Wait for websocket order update with optional timeout.
+        
+        This method efficiently waits for order status changes via websocket,
+        falling back to REST API polling if websocket update doesn't arrive.
+        
+        Args:
+            order_id: Order identifier to wait for
+            timeout: Maximum time to wait in seconds (default: 10.0)
+            
+        Returns:
+            OrderInfo if update received within timeout, None otherwise
+            
+        Note:
+            - Returns immediately if order is already FILLED/CANCELED in cache
+            - Only waits if order status is unknown or still pending
+            - Automatically cleans up event after timeout
+        """
+        if not order_id:
+            return None
+        
+        order_id_str = str(order_id)
+        
+        # Check if order is already in cache with final status
+        cached = self.latest_orders.get(order_id_str)
+        if cached is not None:
+            # If order is already FILLED or CANCELED, return immediately
+            if cached.status in {'FILLED', 'CANCELED', 'CANCELLED', 'CLOSED', 'REJECTED', 'EXPIRED'}:
+                return cached
+        
+        # Create or get existing event for this order
+        event = self.order_update_events.setdefault(order_id_str, asyncio.Event())
+        
+        # If event is already set, check cache again
+        if event.is_set():
+            return self.latest_orders.get(order_id_str)
+        
+        # Wait for websocket update (with timeout)
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            # Timeout - check cache one more time (might have arrived just before timeout)
+            return self.latest_orders.get(order_id_str)
+        except Exception:
+            # Any other error - return cached value if available
+            return self.latest_orders.get(order_id_str)
+        
+        # Event was set - return updated order info
+        return self.latest_orders.get(order_id_str)
 

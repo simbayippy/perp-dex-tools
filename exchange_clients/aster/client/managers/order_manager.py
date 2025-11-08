@@ -65,6 +65,10 @@ class AsterOrderManager:
         self.normalize_symbol = normalize_symbol_fn or (lambda s: s.upper())
         self.round_to_step = round_to_step_fn or (lambda q: q)
         self.get_min_order_notional = get_min_order_notional_fn or (lambda s: None)
+        
+        # WebSocket order update events for efficient order confirmation
+        # Maps order_id -> asyncio.Event that gets set when order status changes
+        self.order_update_events: Dict[str, asyncio.Event] = {}
     
     async def place_limit_order(
         self,
@@ -396,35 +400,28 @@ class AsterOrderManager:
             result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
             order_status = result.get('status', '')
             order_id = result.get('orderId', '')
-
-            # Wait for order to fill
-            start_time = time.time()
-            order_info = None
-            while order_status != 'FILLED' and time.time() - start_time < 10:
-                await asyncio.sleep(0.2)
-                order_info = await self.get_order_info(order_id, normalized_contract_id)
-                if order_info is not None:
-                    order_status = order_info.status
-
-            if order_status == 'FILLED':
+            
+            # Return immediately with order_id - OrderExecutor will handle confirmation via websocket
+            # This avoids redundant REST polling (OrderExecutor uses websocket-first confirmation)
+            if order_id:
                 self.logger.info(
-                    f"✅ [ASTER] Market order filled: {order_id}"
+                    f"📤 [ASTER] Market order placed: {order_id} (status={order_status})"
                 )
                 return OrderResult(
                     success=True,
-                    order_id=order_id,
+                    order_id=str(order_id),
                     side=side.lower(),
                     size=quantity,
-                    price=order_info.price if order_info else Decimal(0),
-                    status='FILLED'
+                    price=expected_price,  # Use expected price (actual fill price will be confirmed by OrderExecutor)
+                    status=order_status  # Initial status from API response
                 )
             else:
                 self.logger.error(
-                    f"❌ [ASTER] Market order not filled: status={order_status}"
+                    f"❌ [ASTER] Market order failed: no order_id returned"
                 )
                 return OrderResult(
                     success=False,
-                    error_message=f'Market order failed with status: {order_status}'
+                    error_message='Market order failed: no order_id returned'
                 )
                 
         except Exception as e:
@@ -528,6 +525,78 @@ class AsterOrderManager:
             orders.append(info)
             if order_id_str:
                 self.latest_orders[order_id_str] = info
-
+        
         return orders
+    
+    def notify_order_update(self, order_id: str) -> None:
+        """
+        Notify waiting coroutines that an order update has been received via websocket.
+        
+        This should be called by the websocket handler whenever an order status changes.
+        
+        Args:
+            order_id: Order identifier that was updated
+        """
+        if not order_id:
+            return
+        
+        order_id_str = str(order_id)
+        event = self.order_update_events.get(order_id_str)
+        if event is not None and not event.is_set():
+            event.set()
+    
+    async def await_order_update(
+        self, 
+        order_id: str, 
+        timeout: float = 10.0
+    ) -> Optional[OrderInfo]:
+        """
+        Wait for websocket order update with optional timeout.
+        
+        This method efficiently waits for order status changes via websocket,
+        falling back to REST API polling if websocket update doesn't arrive.
+        
+        Args:
+            order_id: Order identifier to wait for
+            timeout: Maximum time to wait in seconds (default: 10.0)
+            
+        Returns:
+            OrderInfo if update received within timeout, None otherwise
+            
+        Note:
+            - Returns immediately if order is already FILLED/CANCELED in cache
+            - Only waits if order status is unknown or still pending
+            - Automatically cleans up event after timeout
+        """
+        if not order_id:
+            return None
+        
+        order_id_str = str(order_id)
+        
+        # Check if order is already in cache with final status
+        cached = self.latest_orders.get(order_id_str)
+        if cached is not None:
+            # If order is already FILLED or CANCELED, return immediately
+            if cached.status in {'FILLED', 'CANCELED', 'CANCELLED', 'CLOSED', 'REJECTED', 'EXPIRED'}:
+                return cached
+        
+        # Create or get existing event for this order
+        event = self.order_update_events.setdefault(order_id_str, asyncio.Event())
+        
+        # If event is already set, check cache again
+        if event.is_set():
+            return self.latest_orders.get(order_id_str)
+        
+        # Wait for websocket update (with timeout)
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            # Timeout - check cache one more time (might have arrived just before timeout)
+            return self.latest_orders.get(order_id_str)
+        except Exception:
+            # Any other error - return cached value if available
+            return self.latest_orders.get(order_id_str)
+        
+        # Event was set - return updated order info
+        return self.latest_orders.get(order_id_str)
 

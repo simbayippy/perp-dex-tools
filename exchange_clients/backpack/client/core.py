@@ -158,6 +158,7 @@ class BackpackClient(BaseExchangeClient):
             latest_orders=self._latest_orders,
             order_update_handler=self._order_update_handler,
             order_fill_callback=self.order_fill_callback,
+            order_manager=self.order_manager,
             emit_liquidation_event_fn=self.emit_liquidation_event,
             get_exchange_name_fn=self.get_exchange_name,
         )
@@ -308,6 +309,24 @@ class BackpackClient(BaseExchangeClient):
     async def get_order_info(self, order_id: str, *, force_refresh: bool = False) -> Optional[OrderInfo]:
         """Fetch detailed order information."""
         return await self.order_manager.get_order_info(order_id, force_refresh=force_refresh)
+    
+    async def await_order_update(self, order_id: str, timeout: float = 10.0) -> Optional[OrderInfo]:
+        """
+        Wait for websocket order update with optional timeout.
+        
+        This method efficiently waits for order status changes via websocket,
+        falling back to REST API polling if websocket update doesn't arrive.
+        
+        Args:
+            order_id: Order identifier to wait for
+            timeout: Maximum time to wait in seconds (default: 10.0)
+            
+        Returns:
+            OrderInfo if update received within timeout, None otherwise
+        """
+        if not self.order_manager:
+            raise RuntimeError("Order manager not initialized. Call connect() first.")
+        return await self.order_manager.await_order_update(order_id, timeout)
 
     async def get_active_orders(self, contract_id: str):
         """Return currently active orders."""

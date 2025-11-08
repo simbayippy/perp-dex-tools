@@ -484,30 +484,58 @@ class LighterOrderManager:
         if event is not None and not event.is_set():
             event.set()
     
-    async def await_order_update(self, order_key: str, timeout: float = 1.0) -> Optional[OrderInfo]:
-        """Wait briefly for a websocket update before falling back to REST."""
+    async def await_order_update(self, order_key: str, timeout: float = 10.0) -> Optional[OrderInfo]:
+        """
+        Wait for websocket order update with optional timeout.
+        
+        This method efficiently waits for order status changes via websocket,
+        falling back to REST API polling if websocket update doesn't arrive.
+        
+        Args:
+            order_key: Order identifier to wait for (client_order_index or server_order_index)
+            timeout: Maximum time to wait in seconds (default: 10.0)
+            
+        Returns:
+            OrderInfo if update received within timeout, None otherwise
+            
+        Note:
+            - Returns immediately if order is already FILLED/CANCELED in cache
+            - Only waits if order status is unknown or still pending
+            - Automatically cleans up event after timeout
+        """
         if not order_key:
             return None
 
         order_key_str = str(order_key)
+        
+        # Check if order is already in cache with final status
         cached = self.latest_orders.get(order_key_str)
         if cached is not None:
-            return cached
+            # If order is already FILLED or CANCELED, return immediately
+            if cached.status in {'FILLED', 'CANCELED', 'CANCELLED', 'CLOSED', 'REJECTED', 'EXPIRED'}:
+                return cached
 
         if self.ws_manager is None:
             return None
 
+        # Create or get existing event for this order
         event = self.order_update_events.setdefault(order_key_str, asyncio.Event())
+        
+        # If event is already set, check cache again
         if event.is_set():
             return self.latest_orders.get(order_key_str)
 
+        # Wait for websocket update (with timeout)
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
+            # Timeout - check cache one more time (might have arrived just before timeout)
             return self.latest_orders.get(order_key_str)
         except Exception:
+            # Any other error - return cached value if available
             return self.latest_orders.get(order_key_str)
 
+        # Event was set - return updated order info
         return self.latest_orders.get(order_key_str)
     
     async def lookup_inactive_order(

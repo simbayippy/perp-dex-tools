@@ -97,6 +97,10 @@ class ParadexWebSocketHandlers:
             # Update cache
             self.latest_orders[order_id] = order_info
             
+            # Notify order manager that update was received (for await_order_update())
+            if self.order_manager:
+                self.order_manager.notify_order_update(order_id)
+            
             # Log order update
             status = order_info.status.upper()
             if status in ('FILLED', 'CANCELED', 'CLOSED'):
