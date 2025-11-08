@@ -66,3 +66,21 @@ def get_backpack_symbol_format(normalized_symbol: str) -> str:
     
     return f"{symbol_upper}_USDC_PERP"
 
+
+def get_quantity_multiplier(normalized_symbol: str) -> int:
+    """
+    Get the quantity multiplier for a symbol on Backpack.
+    
+    Backpack's k-prefix tokens (kPEPE, kSHIB, kBONK) represent bundles of 1000 tokens.
+    So 1 contract unit = 1000 actual tokens.
+    
+    Args:
+        normalized_symbol: Normalized symbol (e.g., "PEPE", "BTC")
+        
+    Returns:
+        Multiplier (1000 for k-prefix tokens, 1 for others)
+    """
+    if normalized_symbol.upper() in BACKPACK_K_PREFIX_TOKENS:
+        return 1000  # k-prefix = 1000x multiplier
+    return 1
+

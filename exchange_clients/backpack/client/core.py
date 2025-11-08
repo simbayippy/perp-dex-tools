@@ -331,6 +331,22 @@ class BackpackClient(BaseExchangeClient):
     async def get_active_orders(self, contract_id: str):
         """Return currently active orders."""
         return await self.order_manager.get_active_orders(contract_id)
+    
+    def get_quantity_multiplier(self, symbol: str) -> int:
+        """
+        Get the quantity multiplier for a symbol on Backpack.
+        
+        Backpack's k-prefix tokens (kPEPE, kSHIB, kBONK) represent bundles of 1000 tokens.
+        So 1 contract unit = 1000 actual tokens.
+        
+        Args:
+            symbol: Normalized symbol (e.g., "PEPE", "BTC")
+            
+        Returns:
+            1000 for k-prefix tokens, 1 for others
+        """
+        from exchange_clients.backpack.common import get_quantity_multiplier
+        return get_quantity_multiplier(symbol)
 
     # --------------------------------------------------------------------- #
     # Position management (delegated)
