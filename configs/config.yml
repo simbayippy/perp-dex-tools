@@ -3,7 +3,7 @@ created_at: '2025-10-21T20:00:21.285327'
 version: '1.0'
 config:
   scan_exchanges:
-  - paradex
+  - aster
   - lighter
   mandatory_exchange: lighter
   target_exposure: !!float '120'
