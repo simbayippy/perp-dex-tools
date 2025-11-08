@@ -102,11 +102,30 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
     if order_info is None:
         return
 
+    # Check order status - if CANCELED with 0 fills, don't reconcile
+    order_status = getattr(order_info, "status", "").upper()
     reported_qty = coerce_decimal(getattr(order_info, "filled_size", None))
+    
+    # Critical check: If order is CANCELED and we have no fills recorded, 
+    # and reported_qty matches the order size, this is likely a bug in the exchange client
+    # (it's calculating filled_size = size - remaining when remaining=0 for canceled orders)
+    if order_status == "CANCELED" and ctx.filled_quantity <= Decimal("0"):
+        spec_qty = getattr(ctx.spec, "quantity", None)
+        if spec_qty is not None:
+            spec_qty_dec = Decimal(str(spec_qty))
+            # If reported_qty equals spec_qty for a canceled order with 0 fills, it's wrong
+            if reported_qty is not None and abs(reported_qty - spec_qty_dec) < Decimal("0.01"):
+                logger.warning(
+                    f"⚠️ Reconcile: Detected bug - CANCELED order {order_id} reports filled_size={reported_qty} "
+                    f"which matches spec.quantity={spec_qty_dec}, but websocket showed 0 fills. "
+                    f"This is likely an exchange client bug. Skipping reconciliation."
+                )
+                return
+    
     if reported_qty is None or reported_qty <= Decimal("0"):
         # No fill reported, or zero fill - nothing to reconcile
         logger.debug(
-            f"Reconcile: {ctx.spec.symbol} order {order_id} reported filled_size={reported_qty}, "
+            f"Reconcile: {ctx.spec.symbol} order {order_id} (status={order_status}) reported filled_size={reported_qty}, "
             f"current ctx.filled_quantity={ctx.filled_quantity}. No reconciliation needed."
         )
         return

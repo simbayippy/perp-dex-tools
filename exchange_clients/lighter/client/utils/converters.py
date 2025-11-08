@@ -39,7 +39,14 @@ def build_order_info_from_payload(order_obj: Any, order_id: str) -> Optional[Ord
     except Exception:
         filled_base = Decimal("0")
 
-    if filled_base <= Decimal("0") and size >= remaining:
+    # Get status early to check if order was canceled
+    status_raw = str(getattr(order_obj, "status", "")).upper()
+    
+    # Only calculate filled_base from size - remaining if:
+    # 1. filled_base is not provided/zero AND
+    # 2. size >= remaining (sanity check) AND
+    # 3. Order is NOT canceled (canceled orders may have remaining=0 even with 0 fills)
+    if filled_base <= Decimal("0") and size >= remaining and status_raw != "CANCELED":
         filled_base = size - remaining
 
     if filled_base < Decimal("0"):

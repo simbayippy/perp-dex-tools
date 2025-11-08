@@ -1,0 +1,46 @@
+==================
+2025-11-08 22:34:10 | INFO     | unified_logger:_emit:618                 | 3.2. 🚀 Order Placement
+2025-11-08 22:34:10 | INFO     | unified_logger:_emit:618                 | =======================================================
+2025-11-08 22:34:10 | INFO     | executor:execute_atomically:145          | 🚀 Placing all orders simultaneously...
+2025-11-08 22:34:10 | INFO     | order_executor:execute_order:173         | 🟢 [LIGHTER] Executing buy TOSHI ($119.995156 qty=231.16) in mode limit_only
+2025-11-08 22:34:10 | INFO     | price_provider:_fetch_exchange_bbo:76    | ✅ [LIGHTER] BBO: bid=0.519, ask=0.5191
+2025-11-08 22:34:10 | INFO     | order_executor:_execute_limit:308        | [LIGHTER] Placing limit buy TOSHI (contract_id=81): 231.16 @ $0.51899618 (mid: $0.51905, offset: 0.0200%)
+2025-11-08 22:34:10 | INFO     | order_manager:place_limit_order:185      | 📤 [LIGHTER] Submitting order: market=81 client_id=250349 side=BID price=5190 amount=23116
+2025-11-08 22:34:10 | INFO     | order_executor:execute_order:173         | 🔴 [ASTER] Executing sell TOSHI ($119.8564600 qty=231160) in mode limit_only
+2025-11-08 22:34:10 | INFO     | market_data:fetch_bbo_prices:69          | 📡 [ASTER] Using real-time BBO from WebSocket
+2025-11-08 22:34:10 | INFO     | price_provider:_fetch_exchange_bbo:76    | ✅ [ASTER] BBO: bid=0.0005185, ask=0.0005198
+2025-11-08 22:34:10 | INFO     | order_executor:_execute_limit:308        | [ASTER] Placing limit sell TOSHI (contract_id=TOSHIUSDT): 231160 @ $0.00051860370 (mid: $0.00051915, offset: 0.0200%)
+2025-11-08 22:34:10 | INFO     | ...:handle_websocket_order_update:124    | [WEBSOCKET] [ASTER] OPEN 231160 @ 0.0005186
+2025-11-08 22:34:11 | INFO     | ...:handle_websocket_order_update:171    | [WEBSOCKET] [LIGHTER] OPEN 231.16 @ 0.5190
+2025-11-08 22:34:41 | WARNING  | order_executor:_execute_limit:497        | [LIGHTER] Limit order timeout after 30.0s, canceling 250349
+2025-11-08 22:34:42 | INFO     | ...:handle_websocket_order_update:182    | [WEBSOCKET] [LIGHTER] CANCELED 0.00 @ 0.5190
+2025-11-08 22:34:42 | INFO     | ...:handle_websocket_order_update:212    | TRANSACTION: BUY 0.00 @ 0.5190 | Order: 250349 | Status: CANCELED
+2025-11-08 22:34:43 | WARNING  | order_executor:_execute_limit:497        | [ASTER] Limit order timeout after 30.0s, canceling 131421628
+2025-11-08 22:34:43 | INFO     | ...:handle_websocket_order_update:119    | [WEBSOCKET] [ASTER] CANCELED 231160 @ 0.0005186
+2025-11-08 22:34:45 | INFO     | ...:_check_and_execute_retries:858       | 🔁 Initiating retry cycle for unmatched legs.
+2025-11-08 22:34:45 | INFO     | unified_logger:_emit:618                 | =======================================================
+2025-11-08 22:34:45 | INFO     | unified_logger:_emit:618                 | 3.2.retry.1. 🔁 Retry Attempt 1
+2025-11-08 22:34:45 | INFO     | unified_logger:_emit:618                 | =======================================================
+2025-11-08 22:34:45 | INFO     | market_data:fetch_bbo_prices:69          | 📡 [ASTER] Using real-time BBO from WebSocket
+2025-11-08 22:34:45 | INFO     | price_provider:_fetch_exchange_bbo:76    | ✅ [ASTER] BBO: bid=0.0005182, ask=0.0005194
+2025-11-08 22:34:45 | INFO     | order_executor:execute_order:173         | 🔴 [ASTER] Executing sell TOSHI ($119.7871120 qty=231160) in mode limit_only
+2025-11-08 22:34:45 | INFO     | market_data:fetch_bbo_prices:69          | 📡 [ASTER] Using real-time BBO from WebSocket
+2025-11-08 22:34:45 | INFO     | price_provider:_fetch_exchange_bbo:76    | ✅ [ASTER] BBO: bid=0.0005182, ask=0.0005194
+2025-11-08 22:34:45 | INFO     | order_executor:_execute_limit:308        | [ASTER] Placing limit sell TOSHI (contract_id=TOSHIUSDT): 231160 @ $0.00051830364 (mid: $0.0005188, offset: 0.0200%)
+2025-11-08 22:34:45 | INFO     | ...:handle_websocket_order_update:124    | [WEBSOCKET] [ASTER] OPEN 231160 @ 0.0005183
+2025-11-08 22:35:07 | WARNING  | order_executor:_execute_limit:497        | [ASTER] Limit order timeout after 20.0s, canceling 131421668
+2025-11-08 22:35:08 | WARNING  | retry_manager:execute_retries:126        | ⚠️ Critical imbalance detected during retry attempt 1: longs=$119.97, shorts=$0.00, imbalance=$119.97 (100.0%). Aborting retries for safety.
+2025-11-08 22:35:08 | INFO     | ...:handle_websocket_order_update:119    | [WEBSOCKET] [ASTER] CANCELED 231160 @ 0.0005183
+2025-11-08 22:35:09 | WARNING  | ...:_check_and_execute_retries:879       | ⚠️ CRITICAL IMBALANCE after retry failure: longs=$119.97, shorts=$0.00, imbalance=$119.97 (100.0%). Triggering emergency rollback.
+2025-11-08 22:35:09 | WARNING  | executor:_rollback_filled_orders:1192    | 🚨 EMERGENCY ROLLBACK: Closing 1 filled orders
+2025-11-08 22:35:09 | INFO     | executor:_rollback_filled_orders:1198    | Step 1/3: Canceling all orders to prevent further fills...
+2025-11-08 22:35:11 | INFO     | executor:_rollback_filled_orders:1217    | Step 2/3: Querying actual filled amounts...
+2025-11-08 22:35:11 | INFO     | executor:_rollback_filled_orders:1287    | Step 3/3: Closing 1 filled positions...
+2025-11-08 22:35:11 | INFO     | executor:_rollback_filled_orders:1297    | Rollback: sell TOSHI 231.16 @ market (contract_id=81, exchange=lighter)
+2025-11-08 22:35:11 | INFO     | order_manager:place_market_order:392     | 📤 [LIGHTER] Placing market order: market=81, client_id=311535, side=SELL, base_amount=23116, avg_execution_price=4931
+2025-11-08 22:35:11 | WARNING  | executor:_rollback_filled_orders:1341    | Rollback cost for TOSHI: $0.00 (entry: $0.5190, exit: $0.5190)
+2025-11-08 22:35:11 | WARNING  | executor:_rollback_filled_orders:1346    | ✅ Rollback complete. Total cost: $0.00
+2025-11-08 22:35:11 | WARNING  | ...:_perform_emergency_rollback:502      | 🛡️ Emergency rollback completed; cost=$0.0000. Prevented $119.97 (100.0%) directional exposure.
+2025-11-08 22:35:11 | INFO     | ...:handle_websocket_order_update:182    | [WEBSOCKET] [LIGHTER] FILLED 231.16 @ 0.4931
+2025-11-08 22:35:11 | INFO     | ...:handle_websocket_order_update:212    | TRANSACTION: SELL 231.16 @ 0.4931 | Order: 311535 | Status: FILLED
+2025-11-08 22:35:12 | ERROR    | position_opener:_execute_trade:201       | ❌ TOSHI: Atomic execution failed - Partial fill: 0/2
