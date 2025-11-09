@@ -162,7 +162,7 @@ class TelegramFormatter:
                 lines.append("")
         
         lines.append("")
-        lines.append("─" * 17)
+        lines.append("─" * 18)
         
         # Summary section
         lines.append("<b>💼 Summary</b>")
@@ -193,7 +193,7 @@ class TelegramFormatter:
 
         # uncomment to add position ID to the message
         # lines.append("")
-        # lines.append("─" * 17)
+        # lines.append("─" * 18)
         
         # # Position ID for closing
         # pos_id = pos.get('id', '')
