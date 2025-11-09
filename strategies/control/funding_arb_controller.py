@@ -7,6 +7,7 @@ Implements control operations for funding arbitrage strategy.
 from typing import List, Dict, Any, Optional
 from uuid import UUID
 from decimal import Decimal
+from datetime import datetime
 
 from strategies.control.strategy_controller import BaseStrategyController
 from strategies.implementations.funding_arbitrage.strategy import FundingArbitrageStrategy
@@ -176,24 +177,14 @@ class FundingArbStrategyController(BaseStrategyController):
                 except Exception:
                     position.metadata = {}
             
+            # Enrich position with live exchange data (similar to position_monitor)
+            await self._enrich_position_with_live_data(position)
+            
             account_name_val = row['account_name']
             if account_name_val in accounts_dict:
-                accounts_dict[account_name_val]["positions"].append({
-                    "id": str(position.id),
-                    "symbol": position.symbol,
-                    "long_dex": position.long_dex,
-                    "short_dex": position.short_dex,
-                    "size_usd": float(position.size_usd),
-                    "age_hours": position.get_age_hours(),
-                    "net_pnl_usd": float(position.get_net_pnl()),
-                    "net_pnl_pct": float(position.get_net_pnl_pct()),
-                    "entry_divergence": float(position.entry_divergence) if position.entry_divergence else None,
-                    "current_divergence": float(position.current_divergence) if position.current_divergence else None,
-                    "opened_at": position.opened_at.isoformat() if position.opened_at else None,
-                    "status": position.status,
-                    "cumulative_funding": float(position.cumulative_funding),
-                    "total_fees_paid": float(position.total_fees_paid),
-                })
+                accounts_dict[account_name_val]["positions"].append(
+                    self._format_position_for_api(position)
+                )
         
         # Convert to list (include all accounts, even if they have no positions)
         accounts_data = []
@@ -211,6 +202,202 @@ class FundingArbStrategyController(BaseStrategyController):
         
         return {
             "accounts": accounts_data
+        }
+    
+    async def _enrich_position_with_live_data(self, position: "FundingArbPosition"):
+        """Enrich position with live exchange data (similar to position_monitor)."""
+        try:
+            # Fetch exchange snapshots
+            exchange_clients = self.strategy.exchange_clients
+            clients_lower = {name.lower(): client for name, client in exchange_clients.items()}
+            
+            legs_metadata = {}
+            total_unrealized = Decimal("0")
+            total_funding = Decimal("0")
+            
+            # Fetch funding rates
+            funding_rate_repo = self.strategy.funding_rate_repo
+            rate1_data = rate2_data = None
+            if funding_rate_repo:
+                rate1_data = await funding_rate_repo.get_latest_specific(
+                    position.long_dex, position.symbol
+                )
+                rate2_data = await funding_rate_repo.get_latest_specific(
+                    position.short_dex, position.symbol
+                )
+            
+            if rate1_data and rate2_data:
+                rate1 = Decimal(str(rate1_data["funding_rate"]))
+                rate2 = Decimal(str(rate2_data["funding_rate"]))
+                position.current_divergence = rate2 - rate1
+                position.last_check = datetime.now()
+            
+            # Fetch exchange snapshots for each leg
+            for dex in [position.long_dex, position.short_dex]:
+                if not dex:
+                    continue
+                
+                dex_key = dex.lower()
+                client = clients_lower.get(dex_key)
+                if not client:
+                    continue
+                
+                try:
+                    position_opened_at_ts = None
+                    if position.opened_at:
+                        position_opened_at_ts = position.opened_at.timestamp()
+                    
+                    snapshot = await client.get_position_snapshot(
+                        position.symbol,
+                        position_opened_at=position_opened_at_ts,
+                    )
+                    
+                    if snapshot:
+                        leg_meta = {
+                            "side": snapshot.side or ("long" if dex == position.long_dex else "short"),
+                            "quantity": float(snapshot.quantity.copy_abs()) if snapshot.quantity else 0.0,
+                            "entry_price": float(snapshot.entry_price) if snapshot.entry_price else None,
+                            "mark_price": float(snapshot.mark_price) if snapshot.mark_price else None,
+                            "unrealized_pnl": float(snapshot.unrealized_pnl) if snapshot.unrealized_pnl else None,
+                            "funding_accrued": float(snapshot.funding_accrued) if snapshot.funding_accrued else None,
+                            "exposure_usd": float(snapshot.exposure_usd) if snapshot.exposure_usd else None,
+                            "leverage": float(snapshot.leverage) if snapshot.leverage else None,
+                            "liquidation_price": float(snapshot.liquidation_price) if snapshot.liquidation_price else None,
+                        }
+                        
+                        if snapshot.unrealized_pnl:
+                            total_unrealized += snapshot.unrealized_pnl
+                        if snapshot.funding_accrued:
+                            total_funding += snapshot.funding_accrued
+                        
+                        # Calculate funding APY
+                        if rate1_data and dex_key == position.long_dex.lower():
+                            leg_meta["funding_rate"] = float(rate1)
+                            leg_meta["funding_apy"] = float(rate1 * Decimal("3") * Decimal("365") * Decimal("100"))
+                        elif rate2_data and dex_key == position.short_dex.lower():
+                            leg_meta["funding_rate"] = float(rate2)
+                            leg_meta["funding_apy"] = float(rate2 * Decimal("3") * Decimal("365") * Decimal("100"))
+                        
+                        legs_metadata[dex] = leg_meta
+                except Exception as e:
+                    # Log but don't fail - missing exchange data shouldn't break the API
+                    pass
+            
+            # Update position metadata
+            if legs_metadata:
+                position.metadata["legs"] = legs_metadata
+                position.metadata["exchange_unrealized_pnl"] = float(total_unrealized)
+                position.metadata["exchange_funding"] = float(total_funding)
+            
+            if rate1_data:
+                rate_map = position.metadata.setdefault("rate_map", {})
+                rate_map[position.long_dex] = Decimal(str(rate1_data["funding_rate"]))
+            if rate2_data:
+                rate_map = position.metadata.setdefault("rate_map", {})
+                rate_map[position.short_dex] = Decimal(str(rate2_data["funding_rate"]))
+                
+        except Exception as e:
+            # Don't fail API call if enrichment fails
+            pass
+    
+    def _format_position_for_api(self, position: "FundingArbPosition") -> Dict[str, Any]:
+        """Format position data for API response with comprehensive metrics."""
+        from decimal import Decimal
+        
+        # Calculate yield metrics
+        entry_rate_apy = None
+        current_rate_apy = None
+        if position.entry_divergence:
+            entry_rate_apy = float(position.entry_divergence * Decimal("3") * Decimal("365") * Decimal("100"))
+        if position.current_divergence:
+            current_rate_apy = float(position.current_divergence * Decimal("3") * Decimal("365") * Decimal("100"))
+        
+        # Calculate profit erosion
+        erosion_ratio = float(position.get_profit_erosion())
+        erosion_pct = (1.0 - erosion_ratio) * 100 if erosion_ratio <= 1.0 else 0.0
+        
+        # Get exchange data from metadata
+        legs = position.metadata.get("legs", {})
+        exchange_unrealized_pnl = position.metadata.get("exchange_unrealized_pnl", 0.0)
+        exchange_funding = position.metadata.get("exchange_funding", 0.0)
+        
+        # Extract per-leg unrealized PnL for easy access
+        long_unrealized_pnl = None
+        short_unrealized_pnl = None
+        long_funding_accrued = None
+        short_funding_accrued = None
+        
+        for dex, leg_meta in legs.items():
+            unrealized = leg_meta.get("unrealized_pnl")
+            funding = leg_meta.get("funding_accrued")
+            
+            if dex.lower() == position.long_dex.lower():
+                long_unrealized_pnl = unrealized
+                long_funding_accrued = funding
+            elif dex.lower() == position.short_dex.lower():
+                short_unrealized_pnl = unrealized
+                short_funding_accrued = funding
+        
+        # Build per-leg data
+        leg_data = []
+        for dex, leg_meta in legs.items():
+            leg_data.append({
+                "dex": dex.upper(),
+                "side": leg_meta.get("side", "unknown"),
+                "quantity": leg_meta.get("quantity", 0.0),
+                "entry_price": leg_meta.get("entry_price"),
+                "mark_price": leg_meta.get("mark_price"),
+                "unrealized_pnl": leg_meta.get("unrealized_pnl"),
+                "funding_accrued": leg_meta.get("funding_accrued"),
+                "funding_apy": leg_meta.get("funding_apy"),
+                "exposure_usd": leg_meta.get("exposure_usd"),
+                "leverage": leg_meta.get("leverage"),
+                "liquidation_price": leg_meta.get("liquidation_price"),
+            })
+        
+        return {
+            "id": str(position.id),
+            "symbol": position.symbol,
+            "long_dex": position.long_dex,
+            "short_dex": position.short_dex,
+            "size_usd": float(position.size_usd),
+            "age_hours": position.get_age_hours(),
+            
+            # Yield metrics
+            "entry_divergence": float(position.entry_divergence) if position.entry_divergence else None,
+            "entry_divergence_apy": entry_rate_apy,
+            "current_divergence": float(position.current_divergence) if position.current_divergence else None,
+            "current_divergence_apy": current_rate_apy,
+            "profit_erosion_ratio": erosion_ratio,
+            "profit_erosion_pct": erosion_pct,
+            
+            # PnL metrics (summary)
+            "net_pnl_usd": float(position.get_net_pnl()),
+            "net_pnl_pct": float(position.get_net_pnl_pct()),
+            "exchange_unrealized_pnl": exchange_unrealized_pnl,
+            
+            # Per-leg PnL (individual sides)
+            "long_unrealized_pnl": long_unrealized_pnl,
+            "short_unrealized_pnl": short_unrealized_pnl,
+            
+            # Funding metrics (summary)
+            "cumulative_funding": float(position.cumulative_funding),
+            "exchange_funding_accrued": exchange_funding,
+            "total_fees_paid": float(position.total_fees_paid),
+            
+            # Per-leg funding (individual sides)
+            "long_funding_accrued": long_funding_accrued,
+            "short_funding_accrued": short_funding_accrued,
+            
+            # Per-leg data (detailed breakdown)
+            "legs": leg_data,
+            
+            # Status
+            "opened_at": position.opened_at.isoformat() if position.opened_at else None,
+            "last_check": position.last_check.isoformat() if position.last_check else None,
+            "status": position.status,
+            "rebalance_pending": position.rebalance_pending,
+            "rebalance_reason": position.rebalance_reason,
         }
     
     async def close_position(
