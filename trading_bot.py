@@ -66,6 +66,7 @@ class TradingBot:
         self._proxy_health_monitor: Optional[ProxyHealthMonitor] = None
         self._proxy_rotation_attempts = 0
         self._control_server_task: Optional[asyncio.Task] = None
+        self._control_server: Optional[Any] = None  # Store uvicorn.Server instance for manual shutdown
         self._control_server_enabled = os.getenv("CONTROL_API_ENABLED", "false").lower() in ("true", "1", "yes")
 
         # Log account info if credentials provided
@@ -263,34 +264,24 @@ class TradingBot:
 
     async def _run_trading_loop(self):
         """Execute the main trading loop."""
-        self.logger.info("🔄 Trading loop started")
         while not self.shutdown_requested:
             try:
                 if await self.strategy.should_execute():
-                    # Check shutdown before executing (in case execution is long-running)
                     if self.shutdown_requested:
-                        self.logger.info("🛑 Trading loop: shutdown_requested=True, exiting...")
                         break
                     await self.strategy.execute_strategy()
                 else:
-                    # Use shorter sleep intervals to check shutdown more frequently
                     await asyncio.sleep(0.5)
                     if self.shutdown_requested:
-                        self.logger.info("🛑 Trading loop: shutdown_requested=True after sleep, exiting...")
                         break
                     
             except asyncio.CancelledError:
-                self.logger.info("🛑 Trading loop cancelled")
                 break
             except Exception as e:
                 self.logger.error(f"Strategy execution error: {e}")
-                # Check shutdown even after errors
                 if self.shutdown_requested:
-                    self.logger.info("🛑 Trading loop: shutdown_requested=True after error, exiting...")
                     break
                 await asyncio.sleep(5)  # Wait longer on error
-        
-        self.logger.info("✅ Trading loop exited")
 
     async def _handle_order_fill(
         self,
@@ -310,69 +301,56 @@ class TradingBot:
 
     async def graceful_shutdown(self, reason: str = "Unknown"):
         """Perform graceful shutdown of the trading bot."""
-        self.logger.info(f"🛑 Starting graceful shutdown: {reason}")
+        self.logger.info(f"🛑 Graceful shutdown initiated: {reason}")
         self.shutdown_requested = True
-        self.logger.info(f"✅ shutdown_requested flag set to True")
 
         # Stop proxy health monitor with timeout
         if self._proxy_health_monitor:
             try:
                 await asyncio.wait_for(self._proxy_health_monitor.stop(), timeout=5.0)
-            except asyncio.TimeoutError:
-                self.logger.warning("Proxy health monitor stop timed out")
-            except Exception as e:
-                self.logger.error(f"Error stopping proxy health monitor: {e}")
+            except (asyncio.TimeoutError, Exception):
+                pass  # Non-critical, continue shutdown
             self._proxy_health_monitor = None
 
         try:
             # Cleanup strategy with timeout
             if hasattr(self, 'strategy') and self.strategy:
-                self.logger.info("🧹 Calling strategy.cleanup()...")
                 try:
                     await asyncio.wait_for(self.strategy.cleanup(), timeout=30.0)
-                    self.logger.info("✅ Strategy cleanup completed")
                 except asyncio.TimeoutError:
-                    self.logger.warning("⚠️ Strategy cleanup timed out, forcing shutdown")
+                    self.logger.warning("⚠️ Strategy cleanup timed out")
                 except Exception as e:
-                    self.logger.error(f"❌ Error during strategy cleanup: {e}")
-                    import traceback
-                    self.logger.error(f"Traceback: {traceback.format_exc()}")
+                    self.logger.error(f"❌ Strategy cleanup error: {e}")
             
-            # Stop control server if running with timeout
+            # Stop control server if running
             if self._control_server_task:
                 try:
                     await asyncio.wait_for(self._stop_control_server(), timeout=5.0)
-                except asyncio.TimeoutError:
-                    self.logger.warning("Control server stop timed out, cancelling task")
-                    self._control_server_task.cancel()
-                    try:
-                        await self._control_server_task
-                    except asyncio.CancelledError:
-                        pass
-                except Exception as e:
-                    self.logger.error(f"Error stopping control server: {e}")
+                except (asyncio.TimeoutError, Exception):
+                    if not self._control_server_task.done():
+                        self._control_server_task.cancel()
             
-            # Disconnect from exchange(s) with timeout
+            # Disconnect from exchange(s)
+            disconnected = []
             if hasattr(self, 'exchange_clients') and self.exchange_clients:
                 # Multi-exchange mode: disconnect all clients
                 for exchange_name, client in self.exchange_clients.items():
                     try:
                         await asyncio.wait_for(client.disconnect(), timeout=10.0)
-                        self.logger.info(f"Disconnected from {exchange_name}")
-                    except asyncio.TimeoutError:
-                        self.logger.warning(f"Disconnect from {exchange_name} timed out")
-                    except Exception as e:
-                        self.logger.error(f"Error disconnecting from {exchange_name}: {e}")
-            else:
+                        disconnected.append(exchange_name)
+                    except (asyncio.TimeoutError, Exception):
+                        pass
+            elif hasattr(self, 'exchange_client') and self.exchange_client:
                 # Single exchange mode
                 try:
                     await asyncio.wait_for(self.exchange_client.disconnect(), timeout=10.0)
-                except asyncio.TimeoutError:
-                    self.logger.warning("Exchange disconnect timed out")
-                except Exception as e:
-                    self.logger.error(f"Error disconnecting from exchange: {e}")
-                
-            self.logger.info("Graceful shutdown completed")
+                    disconnected.append(self.config.exchange)
+                except (asyncio.TimeoutError, Exception):
+                    pass
+            
+            if disconnected:
+                self.logger.info(f"✅ Disconnected from: {', '.join(disconnected)}")
+            self.logger.info("✅ Shutdown complete")
 
         except Exception as e:
             self.logger.error(f"Error during graceful shutdown: {e}")
@@ -400,6 +378,8 @@ class TradingBot:
             self.logger.info(f"Starting control API server on {host}:{port}")
             
             # Run uvicorn in background task
+            # IMPORTANT: uvicorn.Server installs its own signal handlers which override ours
+            # We need to ensure our shutdown handler stops the server
             config = uvicorn.Config(
                 app=app,
                 host=host,
@@ -410,8 +390,43 @@ class TradingBot:
             )
             server = uvicorn.Server(config)
             
+            # Store server reference so we can stop it manually
+            self._control_server = server
+            
             # Start server in background task
+            # IMPORTANT: uvicorn.Server.serve() installs its own signal handlers which override ours
+            # We need to re-register our signal handlers after uvicorn starts
             self._control_server_task = asyncio.create_task(server.serve())
+            
+            # Wait a moment for uvicorn to initialize, then re-register signal handlers
+            # This ensures our signal handlers take precedence over uvicorn's
+            await asyncio.sleep(0.1)
+            
+            # Re-register our signal handlers AFTER uvicorn starts
+            # Create a signal handler that calls our shutdown logic
+            def _override_signal_handler(signum, frame):
+                """Signal handler that ensures our shutdown logic runs."""
+                signal_name = "SIGINT" if signum == signal.SIGINT else "SIGTERM"
+                self.logger.info(f"📡 Signal handler called: {signal_name}")
+                # Set shutdown flag to trigger graceful shutdown
+                self.shutdown_requested = True
+                # Also stop uvicorn server if it's running
+                if hasattr(self, '_control_server') and self._control_server:
+                    try:
+                        self._control_server.should_exit = True
+                    except Exception:
+                        pass
+            
+            loop = asyncio.get_running_loop()
+            if hasattr(loop, 'add_signal_handler'):
+                try:
+                    import signal
+                    loop.add_signal_handler(signal.SIGINT, _override_signal_handler, signal.SIGINT, None)
+                    loop.add_signal_handler(signal.SIGTERM, _override_signal_handler, signal.SIGTERM, None)
+                    self.logger.info("✅ Re-registered signal handlers after uvicorn start")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Failed to re-register signal handlers: {e}")
+            
             self.logger.info(f"✅ Control API server started on http://{host}:{port}")
             self.logger.info("   Endpoints:")
             self.logger.info("   - GET  /api/v1/status")
@@ -427,18 +442,25 @@ class TradingBot:
     async def _stop_control_server(self):
         """Stop the control API server."""
         if self._control_server_task:
-            self.logger.info("Stopping control API server...")
-            self._control_server_task.cancel()
-            try:
-                await asyncio.wait_for(self._control_server_task, timeout=3.0)
-            except asyncio.TimeoutError:
-                self.logger.warning("Control server task cancellation timed out")
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                self.logger.error(f"Error waiting for control server task: {e}")
+            # Stop uvicorn server gracefully if we have a reference
+            if hasattr(self, '_control_server') and self._control_server:
+                try:
+                    self._control_server.should_exit = True
+                    await asyncio.sleep(0.5)
+                except Exception:
+                    pass
+            
+            # Cancel the task if it's still running
+            if not self._control_server_task.done():
+                self._control_server_task.cancel()
+                try:
+                    await asyncio.wait_for(self._control_server_task, timeout=3.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                    pass
+            
             self._control_server_task = None
-            self.logger.info("Control API server stopped")
+            if hasattr(self, '_control_server'):
+                self._control_server = None
 
     async def _on_proxy_unhealthy(self, failure_count: int) -> None:
         """Rotate to the next proxy when health checks continue to fail."""
@@ -522,13 +544,9 @@ class TradingBot:
             
             # If shutdown was requested, perform graceful shutdown
             if self.shutdown_requested:
-                self.logger.info("🛑 Trading loop exited, shutdown_requested=True, calling graceful_shutdown()...")
                 await self.graceful_shutdown("Shutdown requested")
-            else:
-                self.logger.info("ℹ️ Trading loop exited but shutdown_requested=False")
 
         except KeyboardInterrupt:
-            self.logger.info("🛑 KeyboardInterrupt caught in bot.run()")
             await self.graceful_shutdown("User interruption (Ctrl+C)")
         except Exception as e:
             self.logger.error(f"Critical error: {e}")
