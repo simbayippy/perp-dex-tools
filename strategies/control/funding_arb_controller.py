@@ -268,7 +268,7 @@ class FundingArbStrategyController(BaseStrategyController):
                         # Calculate leverage if not available in snapshot (for Lighter, Paradex, etc.)
                         if leg_meta["leverage"] is None:
                             leg_meta["leverage"] = await self._calculate_leverage(
-                                client, position.symbol, snapshot
+                                client, position.symbol, snapshot, dex_key
                             )
                         
                         if snapshot.unrealized_pnl:
@@ -310,39 +310,52 @@ class FundingArbStrategyController(BaseStrategyController):
         self,
         client: Any,
         symbol: str,
-        snapshot: Any
+        snapshot: Any,
+        dex_name: str
     ) -> Optional[float]:
         """
         Calculate leverage for exchanges that don't provide it directly (Lighter, Paradex).
+        
+        Uses the same approach as leverage_validator: calls get_leverage_info() and extracts
+        the appropriate leverage field based on exchange type.
         
         Args:
             client: Exchange client instance
             symbol: Trading symbol
             snapshot: ExchangePositionSnapshot
+            dex_name: Exchange name (lowercase) to determine which leverage field to use
             
         Returns:
             Leverage as float, or None if cannot be calculated
         """
         try:
-            # Method 1: Calculate from exposure and margin_reserved
+            # Method 1: Calculate from exposure and margin_reserved (most accurate for actual leverage)
             if snapshot.exposure_usd and snapshot.margin_reserved:
                 if snapshot.margin_reserved > 0:
                     leverage = float(snapshot.exposure_usd / snapshot.margin_reserved)
                     return leverage
             
-            # Method 2: Use exchange client's get_leverage_info method (for Lighter, Paradex)
+            # Method 2: Use exchange client's get_leverage_info method (same as leverage_validator)
             if hasattr(client, 'get_leverage_info'):
                 leverage_info = await client.get_leverage_info(symbol)
                 if leverage_info:
-                    # Try account_leverage first (actual leverage being used)
-                    account_leverage = leverage_info.get('account_leverage')
-                    if account_leverage is not None:
-                        return float(account_leverage)
+                    # For Lighter: use max_leverage (symbol-level, already correct at 5x)
+                    # account_leverage is in wrong format (500/5E+2 instead of 5)
+                    if dex_name == 'lighter':
+                        max_leverage = leverage_info.get('max_leverage')
+                        if max_leverage is not None:
+                            return float(max_leverage)
+                        # If max_leverage not available, fall through to account_leverage
                     
-                    # Fall back to max_leverage if account_leverage not available
+                    # For other exchanges: use max_leverage like leverage_validator does (line 174)
                     max_leverage = leverage_info.get('max_leverage')
                     if max_leverage is not None:
                         return float(max_leverage)
+                    
+                    # Fallback: use account_leverage if max_leverage not available
+                    account_leverage = leverage_info.get('account_leverage')
+                    if account_leverage is not None:
+                        return float(account_leverage)
                     
                     # Method 3: Calculate from margin_requirement if available
                     margin_requirement = leverage_info.get('margin_requirement')
