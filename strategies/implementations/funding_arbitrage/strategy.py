@@ -184,6 +184,7 @@ class FundingArbitrageStrategy(BaseStrategy):
         self._monitor_task = None
         self._monitor_stop_event = None
         self._last_opportunity_scan_ts = 0.0
+        self._shutdown_requested = False  # Track if strategy is shutting down
 
         self._control_server_started = False
 
@@ -235,8 +236,11 @@ class FundingArbitrageStrategy(BaseStrategy):
         self.logger.info("FundingArbitrageStrategy initialized successfully")
         if self._monitor_task is None:
             self._monitor_stop_event = asyncio.Event()
+            self.logger.info("🔄 Creating background monitor task...")
             self._monitor_task = asyncio.create_task(self._monitor_positions_loop(), name="funding-arb-monitor")
-            self.logger.debug("Started background monitor loop")
+            self.logger.info(f"✅ Background monitor task created: {self._monitor_task.get_name()} (task_id={id(self._monitor_task)})")
+        else:
+            self.logger.warning(f"⚠️ Monitor task already exists: {self._monitor_task.get_name()}")
     
     async def should_execute(self) -> bool:
         """
@@ -382,25 +386,46 @@ class FundingArbitrageStrategy(BaseStrategy):
 
         try:
             while stop_event and not stop_event.is_set():
+                # Check shutdown flag from strategy
+                if self._shutdown_requested:
+                    break
+                
+                # Check for cancellation before starting operations
+                if stop_event.is_set():
+                    break
+                
                 try:
                     await self.position_monitor.monitor()
+                    if stop_event.is_set() or self._shutdown_requested:
+                        break
                     await self.position_closer.evaluateAndClosePositions()
+                    
+                except asyncio.CancelledError:
+                    # Task was cancelled, exit immediately
+                    break
                 except Exception as exc:
-                    self.logger.error(
-                        f"Monitor loop error: {exc}\n{traceback.format_exc()}"
-                    )
+                    # If shutdown was requested, exit on any error (database might be closed)
+                    if (stop_event and stop_event.is_set()) or self._shutdown_requested:
+                        break
+                    self.logger.error(f"Monitor loop error: {exc}")
 
-                if stop_event.is_set():
+                if stop_event.is_set() or self._shutdown_requested:
                     break
 
                 try:
                     await asyncio.wait_for(stop_event.wait(), timeout=interval)
+                    break  # Event was set, exit
                 except asyncio.TimeoutError:
-                    continue
+                    continue  # Timeout expected, continue loop
+                except asyncio.CancelledError:
+                    break  # Task cancelled, exit
         except asyncio.CancelledError:
+            # Task cancellation - exit cleanly
             pass
+        except Exception as e:
+            self.logger.error(f"Monitor loop error: {e}")
         finally:
-            self.logger.debug("Background monitor loop stopped")
+            pass  # Silent exit
 
     # ========================================================================
     # Cleanup
@@ -408,34 +433,55 @@ class FundingArbitrageStrategy(BaseStrategy):
     
     async def cleanup(self):
         """Cleanup strategy resources."""
-        if self._monitor_stop_event:
-            self._monitor_stop_event.set()
-        if self._monitor_task:
+        self._shutdown_requested = True  # Set shutdown flag immediately
+        
+        # Stop monitor task
+        if self._monitor_task and not self._monitor_task.done():
+            if self._monitor_stop_event:
+                self._monitor_stop_event.set()
+            self._monitor_task.cancel()
             try:
-                await self._monitor_task
-            except asyncio.CancelledError:
-                pass
-            self._monitor_task = None
-        self._monitor_stop_event = None
+                await asyncio.wait_for(self._monitor_task, timeout=10.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                pass  # Task stopped or cancelled
+            finally:
+                self._monitor_task = None
+        
+        if self._monitor_stop_event:
+            self._monitor_stop_event = None
         self._last_opportunity_scan_ts = 0.0
 
-        # Close position and state managers
+        # Close position and state managers with timeout
         if hasattr(self, 'position_manager'):
             shutdown = getattr(self.position_manager, "shutdown", None)
             if callable(shutdown):
-                await shutdown()
+                try:
+                    await asyncio.wait_for(shutdown(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    self.logger.warning("Position manager shutdown timed out")
+                except Exception as e:
+                    self.logger.error(f"Error shutting down position manager: {e}")
         if getattr(self, "_control_server_started", False) and self.control_server:
-            await self.control_server.stop()
+            try:
+                await asyncio.wait_for(self.control_server.stop(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self.logger.warning("Control server stop timed out")
+            except Exception as e:
+                self.logger.error(f"Error stopping control server: {e}")
             self._control_server_started = False
 
-        # Stop liquidation consumers
+        # Stop liquidation consumers with timeout
         for task in self._liquidation_tasks:
             task.cancel()
         for task in self._liquidation_tasks:
             try:
-                await task
+                await asyncio.wait_for(task, timeout=3.0)
+            except asyncio.TimeoutError:
+                self.logger.warning(f"Liquidation task cancellation timed out")
             except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                self.logger.error(f"Error waiting for liquidation task: {e}")
         self._liquidation_tasks.clear()
 
         for exchange, queue in list(self._liquidation_queues.items()):

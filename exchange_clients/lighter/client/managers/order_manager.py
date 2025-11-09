@@ -822,11 +822,21 @@ class LighterOrderManager:
                         if position.symbol == ticker:
                             position_amt = abs(float(position.position))
                             if position_amt > 0.001:  # Only include significant positions
+                                # Get average entry price (correct attribute name is avg_entry_price)
+                                avg_price = getattr(position, 'avg_entry_price', None)
+                                if avg_price is None:
+                                    # Fallback: try to calculate from position_value if available
+                                    position_value = getattr(position, 'position_value', None)
+                                    if position_value is not None and position_amt > 0:
+                                        avg_price = float(position_value) / position_amt
+                                    else:
+                                        avg_price = None
+                                
                                 return OrderInfo(
                                     order_id=order_id,
                                     side="buy" if float(position.position) > 0 else "sell",
                                     size=Decimal(str(position_amt)),
-                                    price=Decimal(str(position.avg_price)),
+                                    price=Decimal(str(avg_price)) if avg_price is not None else None,
                                     status="FILLED",
                                     filled_size=Decimal(str(position_amt)),
                                     remaining_size=Decimal('0')

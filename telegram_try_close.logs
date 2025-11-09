@@ -1,0 +1,51 @@
+2025-11-09 18:05:43 | INFO     | STRATEGY:FUNDING_RATE_ARBITRAGE:exchange=lighter:ticker=ALL:account=acc1 | 🔒 Closing position APEX atomically | Reason: telegram_manual_close | Legs: [LIGHTER:sell:143.0, PARADEX:buy:143]
+2025-11-09 18:05:43 | INFO     | CORE:ATOMIC_MULTI_ORDER             | Starting atomic execution of 2 orders (rollback_on_partial=True)
+2025-11-09 18:05:43 | INFO     | CORE:ATOMIC_MULTI_ORDER             | =======================================================
+2025-11-09 18:05:43 | INFO     | CORE:ATOMIC_MULTI_ORDER             | close.2. 🚀 Order Placement
+2025-11-09 18:05:43 | INFO     | CORE:ATOMIC_MULTI_ORDER             | =======================================================
+2025-11-09 18:05:43 | INFO     | CORE:ATOMIC_MULTI_ORDER             | 🚀 Placing all orders simultaneously...
+2025-11-09 18:05:43 | INFO     | CORE:ORDER_EXECUTOR                 | 🔴 [LIGHTER] Executing sell APEX ($120.3223450 qty=143.0) in mode market_only
+2025-11-09 18:05:43 | INFO     | CORE:PRICE_PROVIDER                 | ✅ [LIGHTER] BBO: bid=0.84033, ask=0.8425
+2025-11-09 18:05:43 | INFO     | CORE:ORDER_EXECUTOR                 | [LIGHTER] Placing market sell APEX (contract_id=86): 143.0 @ ~$0.84033
+2025-11-09 18:05:43 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | 📤 [LIGHTER] Placing market order: market=86, client_id=543879, side=SELL, base_amount=1430, avg_execution_price=79934
+2025-11-09 18:05:43 | INFO     | CORE:ORDER_EXECUTOR                 | 🟢 [PARADEX] Executing buy APEX ($120.12373945 qty=143) in mode market_only
+2025-11-09 18:05:43 | DEBUG    | EXCHANGE:PARADEX:ticker=ALL         | 📡 [PARADEX] Using BBO stream for APEX-USD-PERP: 0.8402/0.8404
+2025-11-09 18:05:43 | INFO     | CORE:PRICE_PROVIDER                 | ✅ [PARADEX] BBO: bid=0.8402, ask=0.8404
+2025-11-09 18:05:43 | INFO     | CORE:ORDER_EXECUTOR                 | [PARADEX] Placing market buy APEX (contract_id=APEX-USD-PERP): 143 @ ~$0.8404
+2025-11-09 18:05:44 | INFO     | EXCHANGE:PARADEX:ticker=ALL         | [WEBSOCKET] [PARADEX] FILLED 143 @ 0.8442
+2025-11-09 18:05:45 | INFO     | CORE:ORDER_EXECUTOR                 | [PARADEX] Market order filled: 143 @ $0.8442 (slippage: $0.54 / 0.452%)
+2025-11-09 18:05:45 | INFO     | CORE:ATOMIC_MULTI_ORDER             | ✅ PARADEX APEX fully filled (143). Cancelling remaining limit orders and hedging to prevent directional exposure.
+2025-11-09 18:05:45 | INFO     | CORE:ATOMIC_MULTI_ORDER             | 🔄 Cancelling limit order for LIGHTER APEX (remaining: 143.0) → will hedge with market order
+2025-11-09 18:05:45 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | [WEBSOCKET] [LIGHTER] FILLED 143.0 @ 0.79934
+2025-11-09 18:05:45 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | TRANSACTION: SELL 143.0 @ 0.79934 | Order: 543879 | Status: FILLED
+2025-11-09 18:05:45 | INFO     | CORE:ORDER_EXECUTOR                 | [LIGHTER] Market order filled: 143.0 @ $0.79934 (slippage: $5.86 / 4.878%)
+2025-11-09 18:05:45 | WARNING  | EXCHANGE:LIGHTER:ticker=ALL         | ⚠️ [LIGHTER] Position suddenly zeroed: APEX | Previous qty: 143.0 | Market ID: 86 | Possible liquidation (no liquidation notification received)
+2025-11-09 18:05:45 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Received user stats via WebSocket: balance=59.388386 (0 weight)
+2025-11-09 18:05:46 | DEBUG    | CORE:ATOMIC_MULTI_ORDER             | Reconcile: APEX order 543879 reported filled_size=143.0 <= current ctx.filled_quantity=143.0. No reconciliation needed.
+2025-11-09 18:05:46 | DEBUG    | CORE:ATOMIC_MULTI_ORDER             | 📊 [HEDGE] Set hedge_target_quantity for APEX: 143 (trigger=143, multipliers=1×1)
+2025-11-09 18:05:46 | DEBUG    | CORE:ATOMIC_MULTI_ORDER             | 📊 [HEDGE] LIGHTER APEX: hedge_target=143, filled=143.0, remaining_qty=0.0
+2025-11-09 18:05:46 | INFO     | CORE:ATOMIC_MULTI_ORDER             | ⚡ Hedging APEX on LIGHTER for remaining $6.02
+2025-11-09 18:05:46 | INFO     | CORE:ORDER_EXECUTOR                 | 🔴 [LIGHTER] Executing sell APEX ($6.0167250) in mode market_only
+2025-11-09 18:05:46 | INFO     | CORE:PRICE_PROVIDER                 | ✅ [LIGHTER] BBO: bid=0.84033, ask=0.8425
+2025-11-09 18:05:46 | INFO     | CORE:ORDER_EXECUTOR                 | [LIGHTER] Placing market sell APEX (contract_id=86): 7.159955017671629002891721110 @ ~$0.84033
+2025-11-09 18:05:46 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | 📤 [LIGHTER] Placing market order: market=86, client_id=546314, side=SELL, base_amount=72, avg_execution_price=79934
+2025-11-09 18:05:46 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | [WEBSOCKET] [LIGHTER] FILLED 7.2 @ 0.79934
+2025-11-09 18:05:46 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | TRANSACTION: SELL 7.2 @ 0.79934 | Order: 546314 | Status: FILLED
+2025-11-09 18:05:46 | INFO     | CORE:ORDER_EXECUTOR                 | [LIGHTER] Market order filled: 7.2 @ $0.79934 (slippage: $0.30 / 4.878%)
+2025-11-09 18:05:47 | ERROR    | EXCHANGE:LIGHTER:ticker=ALL         | Error getting order info: 'AccountPosition' object has no attribute 'avg_price'
+2025-11-09 18:05:47 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | Traceback: Traceback (most recent call last):
+  File "/root/perp-dex-tools/exchange_clients/lighter/client/managers/order_manager.py", line 829, in get_order_info
+    price=Decimal(str(position.avg_price)),
+                      ^^^^^^^^^^^^^^^^^^
+  File "/root/perp-dex-tools/venv/lib/python3.12/site-packages/pydantic/main.py", line 761, in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+AttributeError: 'AccountPosition' object has no attribute 'avg_price'
+
+2025-11-09 18:05:47 | DEBUG    | CORE:ATOMIC_MULTI_ORDER             | Reconcile: APEX order 546314 reported filled_size=7.2 <= current ctx.filled_quantity=150.2. No reconciliation needed.
+2025-11-09 18:05:47 | WARNING  | CORE:ATOMIC_MULTI_ORDER             | Minor imbalance detected after hedge: longs=$120.12374, shorts=$120.06087, imbalance=$0.06287 (0.1% within 5% tolerance)
+2025-11-09 18:05:47 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Querying position_funding() API for APEX (no cache)
+2025-11-09 18:05:47 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Filtering funding to only after position opened at timestamp 1762711546515 (from trades API)
+2025-11-09 18:05:48 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Cached funding for APEX: 0
+2025-11-09 18:05:48 | WARNING  | CORE:ATOMIC_MULTI_ORDER             | ⚠️ Post-trade exposure detected after hedging: net_qty=7.200000, net_usd=$6.0582 (100.00%).
+2025-11-09 18:05:48 | INFO     | STRATEGY:FUNDING_RATE_ARBITRAGE:exchange=lighter:ticker=ALL:account=acc1 | ✅ Closed position 682ea440-11d2-487d-b737-d992e160c9b7: APEX Reason: telegram_manual_close, PnL: $0.00, Duration: 4.6h
+2025-11-09 18:05:48 | INFO     | STRATEGY:FUNDING_RATE_ARBITRAGE:exchange=lighter:ticker=ALL:account=acc1 | ✅ Closed APEX (telegram_manual_close): PnL=$0.00 (0.00%), Age=4.6h

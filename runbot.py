@@ -12,6 +12,7 @@ Generate configs via:
 import argparse
 import asyncio
 import logging
+import signal
 from pathlib import Path
 import sys
 import dotenv
@@ -67,6 +68,26 @@ def parse_arguments():
         "--enable-proxy",
         action="store_true",
         help="Enable the account's configured proxy assignments for this session (disabled by default).",
+    )
+    
+    parser.add_argument(
+        "--enable-control-api",
+        action="store_true",
+        help="Enable the REST API control interface for managing the running strategy (disabled by default).",
+    )
+    
+    parser.add_argument(
+        "--control-api-port",
+        type=int,
+        default=8766,
+        help="Port for the control API server (default: 8766). Only used if --enable-control-api is set.",
+    )
+    
+    parser.add_argument(
+        "--control-api-host",
+        type=str,
+        default="127.0.0.1",
+        help="Host for the control API server (default: 127.0.0.1). Only used if --enable-control-api is set.",
     )
 
     return parser.parse_args()
@@ -190,8 +211,55 @@ async def load_account_credentials(account_name: str) -> dict:
     return credentials
 
 
+# Global bot instance for signal handling
+_bot_instance: Optional[TradingBot] = None
+_shutdown_event: Optional[asyncio.Event] = None
+_signal_count = 0
+_last_signal_time = 0.0
+_FORCE_SHUTDOWN_WINDOW = 2.0  # seconds
+
+
+def _signal_handler(signum, frame):
+    """Handle shutdown signals (SIGINT/SIGTERM)."""
+    import time
+    
+    global _signal_count, _last_signal_time
+    
+    current_time = time.time()
+    
+    # Check if this is a second press within the window
+    if current_time - _last_signal_time < _FORCE_SHUTDOWN_WINDOW:
+        _signal_count += 1
+    else:
+        _signal_count = 1
+    
+    _last_signal_time = current_time
+    
+    if _signal_count >= 2:
+        print(f"\n🛑 Force shutdown requested (CTRL+C pressed {_signal_count} times)")
+        if _bot_instance:
+            _bot_instance.shutdown_requested = True
+            _bot_instance._force_shutdown = True  # Flag for immediate shutdown
+        if _shutdown_event:
+            _shutdown_event.set()
+        # Force exit after a brief moment
+        import sys
+        import os
+        print("⚠️  Forcing immediate exit...")
+        os._exit(1)  # Force immediate exit, bypassing cleanup
+    else:
+        print(f"\n🛑 Shutdown signal received, initiating graceful shutdown...")
+        print(f"   (Press CTRL+C again within {_FORCE_SHUTDOWN_WINDOW}s to force immediate shutdown)")
+        if _shutdown_event:
+            _shutdown_event.set()
+        if _bot_instance:
+            _bot_instance.shutdown_requested = True
+
+
 async def main():
     """Main entry point."""
+    global _bot_instance, _shutdown_event
+    
     args = parse_arguments()
 
     # Set LOG_LEVEL environment variable for UnifiedLogger
@@ -199,6 +267,23 @@ async def main():
 
     # Setup logging first
     setup_logging(args.log_level)
+    
+    # Setup signal handlers for graceful shutdown
+    _shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    # Use add_signal_handler if available (Unix/macOS), otherwise fall back to signal.signal
+    if hasattr(loop, 'add_signal_handler'):
+        try:
+            loop.add_signal_handler(signal.SIGINT, _signal_handler, signal.SIGINT, None)
+            loop.add_signal_handler(signal.SIGTERM, _signal_handler, signal.SIGTERM, None)
+        except NotImplementedError:
+            # Fallback for platforms that don't support add_signal_handler
+            signal.signal(signal.SIGINT, _signal_handler)
+            signal.signal(signal.SIGTERM, _signal_handler)
+    else:
+        # Fallback for platforms without add_signal_handler
+        signal.signal(signal.SIGINT, _signal_handler)
+        signal.signal(signal.SIGTERM, _signal_handler)
 
     from trading_config.config_yaml import load_config_from_yaml, validate_config_file
 
@@ -284,6 +369,14 @@ async def main():
     strategy_config["_proxy_enabled"] = bool(active_proxy_display)
     strategy_config["_proxy_egress_ip"] = detected_proxy_ip
     strategy_config["_proxy_egress_source"] = detected_proxy_source
+    
+    # Set control API environment variables if enabled
+    if args.enable_control_api:
+        os.environ["CONTROL_API_ENABLED"] = "true"
+        os.environ["CONTROL_API_PORT"] = str(args.control_api_port)
+        os.environ["CONTROL_API_HOST"] = args.control_api_host
+        print(f"✓ Control API enabled: http://{args.control_api_host}:{args.control_api_port}")
+        print("")
 
     # Convert to TradingConfig
     config = _config_dict_to_trading_config(strategy_name, strategy_config)
@@ -311,12 +404,19 @@ async def main():
         account_credentials=account_credentials,
         proxy_selector=proxy_selector,
     )
+    _bot_instance = bot
+    
     try:
         await bot.run()
+    except KeyboardInterrupt:
+        print("\n📡 KeyboardInterrupt received, shutting down...")
+        await bot.graceful_shutdown("User interruption (Ctrl+C)")
     except Exception as e:
         print(f"Bot execution failed: {e}")
-        # The bot's run method already handles graceful shutdown
-        return
+        await bot.graceful_shutdown(f"Error: {e}")
+        raise
+    finally:
+        _bot_instance = None
 
 
 def _config_dict_to_trading_config(strategy_name: str, config_dict: dict) -> TradingConfig:
