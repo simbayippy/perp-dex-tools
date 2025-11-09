@@ -68,6 +68,26 @@ def parse_arguments():
         action="store_true",
         help="Enable the account's configured proxy assignments for this session (disabled by default).",
     )
+    
+    parser.add_argument(
+        "--enable-control-api",
+        action="store_true",
+        help="Enable the REST API control interface for managing the running strategy (disabled by default).",
+    )
+    
+    parser.add_argument(
+        "--control-api-port",
+        type=int,
+        default=8766,
+        help="Port for the control API server (default: 8766). Only used if --enable-control-api is set.",
+    )
+    
+    parser.add_argument(
+        "--control-api-host",
+        type=str,
+        default="127.0.0.1",
+        help="Host for the control API server (default: 127.0.0.1). Only used if --enable-control-api is set.",
+    )
 
     return parser.parse_args()
 
@@ -284,6 +304,14 @@ async def main():
     strategy_config["_proxy_enabled"] = bool(active_proxy_display)
     strategy_config["_proxy_egress_ip"] = detected_proxy_ip
     strategy_config["_proxy_egress_source"] = detected_proxy_source
+    
+    # Set control API environment variables if enabled
+    if args.enable_control_api:
+        os.environ["CONTROL_API_ENABLED"] = "true"
+        os.environ["CONTROL_API_PORT"] = str(args.control_api_port)
+        os.environ["CONTROL_API_HOST"] = args.control_api_host
+        print(f"✓ Control API enabled: http://{args.control_api_host}:{args.control_api_port}")
+        print("")
 
     # Convert to TradingConfig
     config = _config_dict_to_trading_config(strategy_name, strategy_config)
