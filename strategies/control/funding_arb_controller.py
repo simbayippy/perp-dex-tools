@@ -410,6 +410,16 @@ class FundingArbStrategyController(BaseStrategyController):
                 "liquidation_price": leg_meta.get("liquidation_price"),
             })
         
+        # Get risk config for min/max hold info
+        min_hold_hours = None
+        max_position_age_hours = None
+        min_erosion_threshold = None
+        if hasattr(self.strategy, 'config') and hasattr(self.strategy.config, 'risk_config'):
+            risk_cfg = self.strategy.config.risk_config
+            min_hold_hours = float(risk_cfg.min_hold_hours) if hasattr(risk_cfg, 'min_hold_hours') else None
+            max_position_age_hours = float(risk_cfg.max_position_age_hours) if hasattr(risk_cfg, 'max_position_age_hours') else None
+            min_erosion_threshold = float(risk_cfg.min_erosion_threshold) if hasattr(risk_cfg, 'min_erosion_threshold') else None
+        
         return {
             "id": str(position.id),
             "symbol": position.symbol,
@@ -425,6 +435,7 @@ class FundingArbStrategyController(BaseStrategyController):
             "current_divergence_apy": current_rate_apy,
             "profit_erosion_ratio": erosion_ratio,
             "profit_erosion_pct": erosion_pct,
+            "min_erosion_threshold": min_erosion_threshold,
             
             # PnL metrics (summary)
             "net_pnl_usd": float(position.get_net_pnl()),
@@ -446,6 +457,10 @@ class FundingArbStrategyController(BaseStrategyController):
             
             # Per-leg data (detailed breakdown)
             "legs": leg_data,
+            
+            # Risk management config
+            "min_hold_hours": min_hold_hours,
+            "max_position_age_hours": max_position_age_hours,
             
             # Status
             "opened_at": position.opened_at.isoformat() if position.opened_at else None,
