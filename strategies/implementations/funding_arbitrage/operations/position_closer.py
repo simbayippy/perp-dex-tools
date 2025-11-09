@@ -142,6 +142,7 @@ class PositionCloser:
         live_snapshots: Optional[
             Dict[str, Optional["ExchangePositionSnapshot"]]
         ] = None,
+        order_type: Optional[str] = None,
     ) -> None:
         strategy = self._strategy
 
@@ -153,6 +154,7 @@ class PositionCloser:
                 position,
                 reason=reason,
                 live_snapshots=live_snapshots,
+                order_type=order_type,
             )
 
             await strategy.position_manager.close(
@@ -542,9 +544,16 @@ class PositionCloser:
         live_snapshots: Optional[
             Dict[str, Optional["ExchangePositionSnapshot"]]
         ] = None,
+        order_type: Optional[str] = None,
     ) -> None:
         """
         Close legs on the exchanges, skipping those already flat.
+        
+        Args:
+            position: Position to close
+            reason: Reason for closing
+            live_snapshots: Optional pre-fetched snapshots
+            order_type: Optional order type override ("market" or "limit")
         """
         strategy = self._strategy
         legs: List[Dict[str, Any]] = []
@@ -628,16 +637,17 @@ class PositionCloser:
             return
 
         if len(legs) == 1:
-            await self._force_close_leg(position.symbol, legs[0], reason=reason)
+            await self._force_close_leg(position.symbol, legs[0], reason=reason, order_type=order_type)
             return
 
-        await self._close_legs_atomically(position, legs, reason=reason)
+        await self._close_legs_atomically(position, legs, reason=reason, order_type=order_type)
 
     async def _close_legs_atomically(
         self,
         position: "FundingArbPosition",
         legs: List[Dict[str, Any]],
         reason: str = "UNKNOWN",
+        order_type: Optional[str] = None,
     ) -> None:
         strategy = self._strategy
         
@@ -659,7 +669,7 @@ class PositionCloser:
 
         for leg in legs:
             try:
-                spec = await self._build_order_spec(position.symbol, leg, reason=reason)
+                spec = await self._build_order_spec(position.symbol, leg, reason=reason, order_type=order_type)
             except Exception as exc:
                 strategy.logger.error(
                     f"[{leg['dex']}] Unable to prepare close order for {position.symbol}: {exc}"
@@ -686,6 +696,7 @@ class PositionCloser:
         symbol: str,
         leg: Dict[str, Any],
         reason: str = "UNKNOWN",
+        order_type: Optional[str] = None,
     ) -> None:
         strategy = self._strategy
         
@@ -715,13 +726,19 @@ class PositionCloser:
             f"[{leg['dex']}] Emergency close {symbol} qty={leg['quantity']} via market order"
         )
 
+        # Use order_type if provided, otherwise default to market for single leg closes
+        if order_type == "limit":
+            mode = ExecutionMode.LIMIT_ONLY
+        else:
+            mode = ExecutionMode.MARKET_ONLY
+        
         execution = await self._order_executor.execute_order(
             exchange_client=leg["client"],
             symbol=symbol,
             side=leg["side"],
             size_usd=size_usd,
             quantity=leg["quantity"],
-            mode=ExecutionMode.MARKET_ONLY,
+            mode=mode,
             timeout_seconds=10.0,
         )
 
@@ -739,6 +756,7 @@ class PositionCloser:
         symbol: str,
         leg: Dict[str, Any],
         reason: str = "UNKNOWN",
+        order_type: Optional[str] = None,
     ) -> OrderSpec:
         leg["contract_id"] = await self._prepare_contract_context(
             leg["client"],
@@ -756,8 +774,10 @@ class PositionCloser:
         quantity = leg["quantity"]
         notional = quantity * price
         
-        # Use market orders for critical situations requiring immediate execution
-        # Use limit orders for normal exits to minimize slippage
+        # Determine execution mode:
+        # 1. Use order_type if explicitly provided (from API)
+        # 2. Use market for critical reasons
+        # 3. Default to limit for normal exits
         critical_reasons = {
             "SEVERE_IMBALANCE",
             "LEG_LIQUIDATED", 
@@ -767,7 +787,13 @@ class PositionCloser:
             "LIQUIDATION_PARADEX",
         }
         
-        use_market = reason in critical_reasons
+        if order_type:
+            # Explicit order type from API
+            use_market = order_type.lower() == "market"
+        else:
+            # Fall back to reason-based logic
+            use_market = reason in critical_reasons
+        
         execution_mode = "market_only" if use_market else "limit_only"
         limit_offset_pct = None if use_market else self._resolve_limit_offset_pct()
 

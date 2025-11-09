@@ -65,6 +65,8 @@ class TradingBot:
         self.logger = get_logger("bot", config.strategy, context={"exchange": config.exchange, "ticker": config.ticker}, log_to_console=True)
         self._proxy_health_monitor: Optional[ProxyHealthMonitor] = None
         self._proxy_rotation_attempts = 0
+        self._control_server_task: Optional[asyncio.Task] = None
+        self._control_server_enabled = os.getenv("CONTROL_API_ENABLED", "false").lower() in ("true", "1", "yes")
 
         # Log account info if credentials provided
         if account_credentials:
@@ -302,6 +304,10 @@ class TradingBot:
             if hasattr(self, 'strategy') and self.strategy:
                 await self.strategy.cleanup()
             
+            # Stop control server if running
+            if self._control_server_task:
+                await self._stop_control_server()
+            
             # Disconnect from exchange(s)
             if hasattr(self, 'exchange_clients') and self.exchange_clients:
                 # Multi-exchange mode: disconnect all clients
@@ -319,6 +325,65 @@ class TradingBot:
 
         except Exception as e:
             self.logger.error(f"Error during graceful shutdown: {e}")
+
+    async def _start_control_server(self):
+        """Start the control API server."""
+        try:
+            from strategies.control.server import app, set_strategy_controller
+            from strategies.control.funding_arb_controller import FundingArbStrategyController
+            import uvicorn
+            
+            # Only start for funding arbitrage strategy for now
+            if self.config.strategy != "funding_arbitrage":
+                self.logger.info("Control API only supports funding_arbitrage strategy (skipping)")
+                return
+            
+            # Create controller
+            controller = FundingArbStrategyController(self.strategy)
+            set_strategy_controller(controller)
+            
+            # Get server config
+            host = os.getenv("CONTROL_API_HOST", "127.0.0.1")
+            port = int(os.getenv("CONTROL_API_PORT", "8766"))
+            
+            self.logger.info(f"Starting control API server on {host}:{port}")
+            
+            # Run uvicorn in background task
+            config = uvicorn.Config(
+                app=app,
+                host=host,
+                port=port,
+                log_level="warning",  # Reduce uvicorn logs
+                access_log=False,
+                loop="asyncio"
+            )
+            server = uvicorn.Server(config)
+            
+            # Start server in background task
+            self._control_server_task = asyncio.create_task(server.serve())
+            self.logger.info(f"✅ Control API server started on http://{host}:{port}")
+            self.logger.info("   Endpoints:")
+            self.logger.info("   - GET  /api/v1/status")
+            self.logger.info("   - GET  /api/v1/accounts")
+            self.logger.info("   - GET  /api/v1/positions")
+            self.logger.info("   - POST /api/v1/positions/{id}/close")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to start control API server: {e}")
+            self.logger.error(traceback.format_exc())
+            # Don't fail bot startup if control server fails
+    
+    async def _stop_control_server(self):
+        """Stop the control API server."""
+        if self._control_server_task:
+            self.logger.info("Stopping control API server...")
+            self._control_server_task.cancel()
+            try:
+                await self._control_server_task
+            except asyncio.CancelledError:
+                pass
+            self._control_server_task = None
+            self.logger.info("Control API server stopped")
         finally:
             # CRITICAL: Flush all logs to ensure buffered/enqueued logs are written
             from helpers.unified_logger import UnifiedLogger
@@ -396,6 +461,10 @@ class TradingBot:
             # Connection phase
             await self._connect_exchanges()
             await self.strategy.initialize()
+            
+            # Start control API server if enabled
+            if self._control_server_enabled:
+                await self._start_control_server()
             
             # Execution phase
             await self._run_trading_loop()
