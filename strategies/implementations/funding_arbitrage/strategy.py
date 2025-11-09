@@ -383,9 +383,25 @@ class FundingArbitrageStrategy(BaseStrategy):
         try:
             while stop_event and not stop_event.is_set():
                 try:
+                    # Check for cancellation before starting operations
+                    if stop_event.is_set():
+                        break
+                    
                     await self.position_monitor.monitor()
+                    
+                    # Check for cancellation between operations
+                    if stop_event.is_set():
+                        break
+                    
                     await self.position_closer.evaluateAndClosePositions()
+                except asyncio.CancelledError:
+                    # Task was cancelled, exit immediately
+                    break
                 except Exception as exc:
+                    # If shutdown was requested, exit on any error (database might be closed)
+                    if stop_event and stop_event.is_set():
+                        self.logger.info("Monitor loop exiting due to shutdown request")
+                        break
                     self.logger.error(
                         f"Monitor loop error: {exc}\n{traceback.format_exc()}"
                     )
@@ -394,13 +410,21 @@ class FundingArbitrageStrategy(BaseStrategy):
                     break
 
                 try:
+                    # Use wait_for with cancellation check - if event is set, wait returns immediately
                     await asyncio.wait_for(stop_event.wait(), timeout=interval)
+                    # If we get here, the event was set (not a timeout)
+                    break
                 except asyncio.TimeoutError:
+                    # Timeout is expected - continue the loop
                     continue
+                except asyncio.CancelledError:
+                    # Task was cancelled during wait
+                    break
         except asyncio.CancelledError:
+            # Task cancellation - exit cleanly
             pass
         finally:
-            self.logger.debug("Background monitor loop stopped")
+            self.logger.info("Background monitor loop stopped")
 
     # ========================================================================
     # Cleanup
@@ -408,25 +432,31 @@ class FundingArbitrageStrategy(BaseStrategy):
     
     async def cleanup(self):
         """Cleanup strategy resources."""
-        # Stop monitor task with timeout
-        if self._monitor_stop_event:
-            self._monitor_stop_event.set()
-        if self._monitor_task:
+        # Stop monitor task - cancel immediately and wait with timeout
+        if self._monitor_task and not self._monitor_task.done():
+            self.logger.info("Stopping position monitor loop...")
+            # Set stop event first to signal graceful shutdown
+            if self._monitor_stop_event:
+                self._monitor_stop_event.set()
+            
+            # Cancel the task immediately to interrupt any blocking operations
+            self._monitor_task.cancel()
+            
+            # Wait for task to finish (with timeout)
             try:
-                await asyncio.wait_for(self._monitor_task, timeout=5.0)
+                await asyncio.wait_for(self._monitor_task, timeout=10.0)
             except asyncio.TimeoutError:
-                self.logger.warning("Monitor task cleanup timed out, cancelling")
-                self._monitor_task.cancel()
-                try:
-                    await self._monitor_task
-                except asyncio.CancelledError:
-                    pass
+                self.logger.warning("Monitor task did not stop within timeout - forcing shutdown")
             except asyncio.CancelledError:
+                # Task was cancelled successfully
                 pass
             except Exception as e:
                 self.logger.error(f"Error waiting for monitor task: {e}")
-            self._monitor_task = None
-        self._monitor_stop_event = None
+            finally:
+                self._monitor_task = None
+        
+        if self._monitor_stop_event:
+            self._monitor_stop_event = None
         self._last_opportunity_scan_ts = 0.0
 
         # Close position and state managers with timeout
