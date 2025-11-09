@@ -698,6 +698,146 @@ class PositionCloser:
             raise RuntimeError(
                 f"Atomic close failed for {position.symbol}: {error}"
             )
+        
+        # After successful atomic close, check for and close any residual positions
+        # This ensures we fully close to 0 size, even if hedging left small residuals
+        await self._cleanup_residual_positions(position, legs, reason=reason)
+
+    async def _cleanup_residual_positions(
+        self,
+        position: "FundingArbPosition",
+        legs: List[Dict[str, Any]],
+        reason: str = "UNKNOWN",
+    ) -> None:
+        """
+        After atomic close, check for and close any residual positions to ensure full closure.
+        
+        This handles cases where hedging operations may leave small residual quantities
+        that need to be fully closed to 0.
+        """
+        strategy = self._strategy
+        symbol = position.symbol
+        
+        # Fetch current snapshots for all legs
+        residual_legs = []
+        for leg in legs:
+            dex = leg.get("dex", "UNKNOWN")
+            client = leg.get("client")
+            if not client:
+                continue
+            
+            try:
+                snapshot = await client.get_position_snapshot(symbol)
+                if snapshot is None:
+                    continue
+                
+                quantity = snapshot.quantity or Decimal("0")
+                abs_quantity = quantity.copy_abs()
+                
+                # If there's any residual quantity, we need to close it
+                if abs_quantity > self._ZERO_TOLERANCE:
+                    # Determine side to close: opposite of current position
+                    # If quantity > 0 (long), we need to sell
+                    # If quantity < 0 (short), we need to buy
+                    if snapshot.side:
+                        # Use explicit side from snapshot (most reliable)
+                        close_side = "sell" if snapshot.side == "long" else "buy"
+                    else:
+                        # Fallback: infer from quantity sign
+                        close_side = "sell" if quantity > 0 else "buy"
+                    
+                    residual_legs.append({
+                        "dex": dex,
+                        "client": client,
+                        "snapshot": snapshot,
+                        "quantity": abs_quantity,
+                        "side": close_side,
+                        "contract_id": leg.get("contract_id"),
+                        "metadata": leg.get("metadata", {}),
+                    })
+            except Exception as exc:
+                strategy.logger.warning(
+                    f"[{dex}] Failed to fetch snapshot for residual cleanup on {symbol}: {exc}"
+                )
+                continue
+        
+        if not residual_legs:
+            # No residual positions - we're fully closed!
+            return
+        
+        # Log residual positions found
+        residual_summary = []
+        for leg in residual_legs:
+            residual_summary.append(
+                f"{leg['dex'].upper()}:{leg['side']}:{leg['quantity']}"
+            )
+        strategy.logger.info(
+            f"🧹 Cleaning up residual positions for {symbol}: [{', '.join(residual_summary)}]"
+        )
+        
+        # Close each residual leg with market orders
+        for leg in residual_legs:
+            dex = leg["dex"]
+            client = leg["client"]
+            quantity = leg["quantity"]
+            side = leg["side"]
+            
+            try:
+                # Prepare contract context
+                contract_id = await self._prepare_contract_context(
+                    client,
+                    symbol,
+                    metadata=leg.get("metadata", {}),
+                    contract_hint=leg.get("contract_id"),
+                )
+                
+                # Get current price for size calculation
+                price = self._extract_snapshot_price(leg["snapshot"])
+                if price is None or price <= Decimal("0"):
+                    price = await self._fetch_mid_price(client, symbol)
+                
+                if price is None or price <= Decimal("0"):
+                    strategy.logger.warning(
+                        f"[{dex}] Unable to determine price for residual cleanup on {symbol}, skipping"
+                    )
+                    continue
+                
+                size_usd = quantity * price
+                
+                strategy.logger.info(
+                    f"🧹 Closing residual {symbol} on {dex.upper()}: "
+                    f"{side} {quantity} @ ~${price:.6f} (${size_usd:.2f})"
+                )
+                
+                # Use market order to ensure quick execution
+                # reduce_only=True ensures we can only close, not open new positions
+                execution = await self._order_executor.execute_order(
+                    exchange_client=client,
+                    symbol=symbol,
+                    side=side,
+                    size_usd=size_usd,
+                    quantity=quantity,
+                    mode=ExecutionMode.MARKET_ONLY,
+                    timeout_seconds=10.0,
+                    reduce_only=True,  # Critical: only allow closing, not opening
+                )
+                
+                if execution.success and execution.filled:
+                    strategy.logger.info(
+                        f"✅ Residual position closed on {dex.upper()}: "
+                        f"{execution.filled_quantity} @ {execution.fill_price or 'N/A'}"
+                    )
+                else:
+                    error = execution.error_message or "Unknown error"
+                    strategy.logger.warning(
+                        f"⚠️ Failed to close residual position on {dex.upper()}: {error}"
+                    )
+                    
+            except Exception as exc:
+                strategy.logger.error(
+                    f"[{dex}] Error closing residual position on {symbol}: {exc}"
+                )
+                continue
 
     async def _force_close_leg(
         self,
