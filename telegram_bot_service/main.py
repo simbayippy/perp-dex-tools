@@ -33,18 +33,22 @@ logger = logging.getLogger(__name__)
 
 # Global bot instance for signal handling
 bot_instance: Optional[StrategyControlBot] = None
+_shutdown_event: Optional[asyncio.Event] = None
 
 
 def signal_handler(signum, frame):
     """Handle shutdown signals."""
-    logger.info(f"Received signal {signum}, shutting down...")
-    if bot_instance:
-        asyncio.create_task(bot_instance.stop())
+    logger.info(f"Received signal {signum}, initiating shutdown...")
+    if _shutdown_event:
+        _shutdown_event.set()
 
 
 async def main():
     """Main entry point."""
-    global bot_instance
+    global bot_instance, _shutdown_event
+    
+    # Create shutdown event in the event loop
+    _shutdown_event = asyncio.Event()
     
     try:
         # Load configuration
@@ -72,8 +76,12 @@ async def main():
         
         # Keep running until stopped
         logger.info("Bot is running. Press Ctrl+C to stop.")
-        while True:
-            await asyncio.sleep(1)
+        try:
+            # Wait for shutdown event instead of infinite loop
+            await _shutdown_event.wait()
+            logger.info("Shutdown signal received")
+        except KeyboardInterrupt:
+            logger.info("Received keyboard interrupt")
             
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
@@ -82,7 +90,10 @@ async def main():
         sys.exit(1)
     finally:
         if bot_instance:
-            await bot_instance.stop()
+            try:
+                await bot_instance.stop()
+            except Exception as e:
+                logger.error(f"Error during shutdown: {e}")
         logger.info("Telegram bot service stopped")
 
 

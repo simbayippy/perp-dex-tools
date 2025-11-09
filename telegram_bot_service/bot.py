@@ -283,9 +283,27 @@ class StrategyControlBot:
     async def stop(self):
         """Stop the bot."""
         if self.application:
-            await self.application.updater.stop()
-            await self.application.stop()
-            await self.application.shutdown()
-        await self.database.disconnect()
+            try:
+                if self.application.updater.running:
+                    await self.application.updater.stop()
+            except (RuntimeError, AttributeError):
+                # Updater not running or already stopped
+                pass
+            
+            try:
+                await self.application.stop()
+            except Exception as e:
+                self.logger.warning(f"Error stopping application: {e}")
+            
+            try:
+                await self.application.shutdown()
+            except Exception as e:
+                self.logger.warning(f"Error shutting down application: {e}")
+        
+        try:
+            await self.database.disconnect()
+        except Exception as e:
+            self.logger.warning(f"Error disconnecting database: {e}")
+        
         self.logger.info("Telegram bot stopped")
 
