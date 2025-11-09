@@ -214,15 +214,46 @@ async def load_account_credentials(account_name: str) -> dict:
 # Global bot instance for signal handling
 _bot_instance: Optional[TradingBot] = None
 _shutdown_event: Optional[asyncio.Event] = None
+_signal_count = 0
+_last_signal_time = 0.0
+_FORCE_SHUTDOWN_WINDOW = 2.0  # seconds
 
 
 def _signal_handler(signum, frame):
     """Handle shutdown signals (SIGINT/SIGTERM)."""
-    print(f"\n🛑 Shutdown signal received, initiating graceful shutdown...")
-    if _shutdown_event:
-        _shutdown_event.set()
-    if _bot_instance:
-        _bot_instance.shutdown_requested = True
+    import time
+    
+    global _signal_count, _last_signal_time
+    
+    current_time = time.time()
+    
+    # Check if this is a second press within the window
+    if current_time - _last_signal_time < _FORCE_SHUTDOWN_WINDOW:
+        _signal_count += 1
+    else:
+        _signal_count = 1
+    
+    _last_signal_time = current_time
+    
+    if _signal_count >= 2:
+        print(f"\n🛑 Force shutdown requested (CTRL+C pressed {_signal_count} times)")
+        if _bot_instance:
+            _bot_instance.shutdown_requested = True
+            _bot_instance._force_shutdown = True  # Flag for immediate shutdown
+        if _shutdown_event:
+            _shutdown_event.set()
+        # Force exit after a brief moment
+        import sys
+        import os
+        print("⚠️  Forcing immediate exit...")
+        os._exit(1)  # Force immediate exit, bypassing cleanup
+    else:
+        print(f"\n🛑 Shutdown signal received, initiating graceful shutdown...")
+        print(f"   (Press CTRL+C again within {_FORCE_SHUTDOWN_WINDOW}s to force immediate shutdown)")
+        if _shutdown_event:
+            _shutdown_event.set()
+        if _bot_instance:
+            _bot_instance.shutdown_requested = True
 
 
 async def main():

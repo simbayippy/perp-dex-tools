@@ -170,6 +170,7 @@ class TradingBot:
         # Trading state
         self.last_log_time = 0
         self.shutdown_requested = False
+        self._force_shutdown = False  # Flag for immediate shutdown (double CTRL+C)
         self.loop = None
         self._last_confirmed_proxy_ip: Optional[str] = self.config.strategy_params.get("_proxy_egress_ip")
 
@@ -301,6 +302,11 @@ class TradingBot:
 
     async def graceful_shutdown(self, reason: str = "Unknown"):
         """Perform graceful shutdown of the trading bot."""
+        # Check for force shutdown flag
+        if self._force_shutdown:
+            self.logger.warning("⚠️ Force shutdown requested - skipping graceful cleanup")
+            return
+        
         self.logger.info(f"🛑 Graceful shutdown initiated: {reason}")
         self.shutdown_requested = True
 
