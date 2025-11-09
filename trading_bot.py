@@ -266,12 +266,24 @@ class TradingBot:
         while not self.shutdown_requested:
             try:
                 if await self.strategy.should_execute():
+                    # Check shutdown before executing (in case execution is long-running)
+                    if self.shutdown_requested:
+                        break
                     await self.strategy.execute_strategy()
                 else:
-                    await asyncio.sleep(1)  # Brief wait if strategy says not to execute
+                    # Use shorter sleep intervals to check shutdown more frequently
+                    await asyncio.sleep(0.5)
+                    if self.shutdown_requested:
+                        break
                     
+            except asyncio.CancelledError:
+                self.logger.info("Trading loop cancelled")
+                break
             except Exception as e:
                 self.logger.error(f"Strategy execution error: {e}")
+                # Check shutdown even after errors
+                if self.shutdown_requested:
+                    break
                 await asyncio.sleep(5)  # Wait longer on error
 
     async def _handle_order_fill(
@@ -295,31 +307,59 @@ class TradingBot:
         self.logger.info(f"Starting graceful shutdown: {reason}")
         self.shutdown_requested = True
 
+        # Stop proxy health monitor with timeout
         if self._proxy_health_monitor:
-            await self._proxy_health_monitor.stop()
+            try:
+                await asyncio.wait_for(self._proxy_health_monitor.stop(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self.logger.warning("Proxy health monitor stop timed out")
+            except Exception as e:
+                self.logger.error(f"Error stopping proxy health monitor: {e}")
             self._proxy_health_monitor = None
 
         try:
-            # Cleanup strategy
+            # Cleanup strategy with timeout
             if hasattr(self, 'strategy') and self.strategy:
-                await self.strategy.cleanup()
+                try:
+                    await asyncio.wait_for(self.strategy.cleanup(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    self.logger.warning("Strategy cleanup timed out, forcing shutdown")
+                except Exception as e:
+                    self.logger.error(f"Error during strategy cleanup: {e}")
             
-            # Stop control server if running
+            # Stop control server if running with timeout
             if self._control_server_task:
-                await self._stop_control_server()
+                try:
+                    await asyncio.wait_for(self._stop_control_server(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    self.logger.warning("Control server stop timed out, cancelling task")
+                    self._control_server_task.cancel()
+                    try:
+                        await self._control_server_task
+                    except asyncio.CancelledError:
+                        pass
+                except Exception as e:
+                    self.logger.error(f"Error stopping control server: {e}")
             
-            # Disconnect from exchange(s)
+            # Disconnect from exchange(s) with timeout
             if hasattr(self, 'exchange_clients') and self.exchange_clients:
                 # Multi-exchange mode: disconnect all clients
                 for exchange_name, client in self.exchange_clients.items():
                     try:
-                        await client.disconnect()
+                        await asyncio.wait_for(client.disconnect(), timeout=10.0)
                         self.logger.info(f"Disconnected from {exchange_name}")
+                    except asyncio.TimeoutError:
+                        self.logger.warning(f"Disconnect from {exchange_name} timed out")
                     except Exception as e:
                         self.logger.error(f"Error disconnecting from {exchange_name}: {e}")
             else:
                 # Single exchange mode
-                await self.exchange_client.disconnect()
+                try:
+                    await asyncio.wait_for(self.exchange_client.disconnect(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    self.logger.warning("Exchange disconnect timed out")
+                except Exception as e:
+                    self.logger.error(f"Error disconnecting from exchange: {e}")
                 
             self.logger.info("Graceful shutdown completed")
 
@@ -379,9 +419,13 @@ class TradingBot:
             self.logger.info("Stopping control API server...")
             self._control_server_task.cancel()
             try:
-                await self._control_server_task
+                await asyncio.wait_for(self._control_server_task, timeout=3.0)
+            except asyncio.TimeoutError:
+                self.logger.warning("Control server task cancellation timed out")
             except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                self.logger.error(f"Error waiting for control server task: {e}")
             self._control_server_task = None
             self.logger.info("Control API server stopped")
 
@@ -464,6 +508,10 @@ class TradingBot:
             
             # Execution phase
             await self._run_trading_loop()
+            
+            # If shutdown was requested, perform graceful shutdown
+            if self.shutdown_requested:
+                await self.graceful_shutdown("Shutdown requested")
 
         except KeyboardInterrupt:
             self.logger.info("Bot stopped by user")

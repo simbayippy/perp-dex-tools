@@ -408,34 +408,58 @@ class FundingArbitrageStrategy(BaseStrategy):
     
     async def cleanup(self):
         """Cleanup strategy resources."""
+        # Stop monitor task with timeout
         if self._monitor_stop_event:
             self._monitor_stop_event.set()
         if self._monitor_task:
             try:
-                await self._monitor_task
+                await asyncio.wait_for(self._monitor_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                self.logger.warning("Monitor task cleanup timed out, cancelling")
+                self._monitor_task.cancel()
+                try:
+                    await self._monitor_task
+                except asyncio.CancelledError:
+                    pass
             except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                self.logger.error(f"Error waiting for monitor task: {e}")
             self._monitor_task = None
         self._monitor_stop_event = None
         self._last_opportunity_scan_ts = 0.0
 
-        # Close position and state managers
+        # Close position and state managers with timeout
         if hasattr(self, 'position_manager'):
             shutdown = getattr(self.position_manager, "shutdown", None)
             if callable(shutdown):
-                await shutdown()
+                try:
+                    await asyncio.wait_for(shutdown(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    self.logger.warning("Position manager shutdown timed out")
+                except Exception as e:
+                    self.logger.error(f"Error shutting down position manager: {e}")
         if getattr(self, "_control_server_started", False) and self.control_server:
-            await self.control_server.stop()
+            try:
+                await asyncio.wait_for(self.control_server.stop(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self.logger.warning("Control server stop timed out")
+            except Exception as e:
+                self.logger.error(f"Error stopping control server: {e}")
             self._control_server_started = False
 
-        # Stop liquidation consumers
+        # Stop liquidation consumers with timeout
         for task in self._liquidation_tasks:
             task.cancel()
         for task in self._liquidation_tasks:
             try:
-                await task
+                await asyncio.wait_for(task, timeout=3.0)
+            except asyncio.TimeoutError:
+                self.logger.warning(f"Liquidation task cancellation timed out")
             except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                self.logger.error(f"Error waiting for liquidation task: {e}")
         self._liquidation_tasks.clear()
 
         for exchange, queue in list(self._liquidation_queues.items()):

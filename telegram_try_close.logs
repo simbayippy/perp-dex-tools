@@ -1,0 +1,113 @@
+2025-11-09 17:47:08 | INFO     | STRATEGY:FUNDING_RATE_ARBITRAGE:exchange=lighter:ticker=ALL:account=acc1 | Position APEX snapshot [Account: acc1]
+Yield (annualised) | entry 115.5094% | current 127.4263% | erosion 110.32% (limit 40.00%)
+Min hold: satisfied (risk checks active since 2025-11-09 14:26:49)
+Max hold: 7h 40m remaining (force close at 2025-11-10 01:26:49, configured: 12h)
+------------------------------------------------------------------------------------------------
+Exchange     Side   Qty         Entry        Mark         uPnL         Funding      Funding APY 
+------------------------------------------------------------------------------------------------
+LIGHTER     long     143.0000    0.839790    0.841055        0.18       -0.00    16.6440%
+PARADEX     short    143.0000    0.838617    0.840971       -0.28        0.08   144.0703%
+2025-11-09 17:47:08 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | 📞 [REST][LIGHTER] Fetching BBO via REST API (bypassing WebSocket)
+2025-11-09 17:47:08 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Using REST mark_price for APEX: 0.841055
+2025-11-09 17:47:09 | DEBUG    | STRATEGY:FUNDING_RATE_ARBITRAGE:exchange=lighter:ticker=ALL:account=acc1 | Position APEX not closing: None
+2025-11-09 17:47:12 | DEBUG    | STRATEGY:FUNDING_RATE_ARBITRAGE:exchange=lighter:ticker=ALL:account=acc1 | No capacity for new positions; skipping opportunity scan
+2025-11-09 17:47:14 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | 📞 [REST][LIGHTER] Fetching BBO via REST API (bypassing WebSocket)
+2025-11-09 17:47:15 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Using REST mark_price for APEX: 0.841055
+2025-11-09 17:47:15 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Using cached market_id for APEX (saved 300 weight)
+2025-11-09 17:47:15 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | 📊 [LIGHTER] Leverage info for APEX:
+  - Symbol max leverage: 5.0x
+  - Account leverage: 5E+2x
+  - Max notional: None
+  - Margin requirement: 0.2 (20.0%)
+2025-11-09 17:47:31 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | 📞 [REST][LIGHTER] Fetching BBO via REST API (bypassing WebSocket)
+2025-11-09 17:47:32 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Using REST mark_price for APEX: 0.842675
+2025-11-09 17:47:32 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Using cached market_id for APEX (saved 300 weight)
+2025-11-09 17:47:33 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | 📊 [LIGHTER] Leverage info for APEX:
+  - Symbol max leverage: 5.0x
+  - Account leverage: 5E+2x
+  - Max notional: None
+  - Margin requirement: 0.2 (20.0%)
+2025-11-09 17:47:45 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | 📞 [REST][LIGHTER] Fetching BBO via REST API (bypassing WebSocket)
+2025-11-09 17:47:45 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Using REST mark_price for APEX: 0.84264
+2025-11-09 17:47:45 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Using cached market_id for APEX (saved 300 weight)
+2025-11-09 17:47:45 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | 📊 [LIGHTER] Leverage info for APEX:
+  - Symbol max leverage: 5.0x
+  - Account leverage: 5E+2x
+  - Max notional: None
+  - Margin requirement: 0.2 (20.0%)
+2025-11-09 17:47:53 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | 📞 [REST][LIGHTER] Fetching BBO via REST API (bypassing WebSocket)
+2025-11-09 17:47:53 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Using REST mark_price for APEX: 0.842395
+2025-11-09 17:47:54 | INFO     | STRATEGY:FUNDING_RATE_ARBITRAGE:exchange=lighter:ticker=ALL:account=acc1 | 🔒 Closing position APEX atomically | Reason: telegram_manual_close | Legs: [LIGHTER:sell:143.0, PARADEX:sell:143]
+2025-11-09 17:47:54 | INFO     | CORE:ATOMIC_MULTI_ORDER             | Starting atomic execution of 2 orders (rollback_on_partial=True)
+2025-11-09 17:47:54 | INFO     | CORE:ATOMIC_MULTI_ORDER             | =======================================================
+2025-11-09 17:47:54 | INFO     | CORE:ATOMIC_MULTI_ORDER             | close.2. 🚀 Order Placement
+2025-11-09 17:47:54 | INFO     | CORE:ATOMIC_MULTI_ORDER             | =======================================================
+2025-11-09 17:47:54 | INFO     | CORE:ATOMIC_MULTI_ORDER             | 🚀 Placing all orders simultaneously...
+2025-11-09 17:47:54 | INFO     | CORE:ORDER_EXECUTOR                 | 🔴 [LIGHTER] Executing sell APEX ($120.4624850 qty=143.0) in mode market_only
+2025-11-09 17:47:54 | INFO     | CORE:PRICE_PROVIDER                 | ✅ [LIGHTER] BBO: bid=0.8412, ask=0.84359
+2025-11-09 17:47:54 | INFO     | CORE:ORDER_EXECUTOR                 | [LIGHTER] Placing market sell APEX (contract_id=86): 143.0 @ ~$0.8412
+2025-11-09 17:47:54 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | 📤 [LIGHTER] Placing market order: market=86, client_id=474743, side=SELL, base_amount=1430, avg_execution_price=80028
+2025-11-09 17:47:54 | INFO     | CORE:ORDER_EXECUTOR                 | 🔴 [PARADEX] Executing sell APEX ($120.39715974 qty=143) in mode market_only
+2025-11-09 17:47:54 | DEBUG    | EXCHANGE:PARADEX:ticker=ALL         | 📡 [PARADEX] Using BBO stream for APEX-USD-PERP: 0.8418/0.8429
+2025-11-09 17:47:54 | INFO     | CORE:PRICE_PROVIDER                 | ✅ [PARADEX] BBO: bid=0.8418, ask=0.8429
+2025-11-09 17:47:54 | INFO     | CORE:ORDER_EXECUTOR                 | [PARADEX] Placing market sell APEX (contract_id=APEX-USD-PERP): 143 @ ~$0.8418
+2025-11-09 17:47:55 | INFO     | EXCHANGE:PARADEX:ticker=ALL         | [WEBSOCKET] [PARADEX] CANCELED 0 @ 0.8377
+2025-11-09 17:47:55 | ERROR    | CORE:ORDER_EXECUTOR                 | [PARADEX] Market order canceled: 1762710474910201709193850000 | Status: CANCELED | Reason: REDUCE_ONLY_WILL_INCREASE
+2025-11-09 17:47:56 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | [WEBSOCKET] [LIGHTER] FILLED 143.0 @ 0.80028
+2025-11-09 17:47:56 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | TRANSACTION: SELL 143.0 @ 0.80028 | Order: 474743 | Status: FILLED
+2025-11-09 17:47:56 | INFO     | CORE:ORDER_EXECUTOR                 | [LIGHTER] Market order filled: 143.0 @ $0.80028 (slippage: $5.85 / 4.864%)
+2025-11-09 17:47:56 | WARNING  | EXCHANGE:LIGHTER:ticker=ALL         | ⚠️ [LIGHTER] Position suddenly zeroed: APEX | Previous qty: 143.0 | Market ID: 86 | Possible liquidation (no liquidation notification received)
+2025-11-09 17:47:56 | INFO     | CORE:ATOMIC_MULTI_ORDER             | ✅ LIGHTER APEX fully filled (143.0). Cancelling remaining limit orders and hedging to prevent directional exposure.
+2025-11-09 17:47:56 | INFO     | CORE:ATOMIC_MULTI_ORDER             | 🔄 Cancelling limit order for PARADEX APEX (remaining: 143) → will hedge with market order
+2025-11-09 17:47:56 | DEBUG    | CORE:ATOMIC_MULTI_ORDER             | Reconcile: APEX order 1762710474910201709193850000 (status=CANCELED) reported filled_size=0, current ctx.filled_quantity=0. No reconciliation needed.
+2025-11-09 17:47:56 | DEBUG    | CORE:ATOMIC_MULTI_ORDER             | 📊 [HEDGE] Set hedge_target_quantity for APEX: 143.0 (trigger=143.0, multipliers=1×1)
+2025-11-09 17:47:56 | DEBUG    | CORE:ATOMIC_MULTI_ORDER             | 📊 [HEDGE] PARADEX APEX: hedge_target=143.0, filled=0, remaining_qty=143.0
+2025-11-09 17:47:56 | INFO     | CORE:ATOMIC_MULTI_ORDER             | ⚡ Hedging APEX on PARADEX for remaining qty=143.0, $120.40
+2025-11-09 17:47:56 | INFO     | CORE:ORDER_EXECUTOR                 | 🔴 [PARADEX] Executing sell APEX (qty=143.0) in mode market_only
+2025-11-09 17:47:56 | DEBUG    | EXCHANGE:PARADEX:ticker=ALL         | 📡 [PARADEX] Using BBO stream for APEX-USD-PERP: 0.8418/0.8429
+2025-11-09 17:47:56 | INFO     | CORE:PRICE_PROVIDER                 | ✅ [PARADEX] BBO: bid=0.8418, ask=0.8429
+2025-11-09 17:47:56 | INFO     | CORE:ORDER_EXECUTOR                 | [PARADEX] Placing market sell APEX (contract_id=APEX-USD-PERP): 143 @ ~$0.8418
+2025-11-09 17:47:56 | INFO     | EXCHANGE:PARADEX:ticker=ALL         | [WEBSOCKET] [PARADEX] CANCELED 0 @ 0.8376
+2025-11-09 17:47:57 | ERROR    | CORE:ORDER_EXECUTOR                 | [PARADEX] Market order canceled: 1762710476470201709184430000 | Status: CANCELED | Reason: NOT_ENOUGH_MARGIN
+2025-11-09 17:47:57 | ERROR    | CORE:ATOMIC_MULTI_ORDER             | Market order canceled: CANCELED (NOT_ENOUGH_MARGIN)
+2025-11-09 17:47:57 | WARNING  | CORE:ATOMIC_MULTI_ORDER             | Hedge failed (Market order canceled: CANCELED (NOT_ENOUGH_MARGIN)) — attempting rollback of partial fills
+2025-11-09 17:47:57 | DEBUG    | CORE:ATOMIC_MULTI_ORDER             | Rollback (hedge failure) context for APEX (sell): accumulated=143.0, result_dict=143.0
+2025-11-09 17:47:57 | WARNING  | CORE:ATOMIC_MULTI_ORDER             | 🚨 EMERGENCY ROLLBACK: Closing 1 filled orders
+2025-11-09 17:47:57 | INFO     | CORE:ATOMIC_MULTI_ORDER             | Step 1/3: Canceling all orders to prevent further fills...
+2025-11-09 17:47:58 | INFO     | CORE:ATOMIC_MULTI_ORDER             | Step 2/3: Querying actual filled amounts...
+2025-11-09 17:47:58 | DEBUG    | CORE:ATOMIC_MULTI_ORDER             | Rollback order info: APEX (sell), order_id=474743, payload_quantity=143.0
+2025-11-09 17:47:58 | INFO     | CORE:ATOMIC_MULTI_ORDER             | Step 3/3: Closing 1 filled positions...
+2025-11-09 17:47:58 | INFO     | CORE:ATOMIC_MULTI_ORDER             | Rollback: buy APEX 143.0 @ market (contract_id=86, exchange=lighter)
+2025-11-09 17:47:58 | DEBUG    | CORE:ATOMIC_MULTI_ORDER             | Rollback: Using contract_id='86' for symbol 'APEX'
+2025-11-09 17:47:58 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | 📤 [LIGHTER] Placing market order: market=86, client_id=478148, side=BUY, base_amount=1430, avg_execution_price=88449
+2025-11-09 17:47:58 | WARNING  | CORE:ATOMIC_MULTI_ORDER             | Rollback cost for APEX: $0.00 (entry: $0.80028, exit: $0.80028)
+2025-11-09 17:47:58 | WARNING  | CORE:ATOMIC_MULTI_ORDER             | ✅ Rollback complete. Total cost: $0.00
+2025-11-09 17:47:58 | WARNING  | CORE:ATOMIC_MULTI_ORDER             | Rollback completed after hedge failure; total cost $0.0000
+2025-11-09 17:47:58 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | [WEBSOCKET] [LIGHTER] FILLED 143.0 @ 0.88449
+2025-11-09 17:47:58 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | TRANSACTION: BUY 143.0 @ 0.88449 | Order: 478148 | Status: FILLED
+2025-11-09 17:47:59 | INFO     | CORE:ATOMIC_MULTI_ORDER             | Reconcile: APEX order 474743 - adding fill: additional=143.0 @ 0.80028, total will be 143.0
+2025-11-09 17:47:59 | DEBUG    | CORE:ATOMIC_MULTI_ORDER             | Reconcile: APEX order 1762710474910201709193850000 (status=CANCELED) reported filled_size=0, current ctx.filled_quantity=0. No reconciliation needed.
+2025-11-09 17:47:59 | ERROR    | STRATEGY:FUNDING_RATE_ARBITRAGE:exchange=lighter:ticker=ALL:account=acc1 | Error closing position 682ea440-11d2-487d-b737-d992e160c9b7: Atomic close failed for APEX: Market order canceled: CANCELED (NOT_ENOUGH_MARGIN)
+2025-11-09 17:48:09 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | 📞 [REST][LIGHTER] Fetching BBO via REST API (bypassing WebSocket)
+2025-11-09 17:48:09 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Using REST mark_price for APEX: 0.842395
+2025-11-09 17:48:09 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Querying position_funding() API for APEX (no cache)
+2025-11-09 17:48:09 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Using provided position_opened_at timestamp 1762694809.395224 (skipping trades API call)
+2025-11-09 17:48:09 | INFO     | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Funding for current position (market_id=86): $-0.0058 (from 4 records, filtered 0 before position opened at 1762694809.395224)
+2025-11-09 17:48:09 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Cached funding for APEX: -0.005849
+2025-11-09 17:48:11 | INFO     | STRATEGY:FUNDING_RATE_ARBITRAGE:exchange=lighter:ticker=ALL:account=acc1 | Position APEX snapshot [Account: acc1]
+Yield (annualised) | entry 115.5094% | current 126.6758% | erosion 109.67% (limit 40.00%)
+Min hold: satisfied (risk checks active since 2025-11-09 14:26:49)
+Max hold: 7h 39m remaining (force close at 2025-11-10 01:26:49, configured: 12h)
+------------------------------------------------------------------------------------------------
+Exchange     Side   Qty         Entry        Mark         uPnL         Funding      Funding APY 
+------------------------------------------------------------------------------------------------
+LIGHTER     long     143.0000    0.843550    0.842395       -0.17       -0.01    18.3960%
+PARADEX     short    143.0000    0.838617    0.842080       -0.44        0.08   145.0718%
+2025-11-09 17:48:11 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | 📞 [REST][LIGHTER] Fetching BBO via REST API (bypassing WebSocket)
+2025-11-09 17:48:11 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Using REST mark_price for APEX: 0.842395
+2025-11-09 17:48:11 | DEBUG    | STRATEGY:FUNDING_RATE_ARBITRAGE:exchange=lighter:ticker=ALL:account=acc1 | Position APEX not closing: None
+2025-11-09 17:48:12 | DEBUG    | STRATEGY:FUNDING_RATE_ARBITRAGE:exchange=lighter:ticker=ALL:account=acc1 | No capacity for new positions; skipping opportunity scan
+2025-11-09 17:49:11 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | 📞 [REST][LIGHTER] Fetching BBO via REST API (bypassing WebSocket)
+2025-11-09 17:49:12 | DEBUG    | STRATEGY:FUNDING_RATE_ARBITRAGE:exchange=lighter:ticker=ALL:account=acc1 | No capacity for new positions; skipping opportunity scan
+2025-11-09 17:49:12 | DEBUG    | EXCHANGE:LIGHTER:ticker=ALL         | [LIGHTER] Using REST mark_price for APEX: 0.84304
+2025-11-09 17:49:13 | INFO     | STRATEGY:FUNDING_RATE_ARBITRAGE:exchange=lighter:ticker=ALL:account=acc1 | Position APEX snapshot [Account: acc1]

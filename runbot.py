@@ -12,6 +12,7 @@ Generate configs via:
 import argparse
 import asyncio
 import logging
+import signal
 from pathlib import Path
 import sys
 import dotenv
@@ -210,8 +211,25 @@ async def load_account_credentials(account_name: str) -> dict:
     return credentials
 
 
+# Global bot instance for signal handling
+_bot_instance: Optional[TradingBot] = None
+_shutdown_event: Optional[asyncio.Event] = None
+
+
+def _signal_handler(signum, frame):
+    """Handle shutdown signals (SIGINT/SIGTERM)."""
+    signal_name = "SIGINT" if signum == signal.SIGINT else "SIGTERM"
+    print(f"\n📡 Received {signal_name}, initiating graceful shutdown...")
+    if _shutdown_event:
+        _shutdown_event.set()
+    if _bot_instance:
+        _bot_instance.shutdown_requested = True
+
+
 async def main():
     """Main entry point."""
+    global _bot_instance, _shutdown_event
+    
     args = parse_arguments()
 
     # Set LOG_LEVEL environment variable for UnifiedLogger
@@ -219,6 +237,23 @@ async def main():
 
     # Setup logging first
     setup_logging(args.log_level)
+    
+    # Setup signal handlers for graceful shutdown
+    _shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    # Use add_signal_handler if available (Unix/macOS), otherwise fall back to signal.signal
+    if hasattr(loop, 'add_signal_handler'):
+        try:
+            loop.add_signal_handler(signal.SIGINT, _signal_handler, signal.SIGINT, None)
+            loop.add_signal_handler(signal.SIGTERM, _signal_handler, signal.SIGTERM, None)
+        except NotImplementedError:
+            # Fallback for platforms that don't support add_signal_handler
+            signal.signal(signal.SIGINT, _signal_handler)
+            signal.signal(signal.SIGTERM, _signal_handler)
+    else:
+        # Fallback for platforms without add_signal_handler
+        signal.signal(signal.SIGINT, _signal_handler)
+        signal.signal(signal.SIGTERM, _signal_handler)
 
     from trading_config.config_yaml import load_config_from_yaml, validate_config_file
 
@@ -339,12 +374,19 @@ async def main():
         account_credentials=account_credentials,
         proxy_selector=proxy_selector,
     )
+    _bot_instance = bot
+    
     try:
         await bot.run()
+    except KeyboardInterrupt:
+        print("\n📡 KeyboardInterrupt received, shutting down...")
+        await bot.graceful_shutdown("User interruption (Ctrl+C)")
     except Exception as e:
         print(f"Bot execution failed: {e}")
-        # The bot's run method already handles graceful shutdown
-        return
+        await bot.graceful_shutdown(f"Error: {e}")
+        raise
+    finally:
+        _bot_instance = None
 
 
 def _config_dict_to_trading_config(strategy_name: str, config_dict: dict) -> TradingConfig:
