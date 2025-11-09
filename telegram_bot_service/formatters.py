@@ -57,10 +57,11 @@ class TelegramFormatter:
     
     @staticmethod
     def _format_single_position(pos: Dict[str, Any], account_name: str) -> str:
-        """Format a single position in detailed table format."""
+        """Format a single position in detailed table format matching position_monitor."""
         symbol = pos.get('symbol', 'N/A')
         
-        lines = [
+        # Header
+        header_lines = [
             f"Position <b>{symbol}</b> snapshot [Account: {account_name}]"
         ]
         
@@ -68,54 +69,56 @@ class TelegramFormatter:
         entry_apy = pos.get('entry_divergence_apy')
         current_apy = pos.get('current_divergence_apy')
         erosion_ratio = pos.get('profit_erosion_ratio', 1.0)
-        erosion_pct = pos.get('profit_erosion_pct', 0)
-        min_erosion_threshold = pos.get('min_erosion_threshold')  # May not be in API yet
+        min_erosion_threshold = pos.get('min_erosion_threshold')
         
         if entry_apy is not None and current_apy is not None:
-            # Format like position_monitor: "Yield (annualised) | entry X% | current Y% | erosion Z%"
-            entry_display = f"{entry_apy:.4f}%"
-            current_display = f"{current_apy:.4f}%"
-            erosion_display = f"{erosion_pct:.2f}%"
-            
-            threshold_display = f"{min_erosion_threshold * 100:.2f}%" if min_erosion_threshold else "n/a"
+            # Format exactly like position_monitor
+            entry_display = TelegramFormatter._format_rate_for_display(entry_apy)
+            current_display = TelegramFormatter._format_rate_for_display(current_apy)
+            erosion_display = TelegramFormatter._format_percent_for_display(erosion_ratio)
+            threshold_display = TelegramFormatter._format_percent_for_display(min_erosion_threshold) if min_erosion_threshold else "n/a"
             
             yield_line = (
                 f"Yield (annualised) | entry {entry_display} | "
                 f"current {current_display} | "
                 f"erosion {erosion_display} (limit {threshold_display})"
             )
-            lines.append(yield_line)
-            # Add explanation
-            lines.append(
-                f"  <i>Erosion: Current APY ({current_apy:.2f}%) is {erosion_pct:.1f}% lower than Entry APY ({entry_apy:.2f}%)</i>"
-            )
+            header_lines.append(yield_line)
         
         # Min hold status
         min_hold_status = TelegramFormatter._format_min_hold_status(pos)
         if min_hold_status:
-            lines.append(min_hold_status)
+            header_lines.append(min_hold_status)
         
         # Max hold status
         max_hold_status = TelegramFormatter._format_max_hold_status(pos)
         if max_hold_status:
-            lines.append(max_hold_status)
+            header_lines.append(max_hold_status)
         
-        # Table separator
-        lines.append("─" * 95)
+        # Build table using proper formatting (like position_monitor, optimized for mobile)
+        # Reduced column widths for mobile-friendly display (~75 chars total vs ~95)
+        headers = [
+            ("Exchange", 10),  # Reduced from 12
+            ("Side", 5),       # Reduced from 6
+            ("Qty", 10),       # Reduced from 11
+            ("Entry", 10),     # Reduced from 12
+            ("Mark", 10),      # Reduced from 12
+            ("uPnL", 10),      # Reduced from 12
+            ("Funding", 9),     # Reduced from 12
+            ("APY", 11),       # Reduced from 12, shorter name
+        ]
         
-        # Table header (monospace for alignment)
-        header = (
-            f"<code>{'Exchange':<12} {'Side':<6} {'Qty':>11} "
-            f"{'Entry':>12} {'Mark':>12} {'uPnL':>12} "
-            f"{'Funding':>12} {'Funding APY':>12}</code>"
-        )
-        lines.append(header)
-        lines.append("─" * 95)
+        # Build header line
+        header_line = " ".join(f"{title:<{width}}" for title, width in headers)
+        separator = "-" * len(header_line)
         
-        # Table rows (per leg)
+        # Build table rows
+        table_rows = []
         legs = pos.get('legs', [])
+        rate_lookup = {}  # We'll need to get rates from position data
+        
         for leg in legs:
-            dex = leg.get('dex', 'N/A')
+            dex = leg.get('dex', 'N/A').upper()
             side = leg.get('side', 'n/a')
             quantity = leg.get('quantity', 0)
             entry_price = leg.get('entry_price')
@@ -124,27 +127,49 @@ class TelegramFormatter:
             funding_accrued = leg.get('funding_accrued', 0)
             funding_apy = leg.get('funding_apy')
             
-            # Format values
-            qty_str = TelegramFormatter._format_number(quantity, 4)
-            entry_str = TelegramFormatter._format_number(entry_price, 6) if entry_price else "n/a"
-            mark_str = TelegramFormatter._format_number(mark_price, 6) if mark_price else "n/a"
-            pnl_str = TelegramFormatter._format_number(unrealized_pnl, 2) if unrealized_pnl is not None else "0.00"
-            funding_str = TelegramFormatter._format_number(funding_accrued, 2)
-            apy_str = TelegramFormatter._format_rate(funding_apy) if funding_apy is not None else "n/a"
+            # Format values exactly like position_monitor
+            qty_str = TelegramFormatter._format_decimal_for_table(quantity, precision=4)
+            entry_str = TelegramFormatter._format_decimal_for_table(entry_price, precision=6)
+            mark_str = TelegramFormatter._format_decimal_for_table(mark_price, precision=6)
+            pnl_str = TelegramFormatter._format_decimal_for_table(unrealized_pnl, precision=2)
+            funding_str = TelegramFormatter._format_decimal_for_table(funding_accrued, precision=2)
             
+            # Format funding APY
+            if funding_apy is not None:
+                apy_str = TelegramFormatter._format_rate_for_table(funding_apy)
+            else:
+                apy_str = "n/a"
+            
+            # Build row with proper alignment (matching position_monitor)
             row = (
-                f"<code>{dex:<12} {side:<6} {qty_str:>11} "
-                f"{entry_str:>12} {mark_str:>12} {pnl_str:>12} "
-                f"{funding_str:>12} {apy_str:>12}</code>"
+                f"{dex:<{headers[0][1]}}"
+                f"{side:<{headers[1][1]}}"
+                f"{qty_str:>{headers[2][1]}}"
+                f"{entry_str:>{headers[3][1]}}"
+                f"{mark_str:>{headers[4][1]}}"
+                f"{pnl_str:>{headers[5][1]}}"
+                f"{funding_str:>{headers[6][1]}}"
+                f"{apy_str:>{headers[7][1]}}"
             )
-            lines.append(row)
+            table_rows.append(row)
+        
+        # Combine header and table in <pre> tag for monospace
+        table_content = "\n".join([
+            separator,
+            header_line,
+            separator,
+            *table_rows
+        ])
+        
+        # Build final message
+        message_lines = header_lines + [f"<pre>{table_content}</pre>"]
         
         # Position ID for closing
         pos_id = pos.get('id', '')
-        lines.append("")
-        lines.append(f"Position ID: <code>{pos_id}</code>")
+        message_lines.append("")
+        message_lines.append(f"Position ID: <code>{pos_id}</code>")
         
-        message = "\n".join(lines)
+        message = "\n".join(message_lines)
         
         # Split if too long
         if len(message) > TelegramFormatter.MAX_MESSAGE_LENGTH:
@@ -155,12 +180,17 @@ class TelegramFormatter:
     
     @staticmethod
     def _format_min_hold_status(pos: Dict[str, Any]) -> str:
-        """Format min hold status (similar to position_monitor)."""
+        """Format min hold status (exactly like position_monitor)."""
         min_hold_hours = pos.get('min_hold_hours')
         age_hours = pos.get('age_hours', 0)
         opened_at_str = pos.get('opened_at')
         
-        if min_hold_hours is None or min_hold_hours <= 0:
+        # Match position_monitor logic exactly
+        if min_hold_hours is None:
+            return "Min hold: n/a"
+        
+        min_hold_hours_val = float(min_hold_hours) if min_hold_hours else 0
+        if min_hold_hours_val <= 0:
             return "Min hold: disabled"
         
         if not opened_at_str:
@@ -173,11 +203,11 @@ class TelegramFormatter:
         except Exception:
             return "Min hold: n/a"
         
-        remaining = max(0.0, float(min_hold_hours) - age_hours)
+        remaining = max(0.0, min_hold_hours_val - age_hours)
+        ready_at = opened_at + timedelta(hours=min_hold_hours_val)
+        ready_display = ready_at.strftime("%Y-%m-%d %H:%M:%S")
         
         if remaining <= 0:
-            ready_at = opened_at + timedelta(hours=min_hold_hours)
-            ready_display = ready_at.strftime("%Y-%m-%d %H:%M:%S")
             return f"Min hold: satisfied (risk checks active since {ready_display})"
         
         # Format remaining time
@@ -190,19 +220,21 @@ class TelegramFormatter:
             parts.append(f"{minutes_left}m")
         remaining_fmt = " ".join(parts)
         
-        ready_at = opened_at + timedelta(hours=min_hold_hours)
-        ready_display = ready_at.strftime("%Y-%m-%d %H:%M:%S")
-        
         return f"Min hold: ACTIVE ({remaining_fmt} remaining, risk checks resume {ready_display})"
     
     @staticmethod
     def _format_max_hold_status(pos: Dict[str, Any]) -> str:
-        """Format max hold status (similar to position_monitor)."""
+        """Format max hold status (exactly like position_monitor)."""
         max_age_hours = pos.get('max_position_age_hours')
         age_hours = pos.get('age_hours', 0)
         opened_at_str = pos.get('opened_at')
         
-        if max_age_hours is None or max_age_hours <= 0:
+        # Match position_monitor logic exactly
+        if max_age_hours is None:
+            return "Max hold: n/a"
+        
+        max_age_hours_val = float(max_age_hours) if max_age_hours else 0
+        if max_age_hours_val <= 0:
             return "Max hold: disabled"
         
         if not opened_at_str:
@@ -215,8 +247,8 @@ class TelegramFormatter:
         except Exception:
             return "Max hold: n/a"
         
-        remaining = max(0.0, float(max_age_hours) - age_hours)
-        force_close_at = opened_at + timedelta(hours=max_age_hours)
+        remaining = max(0.0, max_age_hours_val - age_hours)
+        force_close_at = opened_at + timedelta(hours=max_age_hours_val)
         force_close_display = force_close_at.strftime("%Y-%m-%d %H:%M:%S")
         
         if remaining <= 0:
@@ -232,7 +264,60 @@ class TelegramFormatter:
             parts.append(f"{minutes_left}m")
         remaining_fmt = " ".join(parts)
         
-        return f"Max hold: {remaining_fmt} remaining (force close at {force_close_display}, configured: {max_age_hours}h)"
+        return f"Max hold: {remaining_fmt} remaining (force close at {force_close_display}, configured: {max_age_hours_val}h)"
+    
+    @staticmethod
+    def _format_decimal_for_table(value: Optional[float], precision: int = 2) -> str:
+        """Format decimal for table display (matching position_monitor format)."""
+        if value is None:
+            return "n/a"
+        try:
+            from decimal import Decimal
+            dec_value = Decimal(str(value))
+            quant = Decimal("1." + "0" * precision)
+            return f"{dec_value.quantize(quant):.{precision}f}"
+        except Exception:
+            return str(value)
+    
+    @staticmethod
+    def _format_rate_for_table(rate: float, precision: int = 4) -> str:
+        """Format funding rate as APY percentage for table (matching position_monitor)."""
+        if rate is None:
+            return "n/a"
+        try:
+            from decimal import Decimal
+            dec_rate = Decimal(str(rate))
+            annualized = dec_rate * Decimal("3") * Decimal("365") * Decimal("100")
+            quant = Decimal("1." + "0" * precision)
+            return f"{annualized.quantize(quant):.{precision}f}%"
+        except Exception:
+            return str(rate)
+    
+    @staticmethod
+    def _format_rate_for_display(apy: float) -> str:
+        """Format APY for yield summary display (matching position_monitor)."""
+        if apy is None:
+            return "n/a"
+        try:
+            from decimal import Decimal
+            dec_apy = Decimal(str(apy))
+            quant = Decimal("1.0000")
+            return f"{dec_apy.quantize(quant):.4f}%"
+        except Exception:
+            return f"{apy:.4f}%"
+    
+    @staticmethod
+    def _format_percent_for_display(value: Optional[float], precision: int = 2) -> str:
+        """Format percentage for display (matching position_monitor)."""
+        if value is None:
+            return "n/a"
+        try:
+            from decimal import Decimal
+            dec = Decimal(str(value))
+            quant = Decimal("1." + "0" * precision)
+            return f"{(dec * Decimal('100')).quantize(quant):.{precision}f}%"
+        except Exception:
+            return f"{value * 100:.{precision}f}%"
     
     @staticmethod
     def _format_number(value: float, precision: int = 2) -> str:
