@@ -102,8 +102,43 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
     if order_info is None:
         return
 
+    # Check order status - if CANCELED with 0 fills, don't reconcile
+    order_status = getattr(order_info, "status", "").upper()
     reported_qty = coerce_decimal(getattr(order_info, "filled_size", None))
-    if reported_qty is None or reported_qty <= ctx.filled_quantity:
+    
+    # Critical check: If order is CANCELED and we have no fills recorded, 
+    # and reported_qty matches the order size, this is likely a bug in the exchange client
+    # (it's calculating filled_size = size - remaining when remaining=0 for canceled orders)
+    # BUT: Allow reconciliation if remaining_size > 0 (partially filled before cancel)
+    if order_status == "CANCELED" and ctx.filled_quantity <= Decimal("0"):
+        remaining_size = coerce_decimal(getattr(order_info, "remaining_size", None)) or Decimal("0")
+        spec_qty = getattr(ctx.spec, "quantity", None)
+        if spec_qty is not None:
+            spec_qty_dec = Decimal(str(spec_qty))
+            # If reported_qty equals spec_qty AND remaining=0 for a canceled order with 0 fills, it's wrong
+            # (If remaining > 0, it was partially filled, so the calculation is correct)
+            if remaining_size <= Decimal("0") and reported_qty is not None and abs(reported_qty - spec_qty_dec) < Decimal("0.01"):
+                logger.warning(
+                    f"⚠️ Reconcile: Detected bug - CANCELED order {order_id} reports filled_size={reported_qty} "
+                    f"which matches spec.quantity={spec_qty_dec}, but websocket showed 0 fills and remaining=0. "
+                    f"This is likely an exchange client bug. Skipping reconciliation."
+                )
+                return
+    
+    if reported_qty is None or reported_qty <= Decimal("0"):
+        # No fill reported, or zero fill - nothing to reconcile
+        logger.debug(
+            f"Reconcile: {ctx.spec.symbol} order {order_id} (status={order_status}) reported filled_size={reported_qty}, "
+            f"current ctx.filled_quantity={ctx.filled_quantity}. No reconciliation needed."
+        )
+        return
+    
+    if reported_qty <= ctx.filled_quantity:
+        # Already accounted for this fill (or less than what we have)
+        logger.debug(
+            f"Reconcile: {ctx.spec.symbol} order {order_id} reported filled_size={reported_qty} "
+            f"<= current ctx.filled_quantity={ctx.filled_quantity}. No reconciliation needed."
+        )
         return
 
     price_candidates = [
@@ -117,6 +152,25 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
             break
 
     additional = reported_qty - ctx.filled_quantity
+    
+    # Safety check: if additional is suspiciously large (more than spec quantity), log warning
+    spec_qty = getattr(ctx.spec, "quantity", None)
+    if spec_qty is not None:
+        spec_qty_dec = Decimal(str(spec_qty))
+        if additional > spec_qty_dec * Decimal("1.1"):  # More than 10% over expected
+            logger.warning(
+                f"⚠️ Reconcile: Suspicious fill detected for {ctx.spec.symbol} order {order_id}: "
+                f"additional={additional} exceeds spec.quantity={spec_qty_dec} by >10%. "
+                f"reported_qty={reported_qty}, ctx.filled_quantity={ctx.filled_quantity}. "
+                f"Skipping reconciliation to prevent incorrect position tracking."
+            )
+            return
+    
+    logger.info(
+        f"Reconcile: {ctx.spec.symbol} order {order_id} - adding fill: "
+        f"additional={additional} @ {reported_price or 'unknown price'}, "
+        f"total will be {ctx.filled_quantity + additional}"
+    )
     ctx.record_fill(additional, reported_price)
 
     if ctx.result is None:

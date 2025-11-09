@@ -289,8 +289,22 @@ class UnifiedLogger:
         
         if not hasattr(_logger, "_perp_dex_history_setup") or not handler_exists:
             def ensure_component(record):
+                """
+                Filter for unified_history.log handler.
+                
+                Excludes funding_rate_service logs (only strategy logs should go here).
+                All other component logs are included.
+                """
                 if "component_id" not in record["extra"]:
                     record["extra"]["component_id"] = "UNKNOWN"
+                
+                component_id = record["extra"].get("component_id", "")
+                
+                # Exclude funding_rate_service logs (SERVICE:FUNDING_RATE_SERVICE)
+                # Only include strategy logs and other non-service logs
+                if component_id.upper().startswith("SERVICE:FUNDING_RATE_SERVICE"):
+                    return False
+                
                 return True
 
             history_format = (

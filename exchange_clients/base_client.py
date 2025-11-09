@@ -270,6 +270,46 @@ class BaseExchangeClient(ABC):
         """
         pass
 
+    @abstractmethod
+    async def get_contract_attributes(self) -> Tuple[str, Decimal]:
+        """
+        Get contract ID and tick size for the current ticker.
+        
+        This method is called during opportunity validation to ensure a symbol
+        is tradeable on the exchange and to populate contract metadata.
+        
+        ⚠️ CRITICAL METHOD - Required for all exchanges.
+        
+        This method should:
+        1. Fetch market metadata for the current ticker (from config.ticker)
+        2. Set config.contract_id and config.tick_size
+        3. Cache contract_id in _contract_id_cache for multi-symbol trading
+        4. Return (contract_id, tick_size) tuple
+        
+        Args:
+            None (uses self.config.ticker)
+            
+        Returns:
+            Tuple of (contract_id, tick_size) where:
+            - contract_id: Exchange-specific contract identifier (e.g., "BTC-USD-PERP", "BTCUSDT")
+            - tick_size: Minimum price increment (e.g., Decimal("0.01"))
+            
+        Raises:
+            ValueError: If ticker is empty or contract not found
+            
+        Example:
+            >>> contract_id, tick_size = await client.get_contract_attributes()
+            >>> print(f"Contract: {contract_id}, Tick: {tick_size}")
+            Contract: BTC-USD-PERP, Tick: 0.01
+            
+        Implementation Notes:
+            - Should modify config.contract_id and config.tick_size
+            - Should cache contract_id in self._contract_id_cache[ticker.upper()]
+            - Should handle symbol normalization (e.g., "BTC" -> "BTC-USD-PERP")
+            - Should raise ValueError with descriptive message if contract not found
+        """
+        pass
+
     # ========================================================================
     # ORDER MANAGEMENT
     # ========================================================================
@@ -427,12 +467,8 @@ class BaseExchangeClient(ABC):
             contract_id = getattr(self.config, "contract_id", None)
             if contract_id:
                 # Cache it for future use
-                if hasattr(self._contract_id_cache, 'set'):
-                    # Custom cache class (ContractIdCache)
-                    self._contract_id_cache.set(symbol_upper, contract_id)
-                elif isinstance(self._contract_id_cache, dict):
-                    # Plain dict cache
-                    self._contract_id_cache[symbol_upper] = contract_id
+                # ContractIdCache supports dict-like access via __setitem__
+                self._contract_id_cache[symbol_upper] = contract_id
                 return contract_id
         
         # Final fallback: return symbol as-is (exchange will normalize it)
@@ -502,6 +538,36 @@ class BaseExchangeClient(ABC):
             
         Returns:
             List of OrderInfo for active orders
+        """
+        pass
+
+    @abstractmethod
+    async def await_order_update(
+        self, 
+        order_id: str, 
+        timeout: float = 10.0
+    ) -> Optional[OrderInfo]:
+        """
+        Wait for websocket order update with optional timeout.
+        
+        This is a required method that all exchanges must implement for efficient
+        order confirmation via websocket. If websocket is not available, implementations
+        should fall back to REST API polling.
+        
+        Args:
+            order_id: Order identifier to wait for
+            timeout: Maximum time to wait in seconds (default: 10.0)
+            
+        Returns:
+            OrderInfo if update received within timeout, None otherwise
+            
+        Note:
+            This method should return immediately if order is already in cache
+            (e.g., already filled/canceled). It should only wait if order status
+            is unknown or still pending.
+            
+            Implementations should prioritize websocket updates for speed, but can
+            fall back to REST polling if websocket is unavailable.
         """
         pass
 

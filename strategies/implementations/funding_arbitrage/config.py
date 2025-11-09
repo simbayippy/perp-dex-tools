@@ -60,51 +60,14 @@ class RiskManagementConfig(BaseModel):
         description="How often to check positions (seconds)"
     )
     
-    min_hold_hours: int = Field(
-        default=0,
-        description="Minimum hours to hold a position before risk exits are considered"
+    min_hold_hours: float = Field(
+        default=0.0,
+        description="Minimum hours to hold a position before risk exits are considered (supports fractional hours, e.g., 1.5 = 1 hour 30 minutes)"
     )
     
     class Config:
         use_enum_values = True
         validate_assignment = True
-
-
-# ============================================================================
-# Atomic Execution Retry Configuration
-# ============================================================================
-
-class AtomicRetryConfig(BaseModel):
-    """Settings for re-attempting partially filled atomic legs."""
-
-    enabled: bool = Field(
-        default=True,
-        description="Enable retry attempts for partially filled atomic orders.",
-    )
-    max_attempts: int = Field(
-        default=2,
-        description="Maximum number of retry passes to attempt after the initial batch.",
-    )
-    per_attempt_timeout_seconds: float = Field(
-        default=20.0,
-        description="Timeout applied to each retry order (seconds).",
-    )
-    retry_delay_seconds: float = Field(
-        default=1.0,
-        description="Delay between retry passes (seconds).",
-    )
-    max_retry_duration_seconds: float = Field(
-        default=40.0,
-        description="Maximum cumulative time spent retrying before falling back to hedge.",
-    )
-    min_retry_quantity: Decimal = Field(
-        default=Decimal("0"),
-        description="Minimum remaining quantity required to trigger a retry attempt.",
-    )
-    limit_price_offset_pct_override: Optional[Decimal] = Field(
-        default=None,
-        description="Optional override for limit price offset during retries.",
-    )
 
 
 # ============================================================================
@@ -175,11 +138,6 @@ class FundingArbConfig(BaseModel):
     limit_order_offset_pct: Decimal = Field(
         default=Decimal("0.0001"),
         description="Limit order price improvement (decimal pct, negative values cross the spread)"
-    )
-
-    atomic_retry: AtomicRetryConfig = Field(
-        default_factory=AtomicRetryConfig,
-        description="Retry policy for atomic execution legs.",
     )
     
     profitability_horizon_hours: int = Field(

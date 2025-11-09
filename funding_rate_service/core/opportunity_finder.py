@@ -29,6 +29,11 @@ class OpportunityFinder:
     6. Rank opportunities by profitability
     """
     
+    # Class-level cache for untradeable symbols per exchange
+    # Format: {dex_name: {symbol: True}}
+    # This prevents creating opportunities for symbols that are known to be untradeable
+    _untradeable_symbols_cache: Dict[str, Dict[str, bool]] = {}
+    
     def __init__(
         self,
         database: Database,
@@ -50,6 +55,50 @@ class OpportunityFinder:
         self.dex_mapper = dex_mapper
         self.symbol_mapper = symbol_mapper
         logger.info("OpportunityFinder initialized")
+    
+    @classmethod
+    def mark_symbol_untradeable(cls, dex_name: str, symbol: str) -> None:
+        """
+        Mark a symbol as untradeable on a specific DEX.
+        
+        This prevents the opportunity finder from creating opportunities
+        for symbol+DEX combinations that are known to be untradeable.
+        
+        Args:
+            dex_name: DEX name (e.g., "paradex", "lighter")
+            symbol: Symbol name (e.g., "AI16Z", "BTC")
+        """
+        dex_lower = dex_name.lower()
+        symbol_upper = symbol.upper()
+        
+        if dex_lower not in cls._untradeable_symbols_cache:
+            cls._untradeable_symbols_cache[dex_lower] = {}
+        
+        cls._untradeable_symbols_cache[dex_lower][symbol_upper] = True
+        logger.debug(
+            f"[OPP] Marked {symbol_upper} as untradeable on {dex_lower} "
+            "(will be filtered from future opportunities)"
+        )
+    
+    @classmethod
+    def is_symbol_tradeable(cls, dex_name: str, symbol: str) -> bool:
+        """
+        Check if a symbol is tradeable on a specific DEX.
+        
+        Args:
+            dex_name: DEX name (e.g., "paradex", "lighter")
+            symbol: Symbol name (e.g., "AI16Z", "BTC")
+            
+        Returns:
+            True if tradeable, False if known to be untradeable
+        """
+        dex_lower = dex_name.lower()
+        symbol_upper = symbol.upper()
+        
+        if dex_lower not in cls._untradeable_symbols_cache:
+            return True
+        
+        return symbol_upper not in cls._untradeable_symbols_cache[dex_lower]
     
     async def find_opportunities(
         self,
@@ -239,6 +288,21 @@ class OpportunityFinder:
         dex_long_lower = dex_long.lower()
         dex_short_lower = dex_short.lower()
         
+        # Check if either symbol+DEX combination is known to be untradeable
+        if not self.is_symbol_tradeable(dex_long, symbol):
+            logger.debug(
+                f"[OPP] Skipping opportunity {symbol} on {dex_long} - "
+                "symbol is known to be untradeable"
+            )
+            return None
+        
+        if not self.is_symbol_tradeable(dex_short, symbol):
+            logger.debug(
+                f"[OPP] Skipping opportunity {symbol} on {dex_short} - "
+                "symbol is known to be untradeable"
+            )
+            return None
+        
         rate_long = long_rate_data['funding_rate']
         rate_short = short_rate_data['funding_rate']
         
@@ -377,9 +441,6 @@ class OpportunityFinder:
                     return None
 
                 if filters.max_oi_usd is not None and target_oi > filters.max_oi_usd:
-                    logger.debug(
-                        f"[OPP] {symbol} skipped: required dex {required_dex_lower} OI {target_oi} exceeds cap {filters.max_oi_usd}"
-                    )
                     return None
 
                 logger.debug(

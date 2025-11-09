@@ -5,12 +5,18 @@ Handles order book updates, validation, BBO extraction, and state management.
 """
 
 import asyncio
+import time
 from typing import Dict, Any, List, Optional, Tuple
 from decimal import Decimal
 
 
 class LighterOrderBook:
     """Manages order book state and validation."""
+
+    # Staleness threshold: if no updates for 60 seconds, consider order book stale
+    STALENESS_THRESHOLD_SECONDS = 60.0
+    # Reconnect threshold: if no updates for 180 seconds (3 minutes), trigger full reconnect
+    RECONNECT_THRESHOLD_SECONDS = 180.0
 
     def __init__(self, logger: Optional[Any] = None):
         """
@@ -30,6 +36,9 @@ class LighterOrderBook:
         self.order_book_sequence_gap = False
         self.order_book_lock = asyncio.Lock()
         self.order_book_ready = False
+        
+        # Track last update time to detect staleness
+        self.last_update_timestamp: Optional[float] = None
 
     def set_logger(self, logger):
         """Set the logger instance."""
@@ -52,6 +61,9 @@ class LighterOrderBook:
             self._log(f"Invalid updates format for {side}: expected list, got {type(updates)}", "ERROR")
             return
 
+        # Track update timestamp (only if we actually process updates)
+        has_valid_updates = False
+        
         for update in updates:
             try:
                 if not isinstance(update, dict):
@@ -78,9 +90,15 @@ class LighterOrderBook:
                     ob.pop(price, None)
                 else:
                     ob[price] = size
+                
+                has_valid_updates = True
             except (KeyError, ValueError, TypeError) as e:
                 self._log(f"Error processing order book update: {e}, update: {update}", "ERROR")
                 continue
+        
+        # Update timestamp only if we processed valid updates
+        if has_valid_updates:
+            self.last_update_timestamp = time.time()
 
     def validate_order_book_offset(self, new_offset: int) -> bool:
         """Validate that the new offset is sequential and handle gaps."""
@@ -251,6 +269,50 @@ class LighterOrderBook:
         except Exception as e:
             self._log(f"Error cleaning up order book levels: {e}", "ERROR")
 
+    def get_staleness_seconds(self) -> Optional[float]:
+        """
+        Get how many seconds since last order book update.
+        
+        Returns:
+            Seconds since last update, or None if never updated
+        """
+        if self.last_update_timestamp is None:
+            return None
+        return time.time() - self.last_update_timestamp
+    
+    def is_stale(self) -> bool:
+        """
+        Check if order book is stale (no updates for threshold period).
+        
+        Returns:
+            True if order book is stale, False otherwise
+        """
+        if not self.snapshot_loaded:
+            return True  # Not loaded yet, consider stale
+        
+        staleness_seconds = self.get_staleness_seconds()
+        if staleness_seconds is None:
+            # Snapshot loaded but no updates received yet - not stale if just loaded
+            return False
+        
+        return staleness_seconds > self.STALENESS_THRESHOLD_SECONDS
+    
+    def needs_reconnect(self) -> bool:
+        """
+        Check if order book is stale enough to warrant a full websocket reconnect.
+        
+        Returns:
+            True if order book needs reconnect (stale for > RECONNECT_THRESHOLD_SECONDS), False otherwise
+        """
+        if not self.snapshot_loaded:
+            return False  # Not loaded yet, don't reconnect (will reconnect on connection failure)
+        
+        staleness_seconds = self.get_staleness_seconds()
+        if staleness_seconds is None:
+            return False  # Just loaded, don't reconnect
+        
+        return staleness_seconds > self.RECONNECT_THRESHOLD_SECONDS
+
     async def reset_order_book(self):
         """Reset the order book state when reconnecting."""
         async with self.order_book_lock:
@@ -262,4 +324,5 @@ class LighterOrderBook:
             self.order_book_offset = None
             self.order_book_sequence_gap = False
             self.order_book_ready = False
+            self.last_update_timestamp = None
 

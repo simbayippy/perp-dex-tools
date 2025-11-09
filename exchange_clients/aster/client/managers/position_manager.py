@@ -155,11 +155,6 @@ class AsterPositionManager:
                 # Fallback: Query userTrades API to find when position sign changed
                 # This is expensive but necessary if we don't have opened_at from database
                 position_start_time = await self._get_position_open_time(formatted_symbol, quantity)
-                if position_start_time:
-                    self.logger.debug(
-                        f"[ASTER] Filtering funding to only after position opened at {position_start_time} "
-                        "(from userTrades API)"
-                    )
             
             # Fetch income history filtered by FUNDING_FEE
             params = {
@@ -171,9 +166,6 @@ class AsterPositionManager:
             # If we know when position started, filter by startTime
             if position_start_time:
                 params['startTime'] = position_start_time
-                self.logger.debug(
-                    f"[ASTER] Filtering funding to only after position opened at {position_start_time}"
-                )
             
             result = await self._make_request('GET', '/fapi/v1/income', params)
             
@@ -206,11 +198,6 @@ class AsterPositionManager:
                         f"[ASTER] Failed to parse funding income: {record.get('income')} ({exc})"
                     )
                     continue
-            
-            self.logger.debug(
-                f"[ASTER] Funding for current {formatted_symbol} position: ${cumulative:.4f} "
-                f"(from {len(result)} records{' after position opened' if position_start_time else ' (all history)'})"
-            )
             
             return cumulative
             

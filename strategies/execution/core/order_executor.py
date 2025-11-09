@@ -22,7 +22,7 @@ import time
 import asyncio
 from helpers.unified_logger import get_core_logger
 from exchange_clients import BaseExchangeClient
-from exchange_clients.base_models import CancelReason, is_retryable_cancellation
+from exchange_clients.base_models import CancelReason, is_retryable_cancellation, OrderInfo
 
 logger = get_core_logger("order_executor")
 
@@ -603,9 +603,76 @@ class OrderExecutor:
                     execution_mode_used="market_failed"
                 )
             
-            # Get actual fill price
-            fill_price = Decimal(str(result.price)) if result.price else expected_price
-            filled_qty = order_quantity  # Assume full fill for market orders
+            order_id = result.order_id if hasattr(result, 'order_id') and result.order_id else None
+            
+            # Wait for order confirmation via websocket (with REST fallback)
+            # Market orders should execute quickly, but we need to confirm they actually filled
+            order_info = await self._wait_for_market_order_confirmation(
+                exchange_client=exchange_client,
+                order_id=order_id,
+                expected_quantity=order_quantity,
+                timeout_seconds=10.0
+            )
+            
+            if order_info is None:
+                # Timeout or no order info available - check via REST as final fallback
+                if order_id:
+                    try:
+                        order_info = await exchange_client.get_order_info(order_id, force_refresh=True)
+                    except Exception as e:
+                        self.logger.warning(
+                            f"[{exchange_name.upper()}] Failed to fetch order info for {order_id}: {e}"
+                        )
+            
+            # Check order status
+            if order_info is None:
+                # No order info available - this is an error case
+                return ExecutionResult(
+                    success=False,
+                    filled=False,
+                    error_message="Market order placed but no order info available",
+                    execution_mode_used="market_no_info",
+                    order_id=order_id
+                )
+            
+            status = order_info.status.upper()
+            
+            # Check for cancellation (market orders can be canceled by exchange)
+            if status in {'CANCELED', 'CANCELLED', 'REJECTED', 'EXPIRED'}:
+                cancel_reason = getattr(order_info, "cancel_reason", "") or "unknown"
+                exchange_name = exchange_client.get_exchange_name()
+                self.logger.error(
+                    f"[{exchange_name.upper()}] Market order canceled: {order_id} | "
+                    f"Status: {status} | Reason: {cancel_reason}"
+                )
+                return ExecutionResult(
+                    success=False,
+                    filled=False,
+                    error_message=f"Market order canceled: {status} ({cancel_reason})",
+                    execution_mode_used="market_canceled",
+                    order_id=order_id,
+                    retryable=False  # Market orders don't have post-only violations, so not retryable
+                )
+            
+            # Check if order is filled
+            if status not in {'FILLED', 'CLOSED'}:
+                # Order is still pending or in unknown state
+                exchange_name = exchange_client.get_exchange_name()
+                self.logger.warning(
+                    f"[{exchange_name.upper()}] Market order not filled: {order_id} | "
+                    f"Status: {status}"
+                )
+                return ExecutionResult(
+                    success=False,
+                    filled=False,
+                    error_message=f"Market order not filled: status={status}",
+                    execution_mode_used="market_not_filled",
+                    order_id=order_id
+                )
+            
+            # Order is filled - extract fill details
+            fill_price = Decimal(str(order_info.price)) if order_info.price > 0 else expected_price
+            filled_qty = Decimal(str(order_info.filled_size)) if order_info.filled_size > 0 else order_quantity
             
             # Calculate slippage
             slippage_usd = abs(fill_price - expected_price) * filled_qty
@@ -626,7 +693,7 @@ class OrderExecutor:
                 slippage_usd=slippage_usd,
                 slippage_pct=slippage_pct,
                 execution_mode_used="market",
-                order_id=result.order_id if hasattr(result, 'order_id') else None
+                order_id=order_id
             )
         
         except Exception as e:
@@ -646,6 +713,156 @@ class OrderExecutor:
                 error_message=f"[{exchange_name}] Market execution error: {str(e)}",
                 execution_mode_used="market_error"
             )
+    
+    async def _wait_for_market_order_confirmation(
+        self,
+        exchange_client: BaseExchangeClient,
+        order_id: Optional[str],
+        expected_quantity: Decimal,
+        timeout_seconds: float = 10.0
+    ) -> Optional[OrderInfo]:
+        """
+        Wait for market order confirmation via websocket (with REST fallback).
+        
+        This method waits specifically for FILLED status, not just any update.
+        Market orders may send OPEN status first, but we need to wait for FILLED.
+        
+        The issue: await_order_update only waits for the FIRST websocket update (OPEN),
+        but market orders need to wait for FILLED status which comes later.
+        
+        Solution: Poll cache/REST directly in a loop until FILLED or timeout.
+        
+        Args:
+            exchange_client: Exchange client instance
+            order_id: Order identifier (None if not available)
+            expected_quantity: Expected order quantity (for validation)
+            timeout_seconds: Maximum time to wait in seconds
+            
+        Returns:
+            OrderInfo if FILLED status received, None if timeout or error
+        """
+        if not order_id:
+            # No order ID - fallback to REST polling
+            return await self._poll_order_status_rest(
+                exchange_client, None, expected_quantity, timeout_seconds
+            )
+        
+        start_time = time.time()
+        poll_interval = 0.2  # Poll every 200ms
+        max_polls = int(timeout_seconds / poll_interval) + 1
+        
+        # First, wait for initial order confirmation (OPEN status)
+        # This ensures the order was actually placed
+        if hasattr(exchange_client, 'await_order_update'):
+            try:
+                initial_info = await exchange_client.await_order_update(order_id, timeout=min(timeout_seconds, 2.0))
+                if initial_info:
+                    status = initial_info.status.upper()
+                    # If already filled, return immediately
+                    if status in {'FILLED', 'CLOSED'}:
+                        return initial_info
+                    # If canceled/rejected, return immediately (final state)
+                    if status in {'CANCELED', 'CANCELLED', 'REJECTED', 'EXPIRED'}:
+                        return initial_info
+            except Exception as e:
+                exchange_name = exchange_client.get_exchange_name()
+                self.logger.debug(
+                    f"[{exchange_name.upper()}] Initial websocket wait failed for {order_id}: {e}"
+                )
+        
+        # Now poll until FILLED status or timeout
+        # We need to check cache/REST because await_order_update only waits for first update
+        for _ in range(max_polls):
+            elapsed = time.time() - start_time
+            if elapsed >= timeout_seconds:
+                break
+            
+            # Check cache via get_order_info (which checks cache first, then REST)
+            try:
+                order_info = await exchange_client.get_order_info(order_id, force_refresh=False)
+                if order_info:
+                    status = order_info.status.upper()
+                    # If filled, return immediately
+                    if status in {'FILLED', 'CLOSED'}:
+                        return order_info
+                    # If canceled/rejected, return immediately (final state)
+                    if status in {'CANCELED', 'CANCELLED', 'REJECTED', 'EXPIRED'}:
+                        return order_info
+                    # Otherwise (OPEN, PARTIALLY_FILLED), continue polling
+            except Exception as e:
+                exchange_name = exchange_client.get_exchange_name()
+                self.logger.debug(
+                    f"[{exchange_name.upper()}] Poll check failed for {order_id}: {e}"
+                )
+            
+            # Small delay before next check
+            await asyncio.sleep(poll_interval)
+        
+        # Final check via REST API with force_refresh (might have filled between polls)
+        try:
+            order_info = await exchange_client.get_order_info(order_id, force_refresh=True)
+            if order_info:
+                status = order_info.status.upper()
+                if status in {'FILLED', 'CLOSED', 'CANCELED', 'CANCELLED', 'REJECTED', 'EXPIRED'}:
+                    return order_info
+        except Exception as e:
+            exchange_name = exchange_client.get_exchange_name()
+            self.logger.debug(
+                f"[{exchange_name.upper()}] Final REST check failed for {order_id}: {e}"
+            )
+        
+        # Fallback to REST polling (original behavior)
+        return await self._poll_order_status_rest(
+            exchange_client, order_id, expected_quantity, timeout_seconds
+        )
+    
+    async def _poll_order_status_rest(
+        self,
+        exchange_client: BaseExchangeClient,
+        order_id: Optional[str],
+        expected_quantity: Decimal,
+        timeout_seconds: float = 10.0
+    ) -> Optional[OrderInfo]:
+        """
+        Poll order status via REST API (fallback when websocket not available).
+        
+        Similar to Aster's approach - polls REST API until order is filled/canceled
+        or timeout is reached.
+        
+        Args:
+            exchange_client: Exchange client instance
+            order_id: Order identifier (None if not available)
+            expected_quantity: Expected order quantity
+            timeout_seconds: Maximum time to wait in seconds
+            
+        Returns:
+            OrderInfo if status check succeeds, None if timeout or error
+        """
+        if not order_id:
+            # No order ID - can't poll
+            return None
+        
+        start_time = time.time()
+        poll_interval = 0.2  # Poll every 200ms (like Aster)
+        
+        while time.time() - start_time < timeout_seconds:
+            try:
+                order_info = await exchange_client.get_order_info(order_id, force_refresh=True)
+                if order_info:
+                    status = order_info.status.upper()
+                    # Return if order reached final state
+                    if status in {'FILLED', 'CANCELED', 'CANCELLED', 'CLOSED', 'REJECTED', 'EXPIRED'}:
+                        return order_info
+            except Exception as e:
+                exchange_name = exchange_client.get_exchange_name()
+                self.logger.debug(
+                    f"[{exchange_name.upper()}] Error polling order status for {order_id}: {e}"
+                )
+            
+            await asyncio.sleep(poll_interval)
+        
+        # Timeout - return None (caller will handle)
+        return None
     
     async def _fetch_bbo_prices(
         self,

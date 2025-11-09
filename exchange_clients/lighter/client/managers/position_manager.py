@@ -38,6 +38,7 @@ class LighterPositionManager:
         positions_ready: asyncio.Event,
         ws_manager: Optional[Any] = None,
         normalize_symbol_fn: Optional[Any] = None,
+        market_data: Optional[Any] = None,
     ):
         """
         Initialize position manager.
@@ -54,6 +55,7 @@ class LighterPositionManager:
             positions_ready: Event signaling positions are ready
             ws_manager: Optional WebSocket manager (for live mark prices)
             normalize_symbol_fn: Function to normalize symbols
+            market_data: Optional MarketData manager (for REST fallback when websocket unavailable)
         """
         self.account_api = account_api
         self.order_api = order_api
@@ -65,135 +67,311 @@ class LighterPositionManager:
         self.positions_lock = positions_lock
         self.positions_ready = positions_ready
         self.ws_manager = ws_manager
+        self.market_data = market_data
         self.normalize_symbol = normalize_symbol_fn or (lambda s: s.upper())
     
-    def get_live_mark_price(self, normalized_symbol: str) -> Optional[Decimal]:
-        """
-        Return a real-time mark price using the active order-book feed.
+    def _trigger_async_reconnect(self, coro) -> None:
+        """Helper to trigger async reconnect task without blocking."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(coro)
+        except RuntimeError:
+            pass  # No event loop, skip (will use REST fallback)
 
-        Lighter's account positions stream is event-driven, so the cached mark price only
-        changes when the exchange pushes a fresh position update. We reuse the best bid/ask
-        tracked by the WebSocket to keep the mark current without hitting the heavy REST
-        endpoint.
+    def _get_websocket_mark_price(self, normalized_symbol: str) -> Optional[Decimal]:
+        """
+        Get mark price from websocket order book.
+        
+        Returns None if websocket unavailable, stale, or symbol mismatch.
+        Automatically triggers reconnect if order book is stale.
         """
         if self.ws_manager is None:
-            self.logger.warning("[LIGHTER] Skipping live mark enrichment – websocket manager unavailable")
             return None
 
+        # Check if this is the active symbol
         config_symbol = getattr(self.config, "ticker", None)
         if config_symbol:
             active_symbol = self.normalize_symbol(str(config_symbol)).upper()
             if normalized_symbol != active_symbol:
                 return None
 
-        midpoint_candidates: List[Decimal] = []
-        for price in (self.ws_manager.best_bid, self.ws_manager.best_ask):
-            if price is None:
-                continue
-            try:
-                midpoint_candidates.append(Decimal(str(price)))
-            except (TypeError, ValueError):
-                continue
+        # Check staleness and trigger reconnect if needed
+        if self.ws_manager.order_book.is_stale():
+            staleness_seconds = self.ws_manager.order_book.get_staleness_seconds()
+            
+            if self.ws_manager.order_book.needs_reconnect():
+                self.logger.warning(
+                    f"[LIGHTER] Order book stale ({staleness_seconds:.1f}s), forcing reconnect"
+                )
+                self._trigger_async_reconnect(self.ws_manager.force_reconnect())
+            else:
+                self.logger.debug(
+                    f"[LIGHTER] Order book stale ({staleness_seconds:.1f}s), requesting snapshot"
+                )
+                self._trigger_async_reconnect(self.ws_manager.request_fresh_snapshot())
+            
+            return None  # Stale, use REST fallback
 
-        if not midpoint_candidates:
+        # Extract best bid/ask and calculate midpoint
+        best_bid = self.ws_manager.best_bid
+        best_ask = self.ws_manager.best_ask
+        
+        if best_bid is None and best_ask is None:
             return None
+        
+        try:
+            bid_decimal = Decimal(str(best_bid)) if best_bid is not None else None
+            ask_decimal = Decimal(str(best_ask)) if best_ask is not None else None
+            
+            if bid_decimal is not None and ask_decimal is not None:
+                return (bid_decimal + ask_decimal) / Decimal("2")
+            elif bid_decimal is not None:
+                return bid_decimal
+            elif ask_decimal is not None:
+                return ask_decimal
+        except (TypeError, ValueError):
+            pass
+        
+        return None
 
-        if len(midpoint_candidates) == 2:
-            return (midpoint_candidates[0] + midpoint_candidates[1]) / Decimal("2")
+    async def _get_rest_mark_price(self, normalized_symbol: str) -> Optional[Decimal]:
+        """
+        Get mark price from REST API BBO endpoint only (bypasses WebSocket check).
+        
+        This is called after WebSocket check fails, so we use REST-only method
+        to avoid redundant WebSocket checks.
+        """
+        if self.market_data is None:
+            return None
+        
+        try:
+            contract_id = getattr(self.config, "contract_id", None)
+            if not contract_id:
+                return None
+            
+            # Use REST-only method since we already checked WebSocket
+            bid, ask = await self.market_data.fetch_bbo_prices_rest_only(str(contract_id))
+            if bid is not None and ask is not None:
+                mark_price = (bid + ask) / Decimal("2")
+                self.logger.debug(
+                    f"[LIGHTER] Using REST mark_price for {normalized_symbol}: {mark_price}"
+                )
+                return mark_price
+        except Exception as exc:
+            self.logger.debug(
+                f"[LIGHTER] Failed to fetch REST mark_price for {normalized_symbol}: {exc}"
+            )
+        
+        return None
 
-        return midpoint_candidates[0]
+    async def _get_mark_price(self, normalized_symbol: str, raw: Dict[str, Any]) -> Optional[Decimal]:
+        """
+        Get mark price with fallback hierarchy:
+        1. Websocket order book (real-time)
+        2. REST API BBO (fresh but costs weight)
+        3. Cached mark_price from raw position data (may be stale)
+        
+        Returns None if all sources fail.
+        """
+        # Try websocket first (free, real-time)
+        mark_price = self._get_websocket_mark_price(normalized_symbol)
+        if mark_price is not None:
+            return mark_price
+        
+        # Fallback to REST API
+        mark_price = await self._get_rest_mark_price(normalized_symbol)
+        if mark_price is not None:
+            return mark_price
+        
+        # Last resort: cached mark_price from position data
+        cached_mark = decimal_or_none(raw.get("mark_price"))
+        if cached_mark is not None:
+            self.logger.debug(
+                f"[LIGHTER] Using cached mark_price for {normalized_symbol} "
+                "(websocket and REST unavailable)"
+            )
+            return cached_mark
+        
+        return None
+
+    def _calculate_unrealized_pnl(
+        self, 
+        mark_price: Decimal, 
+        entry_price: Optional[Decimal], 
+        quantity: Decimal
+    ) -> Optional[Decimal]:
+        """Calculate unrealized PnL from mark price, entry price, and quantity."""
+        if entry_price is None or quantity == 0:
+            return None
+        
+        try:
+            return (mark_price - entry_price) * quantity
+        except Exception:
+            return None
     
-    async def enrich_snapshot_with_live_market_data(
+    async def enrich_snapshot_with_market_data(
         self,
         normalized_symbol: str,
         raw: Dict[str, Any],
         snapshot: ExchangePositionSnapshot,
     ) -> None:
         """
-        Refresh mark price, exposure, and unrealized PnL using the latest order-book data.
+        Enrich snapshot with mark price, exposure, and unrealized PnL.
+        
+        Strategy:
+        - Always calculate uPnL from mark price when available (websocket or REST)
+        - Only fall back to exchange-provided uPnL when mark price is completely unavailable
+        - This ensures real-time accuracy even when websocket order book is stale
         """
-        live_mark = self.get_live_mark_price(normalized_symbol)
-        if live_mark is None:
-            return
-
-        snapshot.mark_price = live_mark
-
+        # Get mark price with fallback hierarchy (websocket -> REST -> cached)
+        mark_price = await self._get_mark_price(normalized_symbol, raw)
+        
         quantity = snapshot.quantity or Decimal("0")
         quantity_abs = quantity.copy_abs()
-        if quantity_abs != 0:
-            snapshot.exposure_usd = quantity_abs * live_mark
-
-        entry_price = snapshot.entry_price
-        if entry_price is not None and quantity != 0:
-            try:
-                snapshot.unrealized_pnl = (live_mark - entry_price) * quantity
-            except Exception:
-                pass
-
-        async with self.positions_lock:
-            cached = self.raw_positions.get(normalized_symbol)
-            if cached is None:
-                return
-
-            cached["mark_price"] = str(live_mark)
-            if snapshot.exposure_usd is not None:
-                cached["position_value"] = str(snapshot.exposure_usd)
-            if snapshot.unrealized_pnl is not None:
-                cached["unrealized_pnl"] = str(snapshot.unrealized_pnl)
+        
+        if mark_price is not None:
+            # Update snapshot with mark price
+            snapshot.mark_price = mark_price
+            
+            # Calculate exposure
+            if quantity_abs != 0:
+                snapshot.exposure_usd = quantity_abs * mark_price
+            
+            # Always calculate uPnL from mark price when available
+            # This ensures accuracy even if exchange-provided uPnL is stale
+            calculated_pnl = self._calculate_unrealized_pnl(
+                mark_price, 
+                snapshot.entry_price, 
+                quantity
+            )
+            
+            if calculated_pnl is not None:
+                snapshot.unrealized_pnl = calculated_pnl
+            else:
+                # Fallback to exchange-provided uPnL if calculation fails
+                raw_unrealized = decimal_or_none(raw.get("unrealized_pnl"))
+                if raw_unrealized is not None:
+                    snapshot.unrealized_pnl = raw_unrealized
+                    self.logger.debug(
+                        f"[LIGHTER] Using exchange unrealized_pnl for {normalized_symbol} "
+                        f"(calculation unavailable): {raw_unrealized}"
+                    )
+            
+            # Update cache with fresh values
+            async with self.positions_lock:
+                cached = self.raw_positions.get(normalized_symbol)
+                if cached is not None:
+                    cached["mark_price"] = str(mark_price)
+                    if snapshot.exposure_usd is not None:
+                        cached["position_value"] = str(snapshot.exposure_usd)
+                    if snapshot.unrealized_pnl is not None:
+                        cached["unrealized_pnl"] = str(snapshot.unrealized_pnl)
+        else:
+            # No mark price available - use exchange-provided uPnL as last resort
+            raw_unrealized = decimal_or_none(raw.get("unrealized_pnl"))
+            if raw_unrealized is not None:
+                snapshot.unrealized_pnl = raw_unrealized
+                self.logger.debug(
+                    f"[LIGHTER] Using exchange unrealized_pnl for {normalized_symbol} "
+                    "(no mark price available): {raw_unrealized}"
+                )
     
+    async def _get_funding_for_snapshot(
+        self,
+        normalized_symbol: str,
+        raw: Dict[str, Any],
+        snapshot: ExchangePositionSnapshot,
+        position_opened_at: Optional[float] = None,
+    ) -> Optional[Decimal]:
+        """
+        Get funding accrued for a position snapshot.
+        
+        Checks websocket data first, then cached funding, then REST API if needed.
+        """
+        async with self.positions_lock:
+            funding_in_cache = raw.get("funding_accrued")
+            total_funding_ws = raw.get("total_funding_paid_out")
+            
+            # Websocket is source of truth - update cache if websocket has funding
+            if total_funding_ws is not None:
+                ws_funding = decimal_or_none(total_funding_ws)
+                if ws_funding is not None:
+                    raw["funding_accrued"] = ws_funding
+                    funding_in_cache = ws_funding
+                    self.logger.debug(
+                        f"[LIGHTER] Updated funding from websocket for {normalized_symbol}: {ws_funding}"
+                    )
+            elif funding_in_cache is None and total_funding_ws is not None:
+                raw["funding_accrued"] = total_funding_ws
+                funding_in_cache = total_funding_ws
+        
+        # Determine if we need to query REST for funding
+        needs_funding = (
+            funding_in_cache is None  # Never checked
+            or (
+                funding_in_cache == Decimal("0")  # Cached as 0
+                and total_funding_ws is None  # But websocket doesn't have it
+            )
+        )
+        
+        if not needs_funding:
+            return decimal_or_none(funding_in_cache)
+        
+        # Check if we have fresh cached funding (< 20 minutes old)
+        async with self.positions_lock:
+            cached_raw = self.raw_positions.get(normalized_symbol)
+            funding_cache_timestamp = cached_raw.get("funding_cache_timestamp") if cached_raw else None
+            cached_funding_value = cached_raw.get("funding_accrued") if cached_raw else None
+            
+            cache_age_seconds = None
+            if funding_cache_timestamp:
+                cache_age_seconds = time.time() - funding_cache_timestamp
+                if cache_age_seconds < 1200 and cached_funding_value is not None:  # 20 minutes
+                    return decimal_or_none(cached_funding_value)
+        
+        # Query REST API for funding
+        if not snapshot.side or snapshot.quantity == 0 or raw.get("market_id") is None:
+            return decimal_or_none(funding_in_cache)
+        
+        try:
+            self.logger.info(
+                f"[LIGHTER] Querying position_funding() API for {normalized_symbol} "
+                f"({'cache expired' if cache_age_seconds else 'no cache'})"
+            )
+            funding = await self.get_cumulative_funding(
+                raw.get("market_id"),
+                snapshot.side,
+                quantity=snapshot.quantity,
+                position_opened_at=position_opened_at,
+            )
+            
+            # Convert None → Decimal("0") to mark as "checked"
+            funding = funding if funding is not None else Decimal("0")
+            
+            # Cache the funding value with timestamp
+            async with self.positions_lock:
+                cached = self.raw_positions.get(normalized_symbol)
+                if cached is not None:
+                    cached["funding_accrued"] = funding
+                    cached["funding_cache_timestamp"] = time.time()
+                    self.logger.debug(
+                        f"[LIGHTER] Cached funding for {normalized_symbol}: {funding}"
+                    )
+            
+            return funding
+        except Exception as exc:
+            self.logger.debug(f"[LIGHTER] Funding lookup failed for {normalized_symbol}: {exc}")
+            return decimal_or_none(funding_in_cache)
+
     async def snapshot_from_cache(
         self, 
         normalized_symbol: str,
         position_opened_at: Optional[float] = None,
     ) -> Optional[ExchangePositionSnapshot]:
-        """Retrieve a cached snapshot if available, optionally enriching with funding data."""
+        """Retrieve a cached snapshot if available, enriching with market data and funding."""
         async with self.positions_lock:
             raw = self.raw_positions.get(normalized_symbol)
-            funding_in_cache = None
-            total_funding_ws = None
-            if raw is not None:
-                # raw from websocket data
-                funding_in_cache = raw.get("funding_accrued")
-                total_funding_ws = raw.get("total_funding_paid_out")
-                
-                # CRITICAL: Always check websocket total_funding_paid_out, even if cached funding exists
-                # Websocket is the source of truth for real-time funding updates
-                if total_funding_ws is not None:
-                    ws_funding = decimal_or_none(total_funding_ws)
-                    # Update cache if websocket has funding (even if cached was 0)
-                    if ws_funding is not None:
-                        raw["funding_accrued"] = ws_funding
-                        funding_in_cache = ws_funding
-                        self.logger.debug(
-                            f"[LIGHTER] Updated funding from websocket for {normalized_symbol}: {ws_funding}"
-                        )
-                
-                # If websocket has total_funding_paid_out but it wasn't mapped to funding_accrued yet, map it now
-                elif funding_in_cache is None and total_funding_ws is not None:
-                    raw["funding_accrued"] = total_funding_ws
-                    funding_in_cache = total_funding_ws
-                    self.logger.debug(
-                        f"[LIGHTER] Mapped total_funding_paid_out → funding_accrued for {normalized_symbol}: {funding_in_cache}"
-                    )
-                
-                # Determine if we need to query REST for funding:
-                # - If funding is None (never checked) → query REST
-                # - If funding is 0 but websocket doesn't have total_funding_paid_out → query REST
-                #   (websocket might not have sent update yet, REST account() API should have latest)
-                needs_funding = (
-                    funding_in_cache is None  # Never checked
-                    or (
-                        funding_in_cache == Decimal("0")  # Cached as 0
-                        and total_funding_ws is None  # But websocket doesn't have it
-                    )
-                )
-                
-                if needs_funding:
-                    self.logger.debug(
-                        f"[LIGHTER] Funding missing for {normalized_symbol}: "
-                        f"funding_accrued={funding_in_cache}, "
-                        f"total_funding_paid_out={total_funding_ws}"
-                    )
 
         if raw is None:
             return None
@@ -202,76 +380,13 @@ class LighterPositionManager:
         if snapshot is None:
             return None
 
-        await self.enrich_snapshot_with_live_market_data(normalized_symbol, raw, snapshot)
+        # Enrich with mark price and calculate uPnL
+        await self.enrich_snapshot_with_market_data(normalized_symbol, raw, snapshot)
 
-        if (
-            needs_funding  # True if funding is None OR cached as 0 but websocket doesn't have it
-            and snapshot.side
-            and snapshot.quantity != 0
-            and raw.get("market_id") is not None
-        ):
-            # Skip REST account() API - it returns ALL symbols and total_funding_paid_out is often None
-            # Go straight to position_funding() API which is reliable
-            funding = None
-            
-            # Check if we have cached funding that's still fresh (< 20 minutes old)
-            # Funding settles every 1 hour on Lighter, but we refresh cache every 20 minutes for more frequent updates
-            async with self.positions_lock:
-                cached_raw = self.raw_positions.get(normalized_symbol)
-                funding_cache_timestamp = cached_raw.get("funding_cache_timestamp") if cached_raw else None
-                cached_funding_value = cached_raw.get("funding_accrued") if cached_raw else None
-                
-                cache_age_seconds = None
-                if funding_cache_timestamp:
-                    cache_age_seconds = time.time() - funding_cache_timestamp
-                    cache_age_minutes = cache_age_seconds / 60
-                    
-                    # Use cached funding if less than 20 minutes old
-                    if cache_age_seconds < 1200 and cached_funding_value is not None:  # 20 minutes = 1200 seconds
-                        funding = decimal_or_none(cached_funding_value)
-                        self.logger.debug(
-                            f"[LIGHTER] Using cached funding for {normalized_symbol}: {funding} "
-                            f"(cached {cache_age_minutes:.1f} minutes ago)"
-                        )
-            
-            # Query position_funding() API if no fresh cache
-            if funding is None:
-                try:
-                    self.logger.info(
-                        f"[LIGHTER] Querying position_funding() API for {normalized_symbol} "
-                        f"({'cache expired' if cache_age_seconds else 'no cache'}, "
-                        f"{'cache age: ' + f'{cache_age_seconds/60:.1f}m' if cache_age_seconds else ''})"
-                    )
-                    funding = await self.get_cumulative_funding(
-                        raw.get("market_id"),
-                        snapshot.side,
-                        quantity=snapshot.quantity,
-                        position_opened_at=position_opened_at,
-                    )
-                    # get_cumulative_funding() returns None when cumulative is 0
-                    # Convert None → Decimal("0") to mark as "checked"
-                    if funding is None:
-                        funding = Decimal("0")
-                    
-                    # Cache the funding value with timestamp
-                    async with self.positions_lock:
-                        cached = self.raw_positions.get(normalized_symbol)
-                        if cached is not None:
-                            cached["funding_accrued"] = funding
-                            cached["funding_cache_timestamp"] = time.time()
-                            self.logger.debug(
-                                f"[LIGHTER] Cached funding for {normalized_symbol}: {funding} "
-                                "(will refresh after 20 minutes or on websocket update)"
-                            )
-                except Exception as exc:
-                    self.logger.debug(f"[LIGHTER] Funding lookup failed for {normalized_symbol}: {exc}")
-                    # Don't cache on error - might be transient, allow retry next cycle
-                    funding = None
-
-            # Set funding on snapshot (may be from cache or fresh query)
-            snapshot.funding_accrued = funding
-        else:
-            snapshot.funding_accrued = snapshot.funding_accrued or decimal_or_none(raw.get("funding_accrued"))
+        # Get funding (from cache or REST API)
+        snapshot.funding_accrued = await self._get_funding_for_snapshot(
+            normalized_symbol, raw, snapshot, position_opened_at
+        )
 
         return snapshot
     

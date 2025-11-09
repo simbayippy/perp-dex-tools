@@ -23,7 +23,6 @@ from strategies.execution.core.liquidity_analyzer import (
 
 from .contexts import OrderContext
 from .hedge_manager import HedgeManager
-from .retry_manager import RetryManager, RetryPolicy
 from .utils import (
     apply_result_to_context,
     context_to_filled_dict,
@@ -45,7 +44,7 @@ class OrderSpec:
     size_usd: Decimal
     quantity: Optional[Decimal] = None
     execution_mode: str = "limit_only"
-    timeout_seconds: float = 30.0
+    timeout_seconds: float = 60.0
     limit_price_offset_pct: Optional[Decimal] = None
     reduce_only: bool = False  # If True, can only close/reduce positions (bypasses min notional)
 
@@ -66,8 +65,6 @@ class AtomicExecutionResult:
     rollback_performed: bool = False
     rollback_cost_usd: Optional[Decimal] = None
     residual_imbalance_usd: Decimal = Decimal("0")
-    retry_attempts: int = 0
-    retry_success: bool = False
 
 
 class AtomicMultiOrderExecutor:
@@ -77,7 +74,6 @@ class AtomicMultiOrderExecutor:
         self.price_provider = price_provider
         self.logger = get_core_logger("atomic_multi_order")
         self._hedge_manager = HedgeManager(price_provider=price_provider)
-        self._retry_manager = RetryManager(price_provider=price_provider)
         self._post_trade_max_imbalance_pct = Decimal("0.02")  # 2% net exposure tolerance
         self._post_trade_base_tolerance = Decimal("0.0001")  # residual quantity tolerance
 
@@ -88,23 +84,23 @@ class AtomicMultiOrderExecutor:
         pre_flight_check: bool = True,
         skip_preflight_leverage: bool = False,
         stage_prefix: Optional[str] = None,
-        retry_policy: Optional[RetryPolicy] = None,
     ) -> AtomicExecutionResult:
         start_time = time.time()
         elapsed_ms = lambda: int((time.time() - start_time) * 1000)
 
         if not orders:
             self.logger.info("No orders supplied; skipping atomic execution.")
-            return AtomicExecutionResult(
+            # Create empty contexts list for result building
+            empty_contexts: List[OrderContext] = []
+            return self._build_execution_result(
+                contexts=empty_contexts,
+                orders=orders,
+                elapsed_ms=elapsed_ms(),
                 success=True,
                 all_filled=True,
-                filled_orders=[],
-                partial_fills=[],
-                total_slippage_usd=Decimal("0"),
-                execution_time_ms=elapsed_ms(),
                 error_message=None,
                 rollback_performed=False,
-                rollback_cost_usd=Decimal("0"),
+                rollback_cost=Decimal("0"),
             )
 
         try:
@@ -123,16 +119,17 @@ class AtomicMultiOrderExecutor:
                     stage_prefix=compose_stage("1"),
                 )
                 if not preflight_ok:
-                    return AtomicExecutionResult(
+                    # Create empty contexts list for result building
+                    empty_contexts: List[OrderContext] = []
+                    return self._build_execution_result(
+                        contexts=empty_contexts,
+                        orders=orders,
+                        elapsed_ms=elapsed_ms(),
                         success=False,
                         all_filled=False,
-                        filled_orders=[],
-                        partial_fills=[],
-                        total_slippage_usd=Decimal("0"),
-                        execution_time_ms=elapsed_ms(),
                         error_message=f"Pre-flight check failed: {preflight_error}",
                         rollback_performed=False,
-                        rollback_cost_usd=Decimal("0"),
+                        rollback_cost=Decimal("0"),
                     )
 
             log_stage(self.logger, "Order Placement", icon="🚀", stage_id=compose_stage("2"))
@@ -154,14 +151,14 @@ class AtomicMultiOrderExecutor:
             hedge_error: Optional[str] = None
             rollback_performed = False
             rollback_cost = Decimal("0")
-            retry_attempts = 0
-            retry_success = False
 
             while pending_tasks:
                 done, pending_tasks = await asyncio.wait(
                     pending_tasks, return_when=asyncio.FIRST_COMPLETED
                 )
                 newly_filled: List[OrderContext] = []
+                retryable_contexts: List[OrderContext] = []
+                partial_fill_contexts: List[OrderContext] = []
 
                 for task in done:
                     ctx = task_map[task]
@@ -170,157 +167,138 @@ class AtomicMultiOrderExecutor:
                         result = task.result()
                     except Exception as exc:  # pragma: no cover - defensive
                         self.logger.error(f"Order task failed for {ctx.spec.symbol}: {exc}")
-                        result = {
-                            "success": False,
-                            "filled": False,
-                            "error": str(exc),
-                            "order_id": None,
-                            "exchange_client": ctx.spec.exchange_client,
-                            "symbol": ctx.spec.symbol,
-                            "side": ctx.spec.side,
-                            "slippage_usd": Decimal("0"),
-                            "execution_mode_used": "error",
-                            "filled_quantity": Decimal("0"),
-                            "fill_price": None,
-                        }
+                        result = self._create_error_result_dict(ctx, str(exc))
                     apply_result_to_context(ctx, result)
+                    
+                    # Check for retryable failures (post-only violations)
+                    if ctx.result and ctx.result.get("retryable", False):
+                        retryable_contexts.append(ctx)
+                    
+                    # Check for fills
                     if ctx.filled_quantity > previous_fill:
                         newly_filled.append(ctx)
+                    
+                    # Check for partial fills that have COMPLETED (timed out or canceled)
+                    # Only hedge partial fills when the order task is done, not while it's still active
+                    if ctx.completed and ctx.filled_quantity > Decimal("0"):
+                        is_fully_filled = self._is_order_fully_filled(ctx)
+                        # Only treat as partial fill if:
+                        # 1. Order has completed (timed out or canceled)
+                        # 2. Has fills (filled_quantity > 0)
+                        # 3. Not fully filled (remaining_quantity > 0)
+                        # 4. Not a retryable failure (post-only violations get retried, not hedged)
+                        if not is_fully_filled and not (ctx.result and ctx.result.get("retryable", False)):
+                            partial_fill_contexts.append(ctx)
 
                 all_completed = all(context.completed for context in contexts)
 
+                # Priority 1: Handle full fills first (highest priority)
                 if newly_filled and trigger_ctx is None:
-                    trigger_ctx = newly_filled[0]
-                    other_contexts = [c for c in contexts if c is not trigger_ctx]
-
-                    # One leg filled completely → cancel other legs and hedge to prevent directional exposure
-                    trigger_exchange = trigger_ctx.spec.exchange_client.get_exchange_name().upper()
-                    trigger_symbol = trigger_ctx.spec.symbol
-                    trigger_qty = trigger_ctx.filled_quantity
+                    # Check if the newly filled order is actually fully filled
+                    potential_trigger = newly_filled[0]
+                    is_fully_filled = self._is_order_fully_filled(potential_trigger)
                     
+                    if is_fully_filled:
+                        trigger_ctx = potential_trigger
+                        other_contexts = [c for c in contexts if c is not trigger_ctx]
+                        
+                        hedge_success, hedge_error, rollback_performed, rollback_cost = await self._handle_full_fill_trigger(
+                            trigger_ctx=trigger_ctx,
+                            other_contexts=other_contexts,
+                            contexts=contexts,
+                            pending_tasks=pending_tasks,
+                            rollback_on_partial=rollback_on_partial,
+                        )
+                        
+                        if hedge_success:
+                            all_completed = True
+                        else:
+                            break
+
+                # Priority 2: Handle partial fills that have COMPLETED (timed out or canceled)
+                # Only hedge partial fills when the order task is done, not while it's still active
+                if trigger_ctx is None and partial_fill_contexts:
+                    partial_ctx = partial_fill_contexts[0]  # Handle first partial fill
+                    exchange_name = partial_ctx.spec.exchange_client.get_exchange_name().upper()
+                    symbol = partial_ctx.spec.symbol
+                    filled_qty = partial_ctx.filled_quantity
                     self.logger.info(
-                        f"✅ {trigger_exchange} {trigger_symbol} fully filled ({trigger_qty}). "
-                        f"Cancelling remaining limit orders and hedging to prevent directional exposure."
+                        f"⚡ [{exchange_name}] Partial fill completed (timed out/canceled) for {symbol} ({filled_qty}). "
+                        f"Cancelling other side and hedging immediately."
                     )
                     
-                    # Cancel in-flight limits for the sibling legs.
-                    for ctx in other_contexts:
-                        exchange_name = ctx.spec.exchange_client.get_exchange_name().upper()
-                        symbol = ctx.spec.symbol
-                        self.logger.info(
-                            f"🔄 Cancelling limit order for {exchange_name} {symbol} "
-                            f"(remaining: {ctx.remaining_quantity}) → will hedge with market order"
-                        )
-                        ctx.cancel_event.set()
-
-                    pending_contexts = [ctx for ctx in other_contexts if not ctx.completed]
-                    pending_completion = [ctx.task for ctx in pending_contexts]
-                    if pending_completion:
-                        gathered_results = await asyncio.gather(
-                            *pending_completion, return_exceptions=True
-                        )
-                        for ctx_result, ctx in zip(gathered_results, pending_contexts):
-                            previous_fill_ctx = ctx.filled_quantity
-                            if isinstance(ctx_result, Exception):  # pragma: no cover
-                                self.logger.error(
-                                    f"Order task failed for {ctx.spec.symbol}: {ctx_result}"
-                                )
-                                result_dict = {
-                                    "success": False,
-                                    "filled": False,
-                                    "error": str(ctx_result),
-                                    "order_id": None,
-                                    "exchange_client": ctx.spec.exchange_client,
-                                    "symbol": ctx.spec.symbol,
-                                    "side": ctx.spec.side,
-                                    "slippage_usd": Decimal("0"),
-                                    "execution_mode_used": "error",
-                                    "filled_quantity": Decimal("0"),
-                                    "fill_price": None,
-                                }
-                            else:
-                                result_dict = ctx_result
-                            apply_result_to_context(ctx, result_dict)
-                            if ctx.filled_quantity > previous_fill_ctx:
-                                newly_filled.append(ctx)
-
-                        pending_tasks = {task for task in pending_tasks if not task.done()}
-
-                    for ctx in other_contexts:
-                        await reconcile_context_after_cancel(ctx, self.logger)
-                        trigger_qty = trigger_ctx.filled_quantity
+                    # Cancel other contexts
+                    other_contexts = [c for c in contexts if c is not partial_ctx]
+                    for other_ctx in other_contexts:
+                        other_ctx.cancel_event.set()
+                    
+                    # Wait for cancellations
+                    pending_cancels = [c.task for c in other_contexts if not c.completed]
+                    if pending_cancels:
+                        await asyncio.gather(*pending_cancels, return_exceptions=True)
+                    
+                    # Reconcile after cancel
+                    for other_ctx in other_contexts:
+                        await reconcile_context_after_cancel(other_ctx, self.logger)
+                    
+                    # Set hedge target for other contexts (accounting for multipliers)
+                    for other_ctx in other_contexts:
+                        trigger_qty = partial_ctx.filled_quantity
                         if not isinstance(trigger_qty, Decimal):
                             trigger_qty = Decimal(str(trigger_qty))
                         trigger_qty = trigger_qty.copy_abs()
-
-                        # Account for quantity multipliers when matching across exchanges
-                        # Example: Lighter kTOSHI (84 units = 84k tokens) vs Aster TOSHI (84k units = 84k tokens)
-                        trigger_multiplier = trigger_ctx.spec.exchange_client.get_quantity_multiplier(trigger_ctx.spec.symbol)
-                        ctx_multiplier = ctx.spec.exchange_client.get_quantity_multiplier(ctx.spec.symbol)
                         
-                        # Convert trigger quantity to "actual tokens" then to target exchange's units
+                        trigger_multiplier = partial_ctx.spec.exchange_client.get_quantity_multiplier(partial_ctx.spec.symbol)
+                        ctx_multiplier = other_ctx.spec.exchange_client.get_quantity_multiplier(other_ctx.spec.symbol)
+                        
                         actual_tokens = trigger_qty * Decimal(str(trigger_multiplier))
                         target_qty = actual_tokens / Decimal(str(ctx_multiplier))
                         
-                        if trigger_multiplier != ctx_multiplier:
-                            self.logger.debug(
-                                f"📊 Multiplier adjustment for {ctx.spec.symbol}: "
-                                f"trigger_qty={trigger_qty} (×{trigger_multiplier}) → "
-                                f"target_qty={target_qty} (×{ctx_multiplier})"
-                            )
-
-                        spec_qty = getattr(ctx.spec, "quantity", None)
+                        spec_qty = getattr(other_ctx.spec, "quantity", None)
                         if spec_qty is not None:
-                            target_qty = min(target_qty, Decimal(str(spec_qty)))
-
+                            spec_qty_dec = Decimal(str(spec_qty))
+                            if target_qty > spec_qty_dec * Decimal("1.1"):
+                                target_qty = spec_qty_dec
+                        
                         if target_qty < Decimal("0"):
                             target_qty = Decimal("0")
-                        ctx.hedge_target_quantity = target_qty
-
+                        other_ctx.hedge_target_quantity = target_qty
+                    
+                    # Hedge immediately
                     hedge_success, hedge_error = await self._hedge_manager.hedge(
-                        trigger_ctx, contexts, self.logger
+                        partial_ctx, contexts, self.logger
                     )
-
+                    
                     if hedge_success:
                         all_completed = True
                     else:
-                        if not rollback_on_partial:
-                            hedge_error = hedge_error or "Hedge failure"
-                        else:
-                            self.logger.warning(
-                                f"Hedge failed ({hedge_error or 'no error supplied'}) — attempting rollback of partial fills"
-                            )
-                            for ctx in contexts:
-                                ctx.cancel_event.set()
-                            remaining = [ctx.task for ctx in contexts if not ctx.completed]
-                            if remaining:
-                                await asyncio.gather(*remaining, return_exceptions=True)
+                        if rollback_on_partial:
                             rollback_performed = True
-                            
-                            # Log context state for debugging
-                            for c in contexts:
-                                if c.filled_quantity > Decimal("0"):
-                                    result_qty = Decimal("0")
-                                    if c.result:
-                                        result_qty = coerce_decimal(c.result.get("filled_quantity")) or Decimal("0")
-                                    self.logger.debug(
-                                        f"Rollback (hedge failure) context for {c.spec.symbol} ({c.spec.side}): "
-                                        f"accumulated={c.filled_quantity}, result_dict={result_qty}"
-                                    )
-                            
-                            rollback_payload = [
-                                context_to_filled_dict(c)
-                                for c in contexts
-                                if c.filled_quantity > Decimal("0") and c.result
-                            ]
-                            rollback_cost = await self._rollback_filled_orders(rollback_payload)
-                            self.logger.warning(
-                                f"Rollback completed after hedge failure; total cost ${rollback_cost:.4f}"
+                            rollback_cost = await self._perform_emergency_rollback(
+                                contexts, "Partial fill hedge failure", 
+                                Decimal("0"), Decimal("0")
                             )
-                            for ctx in contexts:
-                                ctx.filled_quantity = Decimal("0")
-                                ctx.filled_usd = Decimal("0")
                         break
+
+                # Priority 3: Handle retryable failures (post-only violations)
+                # Only retry if we haven't completed execution
+                if not all_completed:
+                    for ctx in retryable_contexts:
+                        exchange_name = ctx.spec.exchange_client.get_exchange_name().upper()
+                        symbol = ctx.spec.symbol
+                        self.logger.info(
+                            f"🔄 [{exchange_name}] Post-only violation detected for {symbol}. "
+                            f"Retrying immediately with fresh BBO."
+                        )
+                        # Place new order with fresh BBO
+                        cancel_event = asyncio.Event()
+                        task = asyncio.create_task(self._place_single_order(ctx.spec, cancel_event=cancel_event))
+                        ctx.cancel_event = cancel_event
+                        ctx.task = task
+                        ctx.completed = False
+                        ctx.result = None
+                        task_map[task] = ctx
+                        pending_tasks.add(task)
 
                 if all_completed:
                     break
@@ -331,222 +309,55 @@ class AtomicMultiOrderExecutor:
             for ctx in contexts:
                 await reconcile_context_after_cancel(ctx, self.logger)
 
-            # Check if retry is needed, but ignore tiny rounding dust
-            # (e.g., 0.2 remaining out of 1176 due to step_size rounding is not worth retrying)
-            RETRY_THRESHOLD_PCT = Decimal("0.01")  # 1% of planned quantity
-            
-            needs_retry = False
-            retryable_failures = []
-            for ctx in contexts:
-                # Check if result indicates retryable failure (e.g., post-only violation)
-                result_retryable = False
-                if ctx.result:
-                    result_retryable = ctx.result.get("retryable", False)
-                    if result_retryable:
-                        retryable_failures.append(ctx.spec.symbol)
-                
-                if ctx.remaining_quantity > Decimal("0"):
-                    # Calculate what % of the planned quantity is remaining
-                    planned_qty = ctx.spec.quantity or (ctx.spec.size_usd / Decimal("100"))  # rough estimate
-                    if planned_qty > Decimal("0"):
-                        remaining_pct = ctx.remaining_quantity / planned_qty
-                        if remaining_pct > RETRY_THRESHOLD_PCT:
-                            self.logger.debug(
-                                f"[{ctx.spec.exchange_client.get_exchange_name().upper()}] {ctx.spec.symbol}: "
-                                f"Significant remainder {ctx.remaining_quantity} ({remaining_pct*100:.1f}% of {planned_qty})"
-                            )
-                            needs_retry = True
-                        else:
-                            # Even if below threshold, retry if marked as retryable (e.g., post-only violation)
-                            if result_retryable:
-                                self.logger.info(
-                                    f"[{ctx.spec.exchange_client.get_exchange_name().upper()}] {ctx.spec.symbol}: "
-                                    f"Retryable failure (e.g., post-only violation), retrying despite "
-                                    f"small remainder {ctx.remaining_quantity} ({remaining_pct*100:.2f}% of {planned_qty})"
-                                )
-                                needs_retry = True
-                            else:
-                                self.logger.debug(
-                                    f"[{ctx.spec.exchange_client.get_exchange_name().upper()}] {ctx.spec.symbol}: "
-                                    f"Ignoring rounding dust {ctx.remaining_quantity} ({remaining_pct*100:.2f}% of {planned_qty})"
-                                )
-            
-            if retryable_failures:
-                self.logger.info(
-                    f"🔁 Retryable failures detected for: {', '.join(retryable_failures)}. "
-                    "Will retry with fresh BBO."
-                )
-            
-            if needs_retry and retry_policy and retry_policy.max_attempts > 0:
-                self.logger.info("🔁 Initiating retry cycle for unmatched legs.")
-                retry_success, retry_attempts = await self._retry_manager.execute_retries(
-                    contexts=contexts,
-                    policy=retry_policy,
-                    place_order=lambda spec, cancel_event: self._place_single_order(
-                        spec, cancel_event=cancel_event
-                    ),
-                    logger=self.logger,
-                    compose_stage=compose_stage,
-                )
-                if retry_attempts:
-                    for ctx in contexts:
-                        await reconcile_context_after_cancel(ctx, self.logger)
-                    if retry_success:
-                        self.logger.info("✅ Retry attempts filled remaining deficits.")
-                    else:
-                        # Retry failed - check if imbalance is critical (using % threshold like position_closer)
-                        retry_long_usd = sum(ctx.filled_usd for ctx in contexts if ctx.spec.side == "buy")
-                        retry_short_usd = sum(ctx.filled_usd for ctx in contexts if ctx.spec.side == "sell")
-                        retry_imbalance_usd = abs(retry_long_usd - retry_short_usd)
-                        
-                        # Calculate imbalance as percentage: (max - min) / max
-                        # Same logic as position_closer._detect_imbalance
-                        critical_imbalance_pct = Decimal("0.05")  # 5% threshold
-                        min_usd = min(retry_long_usd, retry_short_usd)
-                        max_usd = max(retry_long_usd, retry_short_usd)
-                        
-                        imbalance_pct = Decimal("0")
-                        if max_usd > Decimal("0"):
-                            imbalance_pct = (max_usd - min_usd) / max_usd
-                        
-                        if imbalance_pct > critical_imbalance_pct:
-                            self.logger.warning(
-                                f"⚠️ CRITICAL IMBALANCE after retry failure: "
-                                f"longs=${retry_long_usd:.2f}, shorts=${retry_short_usd:.2f}, "
-                                f"imbalance=${retry_imbalance_usd:.2f} ({imbalance_pct*100:.1f}%). Triggering emergency rollback."
-                            )
-                            # Emergency rollback of all filled orders
-                            rollback_performed = True
-                            
-                            # Log context state for debugging (shows accumulated vs last-order fills)
-                            for c in contexts:
-                                if c.filled_quantity > Decimal("0"):
-                                    result_qty = Decimal("0")
-                                    if c.result:
-                                        result_qty = coerce_decimal(c.result.get("filled_quantity")) or Decimal("0")
-                                    self.logger.debug(
-                                        f"Rollback context for {c.spec.symbol} ({c.spec.side}): "
-                                        f"accumulated={c.filled_quantity}, "
-                                        f"result_dict={result_qty}, "
-                                        f"match={'✓' if abs(c.filled_quantity - result_qty) < Decimal('0.0001') else '✗ MISMATCH'}"
-                                    )
-                            
-                            rollback_payload = [
-                                context_to_filled_dict(c)
-                                for c in contexts
-                                if c.filled_quantity > Decimal("0") and c.result
-                            ]
-                            rollback_cost = await self._rollback_filled_orders(rollback_payload)
-                            self.logger.warning(
-                                f"🛡️ Emergency rollback completed; cost=${rollback_cost:.4f}. "
-                                f"Prevented ${retry_imbalance_usd:.2f} ({imbalance_pct*100:.1f}%) directional exposure."
-                            )
-                            # Clear filled quantities to prevent position creation
-                            for ctx in contexts:
-                                ctx.filled_quantity = Decimal("0")
-                                ctx.filled_usd = Decimal("0")
-                        else:
-                            self.logger.warning(
-                                f"⚠️ Retry attempts exhausted; residual imbalance ${retry_imbalance_usd:.2f} "
-                                f"({imbalance_pct*100:.1f}%) within 5% tolerance."
-                            )
-                    needs_retry = any(ctx.remaining_quantity > Decimal("0") for ctx in contexts)
 
-
-            filled_orders = [
-                ctx.result for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal("0")
-            ]
-            partial_fills = [
-                {"spec": ctx.spec, "result": ctx.result}
-                for ctx in contexts
-                if not (ctx.result and ctx.filled_quantity > Decimal("0"))
-            ]
-
-            total_slippage = sum(
-                coerce_decimal(order.get("slippage_usd")) or Decimal("0") for order in filled_orders
-            )
-            total_long_usd = sum(ctx.filled_usd for ctx in contexts if ctx.spec.side == "buy")
-            total_short_usd = sum(ctx.filled_usd for ctx in contexts if ctx.spec.side == "sell")
-            imbalance = abs(total_long_usd - total_short_usd)
-            imbalance_tolerance = Decimal("0.01")
 
             exec_ms = elapsed_ms()
+            total_long_usd, total_short_usd, imbalance, imbalance_pct = self._calculate_imbalance(contexts)
+            imbalance_tolerance = Decimal("0.01")
 
             if rollback_performed:
-                return AtomicExecutionResult(
+                return self._build_execution_result(
+                    contexts=contexts,
+                    orders=orders,
+                    elapsed_ms=exec_ms,
                     success=False,
                     all_filled=False,
-                    filled_orders=[],
-                    partial_fills=partial_fills,
-                    total_slippage_usd=Decimal("0"),
-                    execution_time_ms=exec_ms,
                     error_message=hedge_error or "Rolled back after hedge failure",
                     rollback_performed=True,
-                    rollback_cost_usd=rollback_cost,
-                    residual_imbalance_usd=imbalance,
-                    retry_attempts=retry_attempts,
-                    retry_success=retry_success,
+                    rollback_cost=rollback_cost,
                 )
 
-            if filled_orders and len(filled_orders) == len(orders):
-                # Check if imbalance is within acceptable bounds (using % threshold like position_closer)
-                critical_imbalance_pct = Decimal("0.05")  # 5% threshold
-                min_usd = min(total_long_usd, total_short_usd)
-                max_usd = max(total_long_usd, total_short_usd)
+            # Check if all orders filled
+            filled_orders_count = sum(1 for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal("0"))
+            if filled_orders_count == len(orders):
+                # Check if imbalance is within acceptable bounds
+                is_critical, _, _ = self._check_critical_imbalance(total_long_usd, total_short_usd)
                 
-                final_imbalance_pct = Decimal("0")
-                if max_usd > Decimal("0"):
-                    final_imbalance_pct = (max_usd - min_usd) / max_usd
-                
-                if final_imbalance_pct > critical_imbalance_pct:
+                if is_critical:
                     self.logger.error(
                         f"⚠️ CRITICAL IMBALANCE detected despite all orders filled: "
                         f"longs=${total_long_usd:.2f}, shorts=${total_short_usd:.2f}, "
-                        f"imbalance=${imbalance:.2f} ({final_imbalance_pct*100:.1f}%). Triggering emergency rollback."
+                        f"imbalance=${imbalance:.2f} ({imbalance_pct*100:.1f}%). Triggering emergency rollback."
                     )
-                    # Emergency rollback of all filled orders
                     rollback_performed = True
-                    
-                    # Log context state for debugging
-                    for c in contexts:
-                        if c.filled_quantity > Decimal("0"):
-                            result_qty = Decimal("0")
-                            if c.result:
-                                result_qty = coerce_decimal(c.result.get("filled_quantity")) or Decimal("0")
-                            self.logger.debug(
-                                f"Rollback (all filled imbalance) context for {c.spec.symbol} ({c.spec.side}): "
-                                f"accumulated={c.filled_quantity}, result_dict={result_qty}"
-                            )
-                    
-                    rollback_payload = [
-                        context_to_filled_dict(c)
-                        for c in contexts
-                        if c.filled_quantity > Decimal("0") and c.result
-                    ]
-                    rollback_cost = await self._rollback_filled_orders(rollback_payload)
-                    self.logger.warning(
-                        f"🛡️ Emergency rollback completed; cost=${rollback_cost:.4f}. "
-                        f"Prevented ${imbalance:.2f} ({final_imbalance_pct*100:.1f}%) directional exposure."
+                    rollback_cost = await self._perform_emergency_rollback(
+                        contexts, "all filled imbalance", imbalance, imbalance_pct
                     )
-                    return AtomicExecutionResult(
+                    return self._build_execution_result(
+                        contexts=contexts,
+                        orders=orders,
+                        elapsed_ms=exec_ms,
                         success=False,
                         all_filled=False,
-                        filled_orders=[],  # Clear since we rolled back
-                        partial_fills=[],
-                        total_slippage_usd=Decimal("0"),
-                        execution_time_ms=exec_ms,
                         error_message=f"Rolled back due to critical imbalance: ${imbalance:.2f}",
                         rollback_performed=True,
-                        rollback_cost_usd=rollback_cost,
-                        residual_imbalance_usd=Decimal("0"),
-                        retry_attempts=retry_attempts,
-                        retry_success=retry_success,
+                        rollback_cost=rollback_cost,
                     )
                 elif imbalance > imbalance_tolerance:
                     self.logger.warning(
                         f"Minor imbalance detected after hedge: longs=${total_long_usd:.5f}, "
                         f"shorts=${total_short_usd:.5f}, imbalance=${imbalance:.5f} "
-                        f"({final_imbalance_pct*100:.1f}% within 5% tolerance)"
+                        f"({imbalance_pct*100:.1f}% within 5% tolerance)"
                     )
 
                 post_trade = await self._verify_post_trade_exposure(contexts)
@@ -568,23 +379,20 @@ class AtomicMultiOrderExecutor:
                                 f"net_qty={net_qty:.6f}, net_usd=${net_usd:.4f} ({net_pct*100:.2f}%)."
                             )
                 
-                return AtomicExecutionResult(
+                return self._build_execution_result(
+                    contexts=contexts,
+                    orders=orders,
+                    elapsed_ms=exec_ms,
                     success=True,
                     all_filled=True,
-                    filled_orders=filled_orders,
-                    partial_fills=[],
-                    total_slippage_usd=total_slippage,
-                    execution_time_ms=exec_ms,
                     error_message=None,
                     rollback_performed=False,
-                    rollback_cost_usd=Decimal("0"),
-                    residual_imbalance_usd=imbalance,
-                    retry_attempts=retry_attempts,
-                    retry_success=retry_success,
+                    rollback_cost=Decimal("0"),
                 )
 
             # Critical fix: Check for dangerous imbalance and rollback if needed
-            error_message = hedge_error or f"Partial fill: {len(filled_orders)}/{len(orders)}"
+            filled_orders_count = sum(1 for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal("0"))
+            error_message = hedge_error or f"Partial fill: {filled_orders_count}/{len(orders)}"
             if imbalance > imbalance_tolerance:
                 self.logger.error(
                     f"Exposure imbalance detected after hedge: longs=${total_long_usd:.5f}, "
@@ -594,47 +402,26 @@ class AtomicMultiOrderExecutor:
                 error_message = f"{error_message}; {imbalance_msg}" if error_message else imbalance_msg
                 
                 # If we have a significant imbalance and rollback is enabled, close filled positions
-                if rollback_on_partial and filled_orders:
-                    self.logger.warning(
-                        f"⚠️ Critical imbalance ${imbalance:.2f} detected after retries exhausted. "
-                        f"Initiating rollback to close {len(filled_orders)} filled positions."
-                    )
-                    
-                    # Log context state for debugging
-                    for c in contexts:
-                        if c.filled_quantity > Decimal("0"):
-                            result_qty = Decimal("0")
-                            if c.result:
-                                result_qty = coerce_decimal(c.result.get("filled_quantity")) or Decimal("0")
-                            self.logger.debug(
-                                f"Rollback (retries exhausted) context for {c.spec.symbol} ({c.spec.side}): "
-                                f"accumulated={c.filled_quantity}, result_dict={result_qty}"
-                            )
-                    
-                    rollback_payload = [
-                        context_to_filled_dict(c)
-                        for c in contexts
-                        if c.filled_quantity > Decimal("0") and c.result
-                    ]
-                    rollback_cost = await self._rollback_filled_orders(rollback_payload)
-                    self.logger.warning(
-                        f"Rollback completed after imbalance detection; total cost ${rollback_cost:.4f}"
-                    )
-                    
-                    return AtomicExecutionResult(
-                        success=False,
-                        all_filled=False,
-                        filled_orders=[],  # Clear since we rolled back
-                        partial_fills=partial_fills,
-                        total_slippage_usd=Decimal("0"),
-                        execution_time_ms=exec_ms,
-                        error_message=f"Rolled back due to critical imbalance: {error_message}",
-                        rollback_performed=True,
-                        rollback_cost_usd=rollback_cost,
-                        residual_imbalance_usd=Decimal("0"),  # Should be 0 after rollback
-                        retry_attempts=retry_attempts,
-                        retry_success=retry_success,
-                    )
+                if rollback_on_partial and filled_orders_count > 0:
+                    is_critical, _, _ = self._check_critical_imbalance(total_long_usd, total_short_usd)
+                    if is_critical:
+                        self.logger.warning(
+                            f"⚠️ Critical imbalance ${imbalance:.2f} detected after retries exhausted. "
+                            f"Initiating rollback to close {filled_orders_count} filled positions."
+                        )
+                        rollback_cost = await self._perform_emergency_rollback(
+                            contexts, "retries exhausted", imbalance, imbalance_pct
+                        )
+                        return self._build_execution_result(
+                            contexts=contexts,
+                            orders=orders,
+                            elapsed_ms=exec_ms,
+                            success=False,
+                            all_filled=False,
+                            error_message=f"Rolled back due to critical imbalance: {error_message}",
+                            rollback_performed=True,
+                            rollback_cost=rollback_cost,
+                        )
 
             post_trade = await self._verify_post_trade_exposure(contexts)
             if post_trade is not None:
@@ -648,57 +435,452 @@ class AtomicMultiOrderExecutor:
                         f"net_qty={net_qty:.6f}, net_usd=${net_usd:.4f} ({net_pct*100:.2f}%)."
                     )
 
-            return AtomicExecutionResult(
+            return self._build_execution_result(
+                contexts=contexts,
+                orders=orders,
+                elapsed_ms=exec_ms,
                 success=False,
                 all_filled=False,
-                filled_orders=filled_orders,
-                partial_fills=partial_fills,
-                total_slippage_usd=total_slippage,
-                execution_time_ms=exec_ms,
                 error_message=error_message,
                 rollback_performed=False,
-                rollback_cost_usd=Decimal("0"),
-                residual_imbalance_usd=imbalance,
-                retry_attempts=retry_attempts,
-                retry_success=retry_success,
+                rollback_cost=Decimal("0"),
             )
 
         except Exception as exc:
             self.logger.error(f"Atomic execution failed: {exc}", exc_info=True)
 
-            filled_orders = [
-                ctx.result
-                for ctx in locals().get("contexts", [])
-                if ctx.result and ctx.filled_quantity > Decimal("0")
-            ]
-            partial_fills = [
-                {"spec": ctx.spec, "result": ctx.result}
-                for ctx in locals().get("contexts", [])
-                if not (ctx.result and ctx.filled_quantity > Decimal("0"))
-            ]
-
+            # Get contexts from locals if available
+            contexts = locals().get("contexts", [])
+            
+            # Check if we need to rollback
             rollback_cost = None
-            if filled_orders and rollback_on_partial:
-                rollback_cost = await self._rollback_filled_orders(filled_orders)
-                filled_orders = []
+            filled_orders_count = sum(1 for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal("0"))
+            if filled_orders_count > 0 and rollback_on_partial:
+                filled_orders_list = [
+                    ctx.result
+                    for ctx in contexts
+                    if ctx.result and ctx.filled_quantity > Decimal("0")
+                ]
+                rollback_cost = await self._rollback_filled_orders(filled_orders_list)
 
-            return AtomicExecutionResult(
+            return self._build_execution_result(
+                contexts=contexts,
+                orders=orders,
+                elapsed_ms=elapsed_ms(),
                 success=False,
                 all_filled=False,
-                filled_orders=filled_orders,
-                partial_fills=partial_fills,
-                total_slippage_usd=Decimal("0"),
-                execution_time_ms=elapsed_ms(),
                 error_message=str(exc),
                 rollback_performed=bool(rollback_cost and rollback_on_partial),
-                rollback_cost_usd=rollback_cost,
-                residual_imbalance_usd=Decimal("0"),
+                rollback_cost=rollback_cost or Decimal("0"),
             )
 
     @staticmethod
     def _estimate_required_margin(size_usd: Decimal) -> Decimal:
         """Conservative margin estimate (assumes 20% initial margin)."""
         return size_usd * Decimal("0.20")
+
+    def _calculate_imbalance(
+        self,
+        contexts: List[OrderContext]
+    ) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+        """
+        Calculate exposure imbalance from contexts.
+        
+        Args:
+            contexts: List of order contexts to analyze
+            
+        Returns:
+            Tuple of (total_long_usd, total_short_usd, imbalance_usd, imbalance_pct)
+        """
+        total_long_usd = sum(ctx.filled_usd for ctx in contexts if ctx.spec.side == "buy")
+        total_short_usd = sum(ctx.filled_usd for ctx in contexts if ctx.spec.side == "sell")
+        imbalance_usd = abs(total_long_usd - total_short_usd)
+        
+        # Calculate imbalance as percentage: (max - min) / max
+        min_usd = min(total_long_usd, total_short_usd)
+        max_usd = max(total_long_usd, total_short_usd)
+        imbalance_pct = Decimal("0")
+        if max_usd > Decimal("0"):
+            imbalance_pct = (max_usd - min_usd) / max_usd
+        
+        return total_long_usd, total_short_usd, imbalance_usd, imbalance_pct
+
+    def _check_critical_imbalance(
+        self,
+        total_long_usd: Decimal,
+        total_short_usd: Decimal,
+        threshold_pct: Decimal = Decimal("0.05")
+    ) -> tuple[bool, Decimal, Decimal]:
+        """
+        Check if imbalance exceeds critical threshold.
+        
+        Args:
+            total_long_usd: Total USD value of long positions
+            total_short_usd: Total USD value of short positions
+            threshold_pct: Critical imbalance threshold (default 5%)
+            
+        Returns:
+            Tuple of (is_critical, imbalance_usd, imbalance_pct)
+        """
+        imbalance_usd = abs(total_long_usd - total_short_usd)
+        min_usd = min(total_long_usd, total_short_usd)
+        max_usd = max(total_long_usd, total_short_usd)
+        
+        imbalance_pct = Decimal("0")
+        if max_usd > Decimal("0"):
+            imbalance_pct = (max_usd - min_usd) / max_usd
+        
+        is_critical = imbalance_pct > threshold_pct
+        return is_critical, imbalance_usd, imbalance_pct
+
+    async def _perform_emergency_rollback(
+        self,
+        contexts: List[OrderContext],
+        reason: str,
+        imbalance_usd: Decimal,
+        imbalance_pct: Decimal
+    ) -> Decimal:
+        """
+        Perform emergency rollback of all filled orders.
+        
+        Args:
+            contexts: List of order contexts to rollback
+            reason: Reason for rollback (for logging)
+            imbalance_usd: USD imbalance amount
+            imbalance_pct: Percentage imbalance
+            
+        Returns:
+            Rollback cost in USD
+        """
+        # Log context state for debugging
+        for c in contexts:
+            if c.filled_quantity > Decimal("0"):
+                result_qty = Decimal("0")
+                if c.result:
+                    result_qty = coerce_decimal(c.result.get("filled_quantity")) or Decimal("0")
+                self.logger.debug(
+                    f"Rollback ({reason}) context for {c.spec.symbol} ({c.spec.side}): "
+                    f"accumulated={c.filled_quantity}, "
+                    f"result_dict={result_qty}, "
+                    f"match={'✓' if abs(c.filled_quantity - result_qty) < Decimal('0.0001') else '✗ MISMATCH'}"
+                )
+        
+        # Safety check: Only rollback contexts with actual fills
+        # Double-check that filled_quantity matches what the exchange reports
+        rollback_payload = []
+        for c in contexts:
+            if c.filled_quantity > Decimal("0") and c.result:
+                # Additional safety: verify filled_quantity is reasonable
+                spec_qty = getattr(c.spec, "quantity", None)
+                if spec_qty is not None:
+                    spec_qty_dec = Decimal(str(spec_qty))
+                    # If filled_quantity exceeds spec.quantity significantly, something is wrong
+                    if c.filled_quantity > spec_qty_dec * Decimal("1.1"):
+                        self.logger.error(
+                            f"⚠️ ROLLBACK SKIP: {c.spec.symbol} ({c.spec.side}) has suspicious filled_quantity: "
+                            f"{c.filled_quantity} exceeds spec.quantity={spec_qty_dec} by >10%. "
+                            f"This likely indicates a bug. Skipping rollback for this context."
+                        )
+                        continue
+                
+                rollback_payload.append(context_to_filled_dict(c))
+        
+        rollback_cost = await self._rollback_filled_orders(rollback_payload)
+        self.logger.warning(
+            f"🛡️ Emergency rollback completed; cost=${rollback_cost:.4f}. "
+            f"Prevented ${imbalance_usd:.2f} ({imbalance_pct*100:.1f}%) directional exposure."
+        )
+        
+        # Clear filled quantities to prevent position creation
+        for ctx in contexts:
+            ctx.filled_quantity = Decimal("0")
+            ctx.filled_usd = Decimal("0")
+        
+        return rollback_cost
+
+    def _is_order_fully_filled(
+        self,
+        ctx: OrderContext,
+        tolerance: Decimal = Decimal("0.0001")
+    ) -> bool:
+        """
+        Check if an order is actually fully filled (not just partially filled).
+        
+        Args:
+            ctx: Order context to check
+            tolerance: Tolerance for rounding differences
+            
+        Returns:
+            True if order is fully filled, False otherwise
+        """
+        remaining_qty = ctx.remaining_quantity
+        result_filled = ctx.result and ctx.result.get("filled", False)
+        
+        # Order is fully filled if:
+        # 1. remaining_quantity is zero (or within tolerance for rounding)
+        # 2. AND the result indicates it's filled (not just a partial fill timeout)
+        return remaining_qty <= tolerance and result_filled
+
+    def _create_error_result_dict(
+        self,
+        ctx: OrderContext,
+        error: str
+    ) -> Dict[str, Any]:
+        """
+        Create an error result dictionary for a failed order task.
+        
+        Args:
+            ctx: Order context that failed
+            error: Error message
+            
+        Returns:
+            Error result dictionary
+        """
+        return {
+            "success": False,
+            "filled": False,
+            "error": error,
+            "order_id": None,
+            "exchange_client": ctx.spec.exchange_client,
+            "symbol": ctx.spec.symbol,
+            "side": ctx.spec.side,
+            "slippage_usd": Decimal("0"),
+            "execution_mode_used": "error",
+            "filled_quantity": Decimal("0"),
+            "fill_price": None,
+        }
+
+    async def _handle_full_fill_trigger(
+        self,
+        trigger_ctx: OrderContext,
+        other_contexts: List[OrderContext],
+        contexts: List[OrderContext],
+        pending_tasks: set[asyncio.Task],
+        rollback_on_partial: bool,
+    ) -> tuple[bool, Optional[str], bool, Decimal]:
+        """
+        Handle when one leg fully fills - cancel others and hedge.
+        
+        Args:
+            trigger_ctx: The context that fully filled
+            other_contexts: Other contexts to cancel/hedge
+            contexts: All contexts (for rollback)
+            pending_tasks: Set of pending tasks
+            rollback_on_partial: Whether to rollback on partial fills
+            
+        Returns:
+            Tuple of (hedge_success, hedge_error, rollback_performed, rollback_cost)
+        """
+        trigger_exchange = trigger_ctx.spec.exchange_client.get_exchange_name().upper()
+        trigger_symbol = trigger_ctx.spec.symbol
+        trigger_qty = trigger_ctx.filled_quantity
+        
+        self.logger.info(
+            f"✅ {trigger_exchange} {trigger_symbol} fully filled ({trigger_qty}). "
+            f"Cancelling remaining limit orders and hedging to prevent directional exposure."
+        )
+        
+        # Cancel in-flight limits for the sibling legs.
+        for ctx in other_contexts:
+            exchange_name = ctx.spec.exchange_client.get_exchange_name().upper()
+            symbol = ctx.spec.symbol
+            self.logger.info(
+                f"🔄 Cancelling limit order for {exchange_name} {symbol} "
+                f"(remaining: {ctx.remaining_quantity}) → will hedge with market order"
+            )
+            ctx.cancel_event.set()
+
+        # Wait for pending completions
+        pending_contexts = [ctx for ctx in other_contexts if not ctx.completed]
+        pending_completion = [ctx.task for ctx in pending_contexts]
+        if pending_completion:
+            gathered_results = await asyncio.gather(
+                *pending_completion, return_exceptions=True
+            )
+            for ctx_result, ctx in zip(gathered_results, pending_contexts):
+                previous_fill_ctx = ctx.filled_quantity
+                if isinstance(ctx_result, Exception):  # pragma: no cover
+                    self.logger.error(
+                        f"Order task failed for {ctx.spec.symbol}: {ctx_result}"
+                    )
+                    result_dict = self._create_error_result_dict(ctx, str(ctx_result))
+                else:
+                    result_dict = ctx_result
+                apply_result_to_context(ctx, result_dict)
+                if ctx.filled_quantity > previous_fill_ctx:
+                    # Note: newly_filled tracking happens in caller
+                    pass
+
+            # Update pending_tasks in place (remove completed tasks)
+            pending_tasks.difference_update({task for task in pending_tasks if task.done()})
+
+        # Calculate hedge target quantities with multiplier adjustments
+        for ctx in other_contexts:
+            await reconcile_context_after_cancel(ctx, self.logger)
+            trigger_qty = trigger_ctx.filled_quantity
+            if not isinstance(trigger_qty, Decimal):
+                trigger_qty = Decimal(str(trigger_qty))
+            trigger_qty = trigger_qty.copy_abs()
+
+            # Account for quantity multipliers when matching across exchanges
+            # Example: Lighter kTOSHI (84 units = 84k tokens) vs Aster TOSHI (84k units = 84k tokens)
+            trigger_multiplier = trigger_ctx.spec.exchange_client.get_quantity_multiplier(trigger_ctx.spec.symbol)
+            ctx_multiplier = ctx.spec.exchange_client.get_quantity_multiplier(ctx.spec.symbol)
+            
+            # Convert trigger quantity to "actual tokens" then to target exchange's units
+            actual_tokens = trigger_qty * Decimal(str(trigger_multiplier))
+            target_qty = actual_tokens / Decimal(str(ctx_multiplier))
+            
+            if trigger_multiplier != ctx_multiplier:
+                self.logger.debug(
+                    f"📊 Multiplier adjustment for {ctx.spec.symbol}: "
+                    f"trigger_qty={trigger_qty} (×{trigger_multiplier}) → "
+                    f"target_qty={target_qty} (×{ctx_multiplier})"
+                )
+
+            # Don't cap target_qty to spec.quantity when hedging after trigger fill
+            # The trigger fill is the source of truth, and we need to match it exactly
+            # (accounting for multipliers). spec.quantity might be from the original
+            # order plan and could be wrong if there were rounding differences.
+            # Only cap if target_qty exceeds spec.quantity significantly (safety check)
+            spec_qty = getattr(ctx.spec, "quantity", None)
+            if spec_qty is not None:
+                spec_qty_dec = Decimal(str(spec_qty))
+                # Only cap if target is significantly larger (more than 10% over)
+                # This allows for small rounding differences but prevents huge errors
+                if target_qty > spec_qty_dec * Decimal("1.1"):
+                    self.logger.warning(
+                        f"⚠️ [HEDGE] Calculated hedge target {target_qty} exceeds "
+                        f"spec quantity {spec_qty_dec} by >10%. Capping to spec quantity."
+                    )
+                    target_qty = spec_qty_dec
+
+            if target_qty < Decimal("0"):
+                target_qty = Decimal("0")
+            ctx.hedge_target_quantity = target_qty
+            
+            self.logger.debug(
+                f"📊 [HEDGE] Set hedge_target_quantity for {ctx.spec.symbol}: "
+                f"{target_qty} (trigger={trigger_qty}, multipliers={trigger_multiplier}×{ctx_multiplier})"
+            )
+
+        # Execute hedge
+        hedge_success, hedge_error = await self._hedge_manager.hedge(
+            trigger_ctx, contexts, self.logger
+        )
+
+        rollback_performed = False
+        rollback_cost = Decimal("0")
+
+        if hedge_success:
+            return True, None, False, Decimal("0")
+        else:
+            if not rollback_on_partial:
+                return False, hedge_error or "Hedge failure", False, Decimal("0")
+            else:
+                self.logger.warning(
+                    f"Hedge failed ({hedge_error or 'no error supplied'}) — attempting rollback of partial fills"
+                )
+                for ctx in contexts:
+                    ctx.cancel_event.set()
+                remaining = [ctx.task for ctx in contexts if not ctx.completed]
+                if remaining:
+                    await asyncio.gather(*remaining, return_exceptions=True)
+                rollback_performed = True
+                
+                # Log context state for debugging
+                for c in contexts:
+                    if c.filled_quantity > Decimal("0"):
+                        result_qty = Decimal("0")
+                        if c.result:
+                            result_qty = coerce_decimal(c.result.get("filled_quantity")) or Decimal("0")
+                        self.logger.debug(
+                            f"Rollback (hedge failure) context for {c.spec.symbol} ({c.spec.side}): "
+                            f"accumulated={c.filled_quantity}, result_dict={result_qty}"
+                        )
+                
+                # Safety check: Only rollback contexts with actual fills
+                rollback_payload = []
+                for c in contexts:
+                    if c.filled_quantity > Decimal("0") and c.result:
+                        # Additional safety: verify filled_quantity is reasonable
+                        spec_qty = getattr(c.spec, "quantity", None)
+                        if spec_qty is not None:
+                            spec_qty_dec = Decimal(str(spec_qty))
+                            # If filled_quantity exceeds spec.quantity significantly, something is wrong
+                            if c.filled_quantity > spec_qty_dec * Decimal("1.1"):
+                                self.logger.error(
+                                    f"⚠️ ROLLBACK SKIP: {c.spec.symbol} ({c.spec.side}) has suspicious filled_quantity: "
+                                    f"{c.filled_quantity} exceeds spec.quantity={spec_qty_dec} by >10%. "
+                                    f"This likely indicates a bug. Skipping rollback for this context."
+                                )
+                                continue
+                        
+                        rollback_payload.append(context_to_filled_dict(c))
+                
+                rollback_cost = await self._rollback_filled_orders(rollback_payload)
+                self.logger.warning(
+                    f"Rollback completed after hedge failure; total cost ${rollback_cost:.4f}"
+                )
+                for ctx in contexts:
+                    ctx.filled_quantity = Decimal("0")
+                    ctx.filled_usd = Decimal("0")
+                
+                return False, hedge_error, True, rollback_cost
+
+    def _build_execution_result(
+        self,
+        contexts: List[OrderContext],
+        orders: List[OrderSpec],
+        elapsed_ms: int,
+        success: bool,
+        all_filled: bool,
+        error_message: Optional[str],
+        rollback_performed: bool,
+        rollback_cost: Decimal,
+    ) -> AtomicExecutionResult:
+        """
+        Build AtomicExecutionResult from execution state.
+        
+        Args:
+            contexts: List of order contexts
+            orders: Original order specs
+            elapsed_ms: Execution time in milliseconds
+            success: Whether execution succeeded
+            all_filled: Whether all orders filled
+            error_message: Error message if any
+            rollback_performed: Whether rollback was performed
+            rollback_cost: Cost of rollback if performed
+            
+        Returns:
+            AtomicExecutionResult instance
+        """
+        filled_orders = [
+            ctx.result for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal("0")
+        ]
+        partial_fills = [
+            {"spec": ctx.spec, "result": ctx.result}
+            for ctx in contexts
+            if not (ctx.result and ctx.filled_quantity > Decimal("0"))
+        ]
+        
+        total_slippage = sum(
+            coerce_decimal(order.get("slippage_usd")) or Decimal("0") for order in filled_orders
+        )
+        total_long_usd, total_short_usd, imbalance, _ = self._calculate_imbalance(contexts)
+        
+        return AtomicExecutionResult(
+            success=success,
+            all_filled=all_filled,
+            filled_orders=filled_orders if not rollback_performed else [],
+            partial_fills=partial_fills,
+            total_slippage_usd=total_slippage if not rollback_performed else Decimal("0"),
+            execution_time_ms=elapsed_ms,
+            error_message=error_message,
+            rollback_performed=rollback_performed,
+            rollback_cost_usd=rollback_cost,
+            residual_imbalance_usd=imbalance if not rollback_performed else Decimal("0"),
+        )
 
     async def _place_single_order(
         self, spec: OrderSpec, cancel_event: Optional[asyncio.Event] = None

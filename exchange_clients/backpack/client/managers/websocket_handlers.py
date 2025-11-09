@@ -30,6 +30,7 @@ class BackpackWebSocketHandlers:
         latest_orders: Dict[str, OrderInfo],
         order_update_handler: Optional[Callable] = None,
         order_fill_callback: Optional[Callable] = None,
+        order_manager: Optional[Any] = None,
         emit_liquidation_event_fn: Optional[Callable] = None,
         get_exchange_name_fn: Optional[Callable] = None,
     ):
@@ -42,6 +43,7 @@ class BackpackWebSocketHandlers:
             latest_orders: Dictionary storing latest OrderInfo objects
             order_update_handler: Optional handler for order updates
             order_fill_callback: Optional callback for order fills
+            order_manager: Optional order manager (for notifications)
             emit_liquidation_event_fn: Function to emit liquidation events
             get_exchange_name_fn: Function to get exchange name
         """
@@ -50,6 +52,7 @@ class BackpackWebSocketHandlers:
         self.latest_orders = latest_orders
         self.order_update_handler = order_update_handler
         self.order_fill_callback = order_fill_callback
+        self.order_manager = order_manager
         self.emit_liquidation_event = emit_liquidation_event_fn
         self.get_exchange_name = get_exchange_name_fn or (lambda: "backpack")
 
@@ -122,6 +125,10 @@ class BackpackWebSocketHandlers:
                 cancel_reason=cancel_reason,
             )
             self.latest_orders[order_id] = info
+            
+            # Notify order manager that update was received (for await_order_update())
+            if self.order_manager:
+                self.order_manager.notify_order_update(order_id)
 
             if status == "FILLED":
                 self.logger.info(

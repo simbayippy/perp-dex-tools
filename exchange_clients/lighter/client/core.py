@@ -250,6 +250,7 @@ class LighterClient(BaseExchangeClient):
                 positions_ready=self._positions_ready,
                 ws_manager=None,  # Will be set after ws_manager is created
                 normalize_symbol_fn=self.normalize_symbol,
+                market_data=self.market_data,  # For REST fallback when websocket unavailable
             )
             
             # Initialize account manager
@@ -456,9 +457,21 @@ class LighterClient(BaseExchangeClient):
         """Cancel an order with Lighter."""
         return await self.order_manager.cancel_order(order_id, self.config.contract_id)
 
-    async def _await_order_update(self, order_key: str, timeout: float = 1.0) -> Optional[OrderInfo]:
-        """Wait briefly for a websocket update before falling back to REST."""
-        return await self.order_manager.await_order_update(order_key, timeout)
+    async def await_order_update(self, order_id: str, timeout: float = 10.0) -> Optional[OrderInfo]:
+        """
+        Wait for websocket order update with optional timeout.
+        
+        This method efficiently waits for order status changes via websocket,
+        falling back to REST API polling if websocket update doesn't arrive.
+        
+        Args:
+            order_id: Order identifier to wait for (client_order_index or server_order_index)
+            timeout: Maximum time to wait in seconds (default: 10.0)
+            
+        Returns:
+            OrderInfo if update received within timeout, None otherwise
+        """
+        return await self.order_manager.await_order_update(order_id, timeout)
 
     async def get_order_info(self, order_id: str, *, force_refresh: bool = False) -> Optional[OrderInfo]:
         """Get order information from Lighter using official SDK."""

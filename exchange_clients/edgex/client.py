@@ -487,6 +487,20 @@ class EdgeXClient(BaseExchangeClient):
                 ))
 
         return contract_orders
+    
+    async def await_order_update(
+        self, 
+        order_id: str, 
+        timeout: float = 10.0
+    ) -> Optional[OrderInfo]:
+        """
+        Wait for order update (not implemented for EdgeX yet).
+        
+        Returns None to trigger REST fallback in OrderExecutor.
+        """
+        # Empty implementation - not working with EdgeX yet
+        # OrderExecutor will fall back to REST polling
+        return None
 
     @query_retry(default_return=0)
     async def get_account_positions(self) -> Decimal:

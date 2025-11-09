@@ -249,6 +249,20 @@ async def read_credentials_from_env() -> Dict[str, Dict]:
             'secret_key': backpack_secret
         }
     
+    # Paradex credentials
+    paradex_l1_address = os.getenv('PARADEX_L1_ADDRESS')
+    paradex_l2_private_key = os.getenv('PARADEX_L2_PRIVATE_KEY')
+    paradex_l2_address = os.getenv('PARADEX_L2_ADDRESS')
+    paradex_environment = os.getenv('PARADEX_ENVIRONMENT', 'prod')
+    
+    if paradex_l1_address and paradex_l2_private_key:
+        credentials['paradex'] = {
+            'l1_address': paradex_l1_address,
+            'l2_private_key_hex': paradex_l2_private_key,
+            'l2_address': paradex_l2_address,  # Optional
+            'environment': paradex_environment,  # Optional, defaults to 'prod'
+        }
+    
     return credentials
 
 
@@ -293,10 +307,19 @@ async def add_account_from_env(
         await db.connect()
         manager = AccountManager(db)
         
+        # Read credentials from .env first
+        credentials = await read_credentials_from_env()
+        
+        # Extract wallet address from Paradex L1 address if available
+        wallet_address = None
+        if 'paradex' in credentials:
+            wallet_address = credentials['paradex'].get('l1_address')
+        
         # Create account
         account_id = await manager.create_account(
             account_name=account_name,
             description=f"Account from .env: {account_name}",
+            wallet_address=wallet_address,
             metadata={
                 "source": "env_file",
                 "max_positions": 10,
@@ -304,12 +327,9 @@ async def add_account_from_env(
             }
         )
         
-        # Read credentials from .env
-        credentials = await read_credentials_from_env()
-        
         if not credentials:
             logger.warning(f"⚠️  No credentials found in {env_file}")
-            logger.info("Make sure you have set: LIGHTER_*, ASTER_*, BACKPACK_* variables")
+            logger.info("Make sure you have set: LIGHTER_*, ASTER_*, BACKPACK_*, or PARADEX_* variables")
             return False
         
         # Log what was loaded for verification
@@ -410,9 +430,10 @@ async def interactive_mode():
     print("1. Lighter")
     print("2. Aster")
     print("3. Backpack")
-    print("4. All of the above")
+    print("4. Paradex")
+    print("5. All of the above")
     
-    choice = input("\nChoice (1-4): ").strip()
+    choice = input("\nChoice (1-5): ").strip()
     
     exchanges = []
     if choice == '1':
@@ -422,7 +443,9 @@ async def interactive_mode():
     elif choice == '3':
         exchanges = ['backpack']
     elif choice == '4':
-        exchanges = ['lighter', 'aster', 'backpack']
+        exchanges = ['paradex']
+    elif choice == '5':
+        exchanges = ['lighter', 'aster', 'backpack', 'paradex']
     else:
         print("❌ Invalid choice")
         return False

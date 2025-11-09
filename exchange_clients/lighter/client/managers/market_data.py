@@ -281,6 +281,59 @@ class LighterMarketData:
         except Exception as e:
             self.logger.error(f"❌ [LIGHTER] Failed to get BBO prices: {e}")
             raise ValueError(f"Unable to fetch BBO prices for {contract_id}: {e}")
+
+    @query_retry(default_return=(None, None))
+    async def fetch_bbo_prices_rest_only(self, contract_id: str) -> Tuple[Optional[Decimal], Optional[Decimal]]:
+        """
+        Get best bid/offer prices via REST API only, bypassing WebSocket check.
+        
+        Use this when you've already checked WebSocket and want to force REST fallback.
+        This avoids redundant WebSocket checks.
+        
+        Args:
+            contract_id: Contract/symbol identifier
+            
+        Returns:
+            Tuple of (best_bid, best_ask) or (None, None) if failed
+        """
+        self.logger.debug(f"📞 [REST][LIGHTER] Fetching BBO via REST API (bypassing WebSocket)")
+        try:
+            # Lighter uses integer market_id for API calls
+            try:
+                market_id = int(contract_id)
+            except (ValueError, TypeError):
+                normalized_symbol = self.normalize_symbol(contract_id)
+                market_id = await self.get_market_id_for_symbol(normalized_symbol)
+                if market_id is None:
+                    self.logger.error(f"❌ [LIGHTER] Could not find market_id for symbol '{contract_id}'")
+                    return None, None
+
+            # Use SDK to fetch order book directly via REST
+            order_api = lighter.OrderApi(self.api_client)
+            result = await order_api.order_book_orders(
+                market_id=market_id,
+                limit=1,  # Only need BBO
+                _request_timeout=10,
+            )
+
+            if result.code != 200:
+                self.logger.error(
+                    f"❌ [LIGHTER] Order book API error: code={result.code}, message={result.message}"
+                )
+                return None, None
+
+            if not result.bids or not result.asks:
+                self.logger.error(f"❌ [LIGHTER] Empty order book for {contract_id}")
+                return None, None
+
+            best_bid = Decimal(result.bids[0].price)
+            best_ask = Decimal(result.asks[0].price)
+            
+            return best_bid, best_ask
+            
+        except Exception as e:
+            self.logger.error(f"❌ [LIGHTER] Failed to get BBO prices via REST: {e}")
+            return None, None
     
     async def get_order_book_depth(
         self, 

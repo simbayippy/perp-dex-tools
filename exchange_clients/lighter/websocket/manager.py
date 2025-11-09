@@ -63,6 +63,7 @@ class LighterWebSocketManager(BaseWebSocketManager):
         # Track running state
         self.running = False
         self._listener_task: Optional[asyncio.Task] = None
+        self._staleness_monitor_task: Optional[asyncio.Task] = None
 
     def set_logger(self, logger):
         """Set the logger instance for all components."""
@@ -211,6 +212,26 @@ class LighterWebSocketManager(BaseWebSocketManager):
         except Exception as e:
             self._log(f"Error requesting fresh snapshot: {e}", "ERROR")
             raise
+    
+    async def force_reconnect(self):
+        """
+        Force a full websocket reconnect by closing the current connection.
+        
+        This will cause _consume_messages() to fail, triggering the reconnect mechanism
+        in _listen_loop(). Use this when order book is stale for extended period.
+        """
+        self._log(
+            "[LIGHTER] Forcing websocket reconnect due to stale order book",
+            "WARNING"
+        )
+        try:
+            # Close the current connection - this will cause _consume_messages() to fail
+            # and trigger the reconnect mechanism in _listen_loop()
+            await self.connection.cleanup_current_ws()
+            self.order_book.order_book_ready = False
+            self.order_book.snapshot_loaded = False
+        except Exception as e:
+            self._log(f"Error forcing reconnect: {e}", "ERROR")
 
     async def _subscribe_channels(self) -> None:
         """Subscribe to the required Lighter channels."""
@@ -328,6 +349,57 @@ class LighterWebSocketManager(BaseWebSocketManager):
         self.market_switcher.set_running(True)
 
         self._listener_task = asyncio.create_task(self._listen_loop(), name="lighter-ws-listener")
+        self._staleness_monitor_task = asyncio.create_task(
+            self._monitor_staleness_loop(), 
+            name="lighter-ws-staleness-monitor"
+        )
+
+    async def _monitor_staleness_loop(self) -> None:
+        """
+        Proactively monitor order book staleness and trigger reconnects.
+        
+        Runs every 30 seconds to detect stale order books even when not actively
+        querying mark prices. This ensures websocket stays healthy.
+        """
+        try:
+            while self.running:
+                await asyncio.sleep(30)  # Check every 30 seconds
+                
+                if not self.running:
+                    break
+                
+                if not self.order_book.snapshot_loaded:
+                    continue  # Not loaded yet, skip check
+                
+                if self.order_book.is_stale():
+                    staleness_seconds = self.order_book.get_staleness_seconds()
+                    if staleness_seconds is None:
+                        continue
+                    
+                    if self.order_book.needs_reconnect():
+                        self._log(
+                            f"[LIGHTER] Proactive staleness check: Order book stale "
+                            f"({staleness_seconds:.1f}s), forcing reconnect",
+                            "WARNING"
+                        )
+                        await self.force_reconnect()
+                    else:
+                        self._log(
+                            f"[LIGHTER] Proactive staleness check: Order book stale "
+                            f"({staleness_seconds:.1f}s), requesting snapshot",
+                            "DEBUG"
+                        )
+                        try:
+                            await self.request_fresh_snapshot()
+                        except Exception as exc:
+                            self._log(
+                                f"[LIGHTER] Failed to request snapshot in staleness monitor: {exc}",
+                                "ERROR"
+                            )
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            self._log(f"[LIGHTER] Staleness monitor error: {exc}", "ERROR")
 
     async def disconnect(self):
         """Disconnect from WebSocket."""
@@ -336,6 +408,16 @@ class LighterWebSocketManager(BaseWebSocketManager):
 
         self.running = False
         self.market_switcher.set_running(False)
+
+        # Cancel staleness monitor
+        if self._staleness_monitor_task:
+            self._staleness_monitor_task.cancel()
+            try:
+                await self._staleness_monitor_task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._staleness_monitor_task = None
 
         if self._listener_task:
             self._listener_task.cancel()

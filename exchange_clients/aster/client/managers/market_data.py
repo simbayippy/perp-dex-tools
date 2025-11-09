@@ -254,7 +254,7 @@ class AsterMarketData:
                         self.config.contract_id = contract_id_value
                         
                         # Cache contract_id for this symbol (multi-symbol trading support)
-                        self.contract_id_cache.set(ticker.upper(), contract_id_value)
+                        self.contract_id_cache[ticker.upper()] = contract_id_value
 
                         # Get tick size from filters
                         for filter_info in symbol_info.get('filters', []):

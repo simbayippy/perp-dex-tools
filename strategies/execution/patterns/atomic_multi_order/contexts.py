@@ -58,7 +58,11 @@ class OrderContext:
             self.filled_usd += quantity * price
         elif self.filled_usd == Decimal("0"):
             # Fallback: assume full notional if price is unknown.
-            self.filled_usd = self.spec.size_usd
+            # BUT: Only do this if we actually have a fill (quantity > 0)
+            # This prevents setting filled_usd incorrectly when quantity is 0
+            if quantity > Decimal("0"):
+                self.filled_usd = self.spec.size_usd
+            # If quantity is 0 or negative, don't set filled_usd (shouldn't happen due to early return, but defensive)
 
         if self.filled_usd > self.spec.size_usd:
             self.filled_usd = self.spec.size_usd

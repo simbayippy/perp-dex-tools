@@ -15,6 +15,7 @@ from strategies.execution.patterns.atomic_multi_order import (
     OrderSpec,
 )
 from helpers.unified_logger import log_stage
+from funding_rate_service.core.opportunity_finder import OpportunityFinder
 
 from ..models import FundingArbPosition
 
@@ -193,7 +194,6 @@ class PositionOpener:
             pre_flight_check=True,
             skip_preflight_leverage=True,
             stage_prefix="3",
-            retry_policy=strategy.atomic_retry_policy,
         )
 
         if not result.all_filled:
@@ -760,8 +760,8 @@ class PositionOpener:
         strategy = self._strategy
         try:
             exchange_name = exchange_client.get_exchange_name()
-
-            config_ticker = getattr(exchange_client.config, "ticker", "")
+            
+            # Normalize symbol for cache lookup
             if hasattr(exchange_client, "normalize_symbol"):
                 try:
                     normalized_symbol = exchange_client.normalize_symbol(symbol).upper()
@@ -769,12 +769,38 @@ class PositionOpener:
                     normalized_symbol = symbol.upper()
             else:
                 normalized_symbol = symbol.upper()
+            
+            # Check if this symbol is already known to be untradeable on this exchange
+            # (checking OpportunityFinder cache)
+            if not OpportunityFinder.is_symbol_tradeable(exchange_name, symbol):
+                strategy.logger.debug(
+                    f"⏭️  [{exchange_name.upper()}] Skipping {symbol} - known to be untradeable "
+                    "(cached from previous attempt)"
+                )
+                return False
+            
+            config_ticker = getattr(exchange_client.config, "ticker", "")
             contract_cache = getattr(exchange_client, "_contract_id_cache", {})
-            has_cached_contract = normalized_symbol in contract_cache
+            
+            # ContractIdCache supports dict-like access (__contains__, __getitem__)
+            # and also has .get() method, so we can use either pattern
+            # Using .get() is safer as it returns None for missing keys
+            if hasattr(contract_cache, 'get'):
+                # ContractIdCache or dict - both support .get() and 'in' operator
+                has_cached_contract = normalized_symbol in contract_cache
+                cached_contract = contract_cache.get(normalized_symbol)
+            elif isinstance(contract_cache, dict):
+                # Plain dict cache
+                has_cached_contract = normalized_symbol in contract_cache
+                cached_contract = contract_cache.get(normalized_symbol)
+            else:
+                # Fallback: assume no cache
+                has_cached_contract = False
+                cached_contract = None
+            
             base_missing = getattr(exchange_client, "base_amount_multiplier", None) is None
             price_missing = getattr(exchange_client, "price_multiplier", None) is None
             current_contract = getattr(exchange_client.config, "contract_id", None)
-            cached_contract = contract_cache.get(normalized_symbol)
             contract_mismatch = (
                 has_cached_contract
                 and cached_contract is not None
@@ -817,6 +843,8 @@ class PositionOpener:
                         strategy.logger.warning(
                             f"❌ [{exchange_name.upper()}] Symbol {symbol} initialization returned empty contract_id"
                         )
+                        # Mark as untradeable in OpportunityFinder cache
+                        OpportunityFinder.mark_symbol_untradeable(exchange_name, symbol)
                         return False
 
                     if needs_refresh:
@@ -826,10 +854,12 @@ class PositionOpener:
 
                 except ValueError as exc:
                     error_msg = str(exc).lower()
-                    if "not found" in error_msg or "not supported" in error_msg:
+                    if "not found" in error_msg or "not supported" in error_msg or "not tradeable" in error_msg:
                         strategy.logger.warning(
                             f"⚠️  [{exchange_name.upper()}] Symbol {symbol} is NOT TRADEABLE on {exchange_name}"
                         )
+                        # Mark as untradeable in OpportunityFinder cache to prevent future opportunities
+                        OpportunityFinder.mark_symbol_untradeable(exchange_name, symbol)
                         return False
                     raise
                 finally:
@@ -841,4 +871,5 @@ class PositionOpener:
             strategy.logger.error(
                 f"❌ [{exchange_client.get_exchange_name().upper()}] Failed to ensure contract attributes for {symbol}: {exc}"
             )
+            # Don't cache on unexpected errors - might be transient
             return False

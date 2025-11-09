@@ -54,7 +54,8 @@ class Settings(BaseSettings):
     
     # Adapter controls
     collection_disabled_dexes: List[str] = Field(
-        default_factory=lambda: ["edgex", "paradex"],
+        default_factory=lambda: ["edgex"],
+        # default_factory=lambda: ["edgex", "paradex"],
         description="DEX names to skip during funding collection",
     )
     

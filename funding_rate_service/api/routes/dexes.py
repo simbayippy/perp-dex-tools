@@ -177,7 +177,7 @@ async def get_dex_symbols(dex: str) -> Dict[str, Any]:
                 ds.volume_24h,
                 ds.open_interest_usd,
                 ds.spread_bps,
-                ds.last_updated
+                ds.updated_at
             FROM dex_symbols ds
             JOIN symbols s ON ds.symbol_id = s.id
             WHERE ds.dex_id = :dex_id
@@ -196,7 +196,7 @@ async def get_dex_symbols(dex: str) -> Dict[str, Any]:
                 "volume_24h": float(row['volume_24h']) if row['volume_24h'] else None,
                 "open_interest_usd": float(row['open_interest_usd']) if row['open_interest_usd'] else None,
                 "spread_bps": row['spread_bps'],
-                "last_updated": row['last_updated'].isoformat() if row['last_updated'] else None
+                "last_updated": row['updated_at'].isoformat() if row['updated_at'] else None
             })
         
         return {
