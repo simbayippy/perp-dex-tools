@@ -601,7 +601,15 @@ class PositionCloser:
                 )
                 continue
 
-            side = "sell" if snapshot.quantity > 0 else "buy"
+            # Determine side: use snapshot.side if available, otherwise infer from quantity sign
+            # Note: Some exchanges (e.g., Paradex) store short positions as positive quantities,
+            # so we must rely on snapshot.side rather than quantity sign
+            if snapshot.side:
+                # Use explicit side from snapshot (most reliable)
+                side = "sell" if snapshot.side == "long" else "buy"
+            else:
+                # Fallback: infer from quantity sign (negative = short = need to buy)
+                side = "sell" if snapshot.quantity > 0 else "buy"
             metadata: Dict[str, Any] = getattr(snapshot, "metadata", {}) or {}
 
             if metadata:
