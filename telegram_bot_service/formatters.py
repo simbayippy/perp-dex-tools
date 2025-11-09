@@ -270,6 +270,61 @@ class TelegramFormatter:
         return f"  • Max hold: ⏰ <code>{remaining_fmt}</code> left"
     
     @staticmethod
+    def format_positions_for_selection(data: Dict[str, Any]) -> str:
+        """Format positions as a simple list for selection."""
+        accounts = data.get('accounts', [])
+        if not accounts:
+            return "📊 <b>No active positions</b>\n\nNothing to close."
+        
+        lines = [
+            "📊 <b>Select a position to close:</b>",
+            ""
+        ]
+        
+        position_index = 0
+        for account in accounts:
+            account_name = account.get('account_name', 'N/A')
+            positions = account.get('positions', [])
+            
+            if not positions:
+                continue
+            
+            for pos in positions:
+                position_index += 1
+                symbol = pos.get('symbol', 'N/A')
+                long_dex = pos.get('long_dex', 'N/A').upper()
+                short_dex = pos.get('short_dex', 'N/A').upper()
+                
+                # Calculate net PnL
+                legs = pos.get('legs', [])
+                total_unrealized_pnl = sum(
+                    leg.get('unrealized_pnl', 0) or 0 
+                    for leg in legs
+                )
+                total_funding = sum(
+                    leg.get('funding_accrued', 0) or 0 
+                    for leg in legs
+                )
+                net_pnl = total_unrealized_pnl + total_funding
+                
+                # PnL emoji
+                pnl_emoji = "📈" if net_pnl > 0 else "📉" if net_pnl < 0 else "➖"
+                
+                # Age
+                age_hours = pos.get('age_hours', 0)
+                age_str = TelegramFormatter._format_hours(age_hours)
+                
+                lines.append(
+                    f"<b>{position_index}.</b> {symbol} ({long_dex}/{short_dex})\n"
+                    f"   Account: {account_name}\n"
+                    f"   Net PnL: {pnl_emoji} <code>${net_pnl:+.2f}</code>\n"
+                    f"   Age: {age_str}"
+                )
+                lines.append("")
+        
+        return "\n".join(lines)
+    
+    @staticmethod
     def format_close_result(data: Dict[str, Any]) -> str:
         """Format close position result."""
         if data.get('success'):
@@ -296,7 +351,7 @@ class TelegramFormatter:
 /auth &lt;api_key&gt; - Authenticate with API key
 /status - Get strategy status
 /positions [account] - List active positions (optional account filter)
-/close &lt;position_id&gt; [market|limit] - Close a position (default: market)
+/close - Close a position (interactive selection)
 /logout - Unlink Telegram account
 /help - Show this help message
 
