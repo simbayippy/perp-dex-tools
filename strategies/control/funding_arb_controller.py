@@ -388,10 +388,10 @@ class FundingArbStrategyController(BaseStrategyController):
             
             if dex.lower() == position.long_dex.lower():
                 long_unrealized_pnl = unrealized
-                long_funding_accrued = funding
+                long_funding_accrued = funding if funding is not None else 0.0
             elif dex.lower() == position.short_dex.lower():
                 short_unrealized_pnl = unrealized
-                short_funding_accrued = funding
+                short_funding_accrued = funding if funding is not None else 0.0
         
         # Build per-leg data
         leg_data = []
@@ -403,7 +403,7 @@ class FundingArbStrategyController(BaseStrategyController):
                 "entry_price": leg_meta.get("entry_price"),
                 "mark_price": leg_meta.get("mark_price"),
                 "unrealized_pnl": leg_meta.get("unrealized_pnl"),
-                "funding_accrued": leg_meta.get("funding_accrued"),
+                "funding_accrued": leg_meta.get("funding_accrued") if leg_meta.get("funding_accrued") is not None else 0.0,
                 "funding_apy": leg_meta.get("funding_apy"),
                 "exposure_usd": leg_meta.get("exposure_usd"),
                 "leverage": leg_meta.get("leverage"),
