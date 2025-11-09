@@ -74,8 +74,14 @@ def get_auth() -> APIKeyAuth:
     return _auth
 
 
+async def get_user_info(request: Request) -> Dict[str, Any]:
+    """Dependency function to get user info from API key."""
+    auth = get_auth()
+    return await auth(request)
+
+
 @app.get("/api/v1/status", response_model=Dict[str, Any])
-async def get_status(user_info: Dict[str, Any] = Depends(get_auth)):
+async def get_status(user_info: Dict[str, Any] = Depends(get_user_info)):
     """
     Get strategy status and account information.
     
@@ -116,7 +122,7 @@ async def get_status(user_info: Dict[str, Any] = Depends(get_auth)):
 
 
 @app.get("/api/v1/accounts", response_model=Dict[str, Any])
-async def get_accounts(user_info: Dict[str, Any] = Depends(get_auth)):
+async def get_accounts(user_info: Dict[str, Any] = Depends(get_user_info)):
     """
     Get list of accounts accessible to the authenticated user.
     
@@ -155,7 +161,7 @@ async def get_accounts(user_info: Dict[str, Any] = Depends(get_auth)):
 @app.get("/api/v1/positions", response_model=Dict[str, Any])
 async def get_positions(
     account_name: Optional[str] = Query(None, description="Filter by account name"),
-    user_info: Dict[str, Any] = Depends(get_auth)
+    user_info: Dict[str, Any] = Depends(get_user_info)
 ):
     """
     Get active positions for accessible accounts.
@@ -199,7 +205,7 @@ async def get_positions(
 async def close_position(
     position_id: str,
     request: ClosePositionRequest,
-    user_info: Dict[str, Any] = Depends(get_auth)
+    user_info: Dict[str, Any] = Depends(get_user_info)
 ):
     """
     Close a position.
