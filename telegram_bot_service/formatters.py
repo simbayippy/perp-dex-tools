@@ -131,7 +131,13 @@ class TelegramFormatter:
             # Side emoji
             side_emoji = "🟢" if side == "long" else "🔴" if side == "short" else "⚪"
             
-            lines.append(f"<b>{side_emoji} {dex}</b> ({side.upper()})")
+            # Get leverage if available
+            leverage = leg.get('leverage')
+            if leverage is not None:
+                leverage_str = f" {int(leverage)}x" if leverage >= 1 else f" {leverage:.1f}x"
+                lines.append(f"<b>{side_emoji} {dex}</b> ({side.upper()}{leverage_str})")
+            else:
+                lines.append(f"<b>{side_emoji} {dex}</b> ({side.upper()})")
             
             # Price info
             if entry_price:
