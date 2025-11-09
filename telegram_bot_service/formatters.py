@@ -162,7 +162,7 @@ class TelegramFormatter:
                 lines.append("")
         
         lines.append("")
-        lines.append("─" * 30)
+        lines.append("─" * 15)
         
         # Summary section
         lines.append("<b>💼 Summary</b>")
@@ -190,14 +190,15 @@ class TelegramFormatter:
         # Position size
         if size_usd:
             lines.append(f"  • Position Size: <code>${size_usd:,.2f}</code>")
+
+        # uncomment to add position ID to the message
+        # lines.append("")
+        # lines.append("─" * 15)
         
-        lines.append("")
-        lines.append("─" * 30)
-        
-        # Position ID for closing
-        pos_id = pos.get('id', '')
-        lines.append(f"<b>Position ID:</b>")
-        lines.append(f"<code>{pos_id}</code>")
+        # # Position ID for closing
+        # pos_id = pos.get('id', '')
+        # lines.append(f"<b>Position ID:</b>")
+        # lines.append(f"<code>{pos_id}</code>")
         
         message = "\n".join(lines)
         
