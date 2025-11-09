@@ -287,6 +287,7 @@ class PositionMonitor:
             f"Position {position.symbol} snapshot{account_info}",
             self._compose_yield_summary(position),
             self._compose_hold_summary(position),
+            self._compose_max_hold_summary(position),
             separator,
             header_line,
             separator,
@@ -380,3 +381,31 @@ class PositionMonitor:
         remaining_fmt = " ".join(parts)
 
         return f"Min hold: ACTIVE ({remaining_fmt} remaining, risk checks resume {ready_display})"
+
+    def _compose_max_hold_summary(self, position: FundingArbPosition) -> str:
+        risk_cfg = getattr(self._strategy_config, "risk_config", None) if getattr(self, "_strategy_config", None) else None
+        if not risk_cfg:
+            return "Max hold: n/a"
+
+        max_age_hours = getattr(risk_cfg, "max_position_age_hours", None)
+        if max_age_hours is None or max_age_hours <= 0:
+            return "Max hold: disabled"
+
+        age_hours = position.get_age_hours()
+        remaining = max(0.0, float(max_age_hours) - age_hours)
+        force_close_at = position.opened_at + timedelta(hours=max_age_hours)
+        force_close_display = force_close_at.strftime("%Y-%m-%d %H:%M:%S")
+
+        if remaining <= 0:
+            return f"Max hold: EXCEEDED (force close was due at {force_close_display})"
+
+        remaining_minutes = max(0, int(round(remaining * 60)))
+        hours_left, minutes_left = divmod(remaining_minutes, 60)
+        parts = []
+        if hours_left:
+            parts.append(f"{hours_left}h")
+        if minutes_left or not parts:
+            parts.append(f"{minutes_left}m")
+        remaining_fmt = " ".join(parts)
+
+        return f"Max hold: {remaining_fmt} remaining (force close at {force_close_display}, configured: {max_age_hours}h)"
