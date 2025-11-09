@@ -265,6 +265,12 @@ class FundingArbStrategyController(BaseStrategyController):
                             "liquidation_price": float(snapshot.liquidation_price) if snapshot.liquidation_price else None,
                         }
                         
+                        # Calculate leverage if not available in snapshot (for Lighter, Paradex, etc.)
+                        if leg_meta["leverage"] is None:
+                            leg_meta["leverage"] = await self._calculate_leverage(
+                                client, position.symbol, snapshot
+                            )
+                        
                         if snapshot.unrealized_pnl:
                             total_unrealized += snapshot.unrealized_pnl
                         if snapshot.funding_accrued:
@@ -299,6 +305,55 @@ class FundingArbStrategyController(BaseStrategyController):
         except Exception as e:
             # Don't fail API call if enrichment fails
             pass
+    
+    async def _calculate_leverage(
+        self,
+        client: Any,
+        symbol: str,
+        snapshot: Any
+    ) -> Optional[float]:
+        """
+        Calculate leverage for exchanges that don't provide it directly (Lighter, Paradex).
+        
+        Args:
+            client: Exchange client instance
+            symbol: Trading symbol
+            snapshot: ExchangePositionSnapshot
+            
+        Returns:
+            Leverage as float, or None if cannot be calculated
+        """
+        try:
+            # Method 1: Calculate from exposure and margin_reserved
+            if snapshot.exposure_usd and snapshot.margin_reserved:
+                if snapshot.margin_reserved > 0:
+                    leverage = float(snapshot.exposure_usd / snapshot.margin_reserved)
+                    return leverage
+            
+            # Method 2: Use exchange client's get_leverage_info method (for Lighter, Paradex)
+            if hasattr(client, 'get_leverage_info'):
+                leverage_info = await client.get_leverage_info(symbol)
+                if leverage_info:
+                    # Try account_leverage first (actual leverage being used)
+                    account_leverage = leverage_info.get('account_leverage')
+                    if account_leverage is not None:
+                        return float(account_leverage)
+                    
+                    # Fall back to max_leverage if account_leverage not available
+                    max_leverage = leverage_info.get('max_leverage')
+                    if max_leverage is not None:
+                        return float(max_leverage)
+                    
+                    # Method 3: Calculate from margin_requirement if available
+                    margin_requirement = leverage_info.get('margin_requirement')
+                    if margin_requirement and margin_requirement > 0:
+                        leverage = float(Decimal("1") / Decimal(str(margin_requirement)))
+                        return leverage
+            
+            return None
+        except Exception:
+            # Don't fail if leverage calculation fails
+            return None
     
     def _format_position_for_api(self, position: "FundingArbPosition") -> Dict[str, Any]:
         """Format position data for API response with comprehensive metrics."""
