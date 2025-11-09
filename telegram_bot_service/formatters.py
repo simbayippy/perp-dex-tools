@@ -2,7 +2,7 @@
 Message formatters for Telegram bot responses
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from decimal import Decimal
 from datetime import datetime, timedelta
 
