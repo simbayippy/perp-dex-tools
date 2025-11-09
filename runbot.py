@@ -222,8 +222,12 @@ def _signal_handler(signum, frame):
     print(f"\n📡 Received {signal_name}, initiating graceful shutdown...")
     if _shutdown_event:
         _shutdown_event.set()
+        print(f"✅ Shutdown event set")
     if _bot_instance:
         _bot_instance.shutdown_requested = True
+        print(f"✅ Bot shutdown_requested flag set to True")
+    else:
+        print(f"⚠️ Bot instance not available yet")
 
 
 async def main():

@@ -263,28 +263,34 @@ class TradingBot:
 
     async def _run_trading_loop(self):
         """Execute the main trading loop."""
+        self.logger.info("🔄 Trading loop started")
         while not self.shutdown_requested:
             try:
                 if await self.strategy.should_execute():
                     # Check shutdown before executing (in case execution is long-running)
                     if self.shutdown_requested:
+                        self.logger.info("🛑 Trading loop: shutdown_requested=True, exiting...")
                         break
                     await self.strategy.execute_strategy()
                 else:
                     # Use shorter sleep intervals to check shutdown more frequently
                     await asyncio.sleep(0.5)
                     if self.shutdown_requested:
+                        self.logger.info("🛑 Trading loop: shutdown_requested=True after sleep, exiting...")
                         break
                     
             except asyncio.CancelledError:
-                self.logger.info("Trading loop cancelled")
+                self.logger.info("🛑 Trading loop cancelled")
                 break
             except Exception as e:
                 self.logger.error(f"Strategy execution error: {e}")
                 # Check shutdown even after errors
                 if self.shutdown_requested:
+                    self.logger.info("🛑 Trading loop: shutdown_requested=True after error, exiting...")
                     break
                 await asyncio.sleep(5)  # Wait longer on error
+        
+        self.logger.info("✅ Trading loop exited")
 
     async def _handle_order_fill(
         self,
@@ -304,8 +310,9 @@ class TradingBot:
 
     async def graceful_shutdown(self, reason: str = "Unknown"):
         """Perform graceful shutdown of the trading bot."""
-        self.logger.info(f"Starting graceful shutdown: {reason}")
+        self.logger.info(f"🛑 Starting graceful shutdown: {reason}")
         self.shutdown_requested = True
+        self.logger.info(f"✅ shutdown_requested flag set to True")
 
         # Stop proxy health monitor with timeout
         if self._proxy_health_monitor:
@@ -320,12 +327,16 @@ class TradingBot:
         try:
             # Cleanup strategy with timeout
             if hasattr(self, 'strategy') and self.strategy:
+                self.logger.info("🧹 Calling strategy.cleanup()...")
                 try:
                     await asyncio.wait_for(self.strategy.cleanup(), timeout=30.0)
+                    self.logger.info("✅ Strategy cleanup completed")
                 except asyncio.TimeoutError:
-                    self.logger.warning("Strategy cleanup timed out, forcing shutdown")
+                    self.logger.warning("⚠️ Strategy cleanup timed out, forcing shutdown")
                 except Exception as e:
-                    self.logger.error(f"Error during strategy cleanup: {e}")
+                    self.logger.error(f"❌ Error during strategy cleanup: {e}")
+                    import traceback
+                    self.logger.error(f"Traceback: {traceback.format_exc()}")
             
             # Stop control server if running with timeout
             if self._control_server_task:
@@ -511,10 +522,13 @@ class TradingBot:
             
             # If shutdown was requested, perform graceful shutdown
             if self.shutdown_requested:
+                self.logger.info("🛑 Trading loop exited, shutdown_requested=True, calling graceful_shutdown()...")
                 await self.graceful_shutdown("Shutdown requested")
+            else:
+                self.logger.info("ℹ️ Trading loop exited but shutdown_requested=False")
 
         except KeyboardInterrupt:
-            self.logger.info("Bot stopped by user")
+            self.logger.info("🛑 KeyboardInterrupt caught in bot.run()")
             await self.graceful_shutdown("User interruption (Ctrl+C)")
         except Exception as e:
             self.logger.error(f"Critical error: {e}")

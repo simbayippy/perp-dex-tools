@@ -184,6 +184,7 @@ class FundingArbitrageStrategy(BaseStrategy):
         self._monitor_task = None
         self._monitor_stop_event = None
         self._last_opportunity_scan_ts = 0.0
+        self._shutdown_requested = False  # Track if strategy is shutting down
 
         self._control_server_started = False
 
@@ -235,8 +236,11 @@ class FundingArbitrageStrategy(BaseStrategy):
         self.logger.info("FundingArbitrageStrategy initialized successfully")
         if self._monitor_task is None:
             self._monitor_stop_event = asyncio.Event()
+            self.logger.info("🔄 Creating background monitor task...")
             self._monitor_task = asyncio.create_task(self._monitor_positions_loop(), name="funding-arb-monitor")
-            self.logger.debug("Started background monitor loop")
+            self.logger.info(f"✅ Background monitor task created: {self._monitor_task.get_name()} (task_id={id(self._monitor_task)})")
+        else:
+            self.logger.warning(f"⚠️ Monitor task already exists: {self._monitor_task.get_name()}")
     
     async def should_execute(self) -> bool:
         """
@@ -379,52 +383,76 @@ class FundingArbitrageStrategy(BaseStrategy):
         """Background loop to refresh and close existing positions."""
         interval = max(self.config.risk_config.check_interval_seconds, 1)
         stop_event = self._monitor_stop_event
+        self.logger.info("🔄 Monitor positions loop started")
 
         try:
             while stop_event and not stop_event.is_set():
+                # Check shutdown flag from strategy
+                if self._shutdown_requested:
+                    self.logger.info("🛑 Monitor loop: _shutdown_requested=True, exiting...")
+                    break
+                
+                # Check for cancellation before starting operations
+                if stop_event.is_set():
+                    self.logger.info("🛑 Monitor loop: stop_event.is_set()=True, exiting...")
+                    break
+                
                 try:
-                    # Check for cancellation before starting operations
-                    if stop_event.is_set():
-                        break
-                    
+                    self.logger.debug("🔄 Monitor loop: calling position_monitor.monitor()...")
                     await self.position_monitor.monitor()
+                    self.logger.debug("✅ Monitor loop: position_monitor.monitor() completed")
                     
                     # Check for cancellation between operations
-                    if stop_event.is_set():
+                    if stop_event.is_set() or self._shutdown_requested:
+                        self.logger.info("🛑 Monitor loop: shutdown detected after monitor(), exiting...")
                         break
                     
+                    self.logger.debug("🔄 Monitor loop: calling position_closer.evaluateAndClosePositions()...")
                     await self.position_closer.evaluateAndClosePositions()
+                    self.logger.debug("✅ Monitor loop: position_closer.evaluateAndClosePositions() completed")
+                    
                 except asyncio.CancelledError:
                     # Task was cancelled, exit immediately
+                    self.logger.info("🛑 Monitor loop: CancelledError caught, exiting...")
                     break
                 except Exception as exc:
                     # If shutdown was requested, exit on any error (database might be closed)
                     if stop_event and stop_event.is_set():
-                        self.logger.info("Monitor loop exiting due to shutdown request")
+                        self.logger.info("🛑 Monitor loop: stop_event set, exiting due to error")
+                        break
+                    if self._shutdown_requested:
+                        self.logger.info("🛑 Monitor loop: _shutdown_requested=True, exiting due to error")
                         break
                     self.logger.error(
-                        f"Monitor loop error: {exc}\n{traceback.format_exc()}"
+                        f"❌ Monitor loop error: {exc}\n{traceback.format_exc()}"
                     )
 
-                if stop_event.is_set():
+                if stop_event.is_set() or self._shutdown_requested:
+                    self.logger.info("🛑 Monitor loop: shutdown detected after operations, exiting...")
                     break
 
                 try:
+                    self.logger.debug(f"⏳ Monitor loop: waiting {interval}s (or until stop_event)...")
                     # Use wait_for with cancellation check - if event is set, wait returns immediately
                     await asyncio.wait_for(stop_event.wait(), timeout=interval)
                     # If we get here, the event was set (not a timeout)
+                    self.logger.info("🛑 Monitor loop: stop_event.wait() returned (not timeout), exiting...")
                     break
                 except asyncio.TimeoutError:
                     # Timeout is expected - continue the loop
+                    self.logger.debug("⏰ Monitor loop: wait timeout, continuing...")
                     continue
                 except asyncio.CancelledError:
                     # Task was cancelled during wait
+                    self.logger.info("🛑 Monitor loop: CancelledError during wait, exiting...")
                     break
         except asyncio.CancelledError:
             # Task cancellation - exit cleanly
-            pass
+            self.logger.info("🛑 Monitor loop: CancelledError in outer try block, exiting...")
+        except Exception as e:
+            self.logger.error(f"❌ Monitor loop: Unexpected error: {e}\n{traceback.format_exc()}")
         finally:
-            self.logger.info("Background monitor loop stopped")
+            self.logger.info("✅ Background monitor loop stopped")
 
     # ========================================================================
     # Cleanup
@@ -432,31 +460,45 @@ class FundingArbitrageStrategy(BaseStrategy):
     
     async def cleanup(self):
         """Cleanup strategy resources."""
+        self.logger.info("🧹 Strategy cleanup() called - starting shutdown sequence...")
+        self._shutdown_requested = True  # Set shutdown flag immediately
+        
         # Stop monitor task - cancel immediately and wait with timeout
         if self._monitor_task and not self._monitor_task.done():
-            self.logger.info("Stopping position monitor loop...")
+            self.logger.info("🛑 Stopping position monitor loop...")
             # Set stop event first to signal graceful shutdown
             if self._monitor_stop_event:
                 self._monitor_stop_event.set()
+                self.logger.info("✅ Monitor stop event set")
             
             # Cancel the task immediately to interrupt any blocking operations
+            self.logger.info("🛑 Cancelling monitor task...")
             self._monitor_task.cancel()
             
             # Wait for task to finish (with timeout)
             try:
+                self.logger.info("⏳ Waiting for monitor task to finish (timeout: 10s)...")
                 await asyncio.wait_for(self._monitor_task, timeout=10.0)
+                self.logger.info("✅ Monitor task stopped successfully")
             except asyncio.TimeoutError:
-                self.logger.warning("Monitor task did not stop within timeout - forcing shutdown")
+                self.logger.warning("⚠️ Monitor task did not stop within timeout - forcing shutdown")
             except asyncio.CancelledError:
                 # Task was cancelled successfully
-                pass
+                self.logger.info("✅ Monitor task cancelled successfully")
             except Exception as e:
-                self.logger.error(f"Error waiting for monitor task: {e}")
+                self.logger.error(f"❌ Error waiting for monitor task: {e}")
             finally:
                 self._monitor_task = None
+                self.logger.info("✅ Monitor task reference cleared")
+        else:
+            if self._monitor_task is None:
+                self.logger.info("ℹ️ No monitor task to stop (task is None)")
+            elif self._monitor_task.done():
+                self.logger.info("ℹ️ Monitor task already done")
         
         if self._monitor_stop_event:
             self._monitor_stop_event = None
+            self.logger.info("✅ Monitor stop event cleared")
         self._last_opportunity_scan_ts = 0.0
 
         # Close position and state managers with timeout
