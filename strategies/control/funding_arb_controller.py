@@ -53,7 +53,7 @@ class FundingArbStrategyController(BaseStrategyController):
         if account_name:
             # Filter by specific account name
             account_rows = await database.fetch_all("""
-                SELECT id::text, account_name
+                SELECT id::text as account_id, account_name
                 FROM accounts
                 WHERE id::text = ANY(:account_ids)
                   AND account_name = :account_name
@@ -65,7 +65,7 @@ class FundingArbStrategyController(BaseStrategyController):
         else:
             # Get all accessible accounts
             account_rows = await database.fetch_all("""
-                SELECT id::text, account_name
+                SELECT id::text as account_id, account_name
                 FROM accounts
                 WHERE id::text = ANY(:account_ids)
                   AND is_active = TRUE
@@ -195,12 +195,19 @@ class FundingArbStrategyController(BaseStrategyController):
                     "total_fees_paid": float(position.total_fees_paid),
                 })
         
-        # Convert to list (only include accounts with positions if account_name filter is set)
+        # Convert to list (include all accounts, even if they have no positions)
         accounts_data = []
         for account_row in account_rows:
             account_name_val = account_row['account_name']
-            if account_name_val in accounts_dict:
-                accounts_data.append(accounts_dict[account_name_val])
+            # Get or create account entry in accounts_dict
+            if account_name_val not in accounts_dict:
+                accounts_dict[account_name_val] = {
+                    "account_name": account_name_val,
+                    "account_id": account_row['account_id'],
+                    "strategy": "funding_arbitrage",
+                    "positions": []
+                }
+            accounts_data.append(accounts_dict[account_name_val])
         
         return {
             "accounts": accounts_data
