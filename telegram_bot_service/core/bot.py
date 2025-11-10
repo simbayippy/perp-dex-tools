@@ -1894,11 +1894,17 @@ class StrategyControlBot:
                         """,
                         {"id": account_id, "name": text, "user_id": str(user["id"])}
                     )
-                    await self.audit_logger.log_action(
-                        str(user["id"]),
-                        "edit_account",
-                        {"account_id": account_id, "field": "name", "new_value": text}
-                    )
+                    # Wrap log_action in try-except to prevent it from causing formatting errors
+                    try:
+                        await self.audit_logger.log_action(
+                            str(user["id"]),
+                            "edit_account",
+                            {"account_id": account_id, "field": "name", "new_value": text}
+                        )
+                    except Exception as log_error:
+                        # Silently log audit failures to avoid cascading errors
+                        self.logger.error("Failed to log audit action: " + str(log_error))
+                    
                     # Use string concatenation to avoid f-string formatting issues with braces
                     await update.message.reply_text(
                         "✅ Account name updated to <b>" + text + "</b>",
@@ -1916,13 +1922,19 @@ class StrategyControlBot:
                         """,
                         {"id": account_id, "desc": description, "user_id": str(user["id"])}
                     )
-                    await self.audit_logger.log_action(
-                        str(user["id"]),
-                        "edit_account",
-                        {"account_id": account_id, "field": "description", "new_value": description}
-                    )
+                    # Wrap log_action in try-except to prevent it from causing formatting errors
+                    try:
+                        await self.audit_logger.log_action(
+                            str(user["id"]),
+                            "edit_account",
+                            {"account_id": account_id, "field": "description", "new_value": description}
+                        )
+                    except Exception as log_error:
+                        # Silently log audit failures to avoid cascading errors
+                        self.logger.error("Failed to log audit action: " + str(log_error))
+                    
                     await update.message.reply_text(
-                        f"✅ Account description updated.",
+                        "✅ Account description updated.",
                         parse_mode='HTML'
                     )
                 
