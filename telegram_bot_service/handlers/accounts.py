@@ -715,23 +715,201 @@ class AccountHandler(BaseHandler):
                 }
             }
             
-            # Prompt for exchange-specific credentials
-            prompts = {
-                'lighter': "Enter Lighter credentials:\nFormat: <code>private_key,account_index,api_key_index</code>",
-                'aster': "Enter Aster credentials:\nFormat: <code>api_key,secret_key</code>",
-                'backpack': "Enter Backpack credentials:\nFormat: <code>public_key,secret_key</code>",
-                'paradex': "Enter Paradex credentials:\nFormat: <code>l1_address,l2_private_key_hex[,l2_address,environment]</code>"
+            # Show input mode selection
+            keyboard = [
+                [InlineKeyboardButton("⚡ Quick Input (JSON)", callback_data=f"add_exc_mode:{exchange}:json")],
+                [InlineKeyboardButton("📝 Step-by-Step", callback_data=f"add_exc_mode:{exchange}:interactive")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Get required fields for this exchange
+            field_descriptions = {
+                'lighter': {
+                    'fields': ['private_key', 'account_index', 'api_key_index'],
+                    'example': '{\n  "private_key": "0x...",\n  "account_index": "0",\n  "api_key_index": "0"\n}'
+                },
+                'aster': {
+                    'fields': ['api_key', 'secret_key'],
+                    'example': '{\n  "api_key": "your_api_key",\n  "secret_key": "your_secret_key"\n}'
+                },
+                'backpack': {
+                    'fields': ['public_key', 'secret_key'],
+                    'example': '{\n  "public_key": "your_public_key",\n  "secret_key": "your_secret_key"\n}'
+                },
+                'paradex': {
+                    'fields': ['l1_address', 'l2_private_key_hex'],
+                    'optional': ['l2_address', 'environment'],
+                    'example': '{\n  "l1_address": "0x...",\n  "l2_private_key_hex": "0x...",\n  "l2_address": "0x..." (optional),\n  "environment": "prod" (optional)\n}'
+                }
             }
             
-            await query.edit_message_text(
+            fields_info = field_descriptions.get(exchange, {})
+            required_fields = ', '.join(fields_info.get('fields', []))
+            optional_fields = fields_info.get('optional', [])
+            
+            message = (
                 f"🔐 <b>Add {exchange.upper()} Credentials</b>\n\n"
                 f"Account: <b>{account_name}</b>\n\n"
-                f"{prompts[exchange]}\n\n"
-                "Send credentials separated by commas:",
-                parse_mode='HTML'
+                f"<b>Required fields:</b> {required_fields}\n"
+            )
+            
+            if optional_fields:
+                message += f"<b>Optional:</b> {', '.join(optional_fields)}\n"
+            
+            message += "\nChoose input method:"
+            
+            await query.edit_message_text(
+                message,
+                parse_mode='HTML',
+                reply_markup=reply_markup
             )
         except Exception as e:
             self.logger.error(f"Error in add_exchange_exchange_callback: {e}", exc_info=True)
+            try:
+                await query.edit_message_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again with /add_exchange",
+                    parse_mode='HTML'
+                )
+            except:
+                await query.message.reply_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again with /add_exchange",
+                    parse_mode='HTML'
+                )
+    
+    async def add_exchange_mode_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle input mode selection (JSON vs interactive)."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            callback_data = query.data
+            # Format: add_exc_mode:{exchange}:{mode}
+            parts = callback_data.split(":", 2)
+            if len(parts) != 3:
+                await query.edit_message_text(
+                    "❌ Invalid callback data. Please try again with /add_exchange",
+                    parse_mode='HTML'
+                )
+                return
+            
+            exchange = parts[1]
+            mode = parts[2]
+            
+            # Get account_id from context
+            account_id = context.user_data.get('add_exchange_account_id')
+            if not account_id:
+                await query.edit_message_text(
+                    "❌ Session expired. Please start over with /add_exchange",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Get account name
+            account_row = await self.database.fetch_one(
+                "SELECT account_name FROM accounts WHERE id = :id",
+                {"id": account_id}
+            )
+            
+            if not account_row:
+                await query.edit_message_text(
+                    "❌ Account not found. Please try again.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            account_name = account_row['account_name']
+            
+            # Clear the temporary account_id from context
+            context.user_data.pop('add_exchange_account_id', None)
+            
+            # Start wizard for credentials
+            context.user_data['wizard'] = {
+                'type': 'add_exchange',
+                'step': 1,
+                'mode': mode,  # 'json' or 'interactive'
+                'data': {
+                    'account_id': account_id,
+                    'account_name': account_name,
+                    'exchange': exchange,
+                    'credentials': {}
+                }
+            }
+            
+            if mode == 'json':
+                # JSON mode - show example and prompt
+                field_descriptions = {
+                    'lighter': {
+                        'example': '{\n  "private_key": "0x...",\n  "account_index": "0",\n  "api_key_index": "0"\n}'
+                    },
+                    'aster': {
+                        'example': '{\n  "api_key": "your_api_key",\n  "secret_key": "your_secret_key"\n}'
+                    },
+                    'backpack': {
+                        'example': '{\n  "public_key": "your_public_key",\n  "secret_key": "your_secret_key"\n}'
+                    },
+                    'paradex': {
+                        'example': '{\n  "l1_address": "0x...",\n  "l2_private_key_hex": "0x...",\n  "l2_address": "0x..." (optional),\n  "environment": "prod" (optional)\n}'
+                    }
+                }
+                
+                example = field_descriptions.get(exchange, {}).get('example', '{}')
+                
+                await query.edit_message_text(
+                    f"🔐 <b>Quick Input: {exchange.upper()}</b>\n\n"
+                    f"Account: <b>{account_name}</b>\n\n"
+                    "Send your credentials as JSON:\n\n"
+                    f"<code>{example}</code>\n\n"
+                    "You can send it as a single message or multiple lines.\n"
+                    "<i>Send 'cancel' to abort.</i>",
+                    parse_mode='HTML'
+                )
+            else:
+                # Interactive mode - start with first field
+                field_descriptions = {
+                    'lighter': {
+                        'fields': [
+                            ('private_key', 'Enter your private key (0x...):'),
+                            ('account_index', 'Enter account index (usually 0):'),
+                            ('api_key_index', 'Enter API key index (usually 0):')
+                        ]
+                    },
+                    'aster': {
+                        'fields': [
+                            ('api_key', 'Enter your API key:'),
+                            ('secret_key', 'Enter your secret key:')
+                        ]
+                    },
+                    'backpack': {
+                        'fields': [
+                            ('public_key', 'Enter your public key:'),
+                            ('secret_key', 'Enter your secret key:')
+                        ]
+                    },
+                    'paradex': {
+                        'fields': [
+                            ('l1_address', 'Enter L1 address (0x...):'),
+                            ('l2_private_key_hex', 'Enter L2 private key hex (0x...):'),
+                            ('l2_address', 'Enter L2 address (0x..., optional, or send "skip"):'),
+                            ('environment', 'Enter environment (prod/staging, default: prod, or send "skip"):')
+                        ]
+                    }
+                }
+                
+                fields = field_descriptions.get(exchange, {}).get('fields', [])
+                if fields:
+                    first_field_name, first_field_prompt = fields[0]
+                    context.user_data['wizard']['data']['current_field_index'] = 0
+                    context.user_data['wizard']['data']['fields'] = fields
+                    
+                    await query.edit_message_text(
+                        f"📝 <b>Step-by-Step: {exchange.upper()}</b>\n\n"
+                        f"Account: <b>{account_name}</b>\n\n"
+                        f"Step 1/{len(fields)}: {first_field_prompt}\n\n"
+                        "<i>Send 'cancel' at any time to abort.</i>",
+                        parse_mode='HTML'
+                    )
+        except Exception as e:
+            self.logger.error(f"Error in add_exchange_mode_callback: {e}", exc_info=True)
             try:
                 await query.edit_message_text(
                     f"❌ Error: {str(e)}\n\nPlease try again with /add_exchange",
@@ -858,58 +1036,126 @@ class AccountHandler(BaseHandler):
         data = wizard['data']
         exchange = data['exchange']
         account_id = data['account_id']
+        mode = wizard.get('mode', 'json')  # Default to JSON for backward compatibility
         
         try:
-            # Parse credentials based on exchange
-            parts = [p.strip() for p in text.split(',')]
-            
-            if exchange == 'lighter':
-                if len(parts) < 3:
+            if mode == 'interactive':
+                # Step-by-step interactive mode
+                fields = data.get('fields', [])
+                current_index = data.get('current_field_index', 0)
+                credentials = data.get('credentials', {})
+                
+                if current_index >= len(fields):
                     await update.message.reply_text(
-                        "❌ Invalid format. Need: private_key,account_index,api_key_index",
+                        "❌ Invalid step. Please start over with /add_exchange",
                         parse_mode='HTML'
                     )
                     return
-                credentials = {
-                    'private_key': parts[0],
-                    'account_index': parts[1],
-                    'api_key_index': parts[2]
-                }
-            elif exchange == 'aster':
-                if len(parts) < 2:
+                
+                field_name, field_prompt = fields[current_index]
+                
+                # Allow cancel at any step
+                if text.lower() in ['cancel', '/cancel']:
+                    context.user_data.pop('wizard', None)
                     await update.message.reply_text(
-                        "❌ Invalid format. Need: api_key,secret_key",
+                        "❌ Credential addition cancelled.",
                         parse_mode='HTML'
                     )
                     return
-                credentials = {
-                    'api_key': parts[0],
-                    'secret_key': parts[1]
-                }
-            elif exchange == 'backpack':
-                if len(parts) < 2:
+                
+                # Handle optional fields
+                if text.lower() == 'skip' and field_name in ['l2_address', 'environment']:
+                    if field_name == 'environment':
+                        credentials[field_name] = 'prod'  # Default value
+                    else:
+                        credentials[field_name] = None
+                else:
+                    credentials[field_name] = text.strip()
+                
+                # Move to next field
+                current_index += 1
+                data['current_field_index'] = current_index
+                data['credentials'] = credentials
+                
+                if current_index < len(fields):
+                    # More fields to collect
+                    next_field_name, next_field_prompt = fields[current_index]
                     await update.message.reply_text(
-                        "❌ Invalid format. Need: public_key,secret_key",
+                        f"✅ {field_name} saved\n\n"
+                        f"Step {current_index + 1}/{len(fields)}: {next_field_prompt}",
                         parse_mode='HTML'
                     )
                     return
-                credentials = {
-                    'public_key': parts[0],
-                    'secret_key': parts[1]
-                }
-            elif exchange == 'paradex':
-                if len(parts) < 2:
+                else:
+                    # All fields collected, proceed to verification
+                    pass  # Fall through to verification
+            else:
+                # JSON mode - parse JSON input
+                import json
+                
+                # Allow cancel
+                if text.lower() in ['cancel', '/cancel']:
+                    context.user_data.pop('wizard', None)
                     await update.message.reply_text(
-                        "❌ Invalid format. Need: l1_address,l2_private_key_hex[,l2_address,environment]",
+                        "❌ Credential addition cancelled.",
                         parse_mode='HTML'
                     )
                     return
-                credentials = {
-                    'l1_address': parts[0],
-                    'l2_private_key_hex': parts[1],
-                    'l2_address': parts[2] if len(parts) > 2 else None,
-                    'environment': parts[3] if len(parts) > 3 else 'prod'
-                }
+                
+                try:
+                    # Try to parse as JSON (handle both single-line and multi-line)
+                    json_text = text.strip()
+                    credentials_dict = json.loads(json_text)
+                    
+                    # Map to expected credential format based on exchange
+                    if exchange == 'lighter':
+                        credentials = {
+                            'private_key': credentials_dict.get('private_key', ''),
+                            'account_index': str(credentials_dict.get('account_index', '0')),
+                            'api_key_index': str(credentials_dict.get('api_key_index', '0'))
+                        }
+                        if not credentials['private_key']:
+                            raise ValueError("Missing required field: private_key")
+                    elif exchange == 'aster':
+                        credentials = {
+                            'api_key': credentials_dict.get('api_key', ''),
+                            'secret_key': credentials_dict.get('secret_key', '')
+                        }
+                        if not credentials['api_key'] or not credentials['secret_key']:
+                            raise ValueError("Missing required fields: api_key, secret_key")
+                    elif exchange == 'backpack':
+                        credentials = {
+                            'public_key': credentials_dict.get('public_key', ''),
+                            'secret_key': credentials_dict.get('secret_key', '')
+                        }
+                        if not credentials['public_key'] or not credentials['secret_key']:
+                            raise ValueError("Missing required fields: public_key, secret_key")
+                    elif exchange == 'paradex':
+                        credentials = {
+                            'l1_address': credentials_dict.get('l1_address', ''),
+                            'l2_private_key_hex': credentials_dict.get('l2_private_key_hex', ''),
+                            'l2_address': credentials_dict.get('l2_address'),
+                            'environment': credentials_dict.get('environment', 'prod')
+                        }
+                        if not credentials['l1_address'] or not credentials['l2_private_key_hex']:
+                            raise ValueError("Missing required fields: l1_address, l2_private_key_hex")
+                    else:
+                        raise ValueError(f"Unknown exchange: {exchange}")
+                    
+                except json.JSONDecodeError as e:
+                    await update.message.reply_text(
+                        f"❌ Invalid JSON format: {str(e)}\n\n"
+                        "Please send valid JSON. Example:\n"
+                        f"<code>{{\"api_key\": \"value\", \"secret_key\": \"value\"}}</code>",
+                        parse_mode='HTML'
+                    )
+                    return
+                except ValueError as e:
+                    await update.message.reply_text(
+                        f"❌ {str(e)}\n\nPlease check your JSON and try again.",
+                        parse_mode='HTML'
+                    )
+                    return
             
             # Verify credentials
             await update.message.reply_text("⏳ Verifying credentials...", parse_mode='HTML')
@@ -1296,6 +1542,10 @@ class AccountHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.add_exchange_exchange_callback,
             pattern="^add_exc_ex:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.add_exchange_mode_callback,
+            pattern="^add_exc_mode:"
         ))
         application.add_handler(CallbackQueryHandler(
             self.add_proxy_account_callback,
