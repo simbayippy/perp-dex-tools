@@ -548,8 +548,8 @@ stdout_logfile={stdout_log}
         except (KeyError, TypeError):
             old_port = None
         
-        # Can only resume stopped strategies
-        if current_status not in ("stopped", "error"):
+        # Can only resume stopped or paused strategies
+        if current_status not in ("stopped", "error", "paused"):
             logger.warning(f"Cannot resume strategy with status '{current_status}': {run_id}")
             return False
         

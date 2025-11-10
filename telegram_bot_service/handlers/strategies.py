@@ -154,6 +154,8 @@ class StrategyHandler(BaseHandler):
                 return
             
             message = f"{title} - {filter_label}\n\n"
+            keyboard = []
+            
             for strat in strategies:
                 status_emoji = {
                     'running': '🟢',
@@ -163,10 +165,13 @@ class StrategyHandler(BaseHandler):
                     'paused': '⏸'
                 }.get(strat['status'], '⚪')
                 
-                run_id_short = str(strat['id'])[:8]
+                run_id = str(strat['id'])
+                run_id_short = run_id[:8]
+                status = strat['status']
+                
                 message += (
                     f"{status_emoji} <b>{run_id_short}</b>\n"
-                    f"   Status: {strat['status']}\n"
+                    f"   Status: {status}\n"
                 )
                 
                 if strat.get('started_at'):
@@ -179,11 +184,35 @@ class StrategyHandler(BaseHandler):
                     message += f"   Uptime: {hours}h {minutes}m\n"
                 
                 message += "\n"
+                
+                # Add action button based on status
+                if status in ('running', 'starting'):
+                    # Running strategies can be stopped
+                    keyboard.append([
+                        InlineKeyboardButton(
+                            f"🛑 Stop {run_id_short}",
+                            callback_data=f"stop_strategy:{run_id}"
+                        )
+                    ])
+                elif status in ('stopped', 'error'):
+                    # Stopped strategies can be resumed
+                    keyboard.append([
+                        InlineKeyboardButton(
+                            f"▶️ Resume {run_id_short}",
+                            callback_data=f"resume_strategy:{run_id}"
+                        )
+                    ])
+                elif status == 'paused':
+                    # Paused strategies can be resumed
+                    keyboard.append([
+                        InlineKeyboardButton(
+                            f"▶️ Resume {run_id_short}",
+                            callback_data=f"resume_strategy:{run_id}"
+                        )
+                    ])
             
-            # Show back button instead of all filter buttons
-            keyboard = [
-                [InlineKeyboardButton("⬅️ Back", callback_data="back_to_strategies_filters")]
-            ]
+            # Add back button at the bottom
+            keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="back_to_strategies_filters")])
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
@@ -658,10 +687,10 @@ class StrategyHandler(BaseHandler):
                 return
             
             current_status = row['status']
-            if current_status not in ('stopped', 'error'):
+            if current_status not in ('stopped', 'error', 'paused'):
                 await query.edit_message_text(
-                    f"ℹ️ Strategy is not stopped (status: {current_status}).\n"
-                    f"Only stopped strategies can be resumed.",
+                    f"ℹ️ Strategy is not stopped or paused (status: {current_status}).\n"
+                    f"Only stopped/paused strategies can be resumed.",
                     parse_mode='HTML'
                 )
                 return
