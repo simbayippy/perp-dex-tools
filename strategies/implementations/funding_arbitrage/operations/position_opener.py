@@ -100,7 +100,7 @@ class PositionOpener:
             try:
                 long_price = execution.long_fill.get("fill_price")
                 short_price = execution.short_fill.get("fill_price")
-                await strategy.notification_service.notify_position_opened(
+                await self._strategy.notification_service.notify_position_opened(
                     symbol=execution.position.symbol,
                     long_dex=execution.position.long_dex,
                     short_dex=execution.position.short_dex,
@@ -111,7 +111,7 @@ class PositionOpener:
                 )
             except Exception as exc:
                 # Don't fail position opening if notification fails
-                strategy.logger.warning(f"Failed to send position opened notification: {exc}")
+                self._strategy.logger.warning(f"Failed to send position opened notification: {exc}")
 
             return persistence.position
 
