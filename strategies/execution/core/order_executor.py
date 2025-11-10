@@ -289,6 +289,9 @@ class OrderExecutor:
                 # Sell at bid + offset (better than market taker)
                 limit_price = best_bid * (Decimal('1') + price_offset_pct)
             
+            # Align price to the exchange's tick size before we derive order size or submit
+            limit_price = exchange_client.round_to_tick(limit_price)
+            
             order_quantity: Decimal
             if quantity is not None:
                 order_quantity = Decimal(str(quantity)).copy_abs()
