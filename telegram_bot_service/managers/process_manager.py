@@ -988,15 +988,15 @@ stdout_logfile={stdout_log}
                     
                     if supervisor_state in ("STOPPED", "EXITED"):
                         # Supervisor explicitly reports stopped - update DB
-                    await self.database.execute(
-                        """
-                        UPDATE strategy_runs
-                        SET status = 'stopped', stopped_at = :stopped_at
-                        WHERE id = :id
-                        """,
-                        {"id": row["id"], "stopped_at": datetime.now()}
-                    )
-                    stats["marked_stopped"] += 1
+                        await self.database.execute(
+                            """
+                            UPDATE strategy_runs
+                            SET status = 'stopped', stopped_at = :stopped_at
+                            WHERE id = :id
+                            """,
+                            {"id": row["id"], "stopped_at": datetime.now()}
+                        )
+                        stats["marked_stopped"] += 1
                         logger.info(f"Recovery: Marked {program_name} as stopped (Supervisor: {supervisor_state})")
                     elif supervisor_state == "RUNNING" and db_status != "running":
                         # Supervisor says running but DB says otherwise - update DB to running
