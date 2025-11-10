@@ -954,8 +954,8 @@ stdout_logfile={stdout_log}
             
             # Get all running processes from Supervisor
             try:
-            supervisor = self._get_supervisor_client()
-            all_processes = supervisor.supervisor.getAllProcessInfo()
+                supervisor = self._get_supervisor_client()
+                all_processes = supervisor.supervisor.getAllProcessInfo()
             except Exception as exc:
                 # If we can't connect to Supervisor during recovery, don't update statuses
                 # This prevents incorrectly marking strategies as stopped during
