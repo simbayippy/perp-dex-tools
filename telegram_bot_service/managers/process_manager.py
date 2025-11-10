@@ -953,8 +953,16 @@ stdout_logfile={stdout_log}
             stats["db_running"] = len(db_runs)
             
             # Get all running processes from Supervisor
-            supervisor = self._get_supervisor_client()
-            all_processes = supervisor.supervisor.getAllProcessInfo()
+            try:
+                supervisor = self._get_supervisor_client()
+                all_processes = supervisor.supervisor.getAllProcessInfo()
+            except Exception as exc:
+                # If we can't connect to Supervisor during recovery, don't update statuses
+                # This prevents incorrectly marking strategies as stopped during
+                # Supervisor connection issues or temporary unavailability
+                logger.warning(f"Could not connect to Supervisor during recovery: {exc}")
+                stats["errors_found"] += 1
+                return stats
             
             # Filter to our strategy programs
             supervisor_strategies = {
@@ -967,19 +975,62 @@ stdout_logfile={stdout_log}
             # Reconcile differences
             db_program_names = {row["supervisor_program_name"] for row in db_runs}
             
-            # Mark DB entries as stopped if Supervisor doesn't have them
+            # Update DB status based on Supervisor state for processes that Supervisor knows about
+            # Only mark as stopped if Supervisor explicitly reports STOPPED/EXITED state
             for row in db_runs:
                 program_name = row["supervisor_program_name"]
-                if program_name not in supervisor_strategies:
-                    await self.database.execute(
-                        """
-                        UPDATE strategy_runs
-                        SET status = 'stopped', stopped_at = :stopped_at
-                        WHERE id = :id
-                        """,
-                        {"id": row["id"], "stopped_at": datetime.now()}
-                    )
-                    stats["marked_stopped"] += 1
+                db_status = row["status"]
+                
+                if program_name in supervisor_strategies:
+                    # Process exists in Supervisor - check its actual state
+                    proc_info = supervisor_strategies[program_name]
+                    supervisor_state = proc_info.get("statename", "UNKNOWN")
+                    
+                    if supervisor_state in ("STOPPED", "EXITED"):
+                        # Supervisor explicitly reports stopped - update DB
+                        await self.database.execute(
+                            """
+                            UPDATE strategy_runs
+                            SET status = 'stopped', stopped_at = :stopped_at
+                            WHERE id = :id
+                            """,
+                            {"id": row["id"], "stopped_at": datetime.now()}
+                        )
+                        stats["marked_stopped"] += 1
+                        logger.info(f"Recovery: Marked {program_name} as stopped (Supervisor: {supervisor_state})")
+                    elif supervisor_state == "RUNNING" and db_status != "running":
+                        # Supervisor says running but DB says otherwise - update DB to running
+                        await self.database.execute(
+                            """
+                            UPDATE strategy_runs
+                            SET status = 'running', stopped_at = NULL
+                            WHERE id = :id
+                            """,
+                            {"id": row["id"]}
+                        )
+                        logger.info(f"Recovery: Updated {program_name} to running (was {db_status})")
+                    elif supervisor_state == "FATAL":
+                        # Supervisor reports FATAL - mark as error
+                        await self.database.execute(
+                            """
+                            UPDATE strategy_runs
+                            SET status = 'error', error_message = :error_msg
+                            WHERE id = :id
+                            """,
+                            {
+                                "id": row["id"],
+                                "error_msg": proc_info.get("spawnerr", "Supervisor FATAL state")
+                            }
+                        )
+                        stats["errors_found"] += 1
+                        logger.warning(f"Recovery: Marked {program_name} as error (Supervisor: FATAL)")
+                else:
+                    # Process not in Supervisor list
+                    # Don't automatically mark as stopped - only update if Supervisor explicitly
+                    # reports STOPPED/EXITED. This prevents incorrect status updates during
+                    # connection issues or temporary Supervisor unavailability.
+                    logger.debug(f"Recovery: Process {program_name} not found in Supervisor list (DB status: {db_status})")
+                    # Leave DB status as-is - don't update
             
             # Stop orphaned Supervisor processes (not in DB)
             for program_name, proc_info in supervisor_strategies.items():
