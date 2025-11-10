@@ -715,10 +715,10 @@ class AccountHandler(BaseHandler):
                 }
             }
             
-            # Show input mode selection (include account_id in callback to avoid session expiration)
+            # Show input mode selection (wizard already contains account_id, no need to include in callback)
             keyboard = [
-                [InlineKeyboardButton("⚡ Quick Input (JSON)", callback_data=f"add_exc_mode:{exchange}:json:{account_id}")],
-                [InlineKeyboardButton("📝 Step-by-Step", callback_data=f"add_exc_mode:{exchange}:interactive:{account_id}")]
+                [InlineKeyboardButton("⚡ Quick Input (JSON)", callback_data=f"add_exc_mode:{exchange}:json")],
+                [InlineKeyboardButton("📝 Step-by-Step", callback_data=f"add_exc_mode:{exchange}:interactive")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -783,9 +783,9 @@ class AccountHandler(BaseHandler):
         
         try:
             callback_data = query.data
-            # Format: add_exc_mode:{exchange}:{mode}:{account_id}
-            parts = callback_data.split(":", 3)
-            if len(parts) != 4:
+            # Format: add_exc_mode:{exchange}:{mode}
+            parts = callback_data.split(":", 2)
+            if len(parts) != 3:
                 await query.edit_message_text(
                     "❌ Invalid callback data. Please try again with /add_exchange",
                     parse_mode='HTML'
@@ -794,35 +794,38 @@ class AccountHandler(BaseHandler):
             
             exchange = parts[1]
             mode = parts[2]
-            account_id = parts[3]  # Get account_id from callback_data instead of context
             
-            # Get account name
-            account_row = await self.database.fetch_one(
-                "SELECT account_name FROM accounts WHERE id = :id",
-                {"id": account_id}
-            )
-            
-            if not account_row:
+            # Get account_id from existing wizard (created in add_exchange_exchange_callback)
+            wizard = context.user_data.get('wizard')
+            if not wizard or wizard.get('type') != 'add_exchange':
                 await query.edit_message_text(
-                    "❌ Account not found. Please try again.",
+                    "❌ Session expired. Please start over with /add_exchange",
                     parse_mode='HTML'
                 )
                 return
             
-            account_name = account_row['account_name']
+            wizard_data = wizard.get('data', {})
+            account_id = wizard_data.get('account_id')
+            account_name = wizard_data.get('account_name')
             
-            # Start wizard for credentials
-            context.user_data['wizard'] = {
-                'type': 'add_exchange',
-                'step': 1,
-                'mode': mode,  # 'json' or 'interactive'
-                'data': {
-                    'account_id': account_id,
-                    'account_name': account_name,
-                    'exchange': exchange,
-                    'credentials': {}
-                }
-            }
+            if not account_id:
+                await query.edit_message_text(
+                    "❌ Session expired. Please start over with /add_exchange",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Verify exchange matches
+            if wizard_data.get('exchange') != exchange:
+                await query.edit_message_text(
+                    "❌ Exchange mismatch. Please start over with /add_exchange",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Update existing wizard with mode
+            context.user_data['wizard']['mode'] = mode
+            context.user_data['wizard']['data']['credentials'] = {}
             
             if mode == 'json':
                 # JSON mode - show example and prompt
