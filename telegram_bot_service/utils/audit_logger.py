@@ -35,7 +35,7 @@ class AuditLogger:
         Log an action to audit_log table.
         
         Args:
-            user_id: User UUID
+            user_id: User UUID (must be string)
             action: Action type (e.g., 'start_strategy', 'stop_strategy', 'create_account')
             details: Optional action-specific details
         """
@@ -45,17 +45,20 @@ class AuditLogger:
         """
         
         try:
+            # Ensure user_id is a string
+            user_id_str = str(user_id) if user_id else None
+            
             await self.database.execute(
                 query,
                 {
-                    "user_id": user_id,
+                    "user_id": user_id_str,
                     "action": action,
                     "details": details or {},
                     "created_at": datetime.now()
                 }
             )
         except Exception as e:
-            logger.error(f"Failed to log audit action: {e}")
+            logger.error(f"Failed to log audit action: {e}", exc_info=True)
     
     async def log_strategy_start(
         self,

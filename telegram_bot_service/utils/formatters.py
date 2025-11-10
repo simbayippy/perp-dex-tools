@@ -380,13 +380,7 @@ class TelegramFormatter:
 /stop or /stop_strategy &lt;run_id&gt; - Stop running strategy
 /logs &lt;run_id&gt; - View strategy logs
 /limits - Check usage limits and quotas
-
-<b>Examples:</b>
-<code>/auth perp_8585a9b87b0ebd546c99347979101304</code>
-<code>/quick_start</code>
-<code>/create_config</code>
-<code>/run</code>
-<code>/list_strategies</code>"""
+"""
     
     @staticmethod
     def format_error(message: str) -> str:

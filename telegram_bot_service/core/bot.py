@@ -504,7 +504,7 @@ class StrategyControlBot:
         )
     
     async def add_exchange_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /add_exchange command."""
+        """Handle /add_exchange command - interactive account selection."""
         telegram_user_id = update.effective_user.id
         user = await self.auth.get_user_by_telegram_id(telegram_user_id)
         if not user:
@@ -514,48 +514,37 @@ class StrategyControlBot:
             )
             return
         
-        if not context.args or len(context.args) < 2:
+        # Get user's accounts
+        query = """
+            SELECT id, account_name
+            FROM accounts
+            WHERE user_id = :user_id AND is_active = TRUE
+            ORDER BY account_name
+        """
+        accounts = await self.database.fetch_all(query, {"user_id": str(user["id"])})
+        
+        if not accounts:
             await update.message.reply_text(
-                "❌ Usage: /add_exchange &lt;account_name&gt; &lt;exchange&gt;\n\n"
-                "Supported exchanges: lighter, aster, backpack, paradex",
+                "❌ No accounts found. Create an account first with /create_account",
                 parse_mode='HTML'
             )
             return
         
-        account_name = context.args[0]
-        exchange = context.args[1].lower()
+        # Create account selection keyboard
+        keyboard = []
+        for acc in accounts:
+            keyboard.append([InlineKeyboardButton(
+                acc['account_name'],
+                callback_data=f"add_exchange_account:{acc['id']}"
+            )])
         
-        if exchange not in ['lighter', 'aster', 'backpack', 'paradex']:
-            await update.message.reply_text(
-                f"❌ Unsupported exchange: {exchange}\n\n"
-                "Supported: lighter, aster, backpack, paradex",
-                parse_mode='HTML'
-            )
-            return
-        
-        # Start exchange credential wizard
-        context.user_data['wizard'] = {
-            'type': 'add_exchange',
-            'step': 1,
-            'data': {
-                'account_name': account_name,
-                'exchange': exchange
-            }
-        }
-        
-        # Prompt for exchange-specific credentials
-        prompts = {
-            'lighter': "Enter Lighter credentials:\nFormat: private_key,account_index,api_key_index",
-            'aster': "Enter Aster credentials:\nFormat: api_key,secret_key",
-            'backpack': "Enter Backpack credentials:\nFormat: public_key,secret_key",
-            'paradex': "Enter Paradex credentials:\nFormat: l1_address,l2_private_key_hex,l2_address,environment"
-        }
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            f"🔐 <b>Add {exchange.upper()} Credentials</b>\n\n"
-            f"{prompts[exchange]}\n\n"
-            "Send credentials separated by commas:",
-            parse_mode='HTML'
+            "🔐 <b>Add Exchange Credentials</b>\n\n"
+            "Step 1/2: Select account:",
+            parse_mode='HTML',
+            reply_markup=reply_markup
         )
     
     async def add_proxy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -869,7 +858,7 @@ class StrategyControlBot:
             success = await self.process_manager.stop_strategy(run_id)
             
             if success:
-                await self.audit_logger.log_strategy_stop(user["id"], run_id)
+                await self.audit_logger.log_strategy_stop(str(user["id"]), run_id)
                 await update.message.reply_text(
                     f"✅ Strategy stopped: {run_id[:8]}",
                     parse_mode='HTML'
@@ -1062,6 +1051,14 @@ class StrategyControlBot:
             self.config_type_callback,
             pattern="^config_type:"
         ))
+        application.add_handler(CallbackQueryHandler(
+            self.add_exchange_account_callback,
+            pattern="^add_exchange_account:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.add_exchange_exchange_callback,
+            pattern="^add_exchange_exchange:"
+        ))
         
         # Wizard message handler (for multi-step wizards)
         application.add_handler(MessageHandler(
@@ -1096,13 +1093,7 @@ class StrategyControlBot:
             # Account name
             data['account_name'] = text
             wizard['step'] = 2
-            await update.message.reply_text(
-                "✅ Account name saved\n\n"
-                "Step 2/4: Add exchange credentials\n"
-                "Use /add_exchange after account creation",
-                parse_mode='HTML'
-            )
-            # For now, create account immediately
+            # Create account immediately and send single combined message
             await self._create_account_finalize(update, context, data)
         # Additional steps can be added here
     
@@ -1120,19 +1111,20 @@ class StrategyControlBot:
             await self.database.execute(query, {
                 "id": account_id,
                 "name": data['account_name'],
-                "user_id": user["id"],
+                "user_id": str(user["id"]),  # Ensure string conversion
                 "description": f"Account created via Telegram: {data['account_name']}"
             })
             
-            await self.audit_logger.log_account_creation(user["id"], account_id, data['account_name'])
-            await self.safety_manager.initialize_user_limits(user["id"])
+            await self.audit_logger.log_account_creation(str(user["id"]), account_id, data['account_name'])
+            await self.safety_manager.initialize_user_limits(str(user["id"]))
             
             context.user_data.pop('wizard', None)
             
+            # Single combined message
             await update.message.reply_text(
                 f"✅ Account created: <b>{data['account_name']}</b>\n\n"
                 "Next steps:\n"
-                "1. Add exchange credentials: /add_exchange {account_name} &lt;exchange&gt;\n"
+                "1. Add exchange credentials: /add_exchange\n"
                 "2. Add proxy: /add_proxy {account_name}",
                 parse_mode='HTML'
             )
@@ -1143,10 +1135,88 @@ class StrategyControlBot:
                 parse_mode='HTML'
             )
     
+    async def add_exchange_account_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle account selection for add_exchange."""
+        query = update.callback_query
+        await query.answer()
+        
+        callback_data = query.data
+        account_id = callback_data.split(":", 1)[1]
+        
+        # Get account name
+        account_row = await self.database.fetch_one(
+            "SELECT account_name FROM accounts WHERE id = :id",
+            {"id": account_id}
+        )
+        account_name = account_row['account_name'] if account_row else account_id
+        
+        # Show exchange selection
+        keyboard = [
+            [InlineKeyboardButton("⚡ Lighter", callback_data=f"add_exchange_exchange:{account_id}:lighter")],
+            [InlineKeyboardButton("🌟 Aster", callback_data=f"add_exchange_exchange:{account_id}:aster")],
+            [InlineKeyboardButton("🎒 Backpack", callback_data=f"add_exchange_exchange:{account_id}:backpack")],
+            [InlineKeyboardButton("🎪 Paradex", callback_data=f"add_exchange_exchange:{account_id}:paradex")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"🔐 <b>Add Exchange Credentials</b>\n\n"
+            f"Account: <b>{account_name}</b>\n\n"
+            "Step 2/2: Select exchange:",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+    
+    async def add_exchange_exchange_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle exchange selection for add_exchange."""
+        query = update.callback_query
+        await query.answer()
+        
+        callback_data = query.data
+        # Format: add_exchange_exchange:{account_id}:{exchange}
+        parts = callback_data.split(":", 2)
+        account_id = parts[1]
+        exchange = parts[2]
+        
+        # Get account name
+        account_row = await self.database.fetch_one(
+            "SELECT account_name FROM accounts WHERE id = :id",
+            {"id": account_id}
+        )
+        account_name = account_row['account_name'] if account_row else account_id
+        
+        # Start wizard for credentials
+        context.user_data['wizard'] = {
+            'type': 'add_exchange',
+            'step': 1,
+            'data': {
+                'account_id': account_id,
+                'account_name': account_name,
+                'exchange': exchange
+            }
+        }
+        
+        # Prompt for exchange-specific credentials
+        prompts = {
+            'lighter': "Enter Lighter credentials:\nFormat: <code>private_key,account_index,api_key_index</code>",
+            'aster': "Enter Aster credentials:\nFormat: <code>api_key,secret_key</code>",
+            'backpack': "Enter Backpack credentials:\nFormat: <code>public_key,secret_key</code>",
+            'paradex': "Enter Paradex credentials:\nFormat: <code>l1_address,l2_private_key_hex[,l2_address,environment]</code>"
+        }
+        
+        await query.edit_message_text(
+            f"🔐 <b>Add {exchange.upper()} Credentials</b>\n\n"
+            f"Account: <b>{account_name}</b>\n\n"
+            f"{prompts[exchange]}\n\n"
+            "Send credentials separated by commas:",
+            parse_mode='HTML'
+        )
+    
     async def _handle_add_exchange_wizard(self, update, context, wizard, text):
         """Handle add exchange wizard steps."""
         data = wizard['data']
         exchange = data['exchange']
+        account_id = data['account_id']
         
         try:
             # Parse credentials based on exchange
@@ -1211,36 +1281,17 @@ class StrategyControlBot:
                 )
                 return
             
-            # Get account ID
-            query = """
-                SELECT id FROM accounts
-                WHERE account_name = :name AND user_id = :user_id
-            """
+            # Store credentials
             telegram_user_id = update.effective_user.id
             user = await self.auth.get_user_by_telegram_id(telegram_user_id)
-            row = await self.database.fetch_one(query, {
-                "name": data['account_name'],
-                "user_id": user["id"]
-            })
-            
-            if not row:
-                await update.message.reply_text(
-                    f"❌ Account not found: {data['account_name']}",
-                    parse_mode='HTML'
-                )
-                return
-            
-            account_id = row["id"]
-            
-            # Store credentials (using AccountManager logic)
             await self._store_exchange_credentials(account_id, exchange, credentials)
             
-            await self.audit_logger.log_credential_update(user["id"], account_id, exchange)
+            await self.audit_logger.log_credential_update(str(user["id"]), account_id, exchange)
             
             context.user_data.pop('wizard', None)
             
             await update.message.reply_text(
-                f"✅ {exchange.upper()} credentials added successfully!",
+                f"✅ {exchange.upper()} credentials added successfully to <b>{data['account_name']}</b>!",
                 parse_mode='HTML'
             )
             
@@ -1333,7 +1384,7 @@ class StrategyControlBot:
             # Store proxy
             await self._store_proxy(account_id, data)
             
-            await self.audit_logger.log_proxy_assignment(user["id"], account_id, "proxy_id")
+            await self.audit_logger.log_proxy_assignment(str(user["id"]), account_id, "proxy_id")
             
             context.user_data.pop('wizard', None)
             
@@ -1628,7 +1679,7 @@ class StrategyControlBot:
             )
             
             await self.audit_logger.log_strategy_start(
-                user["id"],
+                str(user["id"]),
                 result['run_id'],
                 account_id,
                 config_id,
