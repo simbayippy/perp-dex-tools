@@ -127,7 +127,15 @@ class StrategyProcessManager:
         """
         # Generate run_id
         run_id = str(uuid.uuid4())
-        supervisor_program_name = f"strategy_{run_id[:8]}"
+        # Supervisor program names must start with a letter, not a number
+        # Use first 8 chars of UUID, but ensure it starts with a letter
+        run_id_short = run_id[:8]
+        # If it starts with a number, prefix with 's' (strategy)
+        if run_id_short[0].isdigit():
+            supervisor_program_name = f"s{run_id_short}"
+        else:
+            supervisor_program_name = run_id_short
+        supervisor_program_name = f"strategy_{supervisor_program_name}"
         
         # Allocate port
         port = await self.port_manager.allocate_port()

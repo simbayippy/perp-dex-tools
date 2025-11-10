@@ -494,9 +494,11 @@ class StrategyHandler(BaseHandler):
             context.user_data.pop('wizard', None)
             
         except Exception as e:
-            self.logger.error(f"Start strategy error: {e}")
+            self.logger.error(f"Start strategy error: {e}", exc_info=True)
+            # Escape HTML special characters in error message to avoid parsing errors
+            error_msg = str(e).replace('<', '&lt;').replace('>', '&gt;')
             await query.edit_message_text(
-                f"❌ Failed to start strategy: {str(e)}",
+                f"❌ Failed to start strategy: {error_msg}",
                 parse_mode='HTML'
             )
     
