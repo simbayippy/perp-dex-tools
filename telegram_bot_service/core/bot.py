@@ -461,15 +461,37 @@ class StrategyControlBot:
                 return
             
             message = "📊 <b>Your Accounts</b>\n\n"
+            keyboard = []
+            
             for row in rows:
                 status_emoji = "🟢" if row["is_active"] else "⚫"
+                account_id = str(row["id"])
+                account_name = row["account_name"]
                 message += (
-                    f"{status_emoji} <b>{row['account_name']}</b>\n"
+                    f"{status_emoji} <b>{account_name}</b>\n"
                     f"   Exchanges: {row['exchange_count']}\n"
                     f"   Proxies: {row['proxy_count']}\n\n"
                 )
+                
+                # Add edit and delete buttons for each account
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"✏️ {account_name}",
+                        callback_data=f"edit_account_btn:{account_id}"
+                    ),
+                    InlineKeyboardButton(
+                        f"🗑️ {account_name}",
+                        callback_data=f"delete_account_btn:{account_id}"
+                    )
+                ])
             
-            await update.message.reply_text(message, parse_mode='HTML')
+            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+            
+            await update.message.reply_text(
+                message,
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
             
         except Exception as e:
             self.logger.error(f"List accounts error: {e}")
@@ -620,12 +642,27 @@ class StrategyControlBot:
             templates = await self.database.fetch_all(query_templates)
             
             message = "📋 <b>Your Configurations</b>\n\n"
+            keyboard = []
             
             if user_configs:
                 message += "<b>Your Configs:</b>\n"
                 for cfg in user_configs:
                     status = "🟢" if cfg["is_active"] else "⚫"
-                    message += f"{status} {cfg['config_name']} ({cfg['strategy_type']})\n"
+                    config_id = str(cfg["id"])
+                    config_name = cfg["config_name"]
+                    message += f"{status} <b>{config_name}</b> ({cfg['strategy_type']})\n"
+                    
+                    # Add edit and delete buttons for each config
+                    keyboard.append([
+                        InlineKeyboardButton(
+                            f"✏️ {config_name}",
+                            callback_data=f"edit_config_btn:{config_id}"
+                        ),
+                        InlineKeyboardButton(
+                            f"🗑️ {config_name}",
+                            callback_data=f"delete_config_btn:{config_id}"
+                        )
+                    ])
                 message += "\n"
             else:
                 message += "No configs yet. Create one with /create_config\n\n"
@@ -637,7 +674,13 @@ class StrategyControlBot:
                 if len(templates) > 10:
                     message += f"... and {len(templates) - 10} more\n"
             
-            await update.message.reply_text(message, parse_mode='HTML')
+            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+            
+            await update.message.reply_text(
+                message,
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
             
         except Exception as e:
             self.logger.error(f"List configs error: {e}")
@@ -1079,6 +1122,38 @@ class StrategyControlBot:
             self.add_exchange_exchange_callback,
             pattern="^add_exc_ex:"
         ))
+        application.add_handler(CallbackQueryHandler(
+            self.edit_account_callback,
+            pattern="^edit_account_btn:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.delete_account_callback,
+            pattern="^delete_account_btn:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.delete_account_confirm_callback,
+            pattern="^delete_account_confirm:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.delete_account_cancel_callback,
+            pattern="^delete_account_cancel:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.edit_config_callback,
+            pattern="^edit_config_btn:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.delete_config_callback,
+            pattern="^delete_config_btn:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.delete_config_confirm_callback,
+            pattern="^delete_config_confirm:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.delete_config_cancel_callback,
+            pattern="^delete_config_cancel:"
+        ))
         
         # Wizard message handler (for multi-step wizards)
         application.add_handler(MessageHandler(
@@ -1103,6 +1178,10 @@ class StrategyControlBot:
             await self._handle_add_exchange_wizard(update, context, wizard, text)
         elif wizard['type'] == 'add_proxy':
             await self._handle_add_proxy_wizard(update, context, wizard, text)
+        elif wizard['type'] == 'edit_account':
+            await self._handle_edit_account_wizard(update, context, wizard, text)
+        elif wizard['type'] == 'edit_config':
+            await self._handle_edit_config_wizard(update, context, wizard, text)
     
     async def _handle_create_account_wizard(self, update, context, wizard, text):
         """Handle create account wizard steps."""
@@ -1483,6 +1562,192 @@ class StrategyControlBot:
                 parse_mode='HTML'
             )
     
+    async def _handle_edit_account_wizard(self, update, context, wizard, text):
+        """Handle edit account wizard steps."""
+        data = wizard['data']
+        step = wizard['step']
+        account_id = data['account_id']
+        
+        if text.lower() == 'cancel':
+            context.user_data.pop('wizard', None)
+            await update.message.reply_text(
+                "❌ Account edit cancelled.",
+                parse_mode='HTML'
+            )
+            return
+        
+        if step == 1:
+            # User selected what to edit (1-4)
+            choice = text.strip()
+            
+            if choice == '1':
+                # Edit account name
+                wizard['step'] = 2
+                wizard['data']['edit_type'] = 'name'
+                await update.message.reply_text(
+                    "Enter new account name:",
+                    parse_mode='HTML'
+                )
+            elif choice == '2':
+                # Edit description
+                wizard['step'] = 2
+                wizard['data']['edit_type'] = 'description'
+                await update.message.reply_text(
+                    "Enter new description (or 'none' to remove):",
+                    parse_mode='HTML'
+                )
+            elif choice == '3':
+                # Add exchange credentials (redirect to add_exchange flow)
+                context.user_data.pop('wizard', None)
+                await update.message.reply_text(
+                    f"Use /add_exchange to add exchange credentials to this account.",
+                    parse_mode='HTML'
+                )
+            elif choice == '4':
+                # Add proxy (redirect to add_proxy flow)
+                context.user_data.pop('wizard', None)
+                account_name = data['account_name']
+                await update.message.reply_text(
+                    f"Use /add_proxy {account_name} to add a proxy to this account.",
+                    parse_mode='HTML'
+                )
+            else:
+                await update.message.reply_text(
+                    "❌ Invalid choice. Please send 1, 2, 3, 4, or 'cancel'.",
+                    parse_mode='HTML'
+                )
+        
+        elif step == 2:
+            # User provided new value
+            edit_type = data.get('edit_type')
+            telegram_user_id = update.effective_user.id
+            user = await self.auth.get_user_by_telegram_id(telegram_user_id)
+            
+            try:
+                if edit_type == 'name':
+                    # Update account name
+                    await self.database.execute(
+                        """
+                        UPDATE accounts
+                        SET account_name = :name, updated_at = NOW()
+                        WHERE id = :id AND user_id = :user_id
+                        """,
+                        {"id": account_id, "name": text, "user_id": str(user["id"])}
+                    )
+                    await self.audit_logger.log_action(
+                        str(user["id"]),
+                        "edit_account",
+                        {"account_id": account_id, "field": "name", "new_value": text}
+                    )
+                    await update.message.reply_text(
+                        f"✅ Account name updated to <b>{text}</b>",
+                        parse_mode='HTML'
+                    )
+                
+                elif edit_type == 'description':
+                    # Update description
+                    description = None if text.lower() == 'none' else text
+                    await self.database.execute(
+                        """
+                        UPDATE accounts
+                        SET description = :desc, updated_at = NOW()
+                        WHERE id = :id AND user_id = :user_id
+                        """,
+                        {"id": account_id, "desc": description, "user_id": str(user["id"])}
+                    )
+                    await self.audit_logger.log_action(
+                        str(user["id"]),
+                        "edit_account",
+                        {"account_id": account_id, "field": "description", "new_value": description}
+                    )
+                    await update.message.reply_text(
+                        f"✅ Account description updated.",
+                        parse_mode='HTML'
+                    )
+                
+                context.user_data.pop('wizard', None)
+            except Exception as e:
+                self.logger.error(f"Error updating account: {e}")
+                await update.message.reply_text(
+                    f"❌ Failed to update account: {str(e)}",
+                    parse_mode='HTML'
+                )
+    
+    async def _handle_edit_config_wizard(self, update, context, wizard, text):
+        """Handle edit config wizard steps."""
+        data = wizard['data']
+        config_id = data['config_id']
+        
+        if text.lower() == 'cancel':
+            context.user_data.pop('wizard', None)
+            await update.message.reply_text(
+                "❌ Config edit cancelled.",
+                parse_mode='HTML'
+            )
+            return
+        
+        telegram_user_id = update.effective_user.id
+        user = await self.auth.get_user_by_telegram_id(telegram_user_id)
+        
+        try:
+            import yaml
+            import json
+            
+            # Try to parse as YAML first, then JSON
+            try:
+                config_dict = yaml.safe_load(text)
+            except:
+                try:
+                    config_dict = json.loads(text)
+                except:
+                    await update.message.reply_text(
+                        "❌ Invalid format. Please provide valid YAML or JSON.",
+                        parse_mode='HTML'
+                    )
+                    return
+            
+            # Validate config structure
+            if not isinstance(config_dict, dict):
+                await update.message.reply_text(
+                    "❌ Config must be a dictionary/object.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Update config in database
+            await self.database.execute(
+                """
+                UPDATE strategy_configs
+                SET config_data = CAST(:config_data AS jsonb),
+                    updated_at = NOW()
+                WHERE id = :id AND user_id = :user_id
+                """,
+                {
+                    "id": config_id,
+                    "config_data": json.dumps(config_dict),
+                    "user_id": str(user["id"])
+                }
+            )
+            
+            await self.audit_logger.log_action(
+                str(user["id"]),
+                "edit_config",
+                {"config_id": config_id, "config_name": data['config_name']}
+            )
+            
+            context.user_data.pop('wizard', None)
+            
+            await update.message.reply_text(
+                f"✅ Config <b>{data['config_name']}</b> updated successfully!",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            self.logger.error(f"Error updating config: {e}")
+            await update.message.reply_text(
+                f"❌ Failed to update config: {str(e)}",
+                parse_mode='HTML'
+            )
+    
     async def _store_exchange_credentials(self, account_id: str, exchange_name: str, credentials: Dict[str, str]):
         """Store exchange credentials in database."""
         # Get exchange_id
@@ -1602,6 +1867,413 @@ class StrategyControlBot:
             proxy_id=proxy_id,
             priority=0,
             status="active"
+        )
+    
+    # ========================================================================
+    # Account Management Callbacks
+    # ========================================================================
+    
+    async def edit_account_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle edit account button click."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            callback_data = query.data
+            account_id = callback_data.split(":", 1)[1]
+            
+            # Get account details
+            account_row = await self.database.fetch_one(
+                """
+                SELECT account_name, description, is_active
+                FROM accounts
+                WHERE id = :id
+                """,
+                {"id": account_id}
+            )
+            
+            if not account_row:
+                await query.edit_message_text(
+                    "❌ Account not found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            account_name = account_row['account_name']
+            
+            # Start edit wizard
+            context.user_data['wizard'] = {
+                'type': 'edit_account',
+                'step': 1,
+                'data': {
+                    'account_id': account_id,
+                    'account_name': account_name
+                }
+            }
+            
+            await query.edit_message_text(
+                f"✏️ <b>Edit Account: {account_name}</b>\n\n"
+                "What would you like to edit?\n\n"
+                "1. Account name\n"
+                "2. Description\n"
+                "3. Add exchange credentials\n"
+                "4. Add proxy\n\n"
+                "Send the number (1-4) or 'cancel' to cancel:",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            self.logger.error(f"Error in edit_account_callback: {e}", exc_info=True)
+            try:
+                await query.edit_message_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+            except:
+                await query.message.reply_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+    
+    async def delete_account_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle delete account button click - show confirmation."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            callback_data = query.data
+            account_id = callback_data.split(":", 1)[1]
+            
+            # Get account name
+            account_row = await self.database.fetch_one(
+                "SELECT account_name FROM accounts WHERE id = :id",
+                {"id": account_id}
+            )
+            
+            if not account_row:
+                await query.edit_message_text(
+                    "❌ Account not found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            account_name = account_row['account_name']
+            
+            # Check if account has running strategies
+            running_strategies = await self.database.fetch_all(
+                """
+                SELECT COUNT(*) as count
+                FROM strategy_runs
+                WHERE account_id = :account_id AND status IN ('running', 'starting', 'paused')
+                """,
+                {"account_id": account_id}
+            )
+            
+            has_running = running_strategies[0]['count'] > 0 if running_strategies else False
+            
+            if has_running:
+                await query.edit_message_text(
+                    f"⚠️ <b>Cannot Delete Account</b>\n\n"
+                    f"Account <b>{account_name}</b> has running strategies.\n"
+                    f"Please stop all strategies first before deleting.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Show confirmation
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Yes, Delete", callback_data=f"delete_account_confirm:{account_id}"),
+                    InlineKeyboardButton("❌ Cancel", callback_data=f"delete_account_cancel:{account_id}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"⚠️ <b>Delete Account?</b>\n\n"
+                f"Account: <b>{account_name}</b>\n\n"
+                f"This will permanently delete:\n"
+                f"• Account settings\n"
+                f"• Exchange credentials\n"
+                f"• Proxy assignments\n\n"
+                f"<b>This action cannot be undone!</b>\n\n"
+                f"Are you sure you want to delete this account?",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            self.logger.error(f"Error in delete_account_callback: {e}", exc_info=True)
+            try:
+                await query.edit_message_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+            except:
+                await query.message.reply_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+    
+    async def delete_account_confirm_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle account deletion confirmation."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            callback_data = query.data
+            account_id = callback_data.split(":", 1)[1]
+            
+            telegram_user_id = query.from_user.id
+            user = await self.auth.get_user_by_telegram_id(telegram_user_id)
+            
+            # Get account name before deletion
+            account_row = await self.database.fetch_one(
+                "SELECT account_name FROM accounts WHERE id = :id AND user_id = :user_id",
+                {"id": account_id, "user_id": str(user["id"])}
+            )
+            
+            if not account_row:
+                await query.edit_message_text(
+                    "❌ Account not found or you don't have permission to delete it.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            account_name = account_row['account_name']
+            
+            # Delete account (CASCADE will handle related records)
+            await self.database.execute(
+                "DELETE FROM accounts WHERE id = :id AND user_id = :user_id",
+                {"id": account_id, "user_id": str(user["id"])}
+            )
+            
+            await self.audit_logger.log_action(
+                str(user["id"]),
+                "delete_account",
+                {"account_id": account_id, "account_name": account_name}
+            )
+            
+            await query.edit_message_text(
+                f"✅ Account <b>{account_name}</b> deleted successfully.",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            self.logger.error(f"Error in delete_account_confirm_callback: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Failed to delete account: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def delete_account_cancel_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle account deletion cancellation."""
+        query = update.callback_query
+        await query.answer("Deletion cancelled.")
+        
+        await query.edit_message_text(
+            "❌ Account deletion cancelled.",
+            parse_mode='HTML'
+        )
+    
+    # ========================================================================
+    # Config Management Callbacks
+    # ========================================================================
+    
+    async def edit_config_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle edit config button click."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            callback_data = query.data
+            config_id = callback_data.split(":", 1)[1]
+            
+            # Get config details
+            config_row = await self.database.fetch_one(
+                """
+                SELECT config_name, strategy_type, config_data, is_active
+                FROM strategy_configs
+                WHERE id = :id
+                """,
+                {"id": config_id}
+            )
+            
+            if not config_row:
+                await query.edit_message_text(
+                    "❌ Config not found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            config_name = config_row['config_name']
+            
+            # Start edit wizard (for now, just show current config and allow JSON edit)
+            context.user_data['wizard'] = {
+                'type': 'edit_config',
+                'step': 1,
+                'data': {
+                    'config_id': config_id,
+                    'config_name': config_name,
+                    'strategy_type': config_row['strategy_type']
+                }
+            }
+            
+            import yaml
+            config_yaml = yaml.dump(config_row['config_data'], default_flow_style=False, indent=2)
+            
+            await query.edit_message_text(
+                f"✏️ <b>Edit Config: {config_name}</b>\n\n"
+                f"Strategy Type: <b>{config_row['strategy_type']}</b>\n\n"
+                f"Current config (YAML):\n"
+                f"<code>{config_yaml[:500]}{'...' if len(config_yaml) > 500 else ''}</code>\n\n"
+                f"Send updated config as JSON/YAML, or 'cancel' to cancel:",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            self.logger.error(f"Error in edit_config_callback: {e}", exc_info=True)
+            try:
+                await query.edit_message_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+            except:
+                await query.message.reply_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+    
+    async def delete_config_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle delete config button click - show confirmation."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            callback_data = query.data
+            config_id = callback_data.split(":", 1)[1]
+            
+            # Get config name
+            config_row = await self.database.fetch_one(
+                "SELECT config_name FROM strategy_configs WHERE id = :id",
+                {"id": config_id}
+            )
+            
+            if not config_row:
+                await query.edit_message_text(
+                    "❌ Config not found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            config_name = config_row['config_name']
+            
+            # Check if config is in use
+            running_strategies = await self.database.fetch_all(
+                """
+                SELECT COUNT(*) as count
+                FROM strategy_runs
+                WHERE config_id = :config_id AND status IN ('running', 'starting', 'paused')
+                """,
+                {"config_id": config_id}
+            )
+            
+            has_running = running_strategies[0]['count'] > 0 if running_strategies else False
+            
+            if has_running:
+                await query.edit_message_text(
+                    f"⚠️ <b>Cannot Delete Config</b>\n\n"
+                    f"Config <b>{config_name}</b> is being used by running strategies.\n"
+                    f"Please stop all strategies using this config first.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Show confirmation
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Yes, Delete", callback_data=f"delete_config_confirm:{config_id}"),
+                    InlineKeyboardButton("❌ Cancel", callback_data=f"delete_config_cancel:{config_id}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"⚠️ <b>Delete Config?</b>\n\n"
+                f"Config: <b>{config_name}</b>\n\n"
+                f"This will permanently delete this configuration.\n\n"
+                f"<b>This action cannot be undone!</b>\n\n"
+                f"Are you sure you want to delete this config?",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            self.logger.error(f"Error in delete_config_callback: {e}", exc_info=True)
+            try:
+                await query.edit_message_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+            except:
+                await query.message.reply_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+    
+    async def delete_config_confirm_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle config deletion confirmation."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            callback_data = query.data
+            config_id = callback_data.split(":", 1)[1]
+            
+            telegram_user_id = query.from_user.id
+            user = await self.auth.get_user_by_telegram_id(telegram_user_id)
+            
+            # Get config name before deletion
+            config_row = await self.database.fetch_one(
+                "SELECT config_name FROM strategy_configs WHERE id = :id AND user_id = :user_id",
+                {"id": config_id, "user_id": str(user["id"])}
+            )
+            
+            if not config_row:
+                await query.edit_message_text(
+                    "❌ Config not found or you don't have permission to delete it.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            config_name = config_row['config_name']
+            
+            # Delete config
+            await self.database.execute(
+                "DELETE FROM strategy_configs WHERE id = :id AND user_id = :user_id",
+                {"id": config_id, "user_id": str(user["id"])}
+            )
+            
+            await self.audit_logger.log_action(
+                str(user["id"]),
+                "delete_config",
+                {"config_id": config_id, "config_name": config_name}
+            )
+            
+            await query.edit_message_text(
+                f"✅ Config <b>{config_name}</b> deleted successfully.",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            self.logger.error(f"Error in delete_config_confirm_callback: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Failed to delete config: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def delete_config_cancel_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle config deletion cancellation."""
+        query = update.callback_query
+        await query.answer("Deletion cancelled.")
+        
+        await query.edit_message_text(
+            "❌ Config deletion cancelled.",
+            parse_mode='HTML'
         )
     
     async def run_account_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):

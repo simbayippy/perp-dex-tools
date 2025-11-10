@@ -365,14 +365,13 @@ class TelegramFormatter:
 
 <b>👤 Account Management:</b>
 /quick_start or /create_account - Create new account (wizard)
-/list_accounts - List your accounts
-/add_exchange &lt;account_name&gt; &lt;exchange&gt; - Add exchange credentials
+/list_accounts - List your accounts (with edit/delete options)
+/add_exchange - Add exchange credentials (interactive)
 /add_proxy &lt;account_name&gt; - Add proxy to account
 
 <b>⚙️ Config Management:</b>
 /create_config or /new_config - Create strategy config (wizard or JSON)
-/list_configs or /my_configs - List your configs
-/edit_config &lt;config_name&gt; - Edit existing config
+/list_configs or /my_configs - List your configs (with edit/delete options)
 
 <b>🚀 Strategy Execution:</b>
 /run or /run_strategy - Start new strategy
