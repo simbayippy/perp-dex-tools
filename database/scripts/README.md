@@ -203,6 +203,67 @@ python database/scripts/list_accounts.py --show-full
 
 ---
 
+### User & API Key Management Scripts
+
+#### `create_api_key.py`
+Create a new API key for a user (for REST API authentication).
+
+**Usage:**
+```bash
+# Interactive mode (recommended)
+python database/scripts/create_api_key.py
+
+# Command line mode
+python database/scripts/create_api_key.py --username alice --name "Telegram Bot"
+```
+
+**Features:**
+- Creates a new API key with random token
+- Keys are hashed using bcrypt before storage
+- Each call creates a NEW key (does not reuse existing keys)
+- Keys are shown once and cannot be retrieved later (unless stored via Telegram bot)
+- Supports optional descriptive names for keys
+
+**Important Notes:**
+- ⚠️ Save the key immediately - it won't be shown again!
+- Multiple API keys can exist for the same user
+- All keys remain valid unless explicitly revoked
+- Keys can be used for REST API authentication (`X-API-Key` header)
+
+---
+
+#### `get_api_key.py`
+Retrieve a stored API key that was saved when authenticating via Telegram bot.
+
+**Usage:**
+```bash
+# Interactive mode (recommended)
+python database/scripts/get_api_key.py
+
+# By username
+python database/scripts/get_api_key.py --username alice
+
+# By Telegram user ID
+python database/scripts/get_api_key.py --telegram-user-id 123456789
+
+# List all API keys for a user (shows prefixes, names, creation dates)
+python database/scripts/get_api_key.py --username alice --list-all
+```
+
+**Features:**
+- Retrieves the API key stored when user authenticated via Telegram bot (`/auth` command)
+- Supports lookup by username or Telegram user ID
+- Optionally lists all API keys for a user (shows metadata, not full keys)
+- Decrypts stored API key using `CREDENTIAL_ENCRYPTION_KEY`
+
+**Important Notes:**
+- Only retrieves API keys stored via Telegram bot authentication
+- If no stored key found, user may need to authenticate again via `/auth` or create a new key
+- Requires `CREDENTIAL_ENCRYPTION_KEY` to be set in environment
+- The `--list-all` option shows key prefixes and metadata, but not the full keys (they're hashed)
+
+---
+
 ## 🚀 Typical Setup Workflow
 
 ### First Time Setup
