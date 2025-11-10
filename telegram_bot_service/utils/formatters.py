@@ -393,8 +393,7 @@ class TelegramFormatter:
             "🔒 <b>Not Authenticated</b>\n\n"
             "Please authenticate first using:\n"
             "<code>/auth &lt;your_api_key&gt;</code>\n\n"
-            "Get your API key by running:\n"
-            "<code>python database/scripts/users/create_api_key.py --username &lt;username&gt;</code>"
+            "Get your API key @yipsinhang:\n"
         )
     
     @staticmethod
