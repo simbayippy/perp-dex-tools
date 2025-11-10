@@ -14,28 +14,81 @@ class StrategyHandler(BaseHandler):
     """Handler for strategy execution commands and callbacks"""
     
     async def list_strategies_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /list_strategies command."""
+        """Handle /list_strategies command - shows filter options."""
         user, _ = await self.require_auth(update, context)
         if not user:
             return
         
         try:
-            # Admins can see all strategies, regular users see only their own
-            is_admin = user.get("is_admin", False)
-            user_id = None if is_admin else user["id"]
-            strategies = await self.process_manager.get_running_strategies(user_id)
+            # Show filter selection buttons
+            keyboard = [
+                [InlineKeyboardButton("🟢 Running", callback_data="filter_strategies:running")],
+                [InlineKeyboardButton("⚫ Stopped", callback_data="filter_strategies:stopped")],
+                [InlineKeyboardButton("📋 All", callback_data="filter_strategies:all")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
             
+            is_admin = user.get("is_admin", False)
             title = "📊 <b>All Strategies</b>" if is_admin else "📊 <b>Your Strategies</b>"
             
+            await update.message.reply_text(
+                f"{title}\n\n"
+                "Select a filter to view strategies:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            self.logger.error(f"List strategies error: {e}")
+            await update.message.reply_text(
+                f"❌ Failed to list strategies: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def filter_strategies_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle filter selection for list_strategies."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        # Parse filter type from callback data: "filter_strategies:{filter_type}"
+        callback_data = query.data
+        filter_type = callback_data.split(":", 1)[1]
+        
+        try:
+            # Get strategies with filter applied
+            is_admin = user.get("is_admin", False)
+            user_id = None if is_admin else user["id"]
+            strategies = await self._get_strategies_with_filter(user_id, filter_type)
+            
+            title = "📊 <b>All Strategies</b>" if is_admin else "📊 <b>Your Strategies</b>"
+            filter_label = {
+                'running': '🟢 Running',
+                'stopped': '⚫ Stopped',
+                'all': '📋 All'
+            }.get(filter_type, filter_type.title())
+            
             if not strategies:
-                await update.message.reply_text(
-                    "📊 <b>No Running Strategies</b>\n\n"
+                # Add filter buttons back even if no results
+                keyboard = [
+                    [InlineKeyboardButton("🟢 Running", callback_data="filter_strategies:running")],
+                    [InlineKeyboardButton("⚫ Stopped", callback_data="filter_strategies:stopped")],
+                    [InlineKeyboardButton("📋 All", callback_data="filter_strategies:all")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(
+                    f"{title} - {filter_label}\n\n"
+                    "No strategies found matching this filter.\n"
                     "Start a strategy with /run",
-                    parse_mode='HTML'
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
                 )
                 return
             
-            message = f"{title}\n\n"
+            message = f"{title} - {filter_label}\n\n"
             for strat in strategies:
                 status_emoji = {
                     'running': '🟢',
@@ -62,14 +115,78 @@ class StrategyHandler(BaseHandler):
                 
                 message += "\n"
             
-            await update.message.reply_text(message, parse_mode='HTML')
+            # Add filter buttons back
+            keyboard = [
+                [InlineKeyboardButton("🟢 Running", callback_data="filter_strategies:running")],
+                [InlineKeyboardButton("⚫ Stopped", callback_data="filter_strategies:stopped")],
+                [InlineKeyboardButton("📋 All", callback_data="filter_strategies:all")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
             
         except Exception as e:
-            self.logger.error(f"List strategies error: {e}")
-            await update.message.reply_text(
-                f"❌ Failed to list strategies: {str(e)}",
+            self.logger.error(f"Filter strategies error: {e}")
+            await query.edit_message_text(
+                f"❌ Failed to filter strategies: {str(e)}",
                 parse_mode='HTML'
             )
+    
+    async def _get_strategies_with_filter(self, user_id, filter_type: str):
+        """Get strategies with filter applied."""
+        # Build query based on filter
+        if filter_type == 'running':
+            status_list = ['starting', 'running', 'paused']
+        elif filter_type == 'stopped':
+            status_list = ['stopped', 'error']
+        else:  # 'all'
+            status_list = None
+        
+        if user_id:
+            if status_list:
+                # Use parameterized query with tuple unpacking
+                placeholders = ','.join([':status' + str(i) for i in range(len(status_list))])
+                params = {"user_id": user_id}
+                for i, status in enumerate(status_list):
+                    params[f"status{i}"] = status
+                query = f"""
+                    SELECT id, status, started_at, supervisor_program_name
+                    FROM strategy_runs
+                    WHERE user_id = :user_id AND status IN ({placeholders})
+                    ORDER BY started_at DESC
+                """
+                rows = await self.database.fetch_all(query, params)
+            else:
+                query = """
+                    SELECT id, status, started_at, supervisor_program_name
+                    FROM strategy_runs
+                    WHERE user_id = :user_id
+                    ORDER BY started_at DESC
+                """
+                rows = await self.database.fetch_all(query, {"user_id": user_id})
+        else:
+            # Admin - see all
+            if status_list:
+                placeholders = ','.join([':status' + str(i) for i in range(len(status_list))])
+                params = {}
+                for i, status in enumerate(status_list):
+                    params[f"status{i}"] = status
+                query = f"""
+                    SELECT id, status, started_at, supervisor_program_name
+                    FROM strategy_runs
+                    WHERE status IN ({placeholders})
+                    ORDER BY started_at DESC
+                """
+                rows = await self.database.fetch_all(query, params)
+            else:
+                query = """
+                    SELECT id, status, started_at, supervisor_program_name
+                    FROM strategy_runs
+                    ORDER BY started_at DESC
+                """
+                rows = await self.database.fetch_all(query)
+        
+        return [dict(row) for row in rows]
     
     async def run_strategy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /run command."""
@@ -198,51 +315,75 @@ class StrategyHandler(BaseHandler):
             )
     
     async def logs_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /logs command - shows interactive list of strategies to view logs."""
+        """Handle /logs command - shows filter options."""
         user, _ = await self.require_auth(update, context)
         if not user:
             return
         
         try:
-            # Get user's strategies with config info (admins see all)
+            # Show filter selection buttons
+            keyboard = [
+                [InlineKeyboardButton("🟢 Running", callback_data="filter_logs:running")],
+                [InlineKeyboardButton("⚫ Stopped", callback_data="filter_logs:stopped")],
+                [InlineKeyboardButton("📋 All", callback_data="filter_logs:all")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            title = "📄 <b>View Logs</b>"
+            
+            await update.message.reply_text(
+                f"{title}\n\n"
+                "Select a filter to view strategy logs:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Logs command error: {e}", exc_info=True)
+            await update.message.reply_text(
+                f"❌ Error: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def filter_logs_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle filter selection for logs."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        # Parse filter type from callback data: "filter_logs:{filter_type}"
+        callback_data = query.data
+        filter_type = callback_data.split(":", 1)[1]
+        
+        try:
+            # Get strategies with filter applied
             is_admin = user.get("is_admin", False)
             user_id = None if is_admin else user["id"]
+            strategies = await self._get_logs_strategies_with_filter(user_id, filter_type)
             
-            # Query strategies with config info in one go
-            if user_id:
-                query = """
-                    SELECT 
-                        sr.id, sr.user_id, sr.account_id, sr.config_id,
-                        sr.supervisor_program_name, sr.status, sr.control_api_port,
-                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
-                        sc.config_name, sc.strategy_type
-                    FROM strategy_runs sr
-                    JOIN strategy_configs sc ON sr.config_id = sc.id
-                    WHERE sr.user_id = :user_id
-                    ORDER BY sr.started_at DESC
-                """
-                strategies = await self.database.fetch_all(query, {"user_id": user_id})
-            else:
-                query = """
-                    SELECT 
-                        sr.id, sr.user_id, sr.account_id, sr.config_id,
-                        sr.supervisor_program_name, sr.status, sr.control_api_port,
-                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
-                        sc.config_name, sc.strategy_type
-                    FROM strategy_runs sr
-                    JOIN strategy_configs sc ON sr.config_id = sc.id
-                    ORDER BY sr.started_at DESC
-                """
-                strategies = await self.database.fetch_all(query)
-            
-            strategies = [dict(row) for row in strategies]
+            filter_label = {
+                'running': '🟢 Running',
+                'stopped': '⚫ Stopped',
+                'all': '📋 All'
+            }.get(filter_type, filter_type.title())
             
             if not strategies:
-                await update.message.reply_text(
-                    "📄 <b>No Strategies Found</b>\n\n"
-                    "No strategies available to view logs.\n"
+                # Add filter buttons back even if no results
+                keyboard = [
+                    [InlineKeyboardButton("🟢 Running", callback_data="filter_logs:running")],
+                    [InlineKeyboardButton("⚫ Stopped", callback_data="filter_logs:stopped")],
+                    [InlineKeyboardButton("📋 All", callback_data="filter_logs:all")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(
+                    f"📄 <b>View Logs</b> - {filter_label}\n\n"
+                    "No strategies found matching this filter.\n"
                     "Start a strategy with /run",
-                    parse_mode='HTML'
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
                 )
                 return
             
@@ -275,22 +416,103 @@ class StrategyHandler(BaseHandler):
                     callback_data=f"view_logs:{run_id}"
                 )])
             
+            # Add filter buttons at the bottom
+            keyboard.append([InlineKeyboardButton("🟢 Running", callback_data="filter_logs:running")])
+            keyboard.append([
+                InlineKeyboardButton("⚫ Stopped", callback_data="filter_logs:stopped"),
+                InlineKeyboardButton("📋 All", callback_data="filter_logs:all")
+            ])
+            
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            title = "📄 <b>View Strategy Logs</b>" if is_admin else "📄 <b>Your Strategy Logs</b>"
-            await update.message.reply_text(
-                f"{title}\n\n"
-                "Select a strategy to view its logs:",
+            await query.edit_message_text(
+                f"📄 <b>View Logs</b> - {filter_label}\n\n"
+                "Select a strategy to view logs:",
                 parse_mode='HTML',
                 reply_markup=reply_markup
             )
-                
+            
         except Exception as e:
-            self.logger.error(f"Logs command error: {e}", exc_info=True)
-            await update.message.reply_text(
-                f"❌ Error: {str(e)}",
+            self.logger.error(f"Filter logs error: {e}")
+            await query.edit_message_text(
+                f"❌ Failed to filter logs: {str(e)}",
                 parse_mode='HTML'
             )
+    
+    async def _get_logs_strategies_with_filter(self, user_id, filter_type: str):
+        """Get strategies with filter applied for logs view."""
+        # Build query based on filter
+        if filter_type == 'running':
+            status_list = ['starting', 'running', 'paused']
+        elif filter_type == 'stopped':
+            status_list = ['stopped', 'error']
+        else:  # 'all'
+            status_list = None
+        
+        if user_id:
+            if status_list:
+                placeholders = ','.join([':status' + str(i) for i in range(len(status_list))])
+                params = {"user_id": user_id}
+                for i, status in enumerate(status_list):
+                    params[f"status{i}"] = status
+                query = f"""
+                    SELECT 
+                        sr.id, sr.user_id, sr.account_id, sr.config_id,
+                        sr.supervisor_program_name, sr.status, sr.control_api_port,
+                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
+                        sc.config_name, sc.strategy_type
+                    FROM strategy_runs sr
+                    JOIN strategy_configs sc ON sr.config_id = sc.id
+                    WHERE sr.user_id = :user_id AND sr.status IN ({placeholders})
+                    ORDER BY sr.started_at DESC
+                """
+                rows = await self.database.fetch_all(query, params)
+            else:
+                query = """
+                    SELECT 
+                        sr.id, sr.user_id, sr.account_id, sr.config_id,
+                        sr.supervisor_program_name, sr.status, sr.control_api_port,
+                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
+                        sc.config_name, sc.strategy_type
+                    FROM strategy_runs sr
+                    JOIN strategy_configs sc ON sr.config_id = sc.id
+                    WHERE sr.user_id = :user_id
+                    ORDER BY sr.started_at DESC
+                """
+                rows = await self.database.fetch_all(query, {"user_id": user_id})
+        else:
+            # Admin - see all
+            if status_list:
+                placeholders = ','.join([':status' + str(i) for i in range(len(status_list))])
+                params = {}
+                for i, status in enumerate(status_list):
+                    params[f"status{i}"] = status
+                query = f"""
+                    SELECT 
+                        sr.id, sr.user_id, sr.account_id, sr.config_id,
+                        sr.supervisor_program_name, sr.status, sr.control_api_port,
+                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
+                        sc.config_name, sc.strategy_type
+                    FROM strategy_runs sr
+                    JOIN strategy_configs sc ON sr.config_id = sc.id
+                    WHERE sr.status IN ({placeholders})
+                    ORDER BY sr.started_at DESC
+                """
+                rows = await self.database.fetch_all(query, params)
+            else:
+                query = """
+                    SELECT 
+                        sr.id, sr.user_id, sr.account_id, sr.config_id,
+                        sr.supervisor_program_name, sr.status, sr.control_api_port,
+                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
+                        sc.config_name, sc.strategy_type
+                    FROM strategy_runs sr
+                    JOIN strategy_configs sc ON sr.config_id = sc.id
+                    ORDER BY sr.started_at DESC
+                """
+                rows = await self.database.fetch_all(query)
+        
+        return [dict(row) for row in rows]
     
     async def view_logs_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle callback for viewing logs."""
@@ -395,6 +617,19 @@ class StrategyHandler(BaseHandler):
                             log_file = str(log_path)
                             break
             
+            # If still no log file found, inform user
+            if not log_file or not Path(log_file).exists():
+                await query.edit_message_text(
+                    f"📄 <b>Log File Not Found</b>\n\n"
+                    f"Strategy: {strategy_type_display}\n"
+                    f"Config: {config_name}\n"
+                    f"Run ID: <code>{run_id_short}</code>\n\n"
+                    f"⚠️ The log file may have been cleaned up or deleted.\n"
+                    f"This is expected if logs were manually removed.",
+                    parse_mode='HTML'
+                )
+                return
+            
             if log_file and Path(log_file).exists():
                 # Send log file as document
                 with open(log_file, 'rb') as f:
@@ -415,15 +650,6 @@ class StrategyHandler(BaseHandler):
                     f"Config: {config_name}\n"
                     f"Run ID: <code>{run_id_short}</code>\n\n"
                     f"📄 Check the document above.",
-                    parse_mode='HTML'
-                )
-            else:
-                await query.edit_message_text(
-                    f"❌ <b>Log file not available</b>\n\n"
-                    f"Strategy: {strategy_type_display}\n"
-                    f"Config: {config_name}\n"
-                    f"Run ID: <code>{run_id_short}</code>\n\n"
-                    f"The log file may not exist yet or the strategy may have just started.",
                     parse_mode='HTML'
                 )
                 
@@ -727,5 +953,13 @@ class StrategyHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.view_logs_callback,
             pattern="^view_logs:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.filter_strategies_callback,
+            pattern="^filter_strategies:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.filter_logs_callback,
+            pattern="^filter_logs:"
         ))
 
