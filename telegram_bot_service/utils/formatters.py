@@ -352,19 +352,41 @@ class TelegramFormatter:
         """Format help message."""
         return """🤖 <b>Strategy Control Bot</b>
 
-<b>Commands:</b>
+<b>🔐 Authentication:</b>
 /start - Start bot and show instructions
 /auth &lt;api_key&gt; - Authenticate with API key
-/status - Get strategy status
-/positions [account] - List active positions (optional account filter)
-/close - Close a position (interactive selection)
 /logout - Unlink Telegram account
 /help - Show this help message
 
-<b>Example:</b>
+<b>📊 Monitoring (Existing Strategies):</b>
+/status - Get strategy status
+/positions [account] - List active positions (optional account filter)
+/close - Close a position (interactive selection)
+
+<b>👤 Account Management:</b>
+/quick_start or /create_account - Create new account (wizard)
+/list_accounts - List your accounts
+/add_exchange &lt;account_name&gt; &lt;exchange&gt; - Add exchange credentials
+/add_proxy &lt;account_name&gt; - Add proxy to account
+
+<b>⚙️ Config Management:</b>
+/create_config or /new_config - Create strategy config (wizard or JSON)
+/list_configs or /my_configs - List your configs
+/edit_config &lt;config_name&gt; - Edit existing config
+
+<b>🚀 Strategy Execution:</b>
+/run or /run_strategy - Start new strategy
+/list_strategies - List running strategies
+/stop or /stop_strategy &lt;run_id&gt; - Stop running strategy
+/logs &lt;run_id&gt; - View strategy logs
+/limits - Check usage limits and quotas
+
+<b>Examples:</b>
 <code>/auth perp_8585a9b87b0ebd546c99347979101304</code>
-<code>/positions</code>
-<code>/close 4e4389de-060a-4aff-bdf2-dd214d3f5727 market</code>"""
+<code>/quick_start</code>
+<code>/create_config</code>
+<code>/run</code>
+<code>/list_strategies</code>"""
     
     @staticmethod
     def format_error(message: str) -> str:

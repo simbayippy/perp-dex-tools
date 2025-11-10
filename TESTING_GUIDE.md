@@ -4,11 +4,11 @@ This guide walks you through setting up and testing the new strategy management 
 
 ## Prerequisites Checklist
 
-- [ ] VPS with Ubuntu/Debian
-- [ ] PostgreSQL database running
-- [ ] Python 3.10+ installed
-- [ ] Virtual environment activated
-- [ ] `.env` file configured with database credentials
+- [x] VPS with Ubuntu/Debian
+- [x] PostgreSQL database running
+- [x] Python 3.10+ installed
+- [x] Virtual environment activated
+- [x] `.env` file configured with database credentials
 
 ---
 
@@ -58,6 +58,61 @@ sudo systemctl status supervisor
 # Test if Supervisor XML-RPC is accessible (should return process list)
 python3 -c "import xmlrpc.client; s = xmlrpc.client.ServerProxy('http://localhost:9001/RPC2'); print(s.supervisor.getAllProcessInfo())"
 ```
+
+**⚠️ If you get "Connection refused" error:**
+
+1. **Check if Supervisor is running:**
+   ```bash
+   sudo systemctl status supervisor
+   # Should show "active (running)"
+   ```
+
+2. **If not running, start it:**
+   ```bash
+   sudo systemctl start supervisor
+   sudo systemctl enable supervisor  # Enable on boot
+   ```
+
+3. **Check if XML-RPC interface is enabled:**
+   ```bash
+   # Check Supervisor config for XML-RPC settings
+   sudo grep -A 10 "\[inet_http_server\]" /etc/supervisor/supervisord.conf
+   ```
+
+4. **If XML-RPC is not configured, add it:**
+   ```bash
+   # Edit Supervisor config
+   sudo vim /etc/supervisor/supervisord.conf
+   
+   # Add or uncomment these lines (usually near the top):
+   [inet_http_server]
+   port=127.0.0.1:9001
+   
+   # Save and restart Supervisor
+   sudo systemctl restart supervisor
+   ```
+
+5. **Verify Supervisor is listening on port 9001:**
+   ```bash
+   # Check if port 9001 is listening
+   sudo netstat -tlnp | grep 9001
+   # Or use ss:
+   sudo ss -tlnp | grep 9001
+   
+   # Should show something like:
+   # tcp  0  0  127.0.0.1:9001  0.0.0.0:*  LISTEN  12345/supervisord
+   ```
+
+6. **Check Supervisor logs for errors:**
+   ```bash
+   sudo tail -50 /var/log/supervisor/supervisord.log
+   ```
+
+7. **Test again:**
+   ```bash
+   python3 -c "import xmlrpc.client; s = xmlrpc.client.ServerProxy('http://127.0.0.1:9001/RPC2'); print(s.supervisor.getVersion())"
+   # Should print Supervisor version number
+   ```
 
 **Configure Supervisor (if needed):**
 - Default config: `/etc/supervisor/supervisord.conf`
@@ -400,13 +455,45 @@ sudo chmod 755 /etc/supervisor/conf.d/
 ```
 
 **XML-RPC connection refused:**
-```bash
-# Check if Supervisor is listening
-sudo netstat -tlnp | grep 9001
 
-# Check Supervisor config
-sudo cat /etc/supervisor/supervisord.conf | grep -A 5 "inet_http_server"
-```
+This usually means Supervisor is not running or XML-RPC is not enabled. Follow these steps:
+
+1. **Check if Supervisor is running:**
+   ```bash
+   sudo systemctl status supervisor
+   ```
+
+2. **Check if XML-RPC is enabled in config:**
+   ```bash
+   sudo grep -A 5 "\[inet_http_server\]" /etc/supervisor/supervisord.conf
+   ```
+
+3. **If missing, add XML-RPC configuration:**
+   ```bash
+   sudo vim /etc/supervisor/supervisord.conf
+   # Add these lines (usually after [unix_http_server] section):
+   [inet_http_server]
+   port=127.0.0.1:9001
+   
+   # Save and restart:
+   sudo systemctl restart supervisor
+   ```
+
+4. **Verify port is listening:**
+   ```bash
+   sudo netstat -tlnp | grep 9001
+   # Should show: tcp  0  0  127.0.0.1:9001  LISTEN
+   ```
+
+5. **Check Supervisor logs:**
+   ```bash
+   sudo tail -50 /var/log/supervisor/supervisord.log
+   ```
+
+6. **Test connection:**
+   ```bash
+   python3 -c "import xmlrpc.client; s = xmlrpc.client.ServerProxy('http://127.0.0.1:9001/RPC2'); print('Supervisor version:', s.supervisor.getVersion())"
+   ```
 
 ### Database Issues
 
