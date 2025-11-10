@@ -1059,7 +1059,7 @@ class ConfigHandler(BaseHandler):
                 )])
             
             # Add Done button
-            keyboard.append([InlineKeyboardButton("✅ Done", callback_data=f"wizard_multi_done:{param.key}")])
+            keyboard.append([InlineKeyboardButton("👉 Done", callback_data=f"wizard_multi_done:{param.key}")])
             keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="wizard_cancel")])
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -1479,7 +1479,7 @@ class ConfigHandler(BaseHandler):
                             callback_data=f"wizard_multi:{param_key}:{choice}:toggle"
                         )])
                     
-                    keyboard.append([InlineKeyboardButton("✅ Done", callback_data=f"wizard_multi_done:{param_key}")])
+                    keyboard.append([InlineKeyboardButton("👉 Done", callback_data=f"wizard_multi_done:{param_key}")])
                     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="wizard_cancel")])
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     
