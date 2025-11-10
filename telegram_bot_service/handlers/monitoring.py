@@ -13,7 +13,7 @@ class MonitoringHandler(BaseHandler):
     """Handler for monitoring-related commands (positions, close)"""
     
     async def positions_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /positions command."""
+        """Handle /positions command - interactive account/position selection."""
         user, api_key = await self.require_auth(update, context)
         if not user or not api_key:
             return
@@ -25,18 +25,236 @@ class MonitoringHandler(BaseHandler):
             client = ControlAPIClient(self.config.control_api_base_url, api_key)
             data = await client.get_positions(account_name=account_name)
             
-            # Format and send (may need to split if too long)
-            message = self.formatter.format_positions(data)
+            accounts = data.get('accounts', [])
             
-            # Split if needed (TelegramFormatter handles this)
-            messages = self.formatter._split_message(message) if len(message) > self.formatter.MAX_MESSAGE_LENGTH else [message]
+            # If account filter provided, show positions directly
+            if account_name:
+                await self._show_positions_for_account(update, context, data, account_name, api_key)
+                return
             
-            for msg in messages:
-                await update.message.reply_text(msg, parse_mode='HTML')
+            # No account filter - show account selection
+            if not accounts:
+                await update.message.reply_text(
+                    "📊 <b>No active positions</b>\n\nNo accounts with open positions found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Filter accounts that have positions
+            accounts_with_positions = [
+                acc for acc in accounts 
+                if acc.get('positions') and len(acc.get('positions', [])) > 0
+            ]
+            
+            if not accounts_with_positions:
+                await update.message.reply_text(
+                    "📊 <b>No active positions</b>\n\nNo open positions found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Show account selection buttons
+            keyboard = []
+            for account in accounts_with_positions:
+                account_name = account.get('account_name', 'N/A')
+                position_count = len(account.get('positions', []))
+                button_label = f"📊 {account_name} ({position_count} position{'s' if position_count != 1 else ''})"
+                callback_data = f"positions_account:{account_name}"
+                keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            total_positions = sum(len(acc.get('positions', [])) for acc in accounts_with_positions)
+            await update.message.reply_text(
+                f"📊 <b>Active Positions</b>\n\n"
+                f"Found <b>{total_positions}</b> position{'s' if total_positions != 1 else ''} "
+                f"across <b>{len(accounts_with_positions)}</b> account{'s' if len(accounts_with_positions) != 1 else ''}.\n\n"
+                f"Select an account to view positions:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
                 
         except Exception as e:
             self.logger.error(f"Positions error: {e}")
             await update.message.reply_text(
+                self.formatter.format_error(f"Failed to get positions: {str(e)}"),
+                parse_mode='HTML'
+            )
+    
+    async def _show_positions_for_account(
+        self, 
+        update: Update, 
+        context: ContextTypes.DEFAULT_TYPE,
+        data: dict,
+        account_name: str,
+        api_key: str
+    ):
+        """Show positions for a specific account with close buttons."""
+        accounts = data.get('accounts', [])
+        account = next((acc for acc in accounts if acc.get('account_name') == account_name), None)
+        
+        if not account:
+            message = update.message if hasattr(update, 'message') and update.message else None
+            query = update.callback_query if hasattr(update, 'callback_query') and update.callback_query else None
+            
+            error_msg = f"❌ Account '{account_name}' not found."
+            if query:
+                await query.edit_message_text(error_msg, parse_mode='HTML')
+            elif message:
+                await message.reply_text(error_msg, parse_mode='HTML')
+            return
+        
+        positions = account.get('positions', [])
+        
+        if not positions:
+            message = update.message if hasattr(update, 'message') and update.message else None
+            query = update.callback_query if hasattr(update, 'callback_query') and update.callback_query else None
+            
+            no_pos_msg = f"📊 <b>{account_name}</b>\n\nNo active positions."
+            if query:
+                await query.edit_message_text(no_pos_msg, parse_mode='HTML')
+            elif message:
+                await message.reply_text(no_pos_msg, parse_mode='HTML')
+            return
+        
+        # Format positions summary
+        message_text = f"📊 <b>{account_name}</b>\n\n"
+        message_text += f"Found <b>{len(positions)}</b> position{'s' if len(positions) != 1 else ''}:\n\n"
+        
+        # Create inline keyboard with position buttons
+        keyboard = []
+        position_index = 0
+        for pos in positions:
+            position_index += 1
+            symbol = pos.get('symbol', 'N/A')
+            long_dex = pos.get('long_dex', 'N/A').upper()
+            short_dex = pos.get('short_dex', 'N/A').upper()
+            position_id = pos.get('id', '')
+            
+            # Button label: "1. BTC/USD (LIGHTER/PARADEX)"
+            button_label = f"{position_index}. {symbol} ({long_dex}/{short_dex})"
+            # Store position_id in callback data
+            callback_data = f"close_pos:{position_id}"
+            
+            keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
+        
+        # Add back button
+        keyboard.append([InlineKeyboardButton("🔙 Back to Accounts", callback_data="positions_back_to_accounts")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Send or edit message
+        query = update.callback_query if hasattr(update, 'callback_query') and update.callback_query else None
+        message = update.message if hasattr(update, 'message') and update.message else None
+        
+        if query:
+            await query.answer()
+            await query.edit_message_text(
+                message_text + "Select a position to close:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+        elif message:
+            await message.reply_text(
+                message_text + "Select a position to close:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+    
+    async def positions_account_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle account selection callback - show positions for selected account."""
+        query = update.callback_query
+        await query.answer()
+        
+        # Parse callback data: "positions_account:{account_name}"
+        callback_data = query.data
+        if not callback_data.startswith("positions_account:"):
+            await query.edit_message_text(
+                "❌ Invalid selection. Please use /positions again.",
+                parse_mode='HTML'
+            )
+            return
+        
+        account_name = callback_data.split(":", 1)[1]
+        
+        # Get user and API key
+        user, api_key = await self.require_auth(update, context)
+        if not user or not api_key:
+            return
+        
+        try:
+            client = ControlAPIClient(self.config.control_api_base_url, api_key)
+            data = await client.get_positions(account_name=account_name)
+            
+            await self._show_positions_for_account(update, context, data, account_name, api_key)
+            
+        except Exception as e:
+            self.logger.error(f"Positions account callback error: {e}")
+            await query.edit_message_text(
+                self.formatter.format_error(f"Failed to get positions: {str(e)}"),
+                parse_mode='HTML'
+            )
+    
+    async def positions_back_to_accounts_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle back button - return to account selection."""
+        query = update.callback_query
+        await query.answer()
+        
+        # Get user and API key
+        user, api_key = await self.require_auth(update, context)
+        if not user or not api_key:
+            return
+        
+        try:
+            client = ControlAPIClient(self.config.control_api_base_url, api_key)
+            data = await client.get_positions(account_name=None)
+            
+            accounts = data.get('accounts', [])
+            
+            if not accounts:
+                await query.edit_message_text(
+                    "📊 <b>No active positions</b>\n\nNo accounts with open positions found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Filter accounts that have positions
+            accounts_with_positions = [
+                acc for acc in accounts 
+                if acc.get('positions') and len(acc.get('positions', [])) > 0
+            ]
+            
+            if not accounts_with_positions:
+                await query.edit_message_text(
+                    "📊 <b>No active positions</b>\n\nNo open positions found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Show account selection buttons
+            keyboard = []
+            for account in accounts_with_positions:
+                account_name = account.get('account_name', 'N/A')
+                position_count = len(account.get('positions', []))
+                button_label = f"📊 {account_name} ({position_count} position{'s' if position_count != 1 else ''})"
+                callback_data = f"positions_account:{account_name}"
+                keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            total_positions = sum(len(acc.get('positions', [])) for acc in accounts_with_positions)
+            await query.edit_message_text(
+                f"📊 <b>Active Positions</b>\n\n"
+                f"Found <b>{total_positions}</b> position{'s' if total_positions != 1 else ''} "
+                f"across <b>{len(accounts_with_positions)}</b> account{'s' if len(accounts_with_positions) != 1 else ''}.\n\n"
+                f"Select an account to view positions:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Back to accounts error: {e}")
+            await query.edit_message_text(
                 self.formatter.format_error(f"Failed to get positions: {str(e)}"),
                 parse_mode='HTML'
             )
@@ -230,6 +448,14 @@ class MonitoringHandler(BaseHandler):
         
         # Callback query handlers for interactive flows
         # Order matters: more specific patterns first
+        application.add_handler(CallbackQueryHandler(
+            self.positions_account_callback,
+            pattern="^positions_account:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.positions_back_to_accounts_callback,
+            pattern="^positions_back_to_accounts$"
+        ))
         application.add_handler(CallbackQueryHandler(
             self.close_position_callback,
             pattern="^close_pos:"
