@@ -95,6 +95,23 @@ class PositionOpener:
                 additional_size=getattr(persistence, "additional_size", None),
                 imbalance_usd=execution.result.residual_imbalance_usd,
             )
+            
+            # Send Telegram notification
+            try:
+                long_price = execution.long_fill.get("fill_price")
+                short_price = execution.short_fill.get("fill_price")
+                await self._strategy.notification_service.notify_position_opened(
+                    symbol=execution.position.symbol,
+                    long_dex=execution.position.long_dex,
+                    short_dex=execution.position.short_dex,
+                    size_usd=execution.position.size_usd,
+                    entry_divergence=execution.position.entry_divergence,
+                    long_price=Decimal(str(long_price)) if long_price else None,
+                    short_price=Decimal(str(short_price)) if short_price else None,
+                )
+            except Exception as exc:
+                # Don't fail position opening if notification fails
+                self._strategy.logger.warning(f"Failed to send position opened notification: {exc}")
 
             return persistence.position
 

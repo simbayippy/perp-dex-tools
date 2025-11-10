@@ -160,7 +160,7 @@ class DatabaseCredentialLoader:
         if not credentials_rows:
             raise ValueError(
                 f"No active exchange credentials found for account '{account_name}'. "
-                f"Run: python database/scripts/add_account.py --from-env --account-name {account_name}"
+                f"Run: python database/scripts/accounts/add_account.py --from-env --account-name {account_name}"
             )
         
         # Decrypt and organize credentials

@@ -134,10 +134,10 @@ docker-compose up -d
 # Just make sure it's running: sudo systemctl status postgresql
 
 # Initialize database
-python database/scripts/init_db.py
+python database/scripts/setup/init_db.py
 
 # Seed DEX data
-python database/scripts/seed_dexes.py
+python database/scripts/setup/seed_dexes.py
 
 # Run migrations
 cd database/migrations

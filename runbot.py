@@ -168,7 +168,7 @@ async def load_account_context(account_name: str) -> Tuple[dict, Optional[ProxyS
         if not credentials:
             print(f"Error: No credentials found for account '{account_name}'")
             print("\nAvailable accounts:")
-            print("  Run: python database/scripts/list_accounts.py")
+            print("  Run: python database/scripts/accounts/list_accounts.py")
             sys.exit(1)
 
         print(f"✓ Loaded credentials for account: {account_name}")

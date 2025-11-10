@@ -147,15 +147,120 @@ class PositionCloser:
         strategy = self._strategy
 
         try:
-            pnl = position.get_net_pnl()
-            pnl_pct = position.get_net_pnl_pct()
-
+            # Capture realized PnL BEFORE closing (while positions are still open)
+            # Position snapshots only work for OPEN positions, not closed ones
+            pre_close_snapshots = live_snapshots or await self._fetch_leg_snapshots(position)
+            
+            # Calculate PnL from exchange snapshots BEFORE closing
+            # Exchange realized_pnl includes cumulative realized PnL (price movement + funding)
+            total_realized_pnl = Decimal("0")
+            for dex in [position.long_dex, position.short_dex]:
+                snapshot = pre_close_snapshots.get(dex) or pre_close_snapshots.get(dex.lower())
+                if snapshot and snapshot.realized_pnl is not None:
+                    total_realized_pnl += snapshot.realized_pnl
+                    strategy.logger.debug(
+                        f"[{dex}] Pre-close Realized PnL: ${snapshot.realized_pnl:.2f}"
+                    )
+            
+            # Close positions on exchanges
             await self._close_exchange_positions(
                 position,
                 reason=reason,
-                live_snapshots=live_snapshots,
+                live_snapshots=pre_close_snapshots,
                 order_type=order_type,
             )
+
+            # Wait a moment for exchanges to process the close
+            await asyncio.sleep(1.0)
+
+            # Try to get updated realized PnL after closing (some exchanges update it immediately)
+            # But don't rely on this - we already have it from pre-close snapshots
+            post_close_snapshots = await self._fetch_leg_snapshots(position)
+            post_close_realized_pnl = Decimal("0")
+            for dex in [position.long_dex, position.short_dex]:
+                snapshot = post_close_snapshots.get(dex) or post_close_snapshots.get(dex.lower())
+                if snapshot and snapshot.realized_pnl is not None:
+                    post_close_realized_pnl += snapshot.realized_pnl
+            
+            # Use post-close PnL if available and different (exchange updated it), otherwise use pre-close
+            if post_close_realized_pnl != 0 and post_close_realized_pnl != total_realized_pnl:
+                old_pnl = total_realized_pnl
+                total_realized_pnl = post_close_realized_pnl
+                strategy.logger.debug(
+                    f"Using post-close realized PnL: ${total_realized_pnl:.2f} "
+                    f"(pre-close was ${old_pnl:.2f})"
+                )
+            
+            # If we couldn't get realized PnL from snapshots, use execution result from websocket fills
+            if total_realized_pnl == 0:
+                # Check if we have close execution result stored in metadata
+                # This contains fill prices from websocket updates (atomic executor waits for fills)
+                close_result = position.metadata.get("close_execution_result")
+                if close_result and close_result.get("filled_orders"):
+                    strategy.logger.debug(
+                        f"Using close execution result (websocket fills) for PnL: {position.symbol}"
+                    )
+                    # Get cumulative funding from database (includes all funding payments)
+                    cumulative_funding = await strategy.position_manager.get_cumulative_funding(position.id)
+                    position.cumulative_funding = cumulative_funding
+                    
+                    # Calculate price PnL from fill prices vs entry prices
+                    # Get entry prices from position metadata
+                    legs_metadata = position.metadata.get("legs", {})
+                    price_pnl = Decimal("0")
+                    
+                    for fill_info in close_result["filled_orders"]:
+                        dex = fill_info["dex"]
+                        fill_price = fill_info.get("fill_price")
+                        filled_qty = fill_info.get("filled_quantity")
+                        
+                        if fill_price and filled_qty:
+                            leg_meta = legs_metadata.get(dex, {})
+                            entry_price = leg_meta.get("entry_price")
+                            
+                            if entry_price:
+                                # Calculate PnL for this leg
+                                # For long: PnL = (exit_price - entry_price) * quantity
+                                # For short: PnL = (entry_price - exit_price) * quantity
+                                side = leg_meta.get("side", "long")
+                                if side == "long":
+                                    leg_pnl = (fill_price - entry_price) * filled_qty
+                                else:  # short
+                                    leg_pnl = (entry_price - fill_price) * filled_qty
+                                price_pnl += leg_pnl
+                                strategy.logger.debug(
+                                    f"[{dex}] Price PnL from websocket fills: ${leg_pnl:.2f} "
+                                    f"(entry=${entry_price:.6f}, exit=${fill_price:.6f}, qty={filled_qty})"
+                                )
+                    
+                    # Total PnL = price movement + funding - fees
+                    pnl = price_pnl + cumulative_funding - position.total_fees_paid
+                    strategy.logger.debug(
+                        f"Calculated PnL from websocket fills: price=${price_pnl:.2f}, "
+                        f"funding=${cumulative_funding:.2f}, fees=${position.total_fees_paid:.2f}, "
+                        f"total=${pnl:.2f}"
+                    )
+                else:
+                    # Fall back to cumulative funding method
+                    strategy.logger.warning(
+                        f"Could not get realized PnL from exchanges for {position.symbol}, "
+                        f"falling back to cumulative funding"
+                    )
+                    cumulative_funding = await strategy.position_manager.get_cumulative_funding(position.id)
+                    position.cumulative_funding = cumulative_funding
+                    pnl = position.get_net_pnl()
+            else:
+                # Use exchange realized PnL from snapshots, subtract our tracked fees
+                # Note: Exchange realized_pnl already includes funding, so we don't add cumulative_funding
+                pnl = total_realized_pnl - position.total_fees_paid
+                strategy.logger.debug(
+                    f"Using exchange realized PnL from snapshots: ${total_realized_pnl:.2f}, "
+                    f"fees=${position.total_fees_paid:.2f}, net=${pnl:.2f}"
+                )
+            
+            pnl_pct = position.get_net_pnl_pct() if position.size_usd > 0 else Decimal("0")
+            if pnl_pct == 0 and position.size_usd > 0:
+                pnl_pct = pnl / position.size_usd
 
             await strategy.position_manager.close(
                 position.id,
@@ -172,6 +277,20 @@ class PositionCloser:
                 f"PnL=${pnl:.2f} ({pnl_pct*100:.2f}%), "
                 f"Age={position.get_age_hours():.1f}h"
             )
+            
+            # Send Telegram notification
+            try:
+                await strategy.notification_service.notify_position_closed(
+                    symbol=position.symbol,
+                    reason=reason,
+                    pnl_usd=pnl,
+                    pnl_pct=pnl_pct,
+                    age_hours=position.get_age_hours(),
+                    size_usd=position.size_usd,
+                )
+            except Exception as exc:
+                # Don't fail position closing if notification fails
+                strategy.logger.warning(f"Failed to send position closed notification: {exc}")
 
         except Exception as exc:  # pragma: no cover - defensive logging
             strategy.logger.error(
@@ -698,6 +817,22 @@ class PositionCloser:
             raise RuntimeError(
                 f"Atomic close failed for {position.symbol}: {error}"
             )
+        
+        # Store execution result for PnL calculation
+        # The filled_orders contain the actual fill prices from websocket updates
+        position.metadata["close_execution_result"] = {
+            "filled_orders": [
+                {
+                    "dex": leg["dex"],
+                    "fill_price": order.get("fill_price"),
+                    "filled_quantity": order.get("filled_quantity"),
+                    "slippage_usd": order.get("slippage_usd", Decimal("0")),
+                }
+                for leg, order in zip(legs, result.filled_orders)
+                if order.get("filled")
+            ],
+            "total_slippage_usd": result.total_slippage_usd or Decimal("0"),
+        }
         
         # After successful atomic close, check for and close any residual positions
         # This ensures we fully close to 0 size, even if hedging left small residuals

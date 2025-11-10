@@ -235,8 +235,8 @@ docker-compose up -d
 # Ensure PostgreSQL is running on your system
 
 # Initialize database
-python database/scripts/init_db.py
-python database/scripts/seed_dexes.py
+python database/scripts/setup/init_db.py
+python database/scripts/setup/seed_dexes.py
 
 # Run migrations
 cd database/migrations

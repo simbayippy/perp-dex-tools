@@ -325,7 +325,7 @@ class FundingArbPositionManager(BasePositionManager):
             return None
         
         # Convert DB row to FundingArbPosition
-        return FundingArbPosition(
+        position = FundingArbPosition(
             id=row['id'],
             symbol=row['symbol'],
             long_dex=dex_mapper.get_name(row['long_dex_id']),
@@ -344,6 +344,19 @@ class FundingArbPositionManager(BasePositionManager):
             closed_at=row['closed_at'],
             pnl_usd=row['pnl_usd']
         )
+        # Load cumulative_funding from database
+        if row.get('cumulative_funding_usd') is not None:
+            position.cumulative_funding = row['cumulative_funding_usd']
+        # Load metadata if present
+        if row.get('metadata'):
+            try:
+                if isinstance(row['metadata'], str):
+                    position.metadata = json.loads(row['metadata'])
+                else:
+                    position.metadata = row['metadata']
+            except Exception:
+                position.metadata = {}
+        return position
     
     async def get_open_positions(self) -> List[FundingArbPosition]:
         """
@@ -393,25 +406,40 @@ class FundingArbPositionManager(BasePositionManager):
         
         positions = []
         for row in rows:
+            row_data = dict(row)
             position = FundingArbPosition(
-                id=row['id'],
-                symbol=row['symbol'],
-                long_dex=dex_mapper.get_name(row['long_dex_id']),
-                short_dex=dex_mapper.get_name(row['short_dex_id']),
-                size_usd=row['size_usd'],
-                entry_long_rate=row['entry_long_rate'],
-                entry_short_rate=row['entry_short_rate'],
-                entry_divergence=row['entry_divergence'],
-                opened_at=row['opened_at'],
-                current_divergence=row['current_divergence'],
-                last_check=row['last_check'],
-                status=row['status'],
-                rebalance_pending=row['rebalance_pending'],
-                rebalance_reason=row['rebalance_reason'],
-                exit_reason=row['exit_reason'],
-                closed_at=row['closed_at'],
-                pnl_usd=row['pnl_usd']
+                id=row_data['id'],
+                symbol=row_data['symbol'],
+                long_dex=dex_mapper.get_name(row_data['long_dex_id']),
+                short_dex=dex_mapper.get_name(row_data['short_dex_id']),
+                size_usd=row_data['size_usd'],
+                entry_long_rate=row_data['entry_long_rate'],
+                entry_short_rate=row_data['entry_short_rate'],
+                entry_divergence=row_data['entry_divergence'],
+                opened_at=row_data['opened_at'],
+                current_divergence=row_data['current_divergence'],
+                last_check=row_data['last_check'],
+                status=row_data['status'],
+                rebalance_pending=row_data['rebalance_pending'],
+                rebalance_reason=row_data['rebalance_reason'],
+                exit_reason=row_data['exit_reason'],
+                closed_at=row_data['closed_at'],
+                pnl_usd=row_data['pnl_usd']
             )
+            # Load cumulative_funding from database
+            cumulative_funding = row_data.get('cumulative_funding_usd')
+            if cumulative_funding is not None:
+                position.cumulative_funding = cumulative_funding
+            # Load metadata if present
+            metadata = row_data.get('metadata')
+            if metadata:
+                try:
+                    if isinstance(metadata, str):
+                        position.metadata = json.loads(metadata)
+                    else:
+                        position.metadata = metadata
+                except Exception:
+                    position.metadata = {}
             positions.append(position)
         
         return positions
@@ -862,6 +890,18 @@ class FundingArbPositionManager(BasePositionManager):
                 closed_at=row['closed_at'],
                 pnl_usd=row['pnl_usd']
             )
+            # Load cumulative_funding from database
+            if row.get('cumulative_funding_usd') is not None:
+                position.cumulative_funding = row['cumulative_funding_usd']
+            # Load metadata if present
+            if row.get('metadata'):
+                try:
+                    if isinstance(row['metadata'], str):
+                        position.metadata = json.loads(row['metadata'])
+                    else:
+                        position.metadata = row['metadata']
+                except Exception:
+                    position.metadata = {}
             positions.append(position)
         
         return positions

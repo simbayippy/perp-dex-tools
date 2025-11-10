@@ -49,7 +49,7 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             prompt="Which exchanges should we scan for opportunities?",
             param_type=ParameterType.MULTI_CHOICE,
             choices=ExchangeFactory.get_supported_exchanges(),
-            default=["lighter", "grvt", "backpack"],  # List, not string!
+            default=["lighter", "aster", "paradex"],  # List, not string!
             required=True,
             help_text="We'll look for funding rate divergences across these exchanges",
             show_default_in_prompt=True,
@@ -83,11 +83,11 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             key="max_positions",
             prompt="Maximum number of concurrent positions?",
             param_type=ParameterType.INTEGER,
-            default=5,
+            default=1,
             min_value=1,
-            max_value=50,
+            max_value=1,
             required=False,
-            help_text="Limit the number of open funding arb positions to manage risk",
+            help_text="Limit the number of open funding arb positions to manage risk. For now only 1 position is allowed",
             show_default_in_prompt=True,
         ),
         create_decimal_parameter(
@@ -185,11 +185,11 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             key="max_new_positions_per_cycle",
             prompt="Maximum new positions to open per cycle?",
             param_type=ParameterType.INTEGER,
-            default=2,
+            default=1,
             min_value=1,
-            max_value=10,
+            max_value=1,
             required=False,
-            help_text="Rate limit: open at most N positions per execution cycle (usually 60s). "
+            help_text="Rate limit: open at most N positions per execution cycle (usually 60s). For now only 1 position is allowed"
             "Prevents overexposure during volatile markets",
             show_default_in_prompt=True,
         ),
@@ -214,14 +214,7 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             help_text="Execution cycle frequency. Lower = more responsive but more API calls",
             show_default_in_prompt=True,
         ),
-        create_boolean_parameter(
-            key="dry_run",
-            prompt="Run in dry-run mode (no real trades)?",
-            default=True,
-            required=False,
-            help_text="TEST MODE: Strategy will run but won't place real orders. "
-            "Great for testing configuration!",
-        ),
+
     ],
     # Category grouping for better UX
     categories={
@@ -238,7 +231,6 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             "max_new_positions_per_cycle",
             "limit_order_offset_pct",
             "check_interval_seconds",
-            "dry_run",
         ],
     },
 )
@@ -262,9 +254,9 @@ def create_default_funding_config() -> dict:
     """
     return {
         "mandatory_exchange": None,
-        "scan_exchanges": ["lighter", "grvt", "backpack"],
+        "scan_exchanges": ["lighter", "aster", "paradex"],
         "target_exposure": Decimal("100"),
-        "max_positions": 5,
+        "max_positions": 1,
         "max_total_exposure_usd": Decimal("1000"),
         "min_profit_rate": DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL,
         "max_oi_usd": None,
@@ -272,7 +264,7 @@ def create_default_funding_config() -> dict:
         "profit_erosion_threshold": Decimal("0.5"),
         "min_hold_hours": 0,
         "max_position_age_hours": 168,
-        "max_new_positions_per_cycle": 2,
+        "max_new_positions_per_cycle": 1,
         "check_interval_seconds": 60,
-        "dry_run": True,
+        "dry_run": False,
     }

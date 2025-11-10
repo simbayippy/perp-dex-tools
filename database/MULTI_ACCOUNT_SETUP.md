@@ -44,7 +44,7 @@ CREDENTIAL_ENCRYPTION_KEY=your_generated_key_here
 Your `.env` already has credentials for Lighter, Aster, and Backpack. Run:
 
 ```bash
-python database/scripts/add_account.py --from-env --account-name main_bot
+python database/scripts/accounts/add_account.py --from-env --account-name main_bot
 ```
 
 **What it does:**
@@ -67,13 +67,13 @@ python database/scripts/add_account.py --from-env --account-name main_bot
 
 ```bash
 # View accounts (credentials hidden by default)
-python database/scripts/list_accounts.py
+python database/scripts/accounts/list_accounts.py
 
 # OR view with masked credentials (safe)
-python database/scripts/list_accounts.py --show-credentials
+python database/scripts/accounts/list_accounts.py --show-credentials
 
 # OR view with FULL credentials (⚠️  careful!)
-python database/scripts/list_accounts.py --show-full
+python database/scripts/accounts/list_accounts.py --show-full
 ```
 
 **Default Output (no credentials shown):**
@@ -190,7 +190,7 @@ chmod +x database/scripts/setup_multiple_accounts.sh
 vim .env  # Change LIGHTER_ACCOUNT_INDEX, API keys, etc.
 
 # Then run:
-python database/scripts/add_account.py --from-env --account-name acc2
+python database/scripts/accounts/add_account.py --from-env --account-name acc2
 ```
 
 ### Update Existing Credentials
@@ -198,18 +198,18 @@ python database/scripts/add_account.py --from-env --account-name acc2
 ```bash
 # Update .env with new credentials
 # Then run same command (it will update):
-python database/scripts/add_account.py --from-env --account-name main_bot
+python database/scripts/accounts/add_account.py --from-env --account-name main_bot
 ```
 
 ### View Credentials (Decrypted)
 
 ```bash
 # Option 1: Masked credentials (safe for sharing/screenshots)
-python database/scripts/list_accounts.py --show-credentials
+python database/scripts/accounts/list_accounts.py --show-credentials
 # Shows: 2b4f...184f
 
 # Option 2: Full credentials (⚠️  use carefully!)
-python database/scripts/list_accounts.py --show-full
+python database/scripts/accounts/list_accounts.py --show-full
 # Shows: 2b4fb053z4ce37c65a0747337bdc6440679f0a184f
 ```
 
@@ -253,7 +253,7 @@ echo "CREDENTIAL_ENCRYPTION_KEY=your_generated_key_here" >> .env
 ### "Exchange 'lighter' not found in database"
 Run the seed script:
 ```bash
-python database/scripts/seed_dexes.py
+python database/scripts/setup/seed_dexes.py
 ```
 
 ### "Account already exists"
