@@ -373,17 +373,48 @@ stdout_logfile={stdout_log}
             logger.error(f"Failed to reload Supervisor config: {e}", exc_info=True)
             raise RuntimeError(f"Failed to reload Supervisor config: {e}")
         
-        # Start program
+        # Start program (if not already started)
+        # Note: With autostart=true, Supervisor may have already started it
         try:
             supervisor = self._get_supervisor_client()
-            result = supervisor.supervisor.startProcess(supervisor_program_name)
-            if not result:
-                raise RuntimeError("Supervisor failed to start process")
-            logger.info(f"Started Supervisor program: {supervisor_program_name}")
+            
+            # Check current state first
+            try:
+                info = supervisor.supervisor.getProcessInfo(supervisor_program_name)
+                current_state = info.get('statename', 'UNKNOWN')
+                logger.info(f"Program '{supervisor_program_name}' current state: {current_state}")
+                
+                # If already running or starting, that's success
+                if current_state in ['RUNNING', 'STARTING']:
+                    logger.info(f"Program '{supervisor_program_name}' is already {current_state.lower()}, skipping start")
+                    result = True
+                else:
+                    # Try to start it
+                    result = supervisor.supervisor.startProcess(supervisor_program_name)
+                    logger.info(f"Started Supervisor program: {result}")
+            except xmlrpc.client.Fault as state_fault:
+                # If we can't get state, try to start anyway
+                fault_code = state_fault.faultCode if hasattr(state_fault, 'faultCode') else 'Unknown'
+                fault_msg = state_fault.faultString if hasattr(state_fault, 'faultString') else str(state_fault)
+                
+                # If it's ALREADY_STARTED, that's actually success
+                if fault_code == 60 or 'ALREADY_STARTED' in fault_msg:
+                    logger.info(f"Program '{supervisor_program_name}' is already started (this is OK)")
+                    result = True
+                else:
+                    # Try to start it
+                    result = supervisor.supervisor.startProcess(supervisor_program_name)
+                    logger.info(f"Started Supervisor program: {result}")
         except xmlrpc.client.Fault as e:
-            # Extract meaningful error message from XML-RPC Fault
+            fault_code = e.faultCode if hasattr(e, 'faultCode') else 'Unknown'
             error_msg = e.faultString if hasattr(e, 'faultString') else str(e)
-            raise RuntimeError(f"Failed to start Supervisor program '{supervisor_program_name}': {error_msg}")
+            
+            # ALREADY_STARTED is actually success - program is running
+            if fault_code == 60 or 'ALREADY_STARTED' in error_msg:
+                logger.info(f"Program '{supervisor_program_name}' is already started (this is OK)")
+                result = True
+            else:
+                raise RuntimeError(f"Failed to start Supervisor program '{supervisor_program_name}': {error_msg}")
         except Exception as e:
             raise RuntimeError(f"Failed to start Supervisor program: {e}")
         
