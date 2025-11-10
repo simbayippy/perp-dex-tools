@@ -509,7 +509,10 @@ stdout_logfile={stdout_log}
         )
         
         # Release port
-        port = row.get("control_api_port")
+        try:
+            port = row["control_api_port"]
+        except (KeyError, TypeError):
+            port = None
         if port:
             await self.port_manager.release_port(port)
         
@@ -540,7 +543,10 @@ stdout_logfile={stdout_log}
         
         supervisor_program_name = row["supervisor_program_name"]
         current_status = row["status"]
-        old_port = row.get("control_api_port")
+        try:
+            old_port = row["control_api_port"]
+        except (KeyError, TypeError):
+            old_port = None
         
         # Can only resume stopped strategies
         if current_status not in ("stopped", "error"):
