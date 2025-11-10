@@ -389,13 +389,21 @@ class ConfigHandler(BaseHandler):
             # Format config as YAML for display
             config_yaml = yaml.dump(default_config, default_flow_style=False, indent=2)
             
+            # Add back button
+            keyboard = [
+                [InlineKeyboardButton("⬅️ Back", callback_data=f"config_method_back:{strategy_type}")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="wizard_cancel")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
             await query.edit_message_text(
                 f"📝 <b>JSON/YAML Config Input: {strategy_type.replace('_', ' ').title()}</b>\n\n"
                 f"Default configuration:\n"
                 f"<code>{config_yaml[:800]}{'...' if len(config_yaml) > 800 else ''}</code>\n\n"
                 "Send your config as JSON or YAML to edit, or send 'use_default' to use the default config above.\n"
                 "Send 'cancel' to cancel.",
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=reply_markup
             )
         else:
             # Start wizard for the selected strategy type
@@ -470,6 +478,50 @@ class ConfigHandler(BaseHandler):
             "Step 1/1: Enter a name for this configuration:\n"
             "(e.g., 'My Funding Arb Config', 'Grid BTC Strategy')",
             parse_mode='HTML'
+        )
+    
+    async def config_method_back_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle back button from JSON/YAML input - return to creation method selection."""
+        query = update.callback_query
+        await query.answer()
+        
+        callback_data = query.data
+        strategy_type = callback_data.split(":", 1)[1]
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        # Clear wizard state
+        context.user_data.pop('wizard', None)
+        
+        # Show creation method selection again
+        schema_map = {
+            'funding_arbitrage': get_funding_arb_schema(),
+            'grid': get_grid_schema()
+        }
+        
+        if strategy_type not in schema_map:
+            await query.edit_message_text(
+                f"❌ Unknown strategy type: {strategy_type}",
+                parse_mode='HTML'
+            )
+            return
+        
+        schema = schema_map[strategy_type]
+        
+        keyboard = [
+            [InlineKeyboardButton("🧙 Interactive Wizard", callback_data=f"config_method:wizard:{strategy_type}")],
+            [InlineKeyboardButton("📝 JSON/YAML Input", callback_data=f"config_method:json:{strategy_type}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"📋 <b>{schema.display_name}</b>\n\n"
+            f"{schema.description}\n\n"
+            "Choose creation method:",
+            parse_mode='HTML',
+            reply_markup=reply_markup
         )
     
     async def config_type_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -852,8 +904,8 @@ class ConfigHandler(BaseHandler):
         context.user_data.pop('wizard', None)
         await update.message.reply_text(
             f"✅ Config <b>{config_name}</b> created successfully!",
-            parse_mode='HTML'
-        )
+                parse_mode='HTML'
+            )
     
     async def handle_edit_config_wizard(self, update, context, wizard, text):
         """Handle edit config wizard steps."""
@@ -1447,7 +1499,7 @@ class ConfigHandler(BaseHandler):
                         prompt_text,
                         parse_mode='HTML',
                         reply_markup=reply_markup
-                    )
+            )
     
     def register_handlers(self, application):
         """Register config management command and callback handlers"""
@@ -1483,6 +1535,10 @@ class ConfigHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.config_method_callback,
             pattern="^config_method:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.config_method_back_callback,
+            pattern="^config_method_back:"
         ))
         application.add_handler(CallbackQueryHandler(
             self.handle_wizard_param_callback,
