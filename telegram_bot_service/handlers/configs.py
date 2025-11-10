@@ -986,6 +986,15 @@ class ConfigHandler(BaseHandler):
         data = wizard['data']
         current_index = data['current_param_index']
         config = data['config']
+        message = None
+        if getattr(update, "message", None):
+            message = update.message
+        elif getattr(update, "callback_query", None):
+            message = update.callback_query.message
+        
+        if message is None:
+            self.logger.error("Unable to determine message object for wizard prompt.")
+            return
         
         if current_index >= len(params):
             # Check if we need max_oi_usd
@@ -994,13 +1003,13 @@ class ConfigHandler(BaseHandler):
             if max_oi_param and mandatory_exchange:
                 wizard['step'] = 2
                 data['current_param_index'] = -1
-                await self._prompt_parameter(update, context, wizard, max_oi_param, schema, params, max_oi_param)
+                await self._prompt_parameter(message, context, wizard, max_oi_param, schema, params, max_oi_param)
             else:
                 await self._finalize_config(update, context, wizard, None)
             return
         
         param = params[current_index]
-        await self._prompt_parameter(update, context, wizard, param, schema, params, max_oi_param)
+        await self._prompt_parameter(message, context, wizard, param, schema, params, max_oi_param)
     
     async def _prompt_parameter_message(self, message, context, wizard, param, schema, params, max_oi_param):
         """Prompt user for a parameter value using a Message object."""
@@ -1102,9 +1111,9 @@ class ConfigHandler(BaseHandler):
                 parse_mode='HTML'
             )
     
-    async def _prompt_parameter(self, update, context, wizard, param, schema, params, max_oi_param):
+    async def _prompt_parameter(self, message, context, wizard, param, schema, params, max_oi_param):
         """Prompt user for a parameter value."""
-        await self._prompt_parameter_message(update.message, context, wizard, param, schema, params, max_oi_param)
+        await self._prompt_parameter_message(message, context, wizard, param, schema, params, max_oi_param)
     
     async def _process_parameter_input(self, text: str, param, config: Dict, update=None) -> Optional[Any]:
         """Process and validate parameter input."""
