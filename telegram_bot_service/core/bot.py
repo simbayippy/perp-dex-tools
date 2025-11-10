@@ -1899,8 +1899,9 @@ class StrategyControlBot:
                         "edit_account",
                         {"account_id": account_id, "field": "name", "new_value": text}
                     )
+                    # Use string concatenation to avoid f-string formatting issues with braces
                     await update.message.reply_text(
-                        f"✅ Account name updated to <b>{text}</b>",
+                        "✅ Account name updated to <b>" + text + "</b>",
                         parse_mode='HTML'
                     )
                 
