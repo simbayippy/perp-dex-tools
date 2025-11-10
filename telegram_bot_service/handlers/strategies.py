@@ -736,7 +736,11 @@ class StrategyHandler(BaseHandler):
                 )
                 return
             
-            account_name = row.get('account_name')
+            # Get account_name safely
+            try:
+                account_name = row['account_name']
+            except (KeyError, TypeError):
+                account_name = None
             
             # Initialize counters
             closed_count = 0
