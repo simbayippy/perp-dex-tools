@@ -45,6 +45,73 @@ class StrategyHandler(BaseHandler):
                 parse_mode='HTML'
             )
     
+    async def back_to_strategies_filters_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle back button - return to filter selection for list_strategies."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        try:
+            # Show filter selection buttons (same as initial command)
+            keyboard = [
+                [InlineKeyboardButton("🟢 Running", callback_data="filter_strategies:running")],
+                [InlineKeyboardButton("⚫ Stopped", callback_data="filter_strategies:stopped")],
+                [InlineKeyboardButton("📋 All", callback_data="filter_strategies:all")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            is_admin = user.get("is_admin", False)
+            title = "📊 <b>All Strategies</b>" if is_admin else "📊 <b>Your Strategies</b>"
+            
+            await query.edit_message_text(
+                f"{title}\n\n"
+                "Select a filter to view strategies:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            self.logger.error(f"Back to strategies filters error: {e}")
+            await query.edit_message_text(
+                f"❌ Error: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def back_to_logs_filters_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle back button - return to filter selection for logs."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        try:
+            # Show filter selection buttons (same as initial command)
+            keyboard = [
+                [InlineKeyboardButton("🟢 Running", callback_data="filter_logs:running")],
+                [InlineKeyboardButton("⚫ Stopped", callback_data="filter_logs:stopped")],
+                [InlineKeyboardButton("📋 All", callback_data="filter_logs:all")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            title = "📄 <b>View Logs</b>"
+            
+            await query.edit_message_text(
+                f"{title}\n\n"
+                "Select a filter to view strategy logs:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            self.logger.error(f"Back to logs filters error: {e}")
+            await query.edit_message_text(
+                f"❌ Error: {str(e)}",
+                parse_mode='HTML'
+            )
+    
     async def filter_strategies_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle filter selection for list_strategies."""
         query = update.callback_query
@@ -72,11 +139,9 @@ class StrategyHandler(BaseHandler):
             }.get(filter_type, filter_type.title())
             
             if not strategies:
-                # Add filter buttons back even if no results
+                # Show back button instead of all filters
                 keyboard = [
-                    [InlineKeyboardButton("🟢 Running", callback_data="filter_strategies:running")],
-                    [InlineKeyboardButton("⚫ Stopped", callback_data="filter_strategies:stopped")],
-                    [InlineKeyboardButton("📋 All", callback_data="filter_strategies:all")]
+                    [InlineKeyboardButton("⬅️ Back", callback_data="back_to_strategies_filters")]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
@@ -115,11 +180,9 @@ class StrategyHandler(BaseHandler):
                 
                 message += "\n"
             
-            # Add filter buttons back
+            # Show back button instead of all filter buttons
             keyboard = [
-                [InlineKeyboardButton("🟢 Running", callback_data="filter_strategies:running")],
-                [InlineKeyboardButton("⚫ Stopped", callback_data="filter_strategies:stopped")],
-                [InlineKeyboardButton("📋 All", callback_data="filter_strategies:all")]
+                [InlineKeyboardButton("⬅️ Back", callback_data="back_to_strategies_filters")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -371,11 +434,9 @@ class StrategyHandler(BaseHandler):
             }.get(filter_type, filter_type.title())
             
             if not strategies:
-                # Add filter buttons back even if no results
+                # Show back button instead of all filters
                 keyboard = [
-                    [InlineKeyboardButton("🟢 Running", callback_data="filter_logs:running")],
-                    [InlineKeyboardButton("⚫ Stopped", callback_data="filter_logs:stopped")],
-                    [InlineKeyboardButton("📋 All", callback_data="filter_logs:all")]
+                    [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
@@ -416,12 +477,8 @@ class StrategyHandler(BaseHandler):
                     callback_data=f"view_logs:{run_id}"
                 )])
             
-            # Add filter buttons at the bottom
-            keyboard.append([InlineKeyboardButton("🟢 Running", callback_data="filter_logs:running")])
-            keyboard.append([
-                InlineKeyboardButton("⚫ Stopped", callback_data="filter_logs:stopped"),
-                InlineKeyboardButton("📋 All", callback_data="filter_logs:all")
-            ])
+            # Show back button instead of all filter buttons
+            keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")])
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -649,7 +706,7 @@ class StrategyHandler(BaseHandler):
                     f"Strategy: {strategy_type_display}\n"
                     f"Config: {config_name}\n"
                     f"Run ID: <code>{run_id_short}</code>\n\n"
-                    f"📄 Check the document above.",
+                    f"📄 Check the document below.",
                     parse_mode='HTML'
                 )
                 
@@ -961,5 +1018,13 @@ class StrategyHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.filter_logs_callback,
             pattern="^filter_logs:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.back_to_strategies_filters_callback,
+            pattern="^back_to_strategies_filters$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.back_to_logs_filters_callback,
+            pattern="^back_to_logs_filters$"
         ))
 
