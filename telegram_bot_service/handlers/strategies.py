@@ -20,7 +20,12 @@ class StrategyHandler(BaseHandler):
             return
         
         try:
-            strategies = await self.process_manager.get_running_strategies(user["id"])
+            # Admins can see all strategies, regular users see only their own
+            is_admin = user.get("is_admin", False)
+            user_id = None if is_admin else user["id"]
+            strategies = await self.process_manager.get_running_strategies(user_id)
+            
+            title = "📊 <b>All Strategies</b>" if is_admin else "📊 <b>Your Strategies</b>"
             
             if not strategies:
                 await update.message.reply_text(
@@ -30,7 +35,7 @@ class StrategyHandler(BaseHandler):
                 )
                 return
             
-            message = "📊 <b>Your Strategies</b>\n\n"
+            message = f"{title}\n\n"
             for strat in strategies:
                 status_emoji = {
                     'running': '🟢',
