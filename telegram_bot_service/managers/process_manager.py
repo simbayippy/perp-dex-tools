@@ -234,6 +234,10 @@ stderr_logfile={stderr_log}
 stdout_logfile={stdout_log}
 """
         
+        # Log the config content for debugging
+        logger.debug(f"Supervisor config content:\n{supervisor_config}")
+        logger.info(f"Supervisor program name: {supervisor_program_name}")
+        
         # Write Supervisor config file (requires sudo)
         config_file_path = self.supervisor_conf_dir / f"{supervisor_program_name}.conf"
         try:
@@ -245,29 +249,110 @@ stdout_logfile={stdout_log}
                 capture_output=True
             )
             logger.info(f"Created Supervisor config: {config_file_path}")
+            
+            # Verify the file was written correctly
+            try:
+                verify_result = subprocess.run(
+                    ["sudo", "cat", str(config_file_path)],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                logger.debug(f"Verified config file content:\n{verify_result.stdout}")
+            except Exception as verify_error:
+                logger.warning(f"Could not verify config file: {verify_error}")
+            
         except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Failed to create Supervisor config: {e.stderr.decode()}")
+            stderr_msg = e.stderr.decode() if e.stderr else "Unknown error"
+            logger.error(f"Failed to create Supervisor config. stderr: {stderr_msg}, stdout: {e.stdout.decode() if e.stdout else 'None'}")
+            raise RuntimeError(f"Failed to create Supervisor config: {stderr_msg}")
         
-        # Reload Supervisor
+        # Reload Supervisor and verify
         try:
             supervisor = self._get_supervisor_client()
-            supervisor.supervisor.reloadConfig()
-            logger.info("Supervisor config reloaded")
             
-            # Verify the program was loaded by checking if it exists
+            # Check Supervisor logs for errors before reload
+            logger.debug("Reloading Supervisor config...")
+            try:
+                reload_result = supervisor.supervisor.reloadConfig()
+                logger.info(f"Supervisor config reloaded, result: {reload_result}")
+            except xmlrpc.client.Fault as reload_fault:
+                # Supervisor might return a fault if config has syntax errors
+                fault_msg = reload_fault.faultString if hasattr(reload_fault, 'faultString') else str(reload_fault)
+                logger.error(f"Supervisor reloadConfig failed with fault: {fault_msg}")
+                # Try to read the config file to show what was written
+                try:
+                    verify_result = subprocess.run(
+                        ["sudo", "cat", str(config_file_path)],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    logger.error(f"Config file that caused error:\n{verify_result.stdout}")
+                except:
+                    pass
+                raise RuntimeError(f"Supervisor rejected config file: {fault_msg}")
+            
+            # Get all process info to see what Supervisor knows about
             all_processes = supervisor.supervisor.getAllProcessInfo()
             program_names = [p['name'] for p in all_processes]
+            logger.debug(f"Supervisor knows about {len(program_names)} programs: {program_names[:10]}")
+            
+            # Check if our program was loaded
             if supervisor_program_name not in program_names:
-                # Try to get process info to see if there's an error
+                # Check Supervisor logs for why it wasn't loaded
+                # Try to read the config file to see if there's a syntax error
+                try:
+                    verify_result = subprocess.run(
+                        ["sudo", "cat", str(config_file_path)],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    logger.error(f"Supervisor config file content:\n{verify_result.stdout}")
+                except Exception as read_error:
+                    logger.error(f"Could not read config file: {read_error}")
+                
+                # Try to get process info to see the exact error
                 try:
                     info = supervisor.supervisor.getProcessInfo(supervisor_program_name)
+                    logger.info(f"Program info retrieved: {info}")
+                except xmlrpc.client.Fault as fault_error:
+                    fault_code = fault_error.faultCode if hasattr(fault_error, 'faultCode') else 'Unknown'
+                    fault_msg = fault_error.faultString if hasattr(fault_error, 'faultString') else str(fault_error)
+                    logger.error(f"Supervisor Fault when checking program: Code={fault_code}, Message={fault_msg}")
+                    
+                    # Check Supervisor logs for more details
+                    try:
+                        log_result = subprocess.run(
+                            ["sudo", "tail", "-20", "/var/log/supervisor/supervisord.log"],
+                            capture_output=True,
+                            text=True,
+                            check=True
+                        )
+                        logger.error(f"Supervisor logs (last 20 lines):\n{log_result.stdout}")
+                    except Exception as log_error:
+                        logger.warning(f"Could not read Supervisor logs: {log_error}")
+                    
+                    raise RuntimeError(
+                        f"Program '{supervisor_program_name}' not found after reload. "
+                        f"Supervisor error (Code {fault_code}): {fault_msg}. "
+                        f"Config file: {config_file_path}. "
+                        f"Available programs: {program_names[:5]}"
+                    )
                 except Exception as info_error:
                     raise RuntimeError(
                         f"Program '{supervisor_program_name}' not found after reload. "
                         f"Available programs: {[p for p in program_names if 'strategy' in p][:5]}. "
                         f"Error: {info_error}"
                     )
+            else:
+                logger.info(f"Program '{supervisor_program_name}' successfully loaded by Supervisor")
+        except RuntimeError:
+            # Re-raise RuntimeErrors as-is
+            raise
         except Exception as e:
+            logger.error(f"Failed to reload Supervisor config: {e}", exc_info=True)
             raise RuntimeError(f"Failed to reload Supervisor config: {e}")
         
         # Start program

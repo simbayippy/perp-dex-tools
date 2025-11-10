@@ -402,6 +402,10 @@ class StrategyHandler(BaseHandler):
         config_name = config_row['config_name']
         strategy_type = config_row['strategy_type']
         
+        # Log config details for debugging
+        self.logger.info(f"Loading config: name={config_name}, type={strategy_type}, id={config_id}")
+        self.logger.debug(f"Config data raw type: {type(config_data_raw)}, value preview: {str(config_data_raw)[:200]}")
+        
         # Parse config_data - JSONB might come back as string or dict
         import json
         if isinstance(config_data_raw, str):
@@ -435,6 +439,9 @@ class StrategyHandler(BaseHandler):
                     "version": "1.0",
                     "config": config_data
                 }
+                self.logger.info(f"Wrapped config_data with strategy wrapper. Final config keys: {list(config_data.keys())}")
+            else:
+                self.logger.info(f"Config already has strategy/config structure. Keys: {list(config_data.keys())}")
         else:
             self.logger.error(f"Config data is not a dict after parsing: {type(config_data)}, value: {config_data}")
             await query.edit_message_text(
@@ -442,6 +449,15 @@ class StrategyHandler(BaseHandler):
                 parse_mode='HTML'
             )
             return
+        
+        # Log final config structure for debugging
+        config_dict = config_data.get('config', {}) if isinstance(config_data, dict) else {}
+        self.logger.info(
+            f"Final config_data structure: "
+            f"strategy={config_data.get('strategy')}, "
+            f"config_keys={list(config_dict.keys())}, "
+            f"config_preview={str(config_dict)[:500]}"
+        )
         
         # Validate config before running
         valid, errors = await self.config_validator.validate_before_run(
