@@ -518,6 +518,10 @@ class StrategyHandler(BaseHandler):
             # Stop strategy
             success = await self.process_manager.stop_strategy(run_id)
             
+            # Immediately sync status to ensure DB is accurate
+            if success:
+                await self.process_manager.sync_status_with_supervisor()
+            
             if success:
                 await self.audit_logger.log_strategy_stop(str(user["id"]), run_id)
                 await query.edit_message_text(
@@ -706,6 +710,19 @@ class StrategyHandler(BaseHandler):
             # Resume strategy
             success = await self.process_manager.resume_strategy(run_id)
             
+            # Immediately sync status to ensure DB is accurate
+            if success:
+                await self.process_manager.sync_status_with_supervisor()
+                
+                # Get updated status from DB
+                status_row = await self.database.fetch_one(
+                    "SELECT status FROM strategy_runs WHERE id = :run_id",
+                    {"run_id": run_id}
+                )
+                actual_status = status_row['status'] if status_row else 'starting'
+            else:
+                actual_status = None
+            
             if success:
                 await self.audit_logger.log_action(
                     user_id=str(user["id"]),
@@ -715,7 +732,7 @@ class StrategyHandler(BaseHandler):
                 await query.edit_message_text(
                     f"✅ <b>Strategy Resumed</b>\n\n"
                     f"Run ID: <code>{run_id_short}</code>\n"
-                    f"Status: starting",
+                    f"Status: {actual_status}",
                     parse_mode='HTML'
                 )
             else:

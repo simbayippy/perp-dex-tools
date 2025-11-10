@@ -690,18 +690,37 @@ stdout_logfile={stdout_log}
             logger.error(f"Error starting Supervisor program: {e}")
             return False
         
-        # Update database
+        # Double-check Supervisor state after starting to ensure accurate status
+        try:
+            info = supervisor.supervisor.getProcessInfo(supervisor_program_name)
+            supervisor_state = info.get('statename', 'UNKNOWN')
+            logger.info(f"Post-start Supervisor state for '{supervisor_program_name}': {supervisor_state}")
+            
+            # Determine final status based on Supervisor state
+            if supervisor_state == 'RUNNING':
+                final_status = 'running'
+            elif supervisor_state == 'STARTING':
+                final_status = 'starting'
+            else:
+                # Unexpected state - log warning but still update DB
+                logger.warning(f"Unexpected Supervisor state after start: {supervisor_state}")
+                final_status = 'starting'  # Will be synced by periodic sync
+        except Exception as e:
+            logger.warning(f"Could not verify Supervisor state after start: {e}")
+            final_status = 'starting'  # Default, will be synced by periodic sync
+        
+        # Update database with accurate status
         query = """
             UPDATE strategy_runs
-            SET status = 'starting', stopped_at = NULL, control_api_port = :port
+            SET status = :status, stopped_at = NULL, control_api_port = :port
             WHERE id = :run_id
         """
         await self.database.execute(
             query,
-            {"run_id": run_id, "port": port}
+            {"run_id": run_id, "status": final_status, "port": port}
         )
         
-        logger.info(f"Resumed strategy {run_id} on port {port}")
+        logger.info(f"Resumed strategy {run_id} on port {port}, status: {final_status}")
         return True
     
     async def get_running_strategies(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -796,11 +815,11 @@ stdout_logfile={stdout_log}
         }
         
         try:
-            # Get all strategies that should be running (starting or running)
+            # Get all strategies from DB (including stopped ones for sync)
             query = """
                 SELECT id, supervisor_program_name, status
                 FROM strategy_runs
-                WHERE status IN ('starting', 'running', 'paused')
+                WHERE status IN ('starting', 'running', 'paused', 'stopped', 'error')
             """
             db_runs = await self.database.fetch_all(query)
             stats["checked"] = len(db_runs)
@@ -829,8 +848,8 @@ stdout_logfile={stdout_log}
                 db_status = row["status"]
                 
                 if program_name not in supervisor_states:
-                    # Supervisor doesn't have this process - mark as stopped
-                    if db_status != "stopped":
+                    # Supervisor doesn't have this process - mark as stopped (if not already)
+                    if db_status not in ("stopped", "error"):
                         await self.database.execute(
                             """
                             UPDATE strategy_runs
@@ -847,20 +866,33 @@ stdout_logfile={stdout_log}
                 
                 # Update DB status based on Supervisor state
                 if supervisor_state == "RUNNING":
-                    if db_status == "starting":
-                        # Strategy started successfully - update to running
+                    if db_status in ("starting", "stopped", "error", "paused"):
+                        # Strategy is running in Supervisor - update DB to match
                         await self.database.execute(
                             """
                             UPDATE strategy_runs
-                            SET status = 'running'
+                            SET status = 'running', stopped_at = NULL
                             WHERE id = :id
                             """,
                             {"id": run_id}
                         )
                         stats["updated_to_running"] += 1
-                        logger.debug(f"Updated {program_name} status: starting -> running")
+                        logger.info(f"Synced {program_name} status: {db_status} -> running (Supervisor: RUNNING)")
+                elif supervisor_state == "STARTING":
+                    if db_status in ("stopped", "error"):
+                        # Strategy is starting in Supervisor - update DB
+                        await self.database.execute(
+                            """
+                            UPDATE strategy_runs
+                            SET status = 'starting', stopped_at = NULL
+                            WHERE id = :id
+                            """,
+                            {"id": run_id}
+                        )
+                        stats["updated_to_running"] += 1
+                        logger.info(f"Synced {program_name} status: {db_status} -> starting (Supervisor: STARTING)")
                 elif supervisor_state in ("STOPPED", "EXITED"):
-                    if db_status != "stopped":
+                    if db_status not in ("stopped", "error"):
                         await self.database.execute(
                             """
                             UPDATE strategy_runs
@@ -870,7 +902,7 @@ stdout_logfile={stdout_log}
                             {"id": run_id, "stopped_at": datetime.now()}
                         )
                         stats["updated_to_stopped"] += 1
-                        logger.info(f"Marked {program_name} as stopped (Supervisor: {supervisor_state})")
+                        logger.info(f"Synced {program_name} status: {db_status} -> stopped (Supervisor: {supervisor_state})")
                 elif supervisor_state == "FATAL":
                     if db_status != "error":
                         error_msg = supervisor_states[program_name].get("spawnerr", "Supervisor FATAL state")
@@ -883,8 +915,8 @@ stdout_logfile={stdout_log}
                             {"id": run_id, "error_msg": error_msg}
                         )
                         stats["updated_to_error"] += 1
-                        logger.warning(f"Marked {program_name} as error (Supervisor FATAL)")
-                # Other states (STARTING, BACKOFF, etc.) - leave DB status as is for now
+                        logger.warning(f"Synced {program_name} status: {db_status} -> error (Supervisor: FATAL)")
+                # Other states (BACKOFF, etc.) - leave DB status as is for now
             
             return stats
             
