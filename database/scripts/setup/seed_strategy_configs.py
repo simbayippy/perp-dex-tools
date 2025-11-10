@@ -6,7 +6,7 @@ Inserts public template configurations into the database.
 These templates are available to all users when creating/configuring strategies.
 
 Usage:
-    python database/scripts/seed_strategy_configs.py
+    python database/scripts/setup/seed_strategy_configs.py
 """
 
 import asyncio
@@ -19,7 +19,7 @@ from decimal import Decimal
 from datetime import datetime
 
 # Add project root to sys.path
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 

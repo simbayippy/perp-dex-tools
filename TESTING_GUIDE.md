@@ -103,10 +103,10 @@ cd /path/to/perp-dex-tools
 source venv/bin/activate
 
 # Run migrations one by one
-python database/scripts/run_migration.py database/migrations/011_add_strategy_configs.sql
-python database/scripts/run_migration.py database/migrations/012_add_strategy_runs.sql
-python database/scripts/run_migration.py database/migrations/013_add_safety_limits.sql
-python database/scripts/run_migration.py database/migrations/014_add_audit_log.sql
+python database/scripts/migrations/run_migration.py database/migrations/011_add_strategy_configs.sql
+python database/scripts/migrations/run_migration.py database/migrations/012_add_strategy_runs.sql
+python database/scripts/migrations/run_migration.py database/migrations/013_add_safety_limits.sql
+python database/scripts/migrations/run_migration.py database/migrations/014_add_audit_log.sql
 ```
 
 **Verify migrations:**
@@ -153,23 +153,23 @@ CREDENTIAL_ENCRYPTION_KEY=your_encryption_key_here
 source venv/bin/activate
 
 # Create user (interactive mode)
-python database/scripts/create_user.py
+python database/scripts/users/create_user.py
 
 # Or command line mode
-python database/scripts/create_user.py --username alice --email alice@example.com
+python database/scripts/users/create_user.py --username alice --email alice@example.com
 
 # Create admin user (like "simba")
-python database/scripts/create_user.py --username simba --email simba@example.com --admin
+python database/scripts/users/create_user.py --username simba --email simba@example.com --admin
 ```
 
 ### 5.2 Create API Key for User
 
 ```bash
 # Create API key (interactive mode)
-python database/scripts/create_api_key.py
+python database/scripts/users/create_api_key.py
 
 # Or command line mode
-python database/scripts/create_api_key.py --username alice --name "Telegram Bot Key"
+python database/scripts/users/create_api_key.py --username alice --name "Telegram Bot Key"
 
 # The script will output the API key - SAVE THIS! It won't be shown again.
 # Example output:

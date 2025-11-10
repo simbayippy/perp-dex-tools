@@ -56,7 +56,7 @@ for env_file in "${ENV_FILES[@]}"; do
     fi
 
     # Add account to database
-    python database/scripts/add_account.py --from-env --account-name "$account_name" --env-file "$env_file" "${proxy_args[@]}"
+    python database/scripts/accounts/add_account.py --from-env --account-name "$account_name" --env-file "$env_file" "${proxy_args[@]}"
     
     echo ""
 done
@@ -73,7 +73,7 @@ echo "✅ All accounts setup complete!"
 echo "======================================"
 echo ""
 echo "📋 Verify accounts:"
-echo "   python database/scripts/list_accounts.py"
+echo "   python database/scripts/accounts/list_accounts.py"
 echo ""
 echo "🚀 Run bots:"
 echo "   python runbot.py --config config.yml --account acc1"

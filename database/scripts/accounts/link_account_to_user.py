@@ -20,7 +20,7 @@ from pathlib import Path
 import argparse
 
 # Add project root to sys.path
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -57,7 +57,7 @@ async def link_accounts_to_user(
         user = await user_repo.get_by_username(username)
         if not user:
             logger.error(f"❌ User '{username}' not found")
-            logger.info("   Create user first: python database/scripts/create_user.py")
+            logger.info("   Create user first: python database/scripts/users/create_user.py")
             return False
         
         if not user['is_active']:

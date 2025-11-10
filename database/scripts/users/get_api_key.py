@@ -27,7 +27,7 @@ import argparse
 from uuid import UUID
 
 # Add project root to sys.path
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -126,7 +126,7 @@ async def get_stored_api_key(
             logger.info(f'  curl -H "X-API-Key: {stored_key}" http://localhost:8766/api/v1/positions')
             logger.info("")
             logger.info("💡 Note: This is the API key stored when you authenticated via Telegram bot.")
-            logger.info("   If you need a new key, run: python database/scripts/create_api_key.py")
+            logger.info("   If you need a new key, run: python database/scripts/users/create_api_key.py")
             logger.info("="*70)
         else:
             logger.warning("⚠️  No stored API key found in user metadata.")

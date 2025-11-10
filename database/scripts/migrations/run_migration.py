@@ -3,10 +3,10 @@
 Run database migration
 
 Usage:
-    python database/scripts/run_migration.py <migration_file>
+    python database/scripts/migrations/run_migration.py <migration_file>
     
 Example:
-    python database/scripts/run_migration.py database/migrations/001_add_dex_symbols_updated_at.sql
+    python database/scripts/migrations/run_migration.py database/migrations/001_add_dex_symbols_updated_at.sql
 """
 
 import asyncio
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 # Add project root to sys.path so imports work correctly
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -70,9 +70,9 @@ async def run_migration(migration_file: str):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python database/scripts/run_migration.py <migration_file>")
+        print("Usage: python database/scripts/migrations/run_migration.py <migration_file>")
         print("\nExample:")
-        print("  python database/scripts/run_migration.py database/migrations/001_add_dex_symbols_updated_at.sql")
+        print("  python database/scripts/migrations/run_migration.py database/migrations/001_add_dex_symbols_updated_at.sql")
         sys.exit(1)
     
     migration_file = sys.argv[1]

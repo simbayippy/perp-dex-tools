@@ -4,10 +4,10 @@ Create an API key for a user
 
 Usage:
     # Interactive mode
-    python database/scripts/create_api_key.py
+    python database/scripts/users/create_api_key.py
     
     # Command line mode
-    python database/scripts/create_api_key.py --username alice --name "Telegram Bot"
+    python database/scripts/users/create_api_key.py --username alice --name "Telegram Bot"
 """
 
 import asyncio
@@ -18,7 +18,7 @@ import argparse
 from uuid import UUID
 
 # Add project root to sys.path
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -57,7 +57,7 @@ async def create_api_key(
         user = await user_repo.get_by_username(username)
         if not user:
             logger.error(f"❌ User '{username}' not found")
-            logger.info("   Create user first: python database/scripts/create_user.py")
+            logger.info("   Create user first: python database/scripts/users/create_user.py")
             return False
         
         if not user['is_active']:

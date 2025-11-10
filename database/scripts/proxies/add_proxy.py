@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 # Ensure project root on sys.path
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 import sys
 
 if str(PROJECT_ROOT) not in sys.path:

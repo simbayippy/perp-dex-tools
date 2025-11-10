@@ -6,7 +6,7 @@ This is a standalone script that can be run manually to apply migrations.
 The migrations will also run automatically on startup of main.py or run_tasks.py.
 
 Usage:
-    python database/scripts/run_all_migrations.py
+    python database/scripts/migrations/run_all_migrations.py
 """
 
 import asyncio
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 # Add project root to sys.path
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 

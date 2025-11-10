@@ -1,17 +1,46 @@
 # Database Scripts
 
-This directory contains database management and utility scripts.
+This directory contains database management and utility scripts, organized into logical groups for better maintainability.
+
+## 📁 Directory Structure
+
+```
+database/scripts/
+├── migrations/          # Database migration scripts
+│   ├── run_migration.py
+│   └── run_all_migrations.py
+├── setup/              # Initial setup and seeding scripts
+│   ├── init_db.py
+│   ├── seed_dexes.py
+│   └── seed_strategy_configs.py
+├── users/              # User and API key management
+│   ├── create_user.py
+│   ├── create_api_key.py
+│   ├── get_api_key.py
+│   └── revoke_api_key.py
+├── accounts/           # Account management scripts
+│   ├── add_account.py
+│   ├── delete_account.py
+│   ├── list_accounts.py
+│   ├── link_account_to_user.py
+│   └── setup_multiple_accounts.sh
+├── proxies/            # Proxy management scripts
+│   ├── add_proxy.py
+│   ├── delete_proxies.py
+│   └── proxy_utils.py
+└── README.md           # This file
+```
 
 ## 📋 Available Scripts
 
-### Core Scripts
+### Migration Scripts (`migrations/`)
 
-#### `run_migration.py`
+#### `migrations/run_migration.py`
 Run a single database migration file.
 
 **Usage:**
 ```bash
-python database/scripts/run_migration.py database/migrations/006_add_multi_account_support.sql
+python database/scripts/migrations/run_migration.py database/migrations/006_add_multi_account_support.sql
 ```
 
 **Features:**
@@ -21,12 +50,12 @@ python database/scripts/run_migration.py database/migrations/006_add_multi_accou
 
 ---
 
-#### `run_all_migrations.py`
+#### `migrations/run_all_migrations.py`
 Run all pending migrations using the migration manager.
 
 **Usage:**
 ```bash
-python database/scripts/run_all_migrations.py
+python database/scripts/migrations/run_all_migrations.py
 ```
 
 **Features:**
@@ -36,12 +65,14 @@ python database/scripts/run_all_migrations.py
 
 ---
 
-#### `init_db.py`
+### Setup Scripts (`setup/`)
+
+#### `setup/init_db.py`
 Initialize the database with the base schema.
 
 **Usage:**
 ```bash
-python database/scripts/init_db.py
+python database/scripts/setup/init_db.py
 ```
 
 **Features:**
@@ -51,12 +82,12 @@ python database/scripts/init_db.py
 
 ---
 
-#### `seed_dexes.py`
+#### `setup/seed_dexes.py`
 Seed the `dexes` table with initial exchange data.
 
 **Usage:**
 ```bash
-python database/scripts/seed_dexes.py
+python database/scripts/setup/seed_dexes.py
 ```
 
 **Exchanges Included:**
@@ -75,24 +106,24 @@ python database/scripts/seed_dexes.py
 
 ---
 
-### Account Management Scripts
+### Account Management Scripts (`accounts/`)
 
-#### `add_account.py`
+#### `accounts/add_account.py`
 Add a new trading account with encrypted credentials to the database.
 
 **Usage:**
 ```bash
 # Interactive mode (recommended)
-python database/scripts/add_account.py --interactive
+python database/scripts/accounts/add_account.py --interactive
 
 # From .env file (default)
-python database/scripts/add_account.py --from-env --account-name main_bot
+python database/scripts/accounts/add_account.py --from-env --account-name main_bot
 
 # From custom env file (useful for multiple accounts/API keys)
-python database/scripts/add_account.py --from-env --account-name acc1_funding --env-file .env.acc2
+python database/scripts/accounts/add_account.py --from-env --account-name acc1_funding --env-file .env.acc2
 
 # Attach proxies while creating the account
-python database/scripts/add_account.py \
+python database/scripts/accounts/add_account.py \
     --from-env --account-name acc1 \
     --env-file .env.acc1 \
     --proxy-file proxies.acc1.txt \
@@ -117,7 +148,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 echo "CREDENTIAL_ENCRYPTION_KEY=your_generated_key_here" >> .env
 
 # 3. Add your account
-python database/scripts/add_account.py --from-env --account-name main_bot
+python database/scripts/accounts/add_account.py --from-env --account-name main_bot
 ```
 
 **Adding Multiple Accounts (e.g., different API keys for same Lighter account):**
@@ -132,7 +163,7 @@ CREDENTIAL_ENCRYPTION_KEY=<same_as_main_env>
 EOF
 
 # 2. Add new account entry with different API key
-python database/scripts/add_account.py --from-env --account-name acc1_funding --env-file .env.acc2
+python database/scripts/accounts/add_account.py --from-env --account-name acc1_funding --env-file .env.acc2
 
 # 3. Run different strategies on same Lighter account with different API keys
 # Terminal 1: python runbot.py --config config1.yml --account acc1
@@ -147,13 +178,13 @@ Delete a trading account and its credentials from the database.
 **Usage:**
 ```bash
 # Interactive mode (recommended - shows list and confirms)
-python database/scripts/delete_account.py
+python database/scripts/accounts/delete_account.py
 
 # Delete specific account (with confirmation)
-python database/scripts/delete_account.py --account-name acc2
+python database/scripts/accounts/delete_account.py --account-name acc2
 
 # Force delete without confirmation (DANGEROUS)
-python database/scripts/delete_account.py --account-name acc2 --force
+python database/scripts/accounts/delete_account.py --account-name acc2 --force
 ```
 
 **Features:**
@@ -181,13 +212,13 @@ List all trading accounts and their configured exchanges.
 **Usage:**
 ```bash
 # List all accounts (credentials hidden - default)
-python database/scripts/list_accounts.py
+python database/scripts/accounts/list_accounts.py
 
 # Show masked credentials (safe for screenshots: 2b4f...184f)
-python database/scripts/list_accounts.py --show-credentials
+python database/scripts/accounts/list_accounts.py --show-credentials
 
 # Show FULL unmasked credentials (⚠️  use with extreme caution!)
-python database/scripts/list_accounts.py --show-full
+python database/scripts/accounts/list_accounts.py --show-full
 ```
 
 **Features:**
@@ -203,18 +234,18 @@ python database/scripts/list_accounts.py --show-full
 
 ---
 
-### User & API Key Management Scripts
+### User & API Key Management Scripts (`users/`)
 
-#### `create_api_key.py`
+#### `users/create_api_key.py`
 Create a new API key for a user (for REST API authentication).
 
 **Usage:**
 ```bash
 # Interactive mode (recommended)
-python database/scripts/create_api_key.py
+python database/scripts/users/create_api_key.py
 
 # Command line mode
-python database/scripts/create_api_key.py --username alice --name "Telegram Bot"
+python database/scripts/users/create_api_key.py --username alice --name "Telegram Bot"
 ```
 
 **Features:**
@@ -238,16 +269,16 @@ Retrieve a stored API key that was saved when authenticating via Telegram bot.
 **Usage:**
 ```bash
 # Interactive mode (recommended)
-python database/scripts/get_api_key.py
+python database/scripts/users/get_api_key.py
 
 # By username
-python database/scripts/get_api_key.py --username alice
+python database/scripts/users/get_api_key.py --username alice
 
 # By Telegram user ID
-python database/scripts/get_api_key.py --telegram-user-id 123456789
+python database/scripts/users/get_api_key.py --telegram-user-id 123456789
 
 # List all API keys for a user (shows prefixes, names, creation dates)
-python database/scripts/get_api_key.py --username alice --list-all
+python database/scripts/users/get_api_key.py --username alice --list-all
 ```
 
 **Features:**
@@ -270,16 +301,16 @@ Revoke (deactivate) API key(s) to ban users from accessing the API.
 **Usage:**
 ```bash
 # Interactive mode (recommended)
-python database/scripts/revoke_api_key.py
+python database/scripts/users/revoke_api_key.py
 
 # Revoke all keys for a user (ban user completely)
-python database/scripts/revoke_api_key.py --username alice --all
+python database/scripts/users/revoke_api_key.py --username alice --all
 
 # Revoke a specific key by key ID
-python database/scripts/revoke_api_key.py --key-id <uuid>
+python database/scripts/users/revoke_api_key.py --key-id <uuid>
 
 # Revoke keys matching a prefix for a user
-python database/scripts/revoke_api_key.py --username alice --prefix perp_a1b2
+python database/scripts/users/revoke_api_key.py --username alice --prefix perp_a1b2
 ```
 
 **Features:**
@@ -320,23 +351,23 @@ cp env_example.txt .env
 # Edit .env with your database credentials and exchange API keys
 
 # 3. Initialize database schema
-python database/scripts/init_db.py
+python database/scripts/setup/init_db.py
 
 # 4. Seed initial DEX data
-python database/scripts/seed_dexes.py
+python database/scripts/setup/seed_dexes.py
 
 # 5. Run all migrations
-python database/scripts/run_all_migrations.py
+python database/scripts/migrations/run_all_migrations.py
 
 # 6. Generate encryption key and add to .env
 python -c "from cryptography.fernet import Fernet; print('CREDENTIAL_ENCRYPTION_KEY=' + Fernet.generate_key().decode())"
 # Copy the output and add to your .env file
 
 # 7. Add your trading account
-python database/scripts/add_account.py --from-env --account-name main_bot
+python database/scripts/accounts/add_account.py --from-env --account-name main_bot
 
 # 8. Verify account was created
-python database/scripts/list_accounts.py
+python database/scripts/accounts/list_accounts.py
 ```
 
 ### Adding New Migrations
@@ -346,10 +377,10 @@ python database/scripts/list_accounts.py
 # Example: 007_add_new_feature.sql
 
 # 2. Run specific migration
-python database/scripts/run_migration.py database/migrations/007_add_new_feature.sql
+python database/scripts/migrations/run_migration.py database/migrations/007_add_new_feature.sql
 
 # Or run all pending migrations
-python database/scripts/run_all_migrations.py
+python database/scripts/migrations/run_all_migrations.py
 ```
 
 ---
@@ -382,7 +413,7 @@ Or from `funding_rate_service.config.settings` if available.
 Make sure you're running scripts from the project root:
 ```bash
 cd /path/to/perp-dex-tools
-python database/scripts/init_db.py
+python database/scripts/setup/init_db.py
 ```
 
 ### "Database connection failed"
@@ -399,7 +430,7 @@ chmod +x database/scripts/*.py
 
 Then you can run directly:
 ```bash
-./database/scripts/seed_dexes.py
+./database/scripts/setup/seed_dexes.py
 ```
 
 **Optional: attach proxies after creating the account**
@@ -412,7 +443,7 @@ proxyas.primedproxies.com:8888:PRIM_USER:PASSWORD
 EOF
 
 # Bulk register proxies and link them to the account
-python database/scripts/add_proxy.py \
+python database/scripts/proxies/add_proxy.py \
     --batch-file proxies.txt \
     --account acc1 \
     --label-prefix primed_sg \

@@ -4,13 +4,13 @@ Create a new user for REST API access
 
 Usage:
     # Interactive mode
-    python database/scripts/create_user.py
+    python database/scripts/users/create_user.py
     
     # Command line mode
-    python database/scripts/create_user.py --username alice --email alice@example.com
+    python database/scripts/users/create_user.py --username alice --email alice@example.com
     
     # Create admin user
-    python database/scripts/create_user.py --username admin --admin
+    python database/scripts/users/create_user.py --username admin --admin
 """
 
 import asyncio
@@ -20,7 +20,7 @@ from pathlib import Path
 import argparse
 
 # Add project root to sys.path
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 

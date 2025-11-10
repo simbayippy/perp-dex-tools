@@ -394,7 +394,7 @@ class TelegramFormatter:
             "Please authenticate first using:\n"
             "<code>/auth &lt;your_api_key&gt;</code>\n\n"
             "Get your API key by running:\n"
-            "<code>python database/scripts/create_api_key.py --username &lt;username&gt;</code>"
+            "<code>python database/scripts/users/create_api_key.py --username &lt;username&gt;</code>"
         )
     
     @staticmethod

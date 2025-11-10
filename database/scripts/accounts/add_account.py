@@ -22,7 +22,7 @@ import argparse
 import json
 
 # Add project root to sys.path
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -136,7 +136,7 @@ class AccountManager:
         
         if not exchange:
             logger.error(f"❌ Exchange '{exchange_name}' not found in database")
-            logger.info("Run: python database/scripts/seed_dexes.py")
+            logger.info("Run: python database/scripts/setup/seed_dexes.py")
             return False
         
         exchange_id = exchange['id']
