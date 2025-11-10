@@ -153,6 +153,10 @@ class FundingArbitrageStrategy(BaseStrategy):
         account_name = getattr(funding_config, 'account_name', None)
         # Pass strategy logger to position manager for unified logging
         self.position_manager = FundingArbPositionManager(account_name=account_name, logger=self.logger)
+        
+        # Notification service for Telegram notifications
+        from .utils.notification_service import StrategyNotificationService
+        self.notification_service = StrategyNotificationService(account_name=account_name)
 
         # Tracking
         self.failed_symbols = set()  # Track symbols that failed validation (avoid retrying same cycle)

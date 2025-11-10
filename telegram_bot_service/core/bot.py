@@ -18,6 +18,7 @@ from telegram_bot_service.handlers.accounts import AccountHandler
 from telegram_bot_service.handlers.configs import ConfigHandler
 from telegram_bot_service.handlers.strategies import StrategyHandler
 from telegram_bot_service.handlers.wizards import WizardRouter
+from telegram_bot_service.handlers.notifications import NotificationHandler
 from telegram_bot_service.utils.auth import TelegramAuth
 from telegram_bot_service.utils.formatters import TelegramFormatter
 from telegram_bot_service.managers.process_manager import StrategyProcessManager
@@ -55,6 +56,9 @@ class StrategyControlBot:
             self.encryptor = Fernet(encryption_key.encode() if isinstance(encryption_key, str) else encryption_key)
         else:
             self.encryptor = None
+        
+        # Notification handler (will be initialized after application is created)
+        self.notification_handler: Optional[NotificationHandler] = None
     
         # Initialize handlers
         handler_kwargs = {
@@ -154,6 +158,10 @@ class StrategyControlBot:
         await self.application.start()
         await self.application.updater.start_polling()
         self.logger.info("Telegram bot started and polling")
+        
+        # Initialize and start notification handler after application is ready
+        self.notification_handler = NotificationHandler(self.database, self.application.bot)
+        await self.notification_handler.start()
     
     async def _health_monitor_loop(self):
         """Background task to monitor strategy health and sync status."""
@@ -177,6 +185,10 @@ class StrategyControlBot:
     
     async def stop(self):
         """Stop the bot."""
+        # Stop notification handler
+        if self.notification_handler:
+            await self.notification_handler.stop()
+        
         # Cancel health monitor task
         if hasattr(self, '_health_monitor_task'):
             self._health_monitor_task.cancel()

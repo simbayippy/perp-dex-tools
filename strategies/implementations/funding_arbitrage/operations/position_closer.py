@@ -172,6 +172,20 @@ class PositionCloser:
                 f"PnL=${pnl:.2f} ({pnl_pct*100:.2f}%), "
                 f"Age={position.get_age_hours():.1f}h"
             )
+            
+            # Send Telegram notification
+            try:
+                await strategy.notification_service.notify_position_closed(
+                    symbol=position.symbol,
+                    reason=reason,
+                    pnl_usd=pnl,
+                    pnl_pct=pnl_pct,
+                    age_hours=position.get_age_hours(),
+                    size_usd=position.size_usd,
+                )
+            except Exception as exc:
+                # Don't fail position closing if notification fails
+                strategy.logger.warning(f"Failed to send position closed notification: {exc}")
 
         except Exception as exc:  # pragma: no cover - defensive logging
             strategy.logger.error(
