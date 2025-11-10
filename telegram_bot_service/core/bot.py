@@ -983,8 +983,28 @@ class StrategyControlBot:
     
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle errors."""
-        self.logger.error(f"Update {update} caused error {context.error}")
-        if update and update.effective_message:
+        error = context.error
+        self.logger.error(f"Update {update} caused error {error}", exc_info=error)
+        
+        # Try to provide more helpful error messages
+        if update and update.callback_query:
+            query = update.callback_query
+            try:
+                await query.answer("❌ An error occurred. Please try again.")
+                await query.edit_message_text(
+                    "❌ An error occurred. Please try again or use /help for assistance.\n\n"
+                    f"Error: {str(error)}",
+                    parse_mode='HTML'
+                )
+            except:
+                try:
+                    await query.message.reply_text(
+                        "❌ An error occurred. Please try again or use /help for assistance.",
+                        parse_mode='HTML'
+                    )
+                except:
+                    pass
+        elif update and update.effective_message:
             await update.effective_message.reply_text(
                 "❌ An error occurred. Please try again or use /help for assistance.",
                 parse_mode='HTML'
@@ -1140,77 +1160,133 @@ class StrategyControlBot:
         query = update.callback_query
         await query.answer()
         
-        callback_data = query.data
-        account_id = callback_data.split(":", 1)[1]
-        
-        # Get account name
-        account_row = await self.database.fetch_one(
-            "SELECT account_name FROM accounts WHERE id = :id",
-            {"id": account_id}
-        )
-        account_name = account_row['account_name'] if account_row else account_id
-        
-        # Show exchange selection
-        keyboard = [
-            [InlineKeyboardButton("⚡ Lighter", callback_data=f"add_exchange_exchange:{account_id}:lighter")],
-            [InlineKeyboardButton("🌟 Aster", callback_data=f"add_exchange_exchange:{account_id}:aster")],
-            [InlineKeyboardButton("🎒 Backpack", callback_data=f"add_exchange_exchange:{account_id}:backpack")],
-            [InlineKeyboardButton("🎪 Paradex", callback_data=f"add_exchange_exchange:{account_id}:paradex")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            f"🔐 <b>Add Exchange Credentials</b>\n\n"
-            f"Account: <b>{account_name}</b>\n\n"
-            "Step 2/2: Select exchange:",
-            parse_mode='HTML',
-            reply_markup=reply_markup
-        )
+        try:
+            callback_data = query.data
+            account_id = callback_data.split(":", 1)[1]
+            
+            # Get account name
+            account_row = await self.database.fetch_one(
+                "SELECT account_name FROM accounts WHERE id = :id",
+                {"id": account_id}
+            )
+            
+            if not account_row:
+                await query.edit_message_text(
+                    "❌ Account not found. Please try again.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            account_name = account_row['account_name']
+            
+            # Show exchange selection
+            keyboard = [
+                [InlineKeyboardButton("⚡ Lighter", callback_data=f"add_exchange_exchange:{account_id}:lighter")],
+                [InlineKeyboardButton("🌟 Aster", callback_data=f"add_exchange_exchange:{account_id}:aster")],
+                [InlineKeyboardButton("🎒 Backpack", callback_data=f"add_exchange_exchange:{account_id}:backpack")],
+                [InlineKeyboardButton("🎪 Paradex", callback_data=f"add_exchange_exchange:{account_id}:paradex")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"🔐 <b>Add Exchange Credentials</b>\n\n"
+                f"Account: <b>{account_name}</b>\n\n"
+                "Step 2/2: Select exchange:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            self.logger.error(f"Error in add_exchange_account_callback: {e}", exc_info=True)
+            try:
+                await query.edit_message_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again with /add_exchange",
+                    parse_mode='HTML'
+                )
+            except:
+                await query.message.reply_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again with /add_exchange",
+                    parse_mode='HTML'
+                )
     
     async def add_exchange_exchange_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle exchange selection for add_exchange."""
         query = update.callback_query
         await query.answer()
         
-        callback_data = query.data
-        # Format: add_exchange_exchange:{account_id}:{exchange}
-        parts = callback_data.split(":", 2)
-        account_id = parts[1]
-        exchange = parts[2]
-        
-        # Get account name
-        account_row = await self.database.fetch_one(
-            "SELECT account_name FROM accounts WHERE id = :id",
-            {"id": account_id}
-        )
-        account_name = account_row['account_name'] if account_row else account_id
-        
-        # Start wizard for credentials
-        context.user_data['wizard'] = {
-            'type': 'add_exchange',
-            'step': 1,
-            'data': {
-                'account_id': account_id,
-                'account_name': account_name,
-                'exchange': exchange
+        try:
+            callback_data = query.data
+            # Format: add_exchange_exchange:{account_id}:{exchange}
+            parts = callback_data.split(":", 2)
+            if len(parts) != 3:
+                await query.edit_message_text(
+                    "❌ Invalid callback data. Please try again with /add_exchange",
+                    parse_mode='HTML'
+                )
+                return
+            
+            account_id = parts[1]
+            exchange = parts[2]
+            
+            if exchange not in ['lighter', 'aster', 'backpack', 'paradex']:
+                await query.edit_message_text(
+                    f"❌ Invalid exchange: {exchange}",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Get account name
+            account_row = await self.database.fetch_one(
+                "SELECT account_name FROM accounts WHERE id = :id",
+                {"id": account_id}
+            )
+            
+            if not account_row:
+                await query.edit_message_text(
+                    "❌ Account not found. Please try again.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            account_name = account_row['account_name']
+            
+            # Start wizard for credentials
+            context.user_data['wizard'] = {
+                'type': 'add_exchange',
+                'step': 1,
+                'data': {
+                    'account_id': account_id,
+                    'account_name': account_name,
+                    'exchange': exchange
+                }
             }
-        }
-        
-        # Prompt for exchange-specific credentials
-        prompts = {
-            'lighter': "Enter Lighter credentials:\nFormat: <code>private_key,account_index,api_key_index</code>",
-            'aster': "Enter Aster credentials:\nFormat: <code>api_key,secret_key</code>",
-            'backpack': "Enter Backpack credentials:\nFormat: <code>public_key,secret_key</code>",
-            'paradex': "Enter Paradex credentials:\nFormat: <code>l1_address,l2_private_key_hex[,l2_address,environment]</code>"
-        }
-        
-        await query.edit_message_text(
-            f"🔐 <b>Add {exchange.upper()} Credentials</b>\n\n"
-            f"Account: <b>{account_name}</b>\n\n"
-            f"{prompts[exchange]}\n\n"
-            "Send credentials separated by commas:",
-            parse_mode='HTML'
-        )
+            
+            # Prompt for exchange-specific credentials
+            prompts = {
+                'lighter': "Enter Lighter credentials:\nFormat: <code>private_key,account_index,api_key_index</code>",
+                'aster': "Enter Aster credentials:\nFormat: <code>api_key,secret_key</code>",
+                'backpack': "Enter Backpack credentials:\nFormat: <code>public_key,secret_key</code>",
+                'paradex': "Enter Paradex credentials:\nFormat: <code>l1_address,l2_private_key_hex[,l2_address,environment]</code>"
+            }
+            
+            await query.edit_message_text(
+                f"🔐 <b>Add {exchange.upper()} Credentials</b>\n\n"
+                f"Account: <b>{account_name}</b>\n\n"
+                f"{prompts[exchange]}\n\n"
+                "Send credentials separated by commas:",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            self.logger.error(f"Error in add_exchange_exchange_callback: {e}", exc_info=True)
+            try:
+                await query.edit_message_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again with /add_exchange",
+                    parse_mode='HTML'
+                )
+            except:
+                await query.message.reply_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again with /add_exchange",
+                    parse_mode='HTML'
+                )
     
     async def _handle_add_exchange_wizard(self, update, context, wizard, text):
         """Handle add exchange wizard steps."""
