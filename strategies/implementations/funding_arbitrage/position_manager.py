@@ -162,7 +162,8 @@ class FundingArbPositionManager(BasePositionManager):
                 )
                 self.account_id = None
             else:
-                self.account_id = row['id']
+                row_data = dict(row)
+                self.account_id = row_data['id']
                 self.logger.info(f"Loaded account_id {self.account_id} for account '{self.account_name}'")
         except Exception as exc:
             self.logger.error(f"Failed to load account_id for '{self.account_name}': {exc}")
@@ -324,36 +325,41 @@ class FundingArbPositionManager(BasePositionManager):
         if not row:
             return None
         
+        # Convert DB row to dict for safe access
+        row_data = dict(row)
+        
         # Convert DB row to FundingArbPosition
         position = FundingArbPosition(
-            id=row['id'],
-            symbol=row['symbol'],
-            long_dex=dex_mapper.get_name(row['long_dex_id']),
-            short_dex=dex_mapper.get_name(row['short_dex_id']),
-            size_usd=row['size_usd'],
-            entry_long_rate=row['entry_long_rate'],
-            entry_short_rate=row['entry_short_rate'],
-            entry_divergence=row['entry_divergence'],
-            opened_at=row['opened_at'],
-            current_divergence=row['current_divergence'],
-            last_check=row['last_check'],
-            status=row['status'],
-            rebalance_pending=row['rebalance_pending'],
-            rebalance_reason=row['rebalance_reason'],
-            exit_reason=row['exit_reason'],
-            closed_at=row['closed_at'],
-            pnl_usd=row['pnl_usd']
+            id=row_data['id'],
+            symbol=row_data['symbol'],
+            long_dex=dex_mapper.get_name(row_data['long_dex_id']),
+            short_dex=dex_mapper.get_name(row_data['short_dex_id']),
+            size_usd=row_data['size_usd'],
+            entry_long_rate=row_data['entry_long_rate'],
+            entry_short_rate=row_data['entry_short_rate'],
+            entry_divergence=row_data['entry_divergence'],
+            opened_at=row_data['opened_at'],
+            current_divergence=row_data['current_divergence'],
+            last_check=row_data['last_check'],
+            status=row_data['status'],
+            rebalance_pending=row_data['rebalance_pending'],
+            rebalance_reason=row_data['rebalance_reason'],
+            exit_reason=row_data['exit_reason'],
+            closed_at=row_data['closed_at'],
+            pnl_usd=row_data['pnl_usd']
         )
         # Load cumulative_funding from database
-        if row.get('cumulative_funding_usd') is not None:
-            position.cumulative_funding = row['cumulative_funding_usd']
+        cumulative_funding = row_data.get('cumulative_funding_usd')
+        if cumulative_funding is not None:
+            position.cumulative_funding = cumulative_funding
         # Load metadata if present
-        if row.get('metadata'):
+        metadata = row_data.get('metadata')
+        if metadata:
             try:
-                if isinstance(row['metadata'], str):
-                    position.metadata = json.loads(row['metadata'])
+                if isinstance(metadata, str):
+                    position.metadata = json.loads(metadata)
                 else:
-                    position.metadata = row['metadata']
+                    position.metadata = metadata
             except Exception:
                 position.metadata = {}
         return position
@@ -474,21 +480,24 @@ class FundingArbPositionManager(BasePositionManager):
             symbol_repo = SymbolRepository(database)
             symbol_row = await symbol_repo.get_by_name(symbol)
             if symbol_row:
-                symbol_id = symbol_row["id"]
-                symbol_mapper.add(symbol_id, symbol_row["symbol"])
+                symbol_row_data = dict(symbol_row) if not isinstance(symbol_row, dict) else symbol_row
+                symbol_id = symbol_row_data["id"]
+                symbol_mapper.add(symbol_id, symbol_row_data["symbol"])
 
         if (long_dex_id is None or short_dex_id is None) and DEXRepository:
             dex_repo = DEXRepository(database)
             if long_dex_id is None:
                 long_row = await dex_repo.get_by_name(long_dex.lower())
                 if long_row:
-                    long_dex_id = long_row["id"]
-                    dex_mapper.add(long_dex_id, long_row["name"])
+                    long_row_data = dict(long_row) if not isinstance(long_row, dict) else long_row
+                    long_dex_id = long_row_data["id"]
+                    dex_mapper.add(long_dex_id, long_row_data["name"])
             if short_dex_id is None:
                 short_row = await dex_repo.get_by_name(short_dex.lower())
                 if short_row:
-                    short_dex_id = short_row["id"]
-                    dex_mapper.add(short_dex_id, short_row["name"])
+                    short_row_data = dict(short_row) if not isinstance(short_row, dict) else short_row
+                    short_dex_id = short_row_data["id"]
+                    dex_mapper.add(short_dex_id, short_row_data["name"])
 
         if symbol_id is None or long_dex_id is None or short_dex_id is None:
             return None
@@ -521,7 +530,9 @@ class FundingArbPositionManager(BasePositionManager):
         if not row:
             return None
 
-        return await self.get(row["id"])
+        # Convert DB row to dict for safe access
+        row_data = dict(row)
+        return await self.get(row_data["id"])
     
     async def update(self, position: FundingArbPosition) -> None:
         """
@@ -871,35 +882,39 @@ class FundingArbPositionManager(BasePositionManager):
         
         positions = []
         for row in rows:
+            # Convert DB row to dict for safe access
+            row_data = dict(row)
             position = FundingArbPosition(
-                id=row['id'],
-                symbol=row['symbol'],
-                long_dex=dex_mapper.get_name(row['long_dex_id']),
-                short_dex=dex_mapper.get_name(row['short_dex_id']),
-                size_usd=row['size_usd'],
-                entry_long_rate=row['entry_long_rate'],
-                entry_short_rate=row['entry_short_rate'],
-                entry_divergence=row['entry_divergence'],
-                opened_at=row['opened_at'],
-                current_divergence=row['current_divergence'],
-                last_check=row['last_check'],
-                status=row['status'],
-                rebalance_pending=row['rebalance_pending'],
-                rebalance_reason=row['rebalance_reason'],
-                exit_reason=row['exit_reason'],
-                closed_at=row['closed_at'],
-                pnl_usd=row['pnl_usd']
+                id=row_data['id'],
+                symbol=row_data['symbol'],
+                long_dex=dex_mapper.get_name(row_data['long_dex_id']),
+                short_dex=dex_mapper.get_name(row_data['short_dex_id']),
+                size_usd=row_data['size_usd'],
+                entry_long_rate=row_data['entry_long_rate'],
+                entry_short_rate=row_data['entry_short_rate'],
+                entry_divergence=row_data['entry_divergence'],
+                opened_at=row_data['opened_at'],
+                current_divergence=row_data['current_divergence'],
+                last_check=row_data['last_check'],
+                status=row_data['status'],
+                rebalance_pending=row_data['rebalance_pending'],
+                rebalance_reason=row_data['rebalance_reason'],
+                exit_reason=row_data['exit_reason'],
+                closed_at=row_data['closed_at'],
+                pnl_usd=row_data['pnl_usd']
             )
             # Load cumulative_funding from database
-            if row.get('cumulative_funding_usd') is not None:
-                position.cumulative_funding = row['cumulative_funding_usd']
+            cumulative_funding = row_data.get('cumulative_funding_usd')
+            if cumulative_funding is not None:
+                position.cumulative_funding = cumulative_funding
             # Load metadata if present
-            if row.get('metadata'):
+            metadata = row_data.get('metadata')
+            if metadata:
                 try:
-                    if isinstance(row['metadata'], str):
-                        position.metadata = json.loads(row['metadata'])
+                    if isinstance(metadata, str):
+                        position.metadata = json.loads(metadata)
                     else:
-                        position.metadata = row['metadata']
+                        position.metadata = metadata
                 except Exception:
                     position.metadata = {}
             positions.append(position)
@@ -930,7 +945,9 @@ class FundingArbPositionManager(BasePositionManager):
         if not row:
             return Decimal("0")
         
-        return row['cumulative_funding_usd'] or Decimal("0")
+        # Convert DB row to dict for safe access
+        row_data = dict(row)
+        return row_data.get('cumulative_funding_usd') or Decimal("0")
     
     async def get_funding_payments(self, position_id: UUID) -> List[Dict]:
         """
@@ -957,14 +974,16 @@ class FundingArbPositionManager(BasePositionManager):
         
         payments = []
         for row in rows:
+            # Convert DB row to dict for safe access
+            row_data = dict(row)
             payments.append({
-                'timestamp': row['payment_time'],
-                'long_payment': row['long_payment'],
-                'short_payment': row['short_payment'],
-                'net_payment': row['net_payment'],
-                'long_rate': row['long_rate'],
-                'short_rate': row['short_rate'],
-                'divergence': row['divergence']
+                'timestamp': row_data['payment_time'],
+                'long_payment': row_data['long_payment'],
+                'short_payment': row_data['short_payment'],
+                'net_payment': row_data['net_payment'],
+                'long_rate': row_data['long_rate'],
+                'short_rate': row_data['short_rate'],
+                'divergence': row_data['divergence']
             })
         
         return payments
