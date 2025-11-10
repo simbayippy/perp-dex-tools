@@ -570,7 +570,7 @@ class StrategyControlBot:
         )
     
     async def add_proxy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /add_proxy command."""
+        """Handle /add_proxy command - interactive account selection."""
         telegram_user_id = update.effective_user.id
         user = await self.auth.get_user_by_telegram_id(telegram_user_id)
         if not user:
@@ -580,31 +580,37 @@ class StrategyControlBot:
             )
             return
         
-        if not context.args or len(context.args) < 1:
+        # Get user's accounts
+        query = """
+            SELECT id, account_name
+            FROM accounts
+            WHERE user_id = :user_id AND is_active = TRUE
+            ORDER BY account_name
+        """
+        accounts = await self.database.fetch_all(query, {"user_id": str(user["id"])})
+        
+        if not accounts:
             await update.message.reply_text(
-                "❌ Usage: /add_proxy &lt;account_name&gt;\n\n"
-                "Example: /add_proxy my_account",
+                "❌ No accounts found. Create an account first with /create_account",
                 parse_mode='HTML'
             )
             return
         
-        account_name = context.args[0]
+        # Create account selection keyboard
+        keyboard = []
+        for acc in accounts:
+            keyboard.append([InlineKeyboardButton(
+                acc['account_name'],
+                callback_data=f"add_proxy_account:{acc['id']}"
+            )])
         
-        # Start proxy wizard
-        context.user_data['wizard'] = {
-            'type': 'add_proxy',
-            'step': 1,
-            'data': {
-                'account_name': account_name
-            }
-        }
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
             "🌐 <b>Add Proxy</b>\n\n"
-            "Step 1/2: Enter proxy URL:\n"
-            "Format: socks5://host:port\n"
-            "Example: socks5://123.45.67.89:1080",
-            parse_mode='HTML'
+            "Select account:",
+            parse_mode='HTML',
+            reply_markup=reply_markup
         )
     
     # ========================================================================
@@ -1123,6 +1129,10 @@ class StrategyControlBot:
             pattern="^add_exc_ex:"
         ))
         application.add_handler(CallbackQueryHandler(
+            self.add_proxy_account_callback,
+            pattern="^add_proxy_account:"
+        ))
+        application.add_handler(CallbackQueryHandler(
             self.edit_account_callback,
             pattern="^edit_account_btn:"
         ))
@@ -1153,6 +1163,22 @@ class StrategyControlBot:
         application.add_handler(CallbackQueryHandler(
             self.delete_config_cancel_callback,
             pattern="^delete_config_cancel:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.edit_account_name_callback,
+            pattern="^edit_acc_name:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.edit_account_description_callback,
+            pattern="^edit_acc_desc:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.edit_account_add_exchange_callback,
+            pattern="^edit_acc_exchange:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.edit_account_add_proxy_callback,
+            pattern="^edit_acc_proxy:"
         ))
         
         # Wizard message handler (for multi-step wizards)
@@ -1471,6 +1497,61 @@ class StrategyControlBot:
                 parse_mode='HTML'
             )
     
+    async def add_proxy_account_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle account selection for add_proxy."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            callback_data = query.data
+            account_id = callback_data.split(":", 1)[1]
+            
+            # Get account name
+            account_row = await self.database.fetch_one(
+                "SELECT account_name FROM accounts WHERE id = :id",
+                {"id": account_id}
+            )
+            
+            if not account_row:
+                await query.edit_message_text(
+                    "❌ Account not found. Please try again.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            account_name = account_row['account_name']
+            
+            # Start proxy wizard
+            context.user_data['wizard'] = {
+                'type': 'add_proxy',
+                'step': 1,
+                'data': {
+                    'account_id': account_id,
+                    'account_name': account_name
+                }
+            }
+            
+            await query.edit_message_text(
+                f"🌐 <b>Add Proxy</b>\n\n"
+                f"Account: <b>{account_name}</b>\n\n"
+                "Step 1/2: Enter proxy URL:\n"
+                "Format: <code>socks5://host:port</code>\n"
+                "Example: <code>socks5://123.45.67.89:1080</code>",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            self.logger.error(f"Error in add_proxy_account_callback: {e}", exc_info=True)
+            try:
+                await query.edit_message_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again with /add_proxy",
+                    parse_mode='HTML'
+                )
+            except:
+                await query.message.reply_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again with /add_proxy",
+                    parse_mode='HTML'
+                )
+    
     async def _handle_add_proxy_wizard(self, update, context, wizard, text):
         """Handle add proxy wizard steps."""
         data = wizard['data']
@@ -1529,26 +1610,30 @@ class StrategyControlBot:
                 )
                 return
             
-            # Get account ID
-            query = """
-                SELECT id FROM accounts
-                WHERE account_name = :name AND user_id = :user_id
-            """
+            # Get account_id from wizard data (already stored from callback)
+            account_id = data.get('account_id')
+            if not account_id:
+                # Fallback: try to get from account_name (for backward compatibility)
+                telegram_user_id = update.effective_user.id
+                user = await self.auth.get_user_by_telegram_id(telegram_user_id)
+                query = """
+                    SELECT id FROM accounts
+                    WHERE account_name = :name AND user_id = :user_id
+                """
+                row = await self.database.fetch_one(query, {
+                    "name": data['account_name'],
+                    "user_id": str(user["id"])
+                })
+                if not row:
+                    await update.message.reply_text(
+                        f"❌ Account not found: {data['account_name']}",
+                        parse_mode='HTML'
+                    )
+                    return
+                account_id = row["id"]
+            
             telegram_user_id = update.effective_user.id
             user = await self.auth.get_user_by_telegram_id(telegram_user_id)
-            row = await self.database.fetch_one(query, {
-                "name": data['account_name'],
-                "user_id": user["id"]
-            })
-            
-            if not row:
-                await update.message.reply_text(
-                    f"❌ Account not found: {data['account_name']}",
-                    parse_mode='HTML'
-                )
-                return
-            
-            account_id = row["id"]
             
             # Store proxy
             await self._store_proxy(account_id, data)
@@ -1558,12 +1643,228 @@ class StrategyControlBot:
             context.user_data.pop('wizard', None)
             
             await update.message.reply_text(
-                f"✅ Proxy added successfully!",
+                f"✅ Proxy added successfully to <b>{data['account_name']}</b>!",
                 parse_mode='HTML'
             )
     
+    async def edit_account_name_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle edit account name button click."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            callback_data = query.data
+            account_id = callback_data.split(":", 1)[1]
+            
+            # Get account name
+            account_row = await self.database.fetch_one(
+                "SELECT account_name FROM accounts WHERE id = :id",
+                {"id": account_id}
+            )
+            
+            if not account_row:
+                await query.edit_message_text(
+                    "❌ Account not found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Start wizard for name edit
+            context.user_data['wizard'] = {
+                'type': 'edit_account',
+                'step': 2,
+                'data': {
+                    'account_id': account_id,
+                    'account_name': account_row['account_name'],
+                    'edit_type': 'name'
+                }
+            }
+            
+            await query.edit_message_text(
+                f"✏️ <b>Edit Account Name</b>\n\n"
+                f"Current name: <b>{account_row['account_name']}</b>\n\n"
+                "Enter new account name:",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            self.logger.error(f"Error in edit_account_name_callback: {e}", exc_info=True)
+            try:
+                await query.edit_message_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+            except:
+                await query.message.reply_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+    
+    async def edit_account_description_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle edit account description button click."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            callback_data = query.data
+            account_id = callback_data.split(":", 1)[1]
+            
+            # Get account details
+            account_row = await self.database.fetch_one(
+                "SELECT account_name, description FROM accounts WHERE id = :id",
+                {"id": account_id}
+            )
+            
+            if not account_row:
+                await query.edit_message_text(
+                    "❌ Account not found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Start wizard for description edit
+            context.user_data['wizard'] = {
+                'type': 'edit_account',
+                'step': 2,
+                'data': {
+                    'account_id': account_id,
+                    'account_name': account_row['account_name'],
+                    'edit_type': 'description'
+                }
+            }
+            
+            current_desc = account_row['description'] or "None"
+            
+            await query.edit_message_text(
+                f"📝 <b>Edit Account Description</b>\n\n"
+                f"Account: <b>{account_row['account_name']}</b>\n"
+                f"Current description: {current_desc}\n\n"
+                "Enter new description (or 'none' to remove):",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            self.logger.error(f"Error in edit_account_description_callback: {e}", exc_info=True)
+            try:
+                await query.edit_message_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+            except:
+                await query.message.reply_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+    
+    async def edit_account_add_exchange_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle add exchange from edit account menu."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            callback_data = query.data
+            account_id = callback_data.split(":", 1)[1]
+            
+            # Store account_id for add_exchange flow
+            context.user_data['add_exchange_account_id'] = account_id
+            
+            # Get account name
+            account_row = await self.database.fetch_one(
+                "SELECT account_name FROM accounts WHERE id = :id",
+                {"id": account_id}
+            )
+            
+            if not account_row:
+                await query.edit_message_text(
+                    "❌ Account not found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Show exchange selection
+            keyboard = [
+                [InlineKeyboardButton("🔵 Lighter", callback_data="add_exc_ex:lighter")],
+                [InlineKeyboardButton("🟢 Aster", callback_data="add_exc_ex:aster")],
+                [InlineKeyboardButton("🟣 Backpack", callback_data="add_exc_ex:backpack")],
+                [InlineKeyboardButton("🟠 Paradex", callback_data="add_exc_ex:paradex")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"🔐 <b>Add Exchange Credentials</b>\n\n"
+                f"Account: <b>{account_row['account_name']}</b>\n\n"
+                "Select exchange:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            self.logger.error(f"Error in edit_account_add_exchange_callback: {e}", exc_info=True)
+            try:
+                await query.edit_message_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+            except:
+                await query.message.reply_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+    
+    async def edit_account_add_proxy_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle add proxy from edit account menu."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            callback_data = query.data
+            account_id = callback_data.split(":", 1)[1]
+            
+            # Get account name
+            account_row = await self.database.fetch_one(
+                "SELECT account_name FROM accounts WHERE id = :id",
+                {"id": account_id}
+            )
+            
+            if not account_row:
+                await query.edit_message_text(
+                    "❌ Account not found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            account_name = account_row['account_name']
+            
+            # Start proxy wizard
+            context.user_data['wizard'] = {
+                'type': 'add_proxy',
+                'step': 1,
+                'data': {
+                    'account_id': account_id,
+                    'account_name': account_name
+                }
+            }
+            
+            await query.edit_message_text(
+                f"🌐 <b>Add Proxy</b>\n\n"
+                f"Account: <b>{account_name}</b>\n\n"
+                "Step 1/2: Enter proxy URL:\n"
+                "Format: <code>socks5://host:port</code>\n"
+                "Example: <code>socks5://123.45.67.89:1080</code>",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            self.logger.error(f"Error in edit_account_add_proxy_callback: {e}", exc_info=True)
+            try:
+                await query.edit_message_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+            except:
+                await query.message.reply_text(
+                    f"❌ Error: {str(e)}\n\nPlease try again.",
+                    parse_mode='HTML'
+                )
+    
     async def _handle_edit_account_wizard(self, update, context, wizard, text):
-        """Handle edit account wizard steps."""
+        """Handle edit account wizard steps (now only handles step 2 - value input)."""
         data = wizard['data']
         step = wizard['step']
         account_id = data['account_id']
@@ -1576,49 +1877,8 @@ class StrategyControlBot:
             )
             return
         
-        if step == 1:
-            # User selected what to edit (1-4)
-            choice = text.strip()
-            
-            if choice == '1':
-                # Edit account name
-                wizard['step'] = 2
-                wizard['data']['edit_type'] = 'name'
-                await update.message.reply_text(
-                    "Enter new account name:",
-                    parse_mode='HTML'
-                )
-            elif choice == '2':
-                # Edit description
-                wizard['step'] = 2
-                wizard['data']['edit_type'] = 'description'
-                await update.message.reply_text(
-                    "Enter new description (or 'none' to remove):",
-                    parse_mode='HTML'
-                )
-            elif choice == '3':
-                # Add exchange credentials (redirect to add_exchange flow)
-                context.user_data.pop('wizard', None)
-                await update.message.reply_text(
-                    f"Use /add_exchange to add exchange credentials to this account.",
-                    parse_mode='HTML'
-                )
-            elif choice == '4':
-                # Add proxy (redirect to add_proxy flow)
-                context.user_data.pop('wizard', None)
-                account_name = data['account_name']
-                await update.message.reply_text(
-                    f"Use /add_proxy {account_name} to add a proxy to this account.",
-                    parse_mode='HTML'
-                )
-            else:
-                await update.message.reply_text(
-                    "❌ Invalid choice. Please send 1, 2, 3, 4, or 'cancel'.",
-                    parse_mode='HTML'
-                )
-        
-        elif step == 2:
-            # User provided new value
+        if step == 2:
+            # User provided new value (step 1 is now handled by buttons)
             edit_type = data.get('edit_type')
             telegram_user_id = update.effective_user.id
             user = await self.auth.get_user_by_telegram_id(telegram_user_id)
@@ -1901,25 +2161,20 @@ class StrategyControlBot:
             
             account_name = account_row['account_name']
             
-            # Start edit wizard
-            context.user_data['wizard'] = {
-                'type': 'edit_account',
-                'step': 1,
-                'data': {
-                    'account_id': account_id,
-                    'account_name': account_name
-                }
-            }
+            # Show edit options with inline buttons
+            keyboard = [
+                [InlineKeyboardButton("✏️ Edit Name", callback_data=f"edit_acc_name:{account_id}")],
+                [InlineKeyboardButton("📝 Edit Description", callback_data=f"edit_acc_desc:{account_id}")],
+                [InlineKeyboardButton("🔐 Add Exchange", callback_data=f"edit_acc_exchange:{account_id}")],
+                [InlineKeyboardButton("🌐 Add Proxy", callback_data=f"edit_acc_proxy:{account_id}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
                 f"✏️ <b>Edit Account: {account_name}</b>\n\n"
-                "What would you like to edit?\n\n"
-                "1. Account name\n"
-                "2. Description\n"
-                "3. Add exchange credentials\n"
-                "4. Add proxy\n\n"
-                "Send the number (1-4) or 'cancel' to cancel:",
-                parse_mode='HTML'
+                "What would you like to edit?",
+                parse_mode='HTML',
+                reply_markup=reply_markup
             )
         except Exception as e:
             self.logger.error(f"Error in edit_account_callback: {e}", exc_info=True)

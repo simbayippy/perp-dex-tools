@@ -367,7 +367,7 @@ class TelegramFormatter:
 /quick_start or /create_account - Create new account (wizard)
 /list_accounts - List your accounts (with edit/delete options)
 /add_exchange - Add exchange credentials (interactive)
-/add_proxy &lt;account_name&gt; - Add proxy to account
+/add_proxy - Add proxy to account (interactive)
 
 <b>⚙️ Config Management:</b>
 /create_config or /new_config - Create strategy config (wizard or JSON)
