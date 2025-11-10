@@ -1064,6 +1064,12 @@ class AccountHandler(BaseHandler):
                 else:
                     credentials[field_name] = text.strip()
                 
+                # Delete the user's message containing the credential for security
+                try:
+                    await update.message.delete()
+                except Exception as e:
+                    self.logger.warning(f"Failed to delete credential message: {e}")
+                
                 # Move to next field
                 current_index += 1
                 data['current_field_index'] = current_index
@@ -1098,6 +1104,13 @@ class AccountHandler(BaseHandler):
                     # Try to parse as JSON (handle both single-line and multi-line)
                     json_text = text.strip()
                     credentials_dict = json.loads(json_text)
+                    
+                    # Delete the user's message containing credentials for security
+                    # Do this after parsing but before processing to ensure we have the data
+                    try:
+                        await update.message.delete()
+                    except Exception as e:
+                        self.logger.warning(f"Failed to delete credential message: {e}")
                     
                     # Map to expected credential format based on exchange
                     if exchange == 'lighter':
