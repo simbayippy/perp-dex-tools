@@ -20,10 +20,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 import argparse
+import dotenv
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+# Load environment variables from .env file
+env_file = project_root / ".env"
+if env_file.exists():
+    dotenv.load_dotenv(env_file)
+else:
+    # Try to load from current directory
+    dotenv.load_dotenv()
 
 from databases import Database
 from helpers.unified_logger import get_logger

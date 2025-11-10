@@ -61,8 +61,10 @@ class StrategyProcessManager:
         
         # Auto-detect paths if not provided
         if project_root is None:
-            # Assume we're in telegram_bot_service/, go up to project root
-            project_root = Path(__file__).resolve().parent.parent
+            # Auto-detect project root
+            # process_manager.py is at: telegram_bot_service/managers/process_manager.py
+            # So we need to go up 3 levels to get to project root
+            project_root = Path(__file__).resolve().parent.parent.parent
         self.project_root = Path(project_root)
         
         if venv_path is None:
