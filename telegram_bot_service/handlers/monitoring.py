@@ -77,8 +77,8 @@ class MonitoringHandler(BaseHandler):
                         short_dex = pos.get('short_dex', 'N/A').upper()
                         position_id = pos.get('id', '')
                         
-                        # Button label: "🔴 Close: 1. PROVE (PARADEX/LIGHTER)" - clearly indicates closing action
-                        button_label = f"🔴 Close: {position_index}. {symbol} ({long_dex}/{short_dex})"
+                        # Button label: "❌ Close: 1. PROVE (PARADEX/LIGHTER)" - clearly indicates closing action
+                        button_label = f"❌ Close: {position_index}. {symbol} ({long_dex}/{short_dex})"
                         # Store position_id in callback data
                         callback_data = f"close_pos:{position_id}"
                         
@@ -465,7 +465,7 @@ class MonitoringHandler(BaseHandler):
             await query.edit_message_text(
                 self.formatter.format_error(f"Failed to get positions: {str(e)}"),
                 parse_mode='HTML'
-            )
+        )
     
     async def close_order_type_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle order type selection callback - executes the close."""

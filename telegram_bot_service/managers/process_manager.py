@@ -829,8 +829,8 @@ stdout_logfile={stdout_log}
             
             # Get Supervisor state for all strategy processes
             try:
-                supervisor = self._get_supervisor_client()
-                all_processes = supervisor.supervisor.getAllProcessInfo()
+            supervisor = self._get_supervisor_client()
+            all_processes = supervisor.supervisor.getAllProcessInfo()
             except Exception as exc:
                 # If we can't connect to Supervisor, don't update statuses
                 # This prevents incorrectly marking strategies as stopped during
@@ -954,8 +954,8 @@ stdout_logfile={stdout_log}
             
             # Get all running processes from Supervisor
             try:
-                supervisor = self._get_supervisor_client()
-                all_processes = supervisor.supervisor.getAllProcessInfo()
+            supervisor = self._get_supervisor_client()
+            all_processes = supervisor.supervisor.getAllProcessInfo()
             except Exception as exc:
                 # If we can't connect to Supervisor during recovery, don't update statuses
                 # This prevents incorrectly marking strategies as stopped during
@@ -988,15 +988,15 @@ stdout_logfile={stdout_log}
                     
                     if supervisor_state in ("STOPPED", "EXITED"):
                         # Supervisor explicitly reports stopped - update DB
-                        await self.database.execute(
-                            """
-                            UPDATE strategy_runs
-                            SET status = 'stopped', stopped_at = :stopped_at
-                            WHERE id = :id
-                            """,
-                            {"id": row["id"], "stopped_at": datetime.now()}
-                        )
-                        stats["marked_stopped"] += 1
+                    await self.database.execute(
+                        """
+                        UPDATE strategy_runs
+                        SET status = 'stopped', stopped_at = :stopped_at
+                        WHERE id = :id
+                        """,
+                        {"id": row["id"], "stopped_at": datetime.now()}
+                    )
+                    stats["marked_stopped"] += 1
                         logger.info(f"Recovery: Marked {program_name} as stopped (Supervisor: {supervisor_state})")
                     elif supervisor_state == "RUNNING" and db_status != "running":
                         # Supervisor says running but DB says otherwise - update DB to running
