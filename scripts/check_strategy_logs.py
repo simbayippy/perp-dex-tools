@@ -29,17 +29,36 @@ def get_fatal_strategies():
         return []
 
 def check_logs(run_id: str, project_root: Path):
-    """Check logs for a specific run_id."""
+    """Check logs for a specific run_id (can be partial or full UUID)."""
     logs_dir = project_root / "logs"
-    stdout_log = logs_dir / f"strategy_{run_id}.out.log"
-    stderr_log = logs_dir / f"strategy_{run_id}.err.log"
+    
+    # Try to find the full log file by matching the run_id prefix
+    stdout_log = None
+    stderr_log = None
+    
+    if logs_dir.exists():
+        # Look for log files matching the run_id
+        for log_file in logs_dir.glob("strategy_*.out.log"):
+            # Extract UUID from filename: strategy_<uuid>.out.log
+            file_uuid = log_file.stem.replace('strategy_', '').replace('.out', '')
+            if file_uuid.startswith(run_id) or run_id.startswith(file_uuid[:8]):
+                stdout_log = log_file
+                # Find corresponding stderr log
+                stderr_log = logs_dir / f"strategy_{file_uuid}.err.log"
+                run_id = file_uuid  # Use full UUID for display
+                break
+    
+    # Fallback: try direct path if not found
+    if stdout_log is None:
+        stdout_log = logs_dir / f"strategy_{run_id}.out.log"
+        stderr_log = logs_dir / f"strategy_{run_id}.err.log"
     
     print(f"\n{'='*80}")
     print(f"Checking logs for run_id: {run_id}")
     print(f"{'='*80}\n")
     
     # Check stderr first (errors)
-    if stderr_log.exists():
+    if stderr_log and stderr_log.exists():
         print(f"📋 STDERR LOG ({stderr_log}):")
         print("-" * 80)
         try:
@@ -57,7 +76,7 @@ def check_logs(run_id: str, project_root: Path):
     print("\n")
     
     # Check stdout
-    if stdout_log.exists():
+    if stdout_log and stdout_log.exists():
         print(f"📋 STDOUT LOG ({stdout_log}):")
         print("-" * 80)
         try:
@@ -105,12 +124,17 @@ def main():
                 # Need full UUID - check database or logs directory
                 logs_dir = project_root / "logs"
                 # Try to find matching log file
-                matching_logs = list(logs_dir.glob(f"strategy_*-*.out.log"))
+                matching_logs = list(logs_dir.glob("strategy_*.out.log"))
                 found = False
                 for log_file in matching_logs:
                     # Extract UUID from filename: strategy_<uuid>.out.log
                     log_run_id = log_file.stem.replace('strategy_', '').replace('.out', '')
-                    if log_run_id[:8] == run_id[:8]:
+                    # Match by first 8 characters
+                    if len(run_id) >= 8 and log_run_id.startswith(run_id[:8]):
+                        check_logs(log_run_id, project_root)
+                        found = True
+                        break
+                    elif len(log_run_id) >= 8 and run_id.startswith(log_run_id[:8]):
                         check_logs(log_run_id, project_root)
                         found = True
                         break
@@ -121,12 +145,13 @@ def main():
     elif args.run_id:
         # Try to find full UUID from partial run_id
         logs_dir = project_root / "logs"
-        matching_logs = list(logs_dir.glob(f"strategy_*-*.out.log"))
+        matching_logs = list(logs_dir.glob("strategy_*.out.log"))
         
         found = False
         for log_file in matching_logs:
             log_run_id = log_file.stem.replace('strategy_', '').replace('.out', '')
-            if log_run_id.startswith(args.run_id):
+            # Match by first 8 characters or exact match
+            if log_run_id.startswith(args.run_id) or args.run_id.startswith(log_run_id[:8]):
                 check_logs(log_run_id, project_root)
                 found = True
                 break
@@ -134,6 +159,11 @@ def main():
         if not found:
             print(f"❌ No logs found for run_id starting with: {args.run_id}")
             print(f"   Searched in: {logs_dir}")
+            if logs_dir.exists():
+                print(f"   Available log files:")
+                for log_file in sorted(logs_dir.glob("strategy_*.out.log"))[:10]:
+                    uuid_part = log_file.stem.replace('strategy_', '').replace('.out', '')
+                    print(f"     - {uuid_part[:8]}... ({log_file.name})")
     else:
         parser.print_help()
 
