@@ -58,7 +58,8 @@ class AuditLogger:
                 }
             )
         except Exception as e:
-            logger.error("Failed to log audit action: %s", str(e), exc_info=True)
+            error_msg = "Failed to log audit action: " + str(e)
+            logger.error(error_msg, exc_info=True)
     
     async def log_strategy_start(
         self,
