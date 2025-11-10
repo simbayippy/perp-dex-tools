@@ -174,14 +174,34 @@ class StrategyHandler(BaseHandler):
                     f"   Status: {status}\n"
                 )
                 
-                if strat.get('started_at'):
-                    started = strat['started_at']
-                    if isinstance(started, str):
-                        started = datetime.fromisoformat(started.replace('Z', '+00:00'))
-                    uptime = datetime.now() - started.replace(tzinfo=None)
-                    hours = int(uptime.total_seconds() / 3600)
-                    minutes = int((uptime.total_seconds() % 3600) / 60)
-                    message += f"   Uptime: {hours}h {minutes}m\n"
+                # Show uptime for running strategies, or "Stopped X ago" for stopped strategies
+                if status in ('running', 'starting', 'paused'):
+                    if strat.get('started_at'):
+                        started = strat['started_at']
+                        if isinstance(started, str):
+                            started = datetime.fromisoformat(started.replace('Z', '+00:00'))
+                        uptime = datetime.now() - started.replace(tzinfo=None)
+                        hours = int(uptime.total_seconds() / 3600)
+                        minutes = int((uptime.total_seconds() % 3600) / 60)
+                        message += f"   Uptime: {hours}h {minutes}m\n"
+                elif status in ('stopped', 'error'):
+                    if strat.get('stopped_at'):
+                        stopped = strat['stopped_at']
+                        if isinstance(stopped, str):
+                            stopped = datetime.fromisoformat(stopped.replace('Z', '+00:00'))
+                        stopped_delta = datetime.now() - stopped.replace(tzinfo=None)
+                        hours = int(stopped_delta.total_seconds() / 3600)
+                        minutes = int((stopped_delta.total_seconds() % 3600) / 60)
+                        message += f"   Stopped: {hours}h {minutes}m ago\n"
+                    elif strat.get('started_at'):
+                        # Fallback: if stopped_at is not available, show age since started
+                        started = strat['started_at']
+                        if isinstance(started, str):
+                            started = datetime.fromisoformat(started.replace('Z', '+00:00'))
+                        age = datetime.now() - started.replace(tzinfo=None)
+                        hours = int(age.total_seconds() / 3600)
+                        minutes = int((age.total_seconds() % 3600) / 60)
+                        message += f"   Age: {hours}h {minutes}m\n"
                 
                 message += "\n"
                 
@@ -198,7 +218,7 @@ class StrategyHandler(BaseHandler):
                     # Stopped strategies can be resumed
                     keyboard.append([
                         InlineKeyboardButton(
-                            f"▶️ Resume {run_id_short}",
+                            f"🟢 Resume {run_id_short}",
                             callback_data=f"resume_strategy:{run_id}"
                         )
                     ])
@@ -206,7 +226,7 @@ class StrategyHandler(BaseHandler):
                     # Paused strategies can be resumed
                     keyboard.append([
                         InlineKeyboardButton(
-                            f"▶️ Resume {run_id_short}",
+                            f"🟢 Resume {run_id_short}",
                             callback_data=f"resume_strategy:{run_id}"
                         )
                     ])
@@ -242,7 +262,7 @@ class StrategyHandler(BaseHandler):
                 for i, status in enumerate(status_list):
                     params[f"status{i}"] = status
                 query = f"""
-                    SELECT id, status, started_at, supervisor_program_name
+                    SELECT id, status, started_at, stopped_at, supervisor_program_name
                     FROM strategy_runs
                     WHERE user_id = :user_id AND status IN ({placeholders})
                     ORDER BY started_at DESC
@@ -250,7 +270,7 @@ class StrategyHandler(BaseHandler):
                 rows = await self.database.fetch_all(query, params)
             else:
                 query = """
-                    SELECT id, status, started_at, supervisor_program_name
+                    SELECT id, status, started_at, stopped_at, supervisor_program_name
                     FROM strategy_runs
                     WHERE user_id = :user_id
                     ORDER BY started_at DESC
@@ -264,7 +284,7 @@ class StrategyHandler(BaseHandler):
                 for i, status in enumerate(status_list):
                     params[f"status{i}"] = status
                 query = f"""
-                    SELECT id, status, started_at, supervisor_program_name
+                    SELECT id, status, started_at, stopped_at, supervisor_program_name
                     FROM strategy_runs
                     WHERE status IN ({placeholders})
                     ORDER BY started_at DESC
@@ -272,7 +292,7 @@ class StrategyHandler(BaseHandler):
                 rows = await self.database.fetch_all(query, params)
             else:
                 query = """
-                    SELECT id, status, started_at, supervisor_program_name
+                    SELECT id, status, started_at, stopped_at, supervisor_program_name
                     FROM strategy_runs
                     ORDER BY started_at DESC
                 """
