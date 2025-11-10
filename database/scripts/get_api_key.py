@@ -166,19 +166,24 @@ async def interactive_mode():
     username = None
     telegram_user_id = None
     
-    if choice == "1":
+    # Handle choice - check first character after stripping whitespace
+    if not choice:
+        print("❌ No choice provided")
+        return False
+    
+    if choice[0] == "1":
         username = input("\nUsername: ").strip()
         if not username:
             print("❌ Username is required")
             return False
-    elif choice == "2":
+    elif choice[0] == "2":
         try:
             telegram_user_id = int(input("\nTelegram User ID: ").strip())
         except ValueError:
             print("❌ Invalid Telegram user ID (must be a number)")
             return False
     else:
-        print("❌ Invalid choice")
+        print(f"❌ Invalid choice: '{choice}' (expected '1' or '2')")
         return False
     
     list_all = input("\nList all API keys? (y/n): ").strip().lower() == 'y'
