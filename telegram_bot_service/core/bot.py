@@ -1077,7 +1077,7 @@ class StrategyControlBot:
         ))
         application.add_handler(CallbackQueryHandler(
             self.add_exchange_exchange_callback,
-            pattern="^add_exchange_exchange:"
+            pattern="^add_exc_ex:"
         ))
         
         # Wizard message handler (for multi-step wizards)
@@ -1179,12 +1179,15 @@ class StrategyControlBot:
             
             account_name = account_row['account_name']
             
-            # Show exchange selection
+            # Store account_id in context for next step (to avoid long callback_data)
+            context.user_data['add_exchange_account_id'] = account_id
+            
+            # Show exchange selection with shorter callback_data (no account_id in callback)
             keyboard = [
-                [InlineKeyboardButton("⚡ Lighter", callback_data=f"add_exchange_exchange:{account_id}:lighter")],
-                [InlineKeyboardButton("🌟 Aster", callback_data=f"add_exchange_exchange:{account_id}:aster")],
-                [InlineKeyboardButton("🎒 Backpack", callback_data=f"add_exchange_exchange:{account_id}:backpack")],
-                [InlineKeyboardButton("🎪 Paradex", callback_data=f"add_exchange_exchange:{account_id}:paradex")]
+                [InlineKeyboardButton("⚡ Lighter", callback_data=f"add_exc_ex:lighter")],
+                [InlineKeyboardButton("🌟 Aster", callback_data=f"add_exc_ex:aster")],
+                [InlineKeyboardButton("🎒 Backpack", callback_data=f"add_exc_ex:backpack")],
+                [InlineKeyboardButton("🎪 Paradex", callback_data=f"add_exc_ex:paradex")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -1214,18 +1217,26 @@ class StrategyControlBot:
         await query.answer()
         
         try:
+            # Get account_id from context (stored in previous step)
+            account_id = context.user_data.get('add_exchange_account_id')
+            if not account_id:
+                await query.edit_message_text(
+                    "❌ Session expired. Please start over with /add_exchange",
+                    parse_mode='HTML'
+                )
+                return
+            
             callback_data = query.data
-            # Format: add_exchange_exchange:{account_id}:{exchange}
-            parts = callback_data.split(":", 2)
-            if len(parts) != 3:
+            # Format: add_exc_ex:{exchange}
+            parts = callback_data.split(":", 1)
+            if len(parts) != 2:
                 await query.edit_message_text(
                     "❌ Invalid callback data. Please try again with /add_exchange",
                     parse_mode='HTML'
                 )
                 return
             
-            account_id = parts[1]
-            exchange = parts[2]
+            exchange = parts[1]
             
             if exchange not in ['lighter', 'aster', 'backpack', 'paradex']:
                 await query.edit_message_text(
@@ -1248,6 +1259,9 @@ class StrategyControlBot:
                 return
             
             account_name = account_row['account_name']
+            
+            # Clear the temporary account_id from context
+            context.user_data.pop('add_exchange_account_id', None)
             
             # Start wizard for credentials
             context.user_data['wizard'] = {
