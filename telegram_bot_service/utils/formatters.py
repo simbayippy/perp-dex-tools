@@ -374,7 +374,7 @@ class TelegramFormatter:
 /list_configs or /my_configs - List your configs (with edit/delete options)
 
 <b>🚀 Strategy Execution:</b>
-/run or /run_strategy - Start new strategy
+/run - Start new strategy
 /list_strategies - List running strategies
 /stop or /stop_strategy &lt;run_id&gt; - Stop running strategy
 /logs &lt;run_id&gt; - View strategy logs

@@ -67,7 +67,7 @@ class StrategyHandler(BaseHandler):
             )
     
     async def run_strategy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /run or /run_strategy command."""
+        """Handle /run command."""
         user, _ = await self.require_auth(update, context)
         if not user:
             return
@@ -398,9 +398,31 @@ class StrategyHandler(BaseHandler):
             )
             return
         
-        config_data = config_row['config_data']
+        config_data_raw = config_row['config_data']
         config_name = config_row['config_name']
         strategy_type = config_row['strategy_type']
+        
+        # Parse config_data - JSONB might come back as string or dict
+        import json
+        if isinstance(config_data_raw, str):
+            try:
+                config_data = json.loads(config_data_raw)
+            except json.JSONDecodeError as e:
+                self.logger.error(f"Failed to parse config_data JSON: {e}, raw: {config_data_raw[:100]}")
+                await query.edit_message_text(
+                    f"❌ Invalid config data format: Failed to parse JSON",
+                    parse_mode='HTML'
+                )
+                return
+        elif isinstance(config_data_raw, dict):
+            config_data = config_data_raw
+        else:
+            self.logger.error(f"Config data is not dict or string: {type(config_data_raw)}, value: {config_data_raw}")
+            await query.edit_message_text(
+                f"❌ Invalid config data format: Expected dict or JSON string, got {type(config_data_raw).__name__}",
+                parse_mode='HTML'
+            )
+            return
         
         # Ensure config_data has the correct structure for runbot.py
         # It should have 'strategy' and 'config' keys
@@ -414,8 +436,9 @@ class StrategyHandler(BaseHandler):
                     "config": config_data
                 }
         else:
+            self.logger.error(f"Config data is not a dict after parsing: {type(config_data)}, value: {config_data}")
             await query.edit_message_text(
-                "❌ Invalid config data format",
+                "❌ Invalid config data format: Config must be a dictionary",
                 parse_mode='HTML'
             )
             return
@@ -481,7 +504,6 @@ class StrategyHandler(BaseHandler):
         """Register strategy execution command and callback handlers"""
         # Commands
         application.add_handler(CommandHandler("run", self.run_strategy_command))
-        application.add_handler(CommandHandler("run_strategy", self.run_strategy_command))
         application.add_handler(CommandHandler("list_strategies", self.list_strategies_command))
         application.add_handler(CommandHandler("stop", self.stop_strategy_command))
         application.add_handler(CommandHandler("stop_strategy", self.stop_strategy_command))
