@@ -12,20 +12,20 @@ This guide walks you through setting up and testing the new strategy management 
 
 ---
 
-## Step 1: Install Python Dependencies
+## Step 1: Install All Dependencies
 
-Install the new dependency (`psutil` for health monitoring):
+Install Python dependencies and Supervisor in one command:
 
 ```bash
-# Activate your virtual environment
-source venv/bin/activate  # or .venv/bin/activate
-
-# Install new dependencies
-pip install psutil>=5.9.0
-
-# Or reinstall all dependencies to be safe
-pip install -r requirements.txt
+# Install everything (Python dependencies + Supervisor)
+make install
 ```
+
+This will:
+1. ✅ Create virtual environment
+2. ✅ Install Python dependencies (including `psutil`, `xmlrpc.client`, `yaml`)
+3. ✅ Install and configure Supervisor with XML-RPC
+4. ✅ Verify everything is working
 
 **Verify installation:**
 ```bash
@@ -36,83 +36,51 @@ python -c "import yaml; print('yaml OK')"
 
 ---
 
-## Step 2: Install and Configure Supervisor
+## Step 2: Install and Configure Supervisor (Optional)
 
-Supervisor is required for process management. Install it on your VPS:
+**Note:** If you ran `make install` in Step 1, Supervisor is already installed and configured. Skip this step.
+
+If you only need to install/configure Supervisor separately:
 
 ```bash
-# Install Supervisor
-sudo apt update
-sudo apt install -y supervisor
+# Install and configure Supervisor only (includes XML-RPC setup)
+make install-supervisor
+```
 
-# Start and enable Supervisor
-sudo systemctl enable supervisor
-sudo systemctl start supervisor
+This command will:
+1. ✅ Check if Supervisor is installed (install if missing)
+2. ✅ Check if XML-RPC is configured (add configuration if missing)
+3. ✅ Start and enable Supervisor service
+4. ✅ Verify XML-RPC connection is working
 
-# Verify Supervisor is running
+**Expected output:**
+```
+Installing and configuring Supervisor...
+
+1. Checking if Supervisor is installed...
+✅ Supervisor installed
+
+2. Checking XML-RPC configuration...
+✅ XML-RPC configuration added
+
+3. Starting and enabling Supervisor...
+✅ Supervisor is running
+
+4. Verifying XML-RPC connection...
+Supervisor version: 4.x.x
+✅ XML-RPC connection successful
+
+✅ Supervisor installation and configuration complete!
+```
+
+**Manual verification (optional):**
+```bash
+# Check Supervisor status
 sudo systemctl status supervisor
+
+# Test XML-RPC API (should return process list)
+python3 -c "import xmlrpc.client; s = xmlrpc.client.ServerProxy('http://127.0.0.1:9001/RPC2'); print(s.supervisor.getAllProcessInfo())"
 ```
-
-**Check Supervisor XML-RPC API:**
-```bash
-# Test if Supervisor XML-RPC is accessible (should return process list)
-python3 -c "import xmlrpc.client; s = xmlrpc.client.ServerProxy('http://localhost:9001/RPC2'); print(s.supervisor.getAllProcessInfo())"
-```
-
-**⚠️ If you get "Connection refused" error:**
-
-1. **Check if Supervisor is running:**
-   ```bash
-   sudo systemctl status supervisor
-   # Should show "active (running)"
-   ```
-
-2. **If not running, start it:**
-   ```bash
-   sudo systemctl start supervisor
-   sudo systemctl enable supervisor  # Enable on boot
-   ```
-
-3. **Check if XML-RPC interface is enabled:**
-   ```bash
-   # Check Supervisor config for XML-RPC settings
-   sudo grep -A 10 "\[inet_http_server\]" /etc/supervisor/supervisord.conf
-   ```
-
-4. **If XML-RPC is not configured, add it:**
-   ```bash
-   # Edit Supervisor config
-   sudo vim /etc/supervisor/supervisord.conf
-   
-   # Add or uncomment these lines (usually near the top):
-   [inet_http_server]
-   port=127.0.0.1:9001
-   
-   # Save and restart Supervisor
-   sudo systemctl restart supervisor
-   ```
-
-5. **Verify Supervisor is listening on port 9001:**
-   ```bash
-   # Check if port 9001 is listening
-   sudo netstat -tlnp | grep 9001
-   # Or use ss:
-   sudo ss -tlnp | grep 9001
-   
-   # Should show something like:
-   # tcp  0  0  127.0.0.1:9001  0.0.0.0:*  LISTEN  12345/supervisord
-   ```
-
-6. **Check Supervisor logs for errors:**
-   ```bash
-   sudo tail -50 /var/log/supervisor/supervisord.log
-   ```
-
-7. **Test again:**
-   ```bash
-   python3 -c "import xmlrpc.client; s = xmlrpc.client.ServerProxy('http://127.0.0.1:9001/RPC2'); print(s.supervisor.getVersion())"
-   # Should print Supervisor version number
-   ```
 
 **Configure Supervisor (if needed):**
 - Default config: `/etc/supervisor/supervisord.conf`
@@ -439,6 +407,15 @@ EOF
 
 ### Supervisor Issues
 
+**Supervisor not installed or XML-RPC not configured:**
+
+Run the automated installer:
+```bash
+make install-supervisor
+```
+
+This will handle installation, configuration, and verification automatically.
+
 **Supervisor not starting:**
 ```bash
 sudo systemctl status supervisor
@@ -456,7 +433,7 @@ sudo chmod 755 /etc/supervisor/conf.d/
 
 **XML-RPC connection refused:**
 
-This usually means Supervisor is not running or XML-RPC is not enabled. Follow these steps:
+If `make install-supervisor` didn't resolve the issue:
 
 1. **Check if Supervisor is running:**
    ```bash
@@ -468,18 +445,12 @@ This usually means Supervisor is not running or XML-RPC is not enabled. Follow t
    sudo grep -A 5 "\[inet_http_server\]" /etc/supervisor/supervisord.conf
    ```
 
-3. **If missing, add XML-RPC configuration:**
+3. **If missing, run the installer again:**
    ```bash
-   sudo vim /etc/supervisor/supervisord.conf
-   # Add these lines (usually after [unix_http_server] section):
-   [inet_http_server]
-   port=127.0.0.1:9001
-   
-   # Save and restart:
-   sudo systemctl restart supervisor
+   make install-supervisor
    ```
 
-4. **Verify port is listening:**
+4. **Or manually verify port is listening:**
    ```bash
    sudo netstat -tlnp | grep 9001
    # Should show: tcp  0  0  127.0.0.1:9001  LISTEN
@@ -581,7 +552,11 @@ After successful testing:
 
 ## Quick Reference
 
-**Key Commands:**
+**Setup Commands:**
+- `make install` - Install all dependencies (Python + Supervisor)
+- `make install-supervisor` - Install and configure Supervisor only (if needed separately)
+
+**Telegram Bot Commands:**
 - `/quick_start` - Create account
 - `/create_config` - Create strategy config
 - `/run` - Start strategy
