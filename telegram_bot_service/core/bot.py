@@ -1928,9 +1928,9 @@ class StrategyControlBot:
                 
                 context.user_data.pop('wizard', None)
             except Exception as e:
-                self.logger.error(f"Error updating account: {e}")
+                self.logger.error("Error updating account: %s", str(e))
                 await update.message.reply_text(
-                    f"❌ Failed to update account: {str(e)}",
+                    "❌ Failed to update account: " + str(e),
                     parse_mode='HTML'
                 )
     
