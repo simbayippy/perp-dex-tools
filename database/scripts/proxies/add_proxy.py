@@ -30,7 +30,7 @@ import dotenv
 from databases import Database
 
 from database.scripts.add_account import CredentialEncryptor  # Reuse helper
-from database.scripts.proxy_utils import assign_proxy, parse_proxy_line, upsert_proxy
+from database.scripts.proxies.proxy_utils import assign_proxy, parse_proxy_line, upsert_proxy
 
 dotenv.load_dotenv()
 

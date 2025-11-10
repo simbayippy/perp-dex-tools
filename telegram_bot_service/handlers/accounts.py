@@ -9,7 +9,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
 from telegram_bot_service.handlers.base import BaseHandler
-from database.scripts.proxy_utils import upsert_proxy, assign_proxy
+from database.scripts.proxies.proxy_utils import upsert_proxy, assign_proxy
 
 
 class AccountHandler(BaseHandler):
