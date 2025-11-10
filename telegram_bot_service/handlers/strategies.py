@@ -1368,10 +1368,6 @@ class StrategyHandler(BaseHandler):
                     await query.message.reply_document(
                         document=f,
                         filename=f"strategy_{run_id_short}_{strategy_type_display.lower().replace(' ', '_')}.log",
-                        caption=f"📄 <b>Log file</b>\n\n"
-                                f"Strategy: {strategy_type_display}\n"
-                                f"Config: {config_name}\n"
-                                f"Run ID: <code>{run_id_short}</code>",
                         parse_mode='HTML'
                     )
                 
