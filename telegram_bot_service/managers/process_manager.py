@@ -515,6 +515,189 @@ stdout_logfile={stdout_log}
         
         return True
     
+    async def resume_strategy(self, run_id: str) -> bool:
+        """
+        Resume a stopped strategy via Supervisor.
+        
+        Args:
+            run_id: Strategy run UUID
+            
+        Returns:
+            True if resumed successfully, False otherwise
+        """
+        # Get strategy info from database
+        query = """
+            SELECT supervisor_program_name, status, control_api_port,
+                   user_id, account_id, config_id
+            FROM strategy_runs
+            WHERE id = :run_id
+        """
+        row = await self.database.fetch_one(query, {"run_id": run_id})
+        
+        if not row:
+            logger.warning(f"Strategy run not found: {run_id}")
+            return False
+        
+        supervisor_program_name = row["supervisor_program_name"]
+        current_status = row["status"]
+        old_port = row.get("control_api_port")
+        
+        # Can only resume stopped strategies
+        if current_status not in ("stopped", "error"):
+            logger.warning(f"Cannot resume strategy with status '{current_status}': {run_id}")
+            return False
+        
+        # Check Supervisor state
+        try:
+            supervisor = self._get_supervisor_client()
+            try:
+                info = supervisor.supervisor.getProcessInfo(supervisor_program_name)
+                supervisor_state = info.get('statename', 'UNKNOWN')
+                logger.info(f"Supervisor state for '{supervisor_program_name}': {supervisor_state}")
+                
+                # If already running, that's success
+                if supervisor_state in ['RUNNING', 'STARTING']:
+                    logger.info(f"Strategy '{supervisor_program_name}' is already {supervisor_state.lower()}")
+                    # Update DB to reflect running state
+                    await self.database.execute(
+                        """
+                        UPDATE strategy_runs
+                        SET status = 'running', stopped_at = NULL
+                        WHERE id = :run_id
+                        """,
+                        {"run_id": run_id}
+                    )
+                    return True
+            except xmlrpc.client.Fault as e:
+                fault_code = e.faultCode if hasattr(e, 'faultCode') else 'Unknown'
+                fault_msg = e.faultString if hasattr(e, 'faultString') else str(e)
+                
+                # If process doesn't exist in Supervisor, config file might be missing
+                if fault_code == 70 or 'BAD_NAME' in fault_msg or 'NOT_RUNNING' in fault_msg:
+                    logger.warning(f"Supervisor program '{supervisor_program_name}' not found. Config file may be missing.")
+                    return False
+                else:
+                    logger.error(f"Error checking Supervisor state: {fault_code} - {fault_msg}")
+                    return False
+        except Exception as e:
+            logger.error(f"Error connecting to Supervisor: {e}")
+            return False
+        
+        # Handle port - try to reuse old port, allocate new if needed
+        if old_port and await self.port_manager.is_port_available(old_port):
+            port = old_port
+            logger.info(f"Reusing old port {port} for strategy {run_id}")
+            port_changed = False
+        else:
+            port = await self.port_manager.allocate_port()
+            if port is None:
+                logger.error(f"No available ports for resuming strategy: {run_id}")
+                return False
+            logger.info(f"Allocated new port {port} for strategy {run_id} (old port {old_port} unavailable)")
+            port_changed = True
+        
+        # Update Supervisor config if port changed
+        if port_changed:
+            config_file_path = self.supervisor_conf_dir / f"{supervisor_program_name}.conf"
+            
+            # Check if config file exists
+            try:
+                check_result = subprocess.run(
+                    ["sudo", "test", "-f", str(config_file_path)],
+                    capture_output=True
+                )
+                if check_result.returncode != 0:
+                    logger.error(f"Supervisor config file not found: {config_file_path}")
+                    return False
+                
+                # Read current config
+                read_result = subprocess.run(
+                    ["sudo", "cat", str(config_file_path)],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                config_content = read_result.stdout
+                
+                # Update port in command line
+                import re
+                # Replace old port with new port in command line
+                # Pattern: --control-api-port <old_port>
+                old_port_pattern = rf"--control-api-port\s+{old_port}\b"
+                new_port_str = f"--control-api-port {port}"
+                
+                if re.search(old_port_pattern, config_content):
+                    updated_config = re.sub(old_port_pattern, new_port_str, config_content)
+                    logger.info(f"Updated port in Supervisor config: {old_port} -> {port}")
+                else:
+                    # Port might not be in config (shouldn't happen, but handle gracefully)
+                    logger.warning(f"Could not find port {old_port} in config, appending new port")
+                    # Try to find command line and append port
+                    if "--control-api-port" not in config_content:
+                        # Add port to command line
+                        updated_config = config_content.replace(
+                            "command=",
+                            f"command={new_port_str} "
+                        )
+                    else:
+                        updated_config = config_content
+                
+                # Write updated config
+                subprocess.run(
+                    ["sudo", "tee", str(config_file_path)],
+                    input=updated_config.encode(),
+                    check=True,
+                    capture_output=True
+                )
+                logger.info(f"Updated Supervisor config file: {config_file_path}")
+                
+                # Reload Supervisor config
+                supervisor.supervisor.reloadConfig()
+                logger.info("Reloaded Supervisor configuration")
+                
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to update Supervisor config: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"Error updating Supervisor config: {e}")
+                return False
+        
+        # Start process via Supervisor
+        try:
+            result = supervisor.supervisor.startProcess(supervisor_program_name)
+            if not result:
+                logger.warning(f"Supervisor failed to start process: {supervisor_program_name}")
+                return False
+            logger.info(f"Started Supervisor program: {supervisor_program_name}")
+        except xmlrpc.client.Fault as e:
+            fault_code = e.faultCode if hasattr(e, 'faultCode') else 'Unknown'
+            fault_msg = e.faultString if hasattr(e, 'faultString') else str(e)
+            
+            # ALREADY_STARTED is actually success
+            if fault_code == 60 or 'ALREADY_STARTED' in fault_msg:
+                logger.info(f"Program '{supervisor_program_name}' is already started (this is OK)")
+                result = True
+            else:
+                logger.error(f"Failed to start Supervisor program '{supervisor_program_name}': {fault_msg}")
+                return False
+        except Exception as e:
+            logger.error(f"Error starting Supervisor program: {e}")
+            return False
+        
+        # Update database
+        query = """
+            UPDATE strategy_runs
+            SET status = 'starting', stopped_at = NULL, control_api_port = :port
+            WHERE id = :run_id
+        """
+        await self.database.execute(
+            query,
+            {"run_id": run_id, "port": port}
+        )
+        
+        logger.info(f"Resumed strategy {run_id} on port {port}")
+        return True
+    
     async def get_running_strategies(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get list of running strategies.

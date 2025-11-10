@@ -512,6 +512,198 @@ class StrategyHandler(BaseHandler):
                 parse_mode='HTML'
             )
     
+    async def resume_strategy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /resume_strategy command - shows interactive list of stopped strategies."""
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        try:
+            # Get user's stopped strategies (admins see all)
+            is_admin = user.get("is_admin", False)
+            user_id = None if is_admin else user["id"]
+            
+            # Query strategies with config info - only stopped/error status
+            if user_id:
+                query = """
+                    SELECT 
+                        sr.id, sr.user_id, sr.account_id, sr.config_id,
+                        sr.supervisor_program_name, sr.status, sr.control_api_port,
+                        sr.log_file_path, sr.started_at, sr.stopped_at,
+                        sc.config_name, sc.strategy_type
+                    FROM strategy_runs sr
+                    JOIN strategy_configs sc ON sr.config_id = sc.id
+                    WHERE sr.user_id = :user_id 
+                    AND sr.status IN ('stopped', 'error')
+                    ORDER BY sr.stopped_at DESC NULLS LAST, sr.started_at DESC
+                """
+                strategies = await self.database.fetch_all(query, {"user_id": user_id})
+            else:
+                query = """
+                    SELECT 
+                        sr.id, sr.user_id, sr.account_id, sr.config_id,
+                        sr.supervisor_program_name, sr.status, sr.control_api_port,
+                        sr.log_file_path, sr.started_at, sr.stopped_at,
+                        sc.config_name, sc.strategy_type
+                    FROM strategy_runs sr
+                    JOIN strategy_configs sc ON sr.config_id = sc.id
+                    WHERE sr.status IN ('stopped', 'error')
+                    ORDER BY sr.stopped_at DESC NULLS LAST, sr.started_at DESC
+                """
+                strategies = await self.database.fetch_all(query)
+            
+            strategies = [dict(row) for row in strategies]
+            
+            if not strategies:
+                await update.message.reply_text(
+                    "▶️ <b>No Stopped Strategies</b>\n\n"
+                    "No stopped strategies available to resume.\n"
+                    "Start a strategy with /run",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Create strategy selection keyboard
+            keyboard = []
+            for strat in strategies:
+                run_id = str(strat['id'])
+                run_id_short = run_id[:8]
+                config_name = strat.get('config_name', 'Unknown')
+                strategy_type = strat.get('strategy_type', 'unknown')
+                
+                # Format strategy type for display
+                strategy_type_display = {
+                    'funding_arbitrage': 'Funding Arb',
+                    'grid': 'Grid'
+                }.get(strategy_type, strategy_type.title())
+                
+                status_emoji = {
+                    'stopped': '⚫',
+                    'error': '🔴'
+                }.get(strat['status'], '⚪')
+                
+                # Button label: "⚫ e9680e47 - Funding Arb"
+                button_label = f"{status_emoji} {run_id_short} - {strategy_type_display}"
+                keyboard.append([InlineKeyboardButton(
+                    button_label,
+                    callback_data=f"resume_strategy:{run_id}"
+                )])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            title = "▶️ <b>Resume Strategy</b>"
+            await update.message.reply_text(
+                f"{title}\n\n"
+                "Select a stopped strategy to resume:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Resume strategy command error: {e}")
+            await update.message.reply_text(
+                f"❌ Failed to load strategies: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def resume_strategy_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle callback for resuming a strategy."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        # Parse callback data: "resume_strategy:{run_id}"
+        callback_data = query.data
+        if not callback_data.startswith("resume_strategy:"):
+            await query.edit_message_text(
+                "❌ Invalid selection. Please use /resume_strategy again.",
+                parse_mode='HTML'
+            )
+            return
+        
+        run_id = callback_data.split(":", 1)[1]
+        
+        try:
+            # Verify ownership (security check)
+            is_admin = user.get("is_admin", False)
+            if is_admin:
+                # Admins can resume any strategy
+                verify_query = """
+                    SELECT id, status FROM strategy_runs
+                    WHERE id = :run_id
+                """
+                row = await self.database.fetch_one(
+                    verify_query,
+                    {"run_id": run_id}
+                )
+            else:
+                # Regular users can only resume their own strategies
+                verify_query = """
+                    SELECT id, status FROM strategy_runs
+                    WHERE id = :run_id AND user_id = :user_id
+                """
+                row = await self.database.fetch_one(
+                    verify_query,
+                    {"run_id": run_id, "user_id": user["id"]}
+                )
+            
+            if not row:
+                await query.edit_message_text(
+                    "❌ Strategy not found or you don't have permission to resume it",
+                    parse_mode='HTML'
+                )
+                return
+            
+            current_status = row['status']
+            if current_status not in ('stopped', 'error'):
+                await query.edit_message_text(
+                    f"ℹ️ Strategy is not stopped (status: {current_status}).\n"
+                    f"Only stopped strategies can be resumed.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Show loading message
+            run_id_short = run_id[:8]
+            await query.edit_message_text(
+                f"⏳ <b>Resuming strategy...</b>\n\n"
+                f"Run ID: <code>{run_id_short}</code>",
+                parse_mode='HTML'
+            )
+            
+            # Resume strategy
+            success = await self.process_manager.resume_strategy(run_id)
+            
+            if success:
+                await self.audit_logger.log_action(
+                    user_id=str(user["id"]),
+                    action="resume_strategy",
+                    details={"run_id": run_id}
+                )
+                await query.edit_message_text(
+                    f"✅ <b>Strategy Resumed</b>\n\n"
+                    f"Run ID: <code>{run_id_short}</code>\n"
+                    f"Status: starting",
+                    parse_mode='HTML'
+                )
+            else:
+                await query.edit_message_text(
+                    f"❌ <b>Failed to Resume Strategy</b>\n\n"
+                    f"Run ID: <code>{run_id_short}</code>\n"
+                    f"Please check logs or try again.",
+                    parse_mode='HTML'
+                )
+                
+        except Exception as e:
+            self.logger.error(f"Resume strategy callback error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Error resuming strategy: {str(e)}",
+                parse_mode='HTML'
+            )
+    
     async def logs_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /logs command - shows filter options."""
         user, _ = await self.require_auth(update, context)
@@ -1129,6 +1321,7 @@ class StrategyHandler(BaseHandler):
         application.add_handler(CommandHandler("run", self.run_strategy_command))
         application.add_handler(CommandHandler("list_strategies", self.list_strategies_command))
         application.add_handler(CommandHandler("stop_strategy", self.stop_strategy_command))
+        application.add_handler(CommandHandler("resume_strategy", self.resume_strategy_command))
         application.add_handler(CommandHandler("logs", self.logs_command))
         application.add_handler(CommandHandler("limits", self.limits_command))
         
@@ -1164,5 +1357,9 @@ class StrategyHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.stop_strategy_callback,
             pattern="^stop_strategy:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.resume_strategy_callback,
+            pattern="^resume_strategy:"
         ))
 

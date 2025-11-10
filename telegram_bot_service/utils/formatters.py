@@ -376,6 +376,7 @@ class TelegramFormatter:
 /run - Start new strategy
 /list_strategies - List running strategies
 /stop_strategy - Stop running strategy
+/resume_strategy - Resume stopped strategy
 /logs - View strategy logs 
 /limits - Check usage limits and quotas
 """
