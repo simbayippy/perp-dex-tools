@@ -77,8 +77,8 @@ class MonitoringHandler(BaseHandler):
                         short_dex = pos.get('short_dex', 'N/A').upper()
                         position_id = pos.get('id', '')
                         
-                        # Button label: "1. BTC/USD (LIGHTER/PARADEX)"
-                        button_label = f"{position_index}. {symbol} ({long_dex}/{short_dex})"
+                        # Button label: "🔴 Close: 1. PROVE (PARADEX/LIGHTER)" - clearly indicates closing action
+                        button_label = f"🔴 Close: {position_index}. {symbol} ({long_dex}/{short_dex})"
                         # Store position_id in callback data
                         callback_data = f"close_pos:{position_id}"
                         
@@ -159,7 +159,8 @@ class MonitoringHandler(BaseHandler):
                     short_dex = pos.get('short_dex', 'N/A').upper()
                     position_id = pos.get('id', '')
                     
-                    button_label = f"{position_index}. {symbol} ({long_dex}/{short_dex})"
+                    # Button label: "❌ Close: 1. PROVE (PARADEX/LIGHTER)" - clearly indicates closing action
+                    button_label = f"❌ Close: {position_index}. {symbol} ({long_dex}/{short_dex})"
                     callback_data = f"close_pos:{position_id}"
                     
                     keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
@@ -246,7 +247,8 @@ class MonitoringHandler(BaseHandler):
                     short_dex = pos.get('short_dex', 'N/A').upper()
                     position_id = pos.get('id', '')
                     
-                    button_label = f"{position_index}. {symbol} ({long_dex}/{short_dex})"
+                    # Button label: "❌ Close: 1. PROVE (PARADEX/LIGHTER)" - clearly indicates closing action
+                    button_label = f"❌ Close: {position_index}. {symbol} ({long_dex}/{short_dex})"
                     callback_data = f"close_pos:{position_id}"
                     
                     keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
@@ -317,8 +319,8 @@ class MonitoringHandler(BaseHandler):
                     short_dex = pos.get('short_dex', 'N/A').upper()
                     position_id = pos.get('id', '')
                     
-                    # Button label: "1. BTC/USD (LIGHTER/PARADEX)"
-                    button_label = f"{position_index}. {symbol} ({long_dex}/{short_dex})"
+                    # Button label: "❌ Close: 1. PROVE (PARADEX/LIGHTER)" - clearly indicates closing action
+                    button_label = f"❌ Close: {position_index}. {symbol} ({long_dex}/{short_dex})"
                     # Store position_id in callback data
                     callback_data = f"close_pos:{position_id}"
                     
@@ -348,7 +350,7 @@ class MonitoringHandler(BaseHandler):
         callback_data = query.data
         if not callback_data.startswith("close_pos:"):
             await query.edit_message_text(
-                "❌ Invalid selection. Please use /close again.",
+                "❌ Invalid selection. Please use /positions again.",
                 parse_mode='HTML'
             )
             return
@@ -357,13 +359,16 @@ class MonitoringHandler(BaseHandler):
         
         # Store position_id in user_data for the next step
         context.user_data['close_position_id'] = position_id
+        # Store that we came from positions view (for back button)
+        context.user_data['close_from_positions'] = True
         
-        # Show order type selection
+        # Show order type selection with back button
         keyboard = [
             [
                 InlineKeyboardButton("🟢 Market", callback_data=f"close_type:{position_id}:market"),
                 InlineKeyboardButton("🟡 Limit", callback_data=f"close_type:{position_id}:limit")
             ],
+            [InlineKeyboardButton("🔙 Back to Positions", callback_data="close_back_to_positions")],
             [InlineKeyboardButton("❌ Cancel", callback_data="close_cancel")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -375,6 +380,92 @@ class MonitoringHandler(BaseHandler):
             parse_mode='HTML',
             reply_markup=reply_markup
         )
+    
+    async def close_back_to_positions_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle back button from order type selection - return to positions view."""
+        query = update.callback_query
+        await query.answer()
+        
+        # Clear close-related user_data
+        context.user_data.pop('close_position_id', None)
+        context.user_data.pop('close_from_positions', None)
+        
+        # Get user and API key
+        user, api_key = await self.require_auth(update, context)
+        if not user or not api_key:
+            return
+        
+        try:
+            client = ControlAPIClient(self.config.control_api_base_url, api_key)
+            data = await client.get_positions(account_name=None)
+            
+            accounts = data.get('accounts', [])
+            
+            # Collect all positions for button creation
+            all_positions = []
+            accounts_with_positions = []
+            for account in accounts:
+                positions = account.get('positions', [])
+                if positions:
+                    accounts_with_positions.append(account)
+                    for pos in positions:
+                        all_positions.append({
+                            'position': pos,
+                            'account_name': account.get('account_name', 'N/A')
+                        })
+            
+            # Format positions summary
+            message = self.formatter.format_positions(data)
+            
+            # Split if needed
+            messages = self.formatter._split_message(message) if len(message) > self.formatter.MAX_MESSAGE_LENGTH else [message]
+            
+            # Create keyboard
+            keyboard = []
+            if len(accounts_with_positions) > 1:
+                for account in accounts_with_positions:
+                    account_name_btn = account.get('account_name', 'N/A')
+                    position_count = len(account.get('positions', []))
+                    button_label = f"📊 {account_name_btn} ({position_count} position{'s' if position_count != 1 else ''})"
+                    callback_data = f"positions_account:{account_name_btn}"
+                    keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
+            
+            # Add direct position selection buttons
+            position_index = 0
+            for account in accounts_with_positions:
+                positions = account.get('positions', [])
+                for pos in positions:
+                    position_index += 1
+                    symbol = pos.get('symbol', 'N/A')
+                    long_dex = pos.get('long_dex', 'N/A').upper()
+                    short_dex = pos.get('short_dex', 'N/A').upper()
+                    position_id = pos.get('id', '')
+                    
+                    # Button label: "❌ Close: 1. PROVE (PARADEX/LIGHTER)" - clearly indicates closing action
+                    button_label = f"❌ Close: {position_index}. {symbol} ({long_dex}/{short_dex})"
+                    callback_data = f"close_pos:{position_id}"
+                    
+                    keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+            
+            # Edit with first message
+            await query.edit_message_text(
+                messages[0],
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+            
+            # Send remaining messages if any
+            for msg in messages[1:]:
+                await query.message.reply_text(msg, parse_mode='HTML')
+            
+        except Exception as e:
+            self.logger.error(f"Back to positions error: {e}")
+            await query.edit_message_text(
+                self.formatter.format_error(f"Failed to get positions: {str(e)}"),
+                parse_mode='HTML'
+            )
     
     async def close_order_type_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle order type selection callback - executes the close."""
@@ -390,6 +481,7 @@ class MonitoringHandler(BaseHandler):
             )
             # Clear user_data
             context.user_data.pop('close_position_id', None)
+            context.user_data.pop('close_from_positions', None)
             return
         
         if not callback_data.startswith("close_type:"):
@@ -467,6 +559,10 @@ class MonitoringHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.positions_back_to_all_callback,
             pattern="^positions_back_to_all$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.close_back_to_positions_callback,
+            pattern="^close_back_to_positions$"
         ))
         application.add_handler(CallbackQueryHandler(
             self.close_position_callback,
