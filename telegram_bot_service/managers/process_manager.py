@@ -127,15 +127,15 @@ class StrategyProcessManager:
         """
         # Generate run_id
         run_id = str(uuid.uuid4())
-        # Supervisor program names must start with a letter, not a number
-        # Use first 8 chars of UUID, but ensure it starts with a letter
-        run_id_short = run_id[:8]
-        # If it starts with a number, prefix with 's' (strategy)
-        if run_id_short[0].isdigit():
-            supervisor_program_name = f"s{run_id_short}"
+        # Supervisor program names: use only alphanumeric (no hyphens or underscores)
+        # Remove hyphens from UUID and take first 8 chars
+        run_id_clean = run_id.replace('-', '')[:8]
+        # Ensure it starts with a letter (Supervisor requirement)
+        if run_id_clean[0].isdigit():
+            # Prefix with 's' if starts with number
+            supervisor_program_name = f"strategys{run_id_clean}"
         else:
-            supervisor_program_name = run_id_short
-        supervisor_program_name = f"strategy_{supervisor_program_name}"
+            supervisor_program_name = f"strategy{run_id_clean}"
         
         # Allocate port
         port = await self.port_manager.allocate_port()
@@ -253,6 +253,20 @@ stdout_logfile={stdout_log}
             supervisor = self._get_supervisor_client()
             supervisor.supervisor.reloadConfig()
             logger.info("Supervisor config reloaded")
+            
+            # Verify the program was loaded by checking if it exists
+            all_processes = supervisor.supervisor.getAllProcessInfo()
+            program_names = [p['name'] for p in all_processes]
+            if supervisor_program_name not in program_names:
+                # Try to get process info to see if there's an error
+                try:
+                    info = supervisor.supervisor.getProcessInfo(supervisor_program_name)
+                except Exception as info_error:
+                    raise RuntimeError(
+                        f"Program '{supervisor_program_name}' not found after reload. "
+                        f"Available programs: {[p for p in program_names if 'strategy' in p][:5]}. "
+                        f"Error: {info_error}"
+                    )
         except Exception as e:
             raise RuntimeError(f"Failed to reload Supervisor config: {e}")
         
@@ -263,6 +277,10 @@ stdout_logfile={stdout_log}
             if not result:
                 raise RuntimeError("Supervisor failed to start process")
             logger.info(f"Started Supervisor program: {supervisor_program_name}")
+        except xmlrpc.client.Fault as e:
+            # Extract meaningful error message from XML-RPC Fault
+            error_msg = e.faultString if hasattr(e, 'faultString') else str(e)
+            raise RuntimeError(f"Failed to start Supervisor program '{supervisor_program_name}': {error_msg}")
         except Exception as e:
             raise RuntimeError(f"Failed to start Supervisor program: {e}")
         
