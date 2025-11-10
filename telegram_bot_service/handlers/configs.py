@@ -174,7 +174,7 @@ class ConfigHandler(BaseHandler):
                 f"Strategy Type: <b>{config_row['strategy_type']}</b>\n\n"
                 f"Current config (YAML):\n"
                 f"<code>{config_yaml[:500]}{'...' if len(config_yaml) > 500 else ''}</code>\n\n"
-                f"Send updated config as JSON/YAML, or 'cancel' to cancel:",
+                f"Send updated config as YAML, or 'cancel' to cancel:",
                 parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("⬅️ Back", callback_data="list_configs_back")]
@@ -358,7 +358,7 @@ class ConfigHandler(BaseHandler):
         
         keyboard = [
             [InlineKeyboardButton("🧙 Interactive Wizard", callback_data=f"config_method:wizard:{strategy_type}")],
-            [InlineKeyboardButton("📝 JSON/YAML Input", callback_data=f"config_method:json:{strategy_type}")]
+            [InlineKeyboardButton("📝 YAML Input", callback_data=f"config_method:yaml:{strategy_type}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -416,10 +416,10 @@ class ConfigHandler(BaseHandler):
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                f"📝 <b>JSON/YAML Config Input: {strategy_type.replace('_', ' ').title()}</b>\n\n"
+                f"📝 <b>YAML Config Input: {strategy_type.replace('_', ' ').title()}</b>\n\n"
                 f"Default configuration:\n"
                 f"<code>{config_yaml[:800]}{'...' if len(config_yaml) > 800 else ''}</code>\n\n"
-                "Send your config as JSON or YAML to edit, or send 'use_default' to use the default config above.\n"
+                "Send your config as YAML to edit, or send 'use_default' to use the default config above.\n"
                 "Send 'cancel' to cancel.",
                 parse_mode='HTML',
                 reply_markup=reply_markup
@@ -500,7 +500,7 @@ class ConfigHandler(BaseHandler):
         )
     
     async def config_method_back_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle back button from JSON/YAML input - return to creation method selection."""
+        """Handle back button from YAML input - return to creation method selection."""
         query = update.callback_query
         await query.answer()
         
@@ -531,7 +531,7 @@ class ConfigHandler(BaseHandler):
         
         keyboard = [
             [InlineKeyboardButton("🧙 Interactive Wizard", callback_data=f"config_method:wizard:{strategy_type}")],
-            [InlineKeyboardButton("📝 JSON/YAML Input", callback_data=f"config_method:json:{strategy_type}")]
+            [InlineKeyboardButton("📝 YAML Input", callback_data=f"config_method:yaml:{strategy_type}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
