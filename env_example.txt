@@ -1,6 +1,6 @@
 # used to distinguish log files for multiple accounts, optional
 
-ACCOUNT_NAME=
+ACCOUNT_NAME=acc1
 
 # EdgeX Account Credentials (REQUIRED for API access)
 # Find these in your EdgeX account under "API Management"
@@ -9,13 +9,14 @@ EDGEX_STARK_PRIVATE_KEY=your_stark_private_key_here
 
 # Backpack Account Credentials (REQUIRED for API access)
 # Find these in your Backpack account under "Portfolio" -> "Settings" -> "API Keys"
-BACKPACK_PUBLIC_KEY=your_api_key
-BACKPACK_SECRET_KEY=your_api_secret
+BACKPACK_PUBLIC_KEY=
+BACKPACK_SECRET_KEY=
 
 # Paradex Configuration 
 # user icon -> "Wallet" -> "Ethereum Address" and "Copy Paradex Private key"
-PARADEX_L1_ADDRESS=your_generated_l1_address_here
-PARADEX_L2_PRIVATE_KEY=your_generated_l2_private_key_here
+PARADEX_L1_ADDRESS=
+PARADEX_L2_ADDRESS=
+PARADEX_L2_PRIVATE_KEY=
 PARADEX_ENVIRONMENT=prod # or testnet
 
 # GRVT Configuration
@@ -26,13 +27,16 @@ GRVT_API_KEY=your_api_key_here
 GRVT_ENVIRONMENT=prod # or testnet/staging/dev 
 
 # Aster Configuration
-ASTER_API_KEY=your_aster_api_key
-ASTER_SECRET_KEY=your_aster_secret_key
+
+ASTER_API_KEY=
+
+ASTER_SECRET_KEY=
 
 # Lighter Configuration
-API_KEY_PRIVATE_KEY=your_api_key_private_key_here
-LIGHTER_ACCOUNT_INDEX=0
-LIGHTER_API_KEY_INDEX=0
+API_KEY_PRIVATE_KEY=
+# public 
+LIGHTER_ACCOUNT_INDEX=213803
+LIGHTER_API_KEY_INDEX=2
 
 # Notification (optional)
 # guide: https://www.feishu.cn/hc/zh-CN/articles/185289387886-%E6%B6%88%E6%81%AF%E5%8A%A9%E6%89%8B-%E6%9C%BA%E5%99%A8%E4%BA%BA
@@ -52,12 +56,5 @@ TIMEZONE=Asia/Shanghai
 EDGEX_BASE_URL=https://pro.edgex.exchange
 EDGEX_WS_URL=wss://quote.edgex.exchange
 
-# Funding Rate Service Controls
-# Set the minimum log level for async database queries (DEBUG, INFO, WARNING, ERROR)
-DATABASE_LOG_LEVEL=WARNING
-# Set the minimum log level for HTTP clients (e.g. urllib3, grvt SDK)
-HTTP_LOG_LEVEL=WARNING
-# Comma-separated DEX names to disable during collection (e.g. "edgex,paradex")
-COLLECTION_DISABLED_DEXES=edgex,paradex
-# Set to "true" for verbose per-symbol collection logs
-COLLECTION_VERBOSE_LOGGING=false
+DATABASE_URL=postgresql://funding_user:simba2001%23%23%23@localhost:5432/funding_rates
+CREDENTIAL_ENCRYPTION_KEY="m0BPCd_Rm..."
