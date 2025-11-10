@@ -98,23 +98,16 @@ class ConfigHandler(BaseHandler):
         if not user:
             return
         
-        # Start config creation wizard
-        context.user_data['wizard'] = {
-            'type': 'create_config',
-            'step': 1,
-            'data': {}
-        }
-        
+        # Start config creation - first select strategy type
         keyboard = [
-            [InlineKeyboardButton("📊 Funding Arbitrage", callback_data="config_type:funding_arbitrage")],
-            [InlineKeyboardButton("📈 Grid", callback_data="config_type:grid")],
-            [InlineKeyboardButton("📝 JSON Input", callback_data="config_type:json")]
+            [InlineKeyboardButton("📊 Funding Arbitrage", callback_data="config_strategy:funding_arbitrage")],
+            [InlineKeyboardButton("📈 Grid", callback_data="config_strategy:grid")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
             "📋 <b>Create New Configuration</b>\n\n"
-            "Choose creation method:",
+            "Choose strategy type:",
             parse_mode='HTML',
             reply_markup=reply_markup
         )
@@ -317,87 +310,173 @@ class ConfigHandler(BaseHandler):
             parse_mode='HTML'
         )
     
-    async def config_type_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle config type selection."""
+    async def config_strategy_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle strategy type selection - show creation method options."""
         query = update.callback_query
         await query.answer()
         
         callback_data = query.data
-        config_type = callback_data.split(":", 1)[1]
+        strategy_type = callback_data.split(":", 1)[1]
         
         user, _ = await self.require_auth(update, context)
         if not user:
             return
         
-        if config_type == "json":
-            # Start JSON/YAML input wizard
-            context.user_data['wizard'] = {
-                'type': 'create_config_json',
-                'step': 1,
-                'data': {}
-            }
+        # Store strategy type and show creation method options
+        schema_map = {
+            'funding_arbitrage': get_funding_arb_schema(),
+            'grid': get_grid_schema()
+        }
+        
+        if strategy_type not in schema_map:
             await query.edit_message_text(
-                "📝 <b>JSON/YAML Config Input</b>\n\n"
-                "Send your config as JSON or YAML.\n\n"
-                "The config should include:\n"
-                "• <code>strategy</code>: strategy type (funding_arbitrage or grid)\n"
-                "• <code>config</code>: configuration object\n\n"
-                "Example:\n"
-                "<code>{\n"
-                '  "strategy": "funding_arbitrage",\n'
-                '  "config": {\n'
-                '    "scan_exchanges": ["lighter", "grvt"],\n'
-                '    "target_exposure": 100\n'
-                "  }\n"
-                "}</code>\n\n"
-                "Or send 'cancel' to cancel.",
+                f"❌ Unknown strategy type: {strategy_type}",
                 parse_mode='HTML'
             )
-        else:
-            # Start wizard for the selected strategy type
-            schema_map = {
-                'funding_arbitrage': get_funding_arb_schema(),
-                'grid': get_grid_schema()
-            }
-            
-            if config_type not in schema_map:
+            return
+        
+        schema = schema_map[strategy_type]
+        
+        keyboard = [
+            [InlineKeyboardButton("🧙 Interactive Wizard", callback_data=f"config_method:wizard:{strategy_type}")],
+            [InlineKeyboardButton("📝 JSON/YAML Input", callback_data=f"config_method:json:{strategy_type}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"📋 <b>{schema.display_name}</b>\n\n"
+            f"{schema.description}\n\n"
+            "Choose creation method:",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+    
+    async def config_method_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle creation method selection (wizard or json)."""
+        query = update.callback_query
+        await query.answer()
+        
+        callback_data = query.data
+        # Format: config_method:wizard:funding_arbitrage or config_method:json:funding_arbitrage
+        parts = callback_data.split(":")
+        method = parts[1]
+        strategy_type = parts[2]
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        if method == "json":
+            # Load default config for the strategy type
+            default_config = self._load_default_config(strategy_type)
+            if default_config is None:
                 await query.edit_message_text(
-                    f"❌ Unknown strategy type: {config_type}",
+                    f"❌ Could not load default config for {strategy_type}",
                     parse_mode='HTML'
                 )
                 return
             
-            schema = schema_map[config_type]
-            
-            # Initialize wizard state
-            # Filter out max_oi_usd from initial params (handled separately)
-            base_params = [p for p in schema.parameters if p.key != "max_oi_usd"]
-            max_oi_param = next((p for p in schema.parameters if p.key == "max_oi_usd"), None)
-            
-            # Store param keys instead of full schema objects (can't pickle)
-            param_keys = [p.key for p in base_params]
-            max_oi_key = max_oi_param.key if max_oi_param else None
-            
+            # Start JSON/YAML input wizard with default config
             context.user_data['wizard'] = {
-                'type': f'create_config_{config_type}',
-                'step': 0,  # 0 = config name, then params
+                'type': 'create_config_json',
+                'step': 1,
                 'data': {
-                    'strategy_type': config_type,
-                    'param_keys': param_keys,
-                    'max_oi_key': max_oi_key,
-                    'config': {},
-                    'current_param_index': 0
+                    'strategy_type': strategy_type,
+                    'default_config': default_config
                 }
             }
             
-            # Start with config name
+            # Format config as YAML for display
+            config_yaml = yaml.dump(default_config, default_flow_style=False, indent=2)
+            
             await query.edit_message_text(
-                f"📋 <b>Config Wizard: {schema.display_name}</b>\n\n"
-                f"{schema.description}\n\n"
-                "Step 1/1: Enter a name for this configuration:\n"
-                "(e.g., 'My Funding Arb Config', 'Grid BTC Strategy')",
+                f"📝 <b>JSON/YAML Config Input: {strategy_type.replace('_', ' ').title()}</b>\n\n"
+                f"Default configuration:\n"
+                f"<code>{config_yaml[:800]}{'...' if len(config_yaml) > 800 else ''}</code>\n\n"
+                "Send your config as JSON or YAML to edit, or send 'use_default' to use the default config above.\n"
+                "Send 'cancel' to cancel.",
                 parse_mode='HTML'
             )
+        else:
+            # Start wizard for the selected strategy type
+            await self._start_wizard_for_strategy(query, context, strategy_type)
+    
+    def _load_default_config(self, strategy_type: str) -> Optional[Dict]:
+        """Load default config from file based on strategy type."""
+        from pathlib import Path
+        
+        if strategy_type == "funding_arbitrage":
+            config_file = Path("configs/config.yml")
+        elif strategy_type == "grid":
+            config_file = Path("configs/grid/grid_original.yml")
+        else:
+            return None
+        
+        if not config_file.exists():
+            self.logger.warning(f"Default config file not found: {config_file}")
+            return None
+        
+        try:
+            with open(config_file, 'r') as f:
+                config_dict = yaml.safe_load(f)
+            return config_dict
+        except Exception as e:
+            self.logger.error(f"Error loading default config: {e}")
+            return None
+    
+    async def _start_wizard_for_strategy(self, query, context: ContextTypes.DEFAULT_TYPE, strategy_type: str):
+        """Start the interactive wizard for a strategy type."""
+        schema_map = {
+            'funding_arbitrage': get_funding_arb_schema(),
+            'grid': get_grid_schema()
+        }
+        
+        if strategy_type not in schema_map:
+            await query.edit_message_text(
+                f"❌ Unknown strategy type: {strategy_type}",
+                parse_mode='HTML'
+            )
+            return
+        
+        schema = schema_map[strategy_type]
+        
+        # Initialize wizard state
+        # Filter out max_oi_usd from initial params (handled separately)
+        # Also filter out parameters that should be hardcoded
+        hardcoded_params = {"max_positions", "max_new_positions_per_cycle", "check_interval_seconds", "dry_run"}
+        base_params = [p for p in schema.parameters if p.key != "max_oi_usd" and p.key not in hardcoded_params]
+        max_oi_param = next((p for p in schema.parameters if p.key == "max_oi_usd"), None)
+        
+        # Store param keys instead of full schema objects (can't pickle)
+        param_keys = [p.key for p in base_params]
+        max_oi_key = max_oi_param.key if max_oi_param else None
+        
+        context.user_data['wizard'] = {
+            'type': f'create_config_{strategy_type}',
+            'step': 0,  # 0 = config name, then params
+            'data': {
+                'strategy_type': strategy_type,
+                'param_keys': param_keys,
+                'max_oi_key': max_oi_key,
+                'config': {},
+                'current_param_index': 0
+            }
+        }
+        
+        # Start with config name
+        await query.edit_message_text(
+            f"📋 <b>Config Wizard: {schema.display_name}</b>\n\n"
+            f"{schema.description}\n\n"
+            "Step 1/1: Enter a name for this configuration:\n"
+            "(e.g., 'My Funding Arb Config', 'Grid BTC Strategy')",
+            parse_mode='HTML'
+        )
+    
+    async def config_type_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle config type selection (legacy - kept for backward compatibility)."""
+        # This is now handled by config_strategy_callback and config_method_callback
+        # But we keep this for any existing callbacks
+        await self.config_strategy_callback(update, context)
     
     def _get_schema(self, strategy_type: str):
         """Get schema for a strategy type."""
@@ -552,7 +631,68 @@ class ConfigHandler(BaseHandler):
         telegram_user_id = update.effective_user.id
         user = await self.auth.get_user_by_telegram_id(telegram_user_id)
         
+        data = wizard['data']
+        strategy_type = data.get('strategy_type')
+        default_config = data.get('default_config')
+        
         try:
+            # Check if user wants to use default
+            if text.lower() == 'use_default':
+                if not default_config:
+                    await update.message.reply_text(
+                        "❌ No default config available. Please provide your config.",
+                        parse_mode='HTML'
+                    )
+                    return
+                
+                # Extract config data from default_config structure
+                config_data = default_config.get('config', default_config)
+                final_strategy_type = strategy_type or default_config.get('strategy')
+                
+                if not final_strategy_type:
+                    await update.message.reply_text(
+                        "❌ Could not determine strategy type from default config.",
+                        parse_mode='HTML'
+                    )
+                    return
+                
+                # Validate config using schema
+                schema_map = {
+                    'funding_arbitrage': get_funding_arb_schema(),
+                    'grid': get_grid_schema()
+                }
+                schema = schema_map[final_strategy_type]
+                
+                # Parse and validate
+                parsed_config = schema.parse_config(config_data)
+                is_valid, errors = schema.validate_config(parsed_config)
+                
+                if not is_valid:
+                    error_msg = "\n".join(f"• {e}" for e in errors[:5])
+                    if len(errors) > 5:
+                        error_msg += f"\n... and {len(errors) - 5} more errors"
+                    await update.message.reply_text(
+                        f"❌ Default config validation failed:\n\n{error_msg}\n\n"
+                        "Please send your own config or 'cancel' to cancel.",
+                        parse_mode='HTML'
+                    )
+                    return
+                
+                # Ask for config name
+                wizard['step'] = 2
+                wizard['data'] = {
+                    'strategy_type': final_strategy_type,
+                    'config_data': parsed_config
+                }
+                await update.message.reply_text(
+                    "✅ Using default configuration!\n\n"
+                    "Enter a name for this configuration:\n"
+                    "(e.g., 'My Funding Arb Config', 'Grid BTC Strategy')",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # User provided their own config - parse it
             # Try to parse as YAML first, then JSON
             try:
                 config_dict = yaml.safe_load(text)
@@ -578,22 +718,29 @@ class ConfigHandler(BaseHandler):
                 return
             
             # Extract strategy and config data
-            strategy_type = config_dict.get('strategy')
+            extracted_strategy_type = config_dict.get('strategy')
             config_data = config_dict.get('config', config_dict)  # Allow both formats
             
-            if not strategy_type:
+            # Use strategy_type from wizard if not in config
+            if not extracted_strategy_type:
+                if strategy_type:
+                    extracted_strategy_type = strategy_type
+                else:
+                    await update.message.reply_text(
+                        "❌ Missing 'strategy' field. Please specify strategy type (funding_arbitrage or grid).",
+                        parse_mode='HTML'
+                    )
+                    return
+            
+            if extracted_strategy_type not in ['funding_arbitrage', 'grid']:
                 await update.message.reply_text(
-                    "❌ Missing 'strategy' field. Please specify strategy type (funding_arbitrage or grid).",
+                    f"❌ Invalid strategy type: {extracted_strategy_type}. Must be 'funding_arbitrage' or 'grid'.",
                     parse_mode='HTML'
                 )
                 return
             
-            if strategy_type not in ['funding_arbitrage', 'grid']:
-                await update.message.reply_text(
-                    f"❌ Invalid strategy type: {strategy_type}. Must be 'funding_arbitrage' or 'grid'.",
-                    parse_mode='HTML'
-                )
-                return
+            # Use strategy_type from wizard if provided, otherwise use from config
+            final_strategy_type = strategy_type or extracted_strategy_type
             
             if not isinstance(config_data, dict):
                 await update.message.reply_text(
@@ -607,7 +754,7 @@ class ConfigHandler(BaseHandler):
                 'funding_arbitrage': get_funding_arb_schema(),
                 'grid': get_grid_schema()
             }
-            schema = schema_map[strategy_type]
+            schema = schema_map[final_strategy_type]
             
             # Parse and validate
             parsed_config = schema.parse_config(config_data)
@@ -630,7 +777,7 @@ class ConfigHandler(BaseHandler):
                 # Ask for config name
                 wizard['step'] = 2
                 wizard['data'] = {
-                    'strategy_type': strategy_type,
+                    'strategy_type': final_strategy_type,
                     'config_data': parsed_config
                 }
                 await update.message.reply_text(
@@ -642,7 +789,7 @@ class ConfigHandler(BaseHandler):
                 return
             
             # Save config
-            await self._save_config_to_db(user, config_name, strategy_type, parsed_config)
+            await self._save_config_to_db(user, config_name, final_strategy_type, parsed_config)
             
             context.user_data.pop('wizard', None)
             await update.message.reply_text(
@@ -840,14 +987,38 @@ class ConfigHandler(BaseHandler):
             )
         
         elif param.param_type == ParameterType.MULTI_CHOICE:
-            # For multi-choice, we'll use text input with comma-separated values
-            choices_str = ", ".join(param.choices or [])
-            prompt_text += f"Available options: <code>{choices_str}</code>\n"
-            prompt_text += "Enter comma-separated values (e.g., lighter,grvt,backpack):"
+            # Use checklist (inline keyboard) for multi-choice
+            keyboard = []
+            choices = param.choices or []
+            defaults = param.default if isinstance(param.default, list) else []
+            
+            # Initialize multi_selections in wizard state
+            if 'multi_selections' not in data:
+                data['multi_selections'] = {}
+            data['multi_selections'][param.key] = defaults.copy()
+            
+            # Create buttons with checkmarks for selected items
+            for choice in choices:
+                is_selected = choice in defaults
+                prefix = "✅ " if is_selected else "☐ "
+                keyboard.append([InlineKeyboardButton(
+                    f"{prefix}{choice.upper() if is_selected else choice}",
+                    callback_data=f"wizard_multi:{param.key}:{choice}:toggle"
+                )])
+            
+            # Add Done button
+            keyboard.append([InlineKeyboardButton("✅ Done", callback_data=f"wizard_multi_done:{param.key}")])
+            keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="wizard_cancel")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            selected_str = ", ".join(defaults) if defaults else "None"
+            prompt_text += f"Selected: <code>{selected_str}</code>\n\n"
+            prompt_text += "Tap exchanges to select/deselect, then tap 'Done':"
             
             await message.reply_text(
                 prompt_text,
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=reply_markup
             )
         
         elif param.param_type == ParameterType.BOOLEAN:
@@ -943,6 +1114,13 @@ class ConfigHandler(BaseHandler):
         config_name = data['config_name']
         strategy_type = data['strategy_type']
         config = data['config']
+        
+        # Hardcode specific parameters for funding_arbitrage
+        if strategy_type == "funding_arbitrage":
+            config["max_positions"] = 1
+            config["max_new_positions_per_cycle"] = 1
+            config["check_interval_seconds"] = 60
+            config["dry_run"] = False
         
         # Post-process config (similar to config_builder.py)
         scan_list = config.get("scan_exchanges") or []
@@ -1118,6 +1296,159 @@ class ConfigHandler(BaseHandler):
                 else:
                     await self._finalize_config(update, context, wizard, None)
     
+    async def handle_wizard_multi_callback(self, update, context):
+        """Handle multi-choice checklist callbacks."""
+        query = update.callback_query
+        await query.answer()
+        
+        callback_data = query.data
+        
+        if callback_data.startswith("wizard_multi_done:"):
+            # User clicked Done - process the selection
+            param_key = callback_data.split(":", 1)[1]
+            
+            wizard = context.user_data.get('wizard')
+            if not wizard:
+                await query.answer("Wizard session expired", show_alert=True)
+                return
+            
+            wizard_type = wizard['type']
+            if not wizard_type.startswith('create_config_') or wizard_type == 'create_config_json':
+                await query.answer("Invalid wizard type", show_alert=True)
+                return
+            
+            data = wizard['data']
+            strategy_type = data['strategy_type']
+            
+            # Get schema
+            schema = self._get_schema(strategy_type)
+            if not schema:
+                await query.answer("Invalid strategy type", show_alert=True)
+                return
+            
+            # Get current selections from wizard state
+            multi_selections = data.get('multi_selections', {})
+            selected_values = multi_selections.get(param_key, [])
+            
+            if not selected_values:
+                await query.answer("Please select at least one option", show_alert=True)
+                return
+            
+            # Get param
+            param = next((p for p in schema.parameters if p.key == param_key), None)
+            if not param:
+                await query.answer("Parameter not found", show_alert=True)
+                return
+            
+            # Validate
+            is_valid, error_msg = param.validate(selected_values)
+            if not is_valid:
+                await query.answer(f"Invalid selection: {error_msg}", show_alert=True)
+                return
+            
+            # Store in config
+            config = data['config']
+            config[param_key] = selected_values
+            
+            # Clear multi_selections for this param
+            if 'multi_selections' in data:
+                data['multi_selections'].pop(param_key, None)
+            
+            # Move to next parameter
+            param_keys = data.get('param_keys', [])
+            params = [p for p in schema.parameters if p.key in param_keys]
+            current_index = data['current_param_index']
+            data['current_param_index'] = current_index + 1
+            
+            max_oi_key = data.get('max_oi_key')
+            max_oi_param = next((p for p in schema.parameters if p.key == max_oi_key), None) if max_oi_key else None
+            
+            # Update message
+            selected_str = ", ".join(selected_values)
+            await query.edit_message_text(
+                f"✅ {param.prompt}: <b>{selected_str}</b>",
+                parse_mode='HTML'
+            )
+            
+            # Prompt next parameter
+            await self._prompt_next_parameter(update, context, wizard, schema, params, max_oi_param)
+        
+        elif callback_data.startswith("wizard_multi:"):
+            # User toggled an option
+            parts = callback_data.split(":", 3)
+            if len(parts) != 4:
+                await query.answer("Invalid callback", show_alert=True)
+                return
+            
+            param_key = parts[1]
+            choice_value = parts[2]
+            
+            wizard = context.user_data.get('wizard')
+            if not wizard:
+                await query.answer("Wizard session expired", show_alert=True)
+                return
+            
+            data = wizard['data']
+            
+            # Initialize multi_selections if needed
+            if 'multi_selections' not in data:
+                data['multi_selections'] = {}
+            if param_key not in data['multi_selections']:
+                # Initialize with defaults
+                schema = self._get_schema(data['strategy_type'])
+                if schema:
+                    param = next((p for p in schema.parameters if p.key == param_key), None)
+                    if param and isinstance(param.default, list):
+                        data['multi_selections'][param_key] = param.default.copy()
+                    else:
+                        data['multi_selections'][param_key] = []
+            
+            # Toggle selection
+            current_selections = data['multi_selections'][param_key]
+            if choice_value in current_selections:
+                current_selections.remove(choice_value)
+            else:
+                current_selections.append(choice_value)
+            
+            # Update the keyboard
+            schema = self._get_schema(data['strategy_type'])
+            if schema:
+                param = next((p for p in schema.parameters if p.key == param_key), None)
+                if param:
+                    keyboard = []
+                    choices = param.choices or []
+                    selected_values = data['multi_selections'][param_key]
+                    
+                    for choice in choices:
+                        is_selected = choice in selected_values
+                        prefix = "✅ " if is_selected else "☐ "
+                        keyboard.append([InlineKeyboardButton(
+                            f"{prefix}{choice.upper() if is_selected else choice}",
+                            callback_data=f"wizard_multi:{param_key}:{choice}:toggle"
+                        )])
+                    
+                    keyboard.append([InlineKeyboardButton("✅ Done", callback_data=f"wizard_multi_done:{param_key}")])
+                    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="wizard_cancel")])
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    
+                    # Calculate step number
+                    param_keys = data.get('param_keys', [])
+                    step_num = data['current_param_index'] + 2
+                    total_params = len(param_keys) + (1 if data.get('max_oi_key') and data['config'].get('mandatory_exchange') else 0)
+                    
+                    selected_str = ", ".join(selected_values) if selected_values else "None"
+                    prompt_text = f"<b>Step {step_num}/{total_params + 1}: {param.prompt}</b>\n\n"
+                    if param.help_text:
+                        prompt_text += f"ℹ️ {param.help_text}\n\n"
+                    prompt_text += f"Selected: <code>{selected_str}</code>\n\n"
+                    prompt_text += "Tap exchanges to select/deselect, then tap 'Done':"
+                    
+                    await query.edit_message_text(
+                        prompt_text,
+                        parse_mode='HTML',
+                        reply_markup=reply_markup
+                    )
+    
     def register_handlers(self, application):
         """Register config management command and callback handlers"""
         # Commands
@@ -1146,7 +1477,19 @@ class ConfigHandler(BaseHandler):
             pattern="^config_type:"
         ))
         application.add_handler(CallbackQueryHandler(
+            self.config_strategy_callback,
+            pattern="^config_strategy:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.config_method_callback,
+            pattern="^config_method:"
+        ))
+        application.add_handler(CallbackQueryHandler(
             self.handle_wizard_param_callback,
             pattern="^wizard_param:|^wizard_cancel"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.handle_wizard_multi_callback,
+            pattern="^wizard_multi:|^wizard_multi_done:"
         ))
 
