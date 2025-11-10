@@ -264,6 +264,49 @@ python database/scripts/get_api_key.py --username alice --list-all
 
 ---
 
+#### `revoke_api_key.py`
+Revoke (deactivate) API key(s) to ban users from accessing the API.
+
+**Usage:**
+```bash
+# Interactive mode (recommended)
+python database/scripts/revoke_api_key.py
+
+# Revoke all keys for a user (ban user completely)
+python database/scripts/revoke_api_key.py --username alice --all
+
+# Revoke a specific key by key ID
+python database/scripts/revoke_api_key.py --key-id <uuid>
+
+# Revoke keys matching a prefix for a user
+python database/scripts/revoke_api_key.py --username alice --prefix perp_a1b2
+```
+
+**Features:**
+- Revokes API keys by setting `is_active = FALSE`
+- Supports revoking all keys for a user (complete ban)
+- Supports revoking specific keys by ID or prefix
+- Shows list of keys before revocation
+- Prevents accidental revocation of multiple keys (requires `--all` flag)
+
+**Important Notes:**
+- ⚠️ **Revoked keys immediately fail authentication** - no caching, works instantly
+- Revoked keys cannot be used for:
+  - REST API requests (`X-API-Key` header)
+  - Telegram bot authentication (`/auth` command)
+- Users will need to create new API keys to regain access
+- If a user has multiple keys, use `--all` to revoke all, or `--key-id` to revoke specific ones
+- Revoking does NOT delete the key from database (just deactivates it) - revoked keys are marked as inactive
+
+**Security Impact:**
+- ✅ **Yes, revoking works immediately** - every API request validates the key fresh from the database
+- ✅ **Yes, it prevents previously authenticated users** - they cannot make new API calls
+- ⚠️ **Note**: If a user is already authenticated in Telegram bot, they may still be able to use bot commands until their session expires, but they cannot:
+  - Make new API requests (will fail)
+  - Re-authenticate with `/auth` (will fail)
+
+---
+
 ## 🚀 Typical Setup Workflow
 
 ### First Time Setup
