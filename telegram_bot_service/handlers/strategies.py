@@ -198,56 +198,230 @@ class StrategyHandler(BaseHandler):
             )
     
     async def logs_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /logs command."""
+        """Handle /logs command - shows interactive list of strategies to view logs."""
         user, _ = await self.require_auth(update, context)
         if not user:
             return
         
-        if not context.args or len(context.args) < 1:
-            await update.message.reply_text(
-                "❌ Usage: /logs &lt;run_id&gt;\n\n"
-                "Get run_id from /list_strategies",
-                parse_mode='HTML'
-            )
-            return
-        
-        run_id = context.args[0]
-        
         try:
-            # Verify ownership
-            query = """
-                SELECT id FROM strategy_runs
-                WHERE id = :run_id AND user_id = :user_id
-            """
-            row = await self.database.fetch_one(query, {"run_id": run_id, "user_id": user["id"]})
+            # Get user's strategies with config info (admins see all)
+            is_admin = user.get("is_admin", False)
+            user_id = None if is_admin else user["id"]
             
-            if not row:
+            # Query strategies with config info in one go
+            if user_id:
+                query = """
+                    SELECT 
+                        sr.id, sr.user_id, sr.account_id, sr.config_id,
+                        sr.supervisor_program_name, sr.status, sr.control_api_port,
+                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
+                        sc.config_name, sc.strategy_type
+                    FROM strategy_runs sr
+                    JOIN strategy_configs sc ON sr.config_id = sc.id
+                    WHERE sr.user_id = :user_id
+                    ORDER BY sr.started_at DESC
+                """
+                strategies = await self.database.fetch_all(query, {"user_id": user_id})
+            else:
+                query = """
+                    SELECT 
+                        sr.id, sr.user_id, sr.account_id, sr.config_id,
+                        sr.supervisor_program_name, sr.status, sr.control_api_port,
+                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
+                        sc.config_name, sc.strategy_type
+                    FROM strategy_runs sr
+                    JOIN strategy_configs sc ON sr.config_id = sc.id
+                    ORDER BY sr.started_at DESC
+                """
+                strategies = await self.database.fetch_all(query)
+            
+            strategies = [dict(row) for row in strategies]
+            
+            if not strategies:
                 await update.message.reply_text(
-                    "❌ Strategy not found or you don't have permission",
+                    "📄 <b>No Strategies Found</b>\n\n"
+                    "No strategies available to view logs.\n"
+                    "Start a strategy with /run",
                     parse_mode='HTML'
                 )
                 return
             
-            # Get log file
-            log_file = await self.process_manager.get_log_file(run_id)
+            # Create strategy selection keyboard
+            keyboard = []
+            for strat in strategies:
+                run_id = str(strat['id'])
+                run_id_short = run_id[:8]
+                config_name = strat.get('config_name', 'Unknown')
+                strategy_type = strat.get('strategy_type', 'unknown')
+                
+                # Format strategy type for display
+                strategy_type_display = {
+                    'funding_arbitrage': 'Funding Arb',
+                    'grid': 'Grid'
+                }.get(strategy_type, strategy_type.title())
+                
+                status_emoji = {
+                    'running': '🟢',
+                    'starting': '🟡',
+                    'stopped': '⚫',
+                    'error': '🔴',
+                    'paused': '⏸'
+                }.get(strat['status'], '⚪')
+                
+                # Button label: "🟢 e9680e47 - Funding Arb"
+                button_label = f"{status_emoji} {run_id_short} - {strategy_type_display}"
+                keyboard.append([InlineKeyboardButton(
+                    button_label,
+                    callback_data=f"view_logs:{run_id}"
+                )])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            title = "📄 <b>View Strategy Logs</b>" if is_admin else "📄 <b>Your Strategy Logs</b>"
+            await update.message.reply_text(
+                f"{title}\n\n"
+                "Select a strategy to view its logs:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+                
+        except Exception as e:
+            self.logger.error(f"Logs command error: {e}", exc_info=True)
+            await update.message.reply_text(
+                f"❌ Error: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def view_logs_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle callback for viewing logs."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        # Parse callback data: "view_logs:{run_id}"
+        callback_data = query.data
+        if not callback_data.startswith("view_logs:"):
+            await query.edit_message_text(
+                "❌ Invalid selection. Please use /logs again.",
+                parse_mode='HTML'
+            )
+            return
+        
+        run_id = callback_data.split(":", 1)[1]
+        
+        try:
+            # Verify ownership (security check)
+            is_admin = user.get("is_admin", False)
+            if is_admin:
+                # Admins can view any strategy
+                verify_query = """
+                    SELECT id, supervisor_program_name, log_file_path, config_id
+                    FROM strategy_runs
+                    WHERE id = :run_id
+                """
+                row = await self.database.fetch_one(
+                    verify_query,
+                    {"run_id": run_id}
+                )
+            else:
+                # Regular users can only view their own strategies
+                verify_query = """
+                    SELECT id, supervisor_program_name, log_file_path, config_id
+                    FROM strategy_runs
+                    WHERE id = :run_id AND user_id = :user_id
+                """
+                row = await self.database.fetch_one(
+                    verify_query,
+                    {"run_id": run_id, "user_id": user["id"]}
+                )
+            
+            if not row:
+                await query.edit_message_text(
+                    "❌ Strategy not found or you don't have permission to view logs",
+                    parse_mode='HTML'
+                )
+                return
+            
+            run_id_full = str(row["id"])
+            run_id_short = run_id_full[:8]
+            
+            # Get config name for display
+            config_id = str(row["config_id"])
+            config_row = await self.database.fetch_one(
+                "SELECT config_name, strategy_type FROM strategy_configs WHERE id = :id",
+                {"id": config_id}
+            )
+            config_name = config_row.get('config_name', 'Unknown') if config_row else 'Unknown'
+            strategy_type = config_row.get('strategy_type', 'unknown') if config_row else 'unknown'
+            strategy_type_display = {
+                'funding_arbitrage': 'Funding Arbitrage',
+                'grid': 'Grid'
+            }.get(strategy_type, strategy_type.title())
+            
+            # Show loading message
+            await query.edit_message_text(
+                f"⏳ <b>Loading logs...</b>\n\n"
+                f"Strategy: {strategy_type_display}\n"
+                f"Config: {config_name}\n"
+                f"Run ID: <code>{run_id_short}</code>",
+                parse_mode='HTML'
+            )
+            
+            # Try to get log file from database first
+            log_file = row.get("log_file_path")
+            
+            # If not in DB or file doesn't exist, try to find it by matching UUID prefix
+            if not log_file or not Path(log_file).exists():
+                logs_dir = self.process_manager.project_root / "logs"
+                if logs_dir.exists():
+                    # Find log file matching the UUID (full or partial)
+                    matching_logs = list(logs_dir.glob("strategy_*.out.log"))
+                    for log_path in matching_logs:
+                        # Extract UUID from filename: strategy_<uuid>.out.log
+                        log_uuid = log_path.stem.replace('strategy_', '').replace('.out', '')
+                        # Match by first 8 characters or full UUID
+                        if log_uuid.startswith(run_id_short) or run_id_full.startswith(log_uuid[:8]):
+                            log_file = str(log_path)
+                            break
             
             if log_file and Path(log_file).exists():
                 # Send log file as document
                 with open(log_file, 'rb') as f:
-                    await update.message.reply_document(
+                    await query.message.reply_document(
                         document=f,
-                        filename=f"strategy_{run_id[:8]}.log",
-                        caption=f"📄 Log file for strategy {run_id[:8]}"
+                        filename=f"strategy_{run_id_short}_{strategy_type_display.lower().replace(' ', '_')}.log",
+                        caption=f"📄 <b>Log file</b>\n\n"
+                                f"Strategy: {strategy_type_display}\n"
+                                f"Config: {config_name}\n"
+                                f"Run ID: <code>{run_id_short}</code>",
+                        parse_mode='HTML'
                     )
+                
+                # Update the message to show success
+                await query.edit_message_text(
+                    f"✅ <b>Log file sent!</b>\n\n"
+                    f"Strategy: {strategy_type_display}\n"
+                    f"Config: {config_name}\n"
+                    f"Run ID: <code>{run_id_short}</code>\n\n"
+                    f"📄 Check the document above.",
+                    parse_mode='HTML'
+                )
             else:
-                await update.message.reply_text(
-                    "❌ Log file not available",
+                await query.edit_message_text(
+                    f"❌ <b>Log file not available</b>\n\n"
+                    f"Strategy: {strategy_type_display}\n"
+                    f"Config: {config_name}\n"
+                    f"Run ID: <code>{run_id_short}</code>\n\n"
+                    f"The log file may not exist yet or the strategy may have just started.",
                     parse_mode='HTML'
                 )
                 
         except Exception as e:
-            self.logger.error(f"Logs error: {e}")
-            await update.message.reply_text(
+            self.logger.error(f"View logs error: {e}", exc_info=True)
+            await query.edit_message_text(
                 f"❌ Error getting logs: {str(e)}",
                 parse_mode='HTML'
             )
@@ -541,5 +715,9 @@ class StrategyHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.run_config_callback,
             pattern="^run_config:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.view_logs_callback,
+            pattern="^view_logs:"
         ))
 
