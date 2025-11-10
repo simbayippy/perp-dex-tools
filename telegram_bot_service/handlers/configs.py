@@ -26,71 +26,74 @@ class ConfigHandler(BaseHandler):
             return
         
         try:
-            # Get user configs
-            query = """
-                SELECT id, config_name, strategy_type, is_active, created_at
-                FROM strategy_configs
-                WHERE user_id = :user_id AND is_template = FALSE
-                ORDER BY created_at DESC
-            """
-            user_configs = await self.database.fetch_all(query, {"user_id": user["id"]})
-            
-            # Get public templates
-            query_templates = """
-                SELECT id, config_name, strategy_type, created_at
-                FROM strategy_configs
-                WHERE is_template = TRUE
-                ORDER BY config_name
-            """
-            templates = await self.database.fetch_all(query_templates)
-            
-            message = "📋 <b>Your Configurations</b>\n\n"
-            keyboard = []
-            
-            if user_configs:
-                message += "<b>Your Configs:</b>\n"
-                for cfg in user_configs:
-                    status = "🟢" if cfg["is_active"] else "⚫"
-                    config_id = str(cfg["id"])
-                    config_name = cfg["config_name"]
-                    message += f"{status} <b>{config_name}</b> ({cfg['strategy_type']})\n"
-                    
-                    # Add edit and delete buttons for each config
-                    keyboard.append([
-                        InlineKeyboardButton(
-                            f"✏️ {config_name}",
-                            callback_data=f"edit_config_btn:{config_id}"
-                        ),
-                        InlineKeyboardButton(
-                            f"🗑️ {config_name}",
-                            callback_data=f"delete_config_btn:{config_id}"
-                        )
-                    ])
-                message += "\n"
-            else:
-                message += "No configs yet. Create one with /create_config\n\n"
-            
-            if templates:
-                message += "<b>Public Templates:</b>\n"
-                for tpl in templates[:10]:  # Limit to 10 templates
-                    message += f"📄 {tpl['config_name']} ({tpl['strategy_type']})\n"
-                if len(templates) > 10:
-                    message += f"... and {len(templates) - 10} more\n"
-            
-            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
-            
+            message, reply_markup = await self._build_config_list(str(user["id"]))
             await update.message.reply_text(
                 message,
                 parse_mode='HTML',
                 reply_markup=reply_markup
             )
-            
         except Exception as e:
             self.logger.error(f"List configs error: {e}")
             await update.message.reply_text(
                 f"❌ Failed to list configs: {str(e)}",
                 parse_mode='HTML'
             )
+
+    async def _build_config_list(self, user_id: str):
+        """Build config list message and keyboard."""
+        # Get user configs
+        query = """
+            SELECT id, config_name, strategy_type, is_active, created_at
+            FROM strategy_configs
+            WHERE user_id = :user_id AND is_template = FALSE
+            ORDER BY created_at DESC
+        """
+        user_configs = await self.database.fetch_all(query, {"user_id": user_id})
+        
+        # Get public templates
+        query_templates = """
+            SELECT id, config_name, strategy_type, created_at
+            FROM strategy_configs
+            WHERE is_template = TRUE
+            ORDER BY config_name
+        """
+        templates = await self.database.fetch_all(query_templates)
+        
+        message = "📋 <b>Your Configurations</b>\n\n"
+        keyboard = []
+        
+        if user_configs:
+            message += "<b>Your Configs:</b>\n"
+            for cfg in user_configs:
+                status = "🟢" if cfg["is_active"] else "⚫"
+                config_id = str(cfg["id"])
+                config_name = cfg["config_name"]
+                message += f"{status} <b>{config_name}</b> ({cfg['strategy_type']})\n"
+                
+                # Add edit and delete buttons for each config
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"✏️ {config_name}",
+                        callback_data=f"edit_config_btn:{config_id}"
+                    ),
+                    InlineKeyboardButton(
+                        f"🗑️ {config_name}",
+                        callback_data=f"delete_config_btn:{config_id}"
+                    )
+                ])
+            message += "\n"
+        else:
+            message += "No configs yet. Create one with /create_config\n\n"
+        
+        if templates:
+            message += "<b>Public Templates:</b>\n"
+            for tpl in templates[:10]:  # Limit to 10 templates
+                message += f"📄 {tpl['config_name']} ({tpl['strategy_type']})\n"
+            if len(templates) > 10:
+                message += f"... and {len(templates) - 10} more\n"
+        
+        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+        return message, reply_markup
     
     async def create_config_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /create_config command."""
@@ -150,8 +153,21 @@ class ConfigHandler(BaseHandler):
                     'strategy_type': config_row['strategy_type']
                 }
             }
-            
-            config_yaml = yaml.dump(config_row['config_data'], default_flow_style=False, indent=2)
+            config_data = config_row['config_data']
+            if isinstance(config_data, str):
+                try:
+                    config_data = json.loads(config_data)
+                except json.JSONDecodeError:
+                    try:
+                        config_data = yaml.safe_load(config_data)
+                    except Exception:
+                        pass
+            config_data = config_data or {}
+            structured_config = {
+                "strategy": config_row['strategy_type'],
+                "config": config_data
+            }
+            config_yaml = yaml.dump(structured_config, default_flow_style=False, indent=2, sort_keys=False)
             
             await query.edit_message_text(
                 f"✏️ <b>Edit Config: {config_name}</b>\n\n"
@@ -159,7 +175,10 @@ class ConfigHandler(BaseHandler):
                 f"Current config (YAML):\n"
                 f"<code>{config_yaml[:500]}{'...' if len(config_yaml) > 500 else ''}</code>\n\n"
                 f"Send updated config as JSON/YAML, or 'cancel' to cancel:",
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Back", callback_data="list_configs_back")]
+                ])
             )
         except Exception as e:
             self.logger.error(f"Error in edit_config_callback: {e}", exc_info=True)
@@ -523,6 +542,31 @@ class ConfigHandler(BaseHandler):
             parse_mode='HTML',
             reply_markup=reply_markup
         )
+    
+    async def list_configs_back_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle back button from config detail to list view."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        context.user_data.pop('wizard', None)
+        
+        try:
+            message, reply_markup = await self._build_config_list(str(user["id"]))
+            await query.edit_message_text(
+                message,
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            self.logger.error(f"Error returning to config list: {e}")
+            await query.edit_message_text(
+                f"❌ Failed to load configs: {str(e)}",
+                parse_mode='HTML'
+            )
     
     async def config_type_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle config type selection (legacy - kept for backward compatibility)."""
@@ -1548,6 +1592,10 @@ class ConfigHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.config_method_back_callback,
             pattern="^config_method_back:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.list_configs_back_callback,
+            pattern="^list_configs_back$"
         ))
         application.add_handler(CallbackQueryHandler(
             self.handle_wizard_param_callback,
