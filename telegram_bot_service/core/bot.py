@@ -156,10 +156,17 @@ class StrategyControlBot:
         self.logger.info("Telegram bot started and polling")
     
     async def _health_monitor_loop(self):
-        """Background task to monitor strategy health."""
+        """Background task to monitor strategy health and sync status."""
         while True:
             try:
                 await asyncio.sleep(60)  # Run every 60 seconds
+                
+                # Sync database status with Supervisor state
+                sync_stats = await self.process_manager.sync_status_with_supervisor()
+                if sync_stats.get("updated_to_running", 0) > 0 or sync_stats.get("updated_to_stopped", 0) > 0:
+                    self.logger.info(f"Status sync: {sync_stats}")
+                
+                # Check health of all strategies
                 stats = await self.health_monitor.check_all_strategies()
                 if stats.get("unhealthy", 0) > 0 or stats.get("degraded", 0) > 0:
                     self.logger.warning(f"Health check found issues: {stats}")

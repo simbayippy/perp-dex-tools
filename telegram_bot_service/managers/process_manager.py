@@ -587,6 +587,123 @@ stdout_logfile={stdout_log}
             logger.error(f"Error getting Supervisor status: {e}")
             return None
     
+    async def sync_status_with_supervisor(self) -> Dict[str, int]:
+        """
+        Sync database status with Supervisor state.
+        
+        This should be called periodically to keep DB in sync with Supervisor.
+        Updates status from 'starting' -> 'running' when Supervisor shows RUNNING,
+        and marks as 'stopped' when Supervisor shows STOPPED/FATAL.
+        
+        Returns:
+            Dict with sync statistics
+        """
+        stats = {
+            "checked": 0,
+            "updated_to_running": 0,
+            "updated_to_stopped": 0,
+            "updated_to_error": 0,
+            "errors": 0
+        }
+        
+        try:
+            # Get all strategies that should be running (starting or running)
+            query = """
+                SELECT id, supervisor_program_name, status
+                FROM strategy_runs
+                WHERE status IN ('starting', 'running', 'paused')
+            """
+            db_runs = await self.database.fetch_all(query)
+            stats["checked"] = len(db_runs)
+            
+            if not db_runs:
+                return stats
+            
+            # Get Supervisor state for all strategy processes
+            supervisor = self._get_supervisor_client()
+            all_processes = supervisor.supervisor.getAllProcessInfo()
+            
+            # Create lookup: supervisor_program_name -> Supervisor state
+            supervisor_states = {}
+            for proc in all_processes:
+                if proc["name"].startswith("strategy"):
+                    supervisor_states[proc["name"]] = {
+                        "statename": proc.get("statename", "UNKNOWN"),
+                        "pid": proc.get("pid", 0),
+                        "spawnerr": proc.get("spawnerr", "")
+                    }
+            
+            # Sync each DB entry with Supervisor state
+            for row in db_runs:
+                run_id = row["id"]
+                program_name = row["supervisor_program_name"]
+                db_status = row["status"]
+                
+                if program_name not in supervisor_states:
+                    # Supervisor doesn't have this process - mark as stopped
+                    if db_status != "stopped":
+                        await self.database.execute(
+                            """
+                            UPDATE strategy_runs
+                            SET status = 'stopped', stopped_at = :stopped_at
+                            WHERE id = :id
+                            """,
+                            {"id": run_id, "stopped_at": datetime.now()}
+                        )
+                        stats["updated_to_stopped"] += 1
+                        logger.info(f"Marked {program_name} as stopped (not in Supervisor)")
+                    continue
+                
+                supervisor_state = supervisor_states[program_name]["statename"]
+                
+                # Update DB status based on Supervisor state
+                if supervisor_state == "RUNNING":
+                    if db_status == "starting":
+                        # Strategy started successfully - update to running
+                        await self.database.execute(
+                            """
+                            UPDATE strategy_runs
+                            SET status = 'running'
+                            WHERE id = :id
+                            """,
+                            {"id": run_id}
+                        )
+                        stats["updated_to_running"] += 1
+                        logger.debug(f"Updated {program_name} status: starting -> running")
+                elif supervisor_state in ("STOPPED", "EXITED"):
+                    if db_status != "stopped":
+                        await self.database.execute(
+                            """
+                            UPDATE strategy_runs
+                            SET status = 'stopped', stopped_at = :stopped_at
+                            WHERE id = :id
+                            """,
+                            {"id": run_id, "stopped_at": datetime.now()}
+                        )
+                        stats["updated_to_stopped"] += 1
+                        logger.info(f"Marked {program_name} as stopped (Supervisor: {supervisor_state})")
+                elif supervisor_state == "FATAL":
+                    if db_status != "error":
+                        error_msg = supervisor_states[program_name].get("spawnerr", "Supervisor FATAL state")
+                        await self.database.execute(
+                            """
+                            UPDATE strategy_runs
+                            SET status = 'error', error_message = :error_msg
+                            WHERE id = :id
+                            """,
+                            {"id": run_id, "error_msg": error_msg}
+                        )
+                        stats["updated_to_error"] += 1
+                        logger.warning(f"Marked {program_name} as error (Supervisor FATAL)")
+                # Other states (STARTING, BACKOFF, etc.) - leave DB status as is for now
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Error syncing status with Supervisor: {e}", exc_info=True)
+            stats["errors"] += 1
+            return stats
+    
     async def recover_processes(self) -> Dict[str, int]:
         """
         Recover processes on bot restart - sync DB with Supervisor state.
