@@ -325,7 +325,7 @@ class FundingArbPositionManager(BasePositionManager):
             return None
         
         # Convert DB row to FundingArbPosition
-        return FundingArbPosition(
+        position = FundingArbPosition(
             id=row['id'],
             symbol=row['symbol'],
             long_dex=dex_mapper.get_name(row['long_dex_id']),
@@ -344,6 +344,19 @@ class FundingArbPositionManager(BasePositionManager):
             closed_at=row['closed_at'],
             pnl_usd=row['pnl_usd']
         )
+        # Load cumulative_funding from database
+        if row.get('cumulative_funding_usd') is not None:
+            position.cumulative_funding = row['cumulative_funding_usd']
+        # Load metadata if present
+        if row.get('metadata'):
+            try:
+                if isinstance(row['metadata'], str):
+                    position.metadata = json.loads(row['metadata'])
+                else:
+                    position.metadata = row['metadata']
+            except Exception:
+                position.metadata = {}
+        return position
     
     async def get_open_positions(self) -> List[FundingArbPosition]:
         """
@@ -412,6 +425,18 @@ class FundingArbPositionManager(BasePositionManager):
                 closed_at=row['closed_at'],
                 pnl_usd=row['pnl_usd']
             )
+            # Load cumulative_funding from database
+            if row.get('cumulative_funding_usd') is not None:
+                position.cumulative_funding = row['cumulative_funding_usd']
+            # Load metadata if present
+            if row.get('metadata'):
+                try:
+                    if isinstance(row['metadata'], str):
+                        position.metadata = json.loads(row['metadata'])
+                    else:
+                        position.metadata = row['metadata']
+                except Exception:
+                    position.metadata = {}
             positions.append(position)
         
         return positions
@@ -862,6 +887,18 @@ class FundingArbPositionManager(BasePositionManager):
                 closed_at=row['closed_at'],
                 pnl_usd=row['pnl_usd']
             )
+            # Load cumulative_funding from database
+            if row.get('cumulative_funding_usd') is not None:
+                position.cumulative_funding = row['cumulative_funding_usd']
+            # Load metadata if present
+            if row.get('metadata'):
+                try:
+                    if isinstance(row['metadata'], str):
+                        position.metadata = json.loads(row['metadata'])
+                    else:
+                        position.metadata = row['metadata']
+                except Exception:
+                    position.metadata = {}
             positions.append(position)
         
         return positions
