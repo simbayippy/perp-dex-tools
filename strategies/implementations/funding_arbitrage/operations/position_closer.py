@@ -258,9 +258,14 @@ class PositionCloser:
                     f"fees=${position.total_fees_paid:.2f}, net=${pnl:.2f}"
                 )
             
-            pnl_pct = position.get_net_pnl_pct() if position.size_usd > 0 else Decimal("0")
-            if pnl_pct == 0 and position.size_usd > 0:
-                pnl_pct = pnl / position.size_usd
+            if position.size_usd and position.size_usd > Decimal("0"):
+                try:
+                    pnl_pct = pnl / position.size_usd
+                except Exception:
+                    # Defensive fallback if size_usd is corrupted or zero-like
+                    pnl_pct = Decimal("0")
+            else:
+                pnl_pct = Decimal("0")
 
             await strategy.position_manager.close(
                 position.id,
