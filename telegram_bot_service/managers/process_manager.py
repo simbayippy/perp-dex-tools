@@ -828,8 +828,16 @@ stdout_logfile={stdout_log}
                 return stats
             
             # Get Supervisor state for all strategy processes
-            supervisor = self._get_supervisor_client()
-            all_processes = supervisor.supervisor.getAllProcessInfo()
+            try:
+                supervisor = self._get_supervisor_client()
+                all_processes = supervisor.supervisor.getAllProcessInfo()
+            except Exception as exc:
+                # If we can't connect to Supervisor, don't update statuses
+                # This prevents incorrectly marking strategies as stopped during
+                # Supervisor connection issues or bot service shutdown
+                logger.warning(f"Could not connect to Supervisor during sync: {exc}")
+                stats["errors"] += 1
+                return stats
             
             # Create lookup: supervisor_program_name -> Supervisor state
             supervisor_states = {}
@@ -848,18 +856,12 @@ stdout_logfile={stdout_log}
                 db_status = row["status"]
                 
                 if program_name not in supervisor_states:
-                    # Supervisor doesn't have this process - mark as stopped (if not already)
-                    if db_status not in ("stopped", "error"):
-                        await self.database.execute(
-                            """
-                            UPDATE strategy_runs
-                            SET status = 'stopped', stopped_at = :stopped_at
-                            WHERE id = :id
-                            """,
-                            {"id": run_id, "stopped_at": datetime.now()}
-                        )
-                        stats["updated_to_stopped"] += 1
-                        logger.info(f"Marked {program_name} as stopped (not in Supervisor)")
+                    # Supervisor doesn't have this process in its list
+                    # Don't automatically mark as stopped - only update if Supervisor
+                    # explicitly reports STOPPED/EXITED state. This prevents incorrect
+                    # status updates during connection issues or bot service shutdown.
+                    # If a process is truly stopped, Supervisor will report it explicitly.
+                    logger.debug(f"Process {program_name} not found in Supervisor list (DB status: {db_status})")
                     continue
                 
                 supervisor_state = supervisor_states[program_name]["statename"]
