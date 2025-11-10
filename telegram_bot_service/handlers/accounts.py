@@ -715,10 +715,10 @@ class AccountHandler(BaseHandler):
                 }
             }
             
-            # Show input mode selection
+            # Show input mode selection (include account_id in callback to avoid session expiration)
             keyboard = [
-                [InlineKeyboardButton("⚡ Quick Input (JSON)", callback_data=f"add_exc_mode:{exchange}:json")],
-                [InlineKeyboardButton("📝 Step-by-Step", callback_data=f"add_exc_mode:{exchange}:interactive")]
+                [InlineKeyboardButton("⚡ Quick Input (JSON)", callback_data=f"add_exc_mode:{exchange}:json:{account_id}")],
+                [InlineKeyboardButton("📝 Step-by-Step", callback_data=f"add_exc_mode:{exchange}:interactive:{account_id}")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -783,9 +783,9 @@ class AccountHandler(BaseHandler):
         
         try:
             callback_data = query.data
-            # Format: add_exc_mode:{exchange}:{mode}
-            parts = callback_data.split(":", 2)
-            if len(parts) != 3:
+            # Format: add_exc_mode:{exchange}:{mode}:{account_id}
+            parts = callback_data.split(":", 3)
+            if len(parts) != 4:
                 await query.edit_message_text(
                     "❌ Invalid callback data. Please try again with /add_exchange",
                     parse_mode='HTML'
@@ -794,15 +794,7 @@ class AccountHandler(BaseHandler):
             
             exchange = parts[1]
             mode = parts[2]
-            
-            # Get account_id from context
-            account_id = context.user_data.get('add_exchange_account_id')
-            if not account_id:
-                await query.edit_message_text(
-                    "❌ Session expired. Please start over with /add_exchange",
-                    parse_mode='HTML'
-                )
-                return
+            account_id = parts[3]  # Get account_id from callback_data instead of context
             
             # Get account name
             account_row = await self.database.fetch_one(
@@ -818,9 +810,6 @@ class AccountHandler(BaseHandler):
                 return
             
             account_name = account_row['account_name']
-            
-            # Clear the temporary account_id from context
-            context.user_data.pop('add_exchange_account_id', None)
             
             # Start wizard for credentials
             context.user_data['wizard'] = {
