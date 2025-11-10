@@ -13,7 +13,7 @@ class MonitoringHandler(BaseHandler):
     """Handler for monitoring-related commands (positions, close)"""
     
     async def positions_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /positions command - interactive account/position selection."""
+        """Handle /positions command - shows summary with interactive buttons."""
         user, api_key = await self.require_auth(update, context)
         if not user or not api_key:
             return
@@ -27,138 +27,78 @@ class MonitoringHandler(BaseHandler):
             
             accounts = data.get('accounts', [])
             
-            # If account filter provided, show positions directly
-            if account_name:
-                await self._show_positions_for_account(update, context, data, account_name, api_key)
-                return
+            # Collect all positions for button creation
+            all_positions = []
+            accounts_with_positions = []
+            for account in accounts:
+                positions = account.get('positions', [])
+                if positions:
+                    accounts_with_positions.append(account)
+                    for pos in positions:
+                        all_positions.append({
+                            'position': pos,
+                            'account_name': account.get('account_name', 'N/A')
+                        })
             
-            # No account filter - show account selection
-            if not accounts:
+            # Format and send summary (may need to split if too long)
+            message = self.formatter.format_positions(data)
+            
+            # Split if needed (TelegramFormatter handles this)
+            messages = self.formatter._split_message(message) if len(message) > self.formatter.MAX_MESSAGE_LENGTH else [message]
+            
+            # Send all summary messages except the last one
+            for msg in messages[:-1]:
+                await update.message.reply_text(msg, parse_mode='HTML')
+            
+            # For the last message, add interactive buttons if there are positions
+            last_message = messages[-1] if messages else ""
+            
+            if all_positions:
+                # Create keyboard with position buttons
+                keyboard = []
+                
+                # If multiple accounts, show account selection buttons first
+                if not account_name and len(accounts_with_positions) > 1:
+                    for account in accounts_with_positions:
+                        account_name_btn = account.get('account_name', 'N/A')
+                        position_count = len(account.get('positions', []))
+                        button_label = f"📊 {account_name_btn} ({position_count} position{'s' if position_count != 1 else ''})"
+                        callback_data = f"positions_account:{account_name_btn}"
+                        keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
+                
+                # Add direct position selection buttons
+                position_index = 0
+                for account in accounts_with_positions:
+                    positions = account.get('positions', [])
+                    for pos in positions:
+                        position_index += 1
+                        symbol = pos.get('symbol', 'N/A')
+                        long_dex = pos.get('long_dex', 'N/A').upper()
+                        short_dex = pos.get('short_dex', 'N/A').upper()
+                        position_id = pos.get('id', '')
+                        
+                        # Button label: "1. BTC/USD (LIGHTER/PARADEX)"
+                        button_label = f"{position_index}. {symbol} ({long_dex}/{short_dex})"
+                        # Store position_id in callback data
+                        callback_data = f"close_pos:{position_id}"
+                        
+                        keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
                 await update.message.reply_text(
-                    "📊 <b>No active positions</b>\n\nNo accounts with open positions found.",
-                    parse_mode='HTML'
+                    last_message,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
                 )
-                return
-            
-            # Filter accounts that have positions
-            accounts_with_positions = [
-                acc for acc in accounts 
-                if acc.get('positions') and len(acc.get('positions', [])) > 0
-            ]
-            
-            if not accounts_with_positions:
-                await update.message.reply_text(
-                    "📊 <b>No active positions</b>\n\nNo open positions found.",
-                    parse_mode='HTML'
-                )
-                return
-            
-            # Show account selection buttons
-            keyboard = []
-            for account in accounts_with_positions:
-                account_name = account.get('account_name', 'N/A')
-                position_count = len(account.get('positions', []))
-                button_label = f"📊 {account_name} ({position_count} position{'s' if position_count != 1 else ''})"
-                callback_data = f"positions_account:{account_name}"
-                keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            total_positions = sum(len(acc.get('positions', [])) for acc in accounts_with_positions)
-            await update.message.reply_text(
-                f"📊 <b>Active Positions</b>\n\n"
-                f"Found <b>{total_positions}</b> position{'s' if total_positions != 1 else ''} "
-                f"across <b>{len(accounts_with_positions)}</b> account{'s' if len(accounts_with_positions) != 1 else ''}.\n\n"
-                f"Select an account to view positions:",
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
+            else:
+                # No positions, just send the message without buttons
+                await update.message.reply_text(last_message, parse_mode='HTML')
                 
         except Exception as e:
             self.logger.error(f"Positions error: {e}")
             await update.message.reply_text(
                 self.formatter.format_error(f"Failed to get positions: {str(e)}"),
                 parse_mode='HTML'
-            )
-    
-    async def _show_positions_for_account(
-        self, 
-        update: Update, 
-        context: ContextTypes.DEFAULT_TYPE,
-        data: dict,
-        account_name: str,
-        api_key: str
-    ):
-        """Show positions for a specific account with close buttons."""
-        accounts = data.get('accounts', [])
-        account = next((acc for acc in accounts if acc.get('account_name') == account_name), None)
-        
-        if not account:
-            message = update.message if hasattr(update, 'message') and update.message else None
-            query = update.callback_query if hasattr(update, 'callback_query') and update.callback_query else None
-            
-            error_msg = f"❌ Account '{account_name}' not found."
-            if query:
-                await query.edit_message_text(error_msg, parse_mode='HTML')
-            elif message:
-                await message.reply_text(error_msg, parse_mode='HTML')
-            return
-        
-        positions = account.get('positions', [])
-        
-        if not positions:
-            message = update.message if hasattr(update, 'message') and update.message else None
-            query = update.callback_query if hasattr(update, 'callback_query') and update.callback_query else None
-            
-            no_pos_msg = f"📊 <b>{account_name}</b>\n\nNo active positions."
-            if query:
-                await query.edit_message_text(no_pos_msg, parse_mode='HTML')
-            elif message:
-                await message.reply_text(no_pos_msg, parse_mode='HTML')
-            return
-        
-        # Format positions summary
-        message_text = f"📊 <b>{account_name}</b>\n\n"
-        message_text += f"Found <b>{len(positions)}</b> position{'s' if len(positions) != 1 else ''}:\n\n"
-        
-        # Create inline keyboard with position buttons
-        keyboard = []
-        position_index = 0
-        for pos in positions:
-            position_index += 1
-            symbol = pos.get('symbol', 'N/A')
-            long_dex = pos.get('long_dex', 'N/A').upper()
-            short_dex = pos.get('short_dex', 'N/A').upper()
-            position_id = pos.get('id', '')
-            
-            # Button label: "1. BTC/USD (LIGHTER/PARADEX)"
-            button_label = f"{position_index}. {symbol} ({long_dex}/{short_dex})"
-            # Store position_id in callback data
-            callback_data = f"close_pos:{position_id}"
-            
-            keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
-        
-        # Add back button
-        keyboard.append([InlineKeyboardButton("🔙 Back to Accounts", callback_data="positions_back_to_accounts")])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # Send or edit message
-        query = update.callback_query if hasattr(update, 'callback_query') and update.callback_query else None
-        message = update.message if hasattr(update, 'message') and update.message else None
-        
-        if query:
-            await query.answer()
-            await query.edit_message_text(
-                message_text + "Select a position to close:",
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
-        elif message:
-            await message.reply_text(
-                message_text + "Select a position to close:",
-                parse_mode='HTML',
-                reply_markup=reply_markup
             )
     
     async def positions_account_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -186,7 +126,62 @@ class MonitoringHandler(BaseHandler):
             client = ControlAPIClient(self.config.control_api_base_url, api_key)
             data = await client.get_positions(account_name=account_name)
             
-            await self._show_positions_for_account(update, context, data, account_name, api_key)
+            # Format positions summary for this account
+            message = self.formatter.format_positions(data)
+            
+            # Get positions for button creation
+            accounts = data.get('accounts', [])
+            all_positions = []
+            for account in accounts:
+                positions = account.get('positions', [])
+                for pos in positions:
+                    all_positions.append({
+                        'position': pos,
+                        'account_name': account.get('account_name', 'N/A')
+                    })
+            
+            if not all_positions:
+                await query.edit_message_text(
+                    f"📊 <b>{account_name}</b>\n\nNo active positions.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Create keyboard with position buttons
+            keyboard = []
+            position_index = 0
+            for account in accounts:
+                positions = account.get('positions', [])
+                for pos in positions:
+                    position_index += 1
+                    symbol = pos.get('symbol', 'N/A')
+                    long_dex = pos.get('long_dex', 'N/A').upper()
+                    short_dex = pos.get('short_dex', 'N/A').upper()
+                    position_id = pos.get('id', '')
+                    
+                    button_label = f"{position_index}. {symbol} ({long_dex}/{short_dex})"
+                    callback_data = f"close_pos:{position_id}"
+                    
+                    keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
+            
+            # Add back button
+            keyboard.append([InlineKeyboardButton("🔙 Back to All Positions", callback_data="positions_back_to_all")])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Split message if needed
+            messages = self.formatter._split_message(message) if len(message) > self.formatter.MAX_MESSAGE_LENGTH else [message]
+            
+            # Edit with first message, then send rest as new messages
+            await query.edit_message_text(
+                messages[0],
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+            
+            # Send remaining messages if any
+            for msg in messages[1:]:
+                await query.message.reply_text(msg, parse_mode='HTML')
             
         except Exception as e:
             self.logger.error(f"Positions account callback error: {e}")
@@ -195,8 +190,8 @@ class MonitoringHandler(BaseHandler):
                 parse_mode='HTML'
             )
     
-    async def positions_back_to_accounts_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle back button - return to account selection."""
+    async def positions_back_to_all_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle back button - return to all positions view."""
         query = update.callback_query
         await query.answer()
         
@@ -211,49 +206,66 @@ class MonitoringHandler(BaseHandler):
             
             accounts = data.get('accounts', [])
             
-            if not accounts:
-                await query.edit_message_text(
-                    "📊 <b>No active positions</b>\n\nNo accounts with open positions found.",
-                    parse_mode='HTML'
-                )
-                return
+            # Collect all positions for button creation
+            all_positions = []
+            accounts_with_positions = []
+            for account in accounts:
+                positions = account.get('positions', [])
+                if positions:
+                    accounts_with_positions.append(account)
+                    for pos in positions:
+                        all_positions.append({
+                            'position': pos,
+                            'account_name': account.get('account_name', 'N/A')
+                        })
             
-            # Filter accounts that have positions
-            accounts_with_positions = [
-                acc for acc in accounts 
-                if acc.get('positions') and len(acc.get('positions', [])) > 0
-            ]
+            # Format positions summary
+            message = self.formatter.format_positions(data)
             
-            if not accounts_with_positions:
-                await query.edit_message_text(
-                    "📊 <b>No active positions</b>\n\nNo open positions found.",
-                    parse_mode='HTML'
-                )
-                return
+            # Split if needed
+            messages = self.formatter._split_message(message) if len(message) > self.formatter.MAX_MESSAGE_LENGTH else [message]
             
-            # Show account selection buttons
+            # Create keyboard
             keyboard = []
+            if len(accounts_with_positions) > 1:
+                for account in accounts_with_positions:
+                    account_name_btn = account.get('account_name', 'N/A')
+                    position_count = len(account.get('positions', []))
+                    button_label = f"📊 {account_name_btn} ({position_count} position{'s' if position_count != 1 else ''})"
+                    callback_data = f"positions_account:{account_name_btn}"
+                    keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
+            
+            # Add direct position selection buttons
+            position_index = 0
             for account in accounts_with_positions:
-                account_name = account.get('account_name', 'N/A')
-                position_count = len(account.get('positions', []))
-                button_label = f"📊 {account_name} ({position_count} position{'s' if position_count != 1 else ''})"
-                callback_data = f"positions_account:{account_name}"
-                keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
+                positions = account.get('positions', [])
+                for pos in positions:
+                    position_index += 1
+                    symbol = pos.get('symbol', 'N/A')
+                    long_dex = pos.get('long_dex', 'N/A').upper()
+                    short_dex = pos.get('short_dex', 'N/A').upper()
+                    position_id = pos.get('id', '')
+                    
+                    button_label = f"{position_index}. {symbol} ({long_dex}/{short_dex})"
+                    callback_data = f"close_pos:{position_id}"
+                    
+                    keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
             
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
             
-            total_positions = sum(len(acc.get('positions', [])) for acc in accounts_with_positions)
+            # Edit with first message
             await query.edit_message_text(
-                f"📊 <b>Active Positions</b>\n\n"
-                f"Found <b>{total_positions}</b> position{'s' if total_positions != 1 else ''} "
-                f"across <b>{len(accounts_with_positions)}</b> account{'s' if len(accounts_with_positions) != 1 else ''}.\n\n"
-                f"Select an account to view positions:",
+                messages[0],
                 parse_mode='HTML',
                 reply_markup=reply_markup
             )
             
+            # Send remaining messages if any
+            for msg in messages[1:]:
+                await query.message.reply_text(msg, parse_mode='HTML')
+            
         except Exception as e:
-            self.logger.error(f"Back to accounts error: {e}")
+            self.logger.error(f"Back to all positions error: {e}")
             await query.edit_message_text(
                 self.formatter.format_error(f"Failed to get positions: {str(e)}"),
                 parse_mode='HTML'
@@ -453,8 +465,8 @@ class MonitoringHandler(BaseHandler):
             pattern="^positions_account:"
         ))
         application.add_handler(CallbackQueryHandler(
-            self.positions_back_to_accounts_callback,
-            pattern="^positions_back_to_accounts$"
+            self.positions_back_to_all_callback,
+            pattern="^positions_back_to_all$"
         ))
         application.add_handler(CallbackQueryHandler(
             self.close_position_callback,
