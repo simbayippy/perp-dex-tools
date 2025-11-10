@@ -274,8 +274,31 @@ stdout_logfile={stdout_log}
             # Check Supervisor logs for errors before reload
             logger.debug("Reloading Supervisor config...")
             try:
-                reload_result = supervisor.supervisor.reloadConfig()
-                logger.info(f"Supervisor config reloaded, result: {reload_result}")
+                # First, reread configs to ensure Supervisor sees the new file
+                try:
+                    reread_result = supervisor.supervisor.reloadConfig()
+                    logger.info(f"Supervisor reloadConfig result: {reread_result}")
+                except xmlrpc.client.Fault as reread_fault:
+                    fault_msg = reread_fault.faultString if hasattr(reread_fault, 'faultString') else str(reread_fault)
+                    logger.warning(f"Supervisor reloadConfig returned fault (might be OK): {fault_msg}")
+                
+                # After reloadConfig, we need to add the process group
+                # The reloadConfig returns [[added], [modified], [removed]]
+                # We need to actually add the process group to Supervisor
+                try:
+                    add_result = supervisor.supervisor.addProcessGroup(supervisor_program_name)
+                    logger.info(f"Supervisor addProcessGroup result: {add_result}")
+                except xmlrpc.client.Fault as add_fault:
+                    fault_code = add_fault.faultCode if hasattr(add_fault, 'faultCode') else 'Unknown'
+                    fault_msg = add_fault.faultString if hasattr(add_fault, 'faultString') else str(add_fault)
+                    # If process group already exists, that's OK
+                    if 'ALREADY_ADDED' in fault_msg or fault_code == 60:
+                        logger.info(f"Process group already exists (OK): {fault_msg}")
+                    else:
+                        logger.error(f"Supervisor addProcessGroup failed: Code={fault_code}, Message={fault_msg}")
+                        raise RuntimeError(f"Supervisor failed to add process group: {fault_msg}")
+            except RuntimeError:
+                raise
             except xmlrpc.client.Fault as reload_fault:
                 # Supervisor might return a fault if config has syntax errors
                 fault_msg = reload_fault.faultString if hasattr(reload_fault, 'faultString') else str(reload_fault)
@@ -293,13 +316,25 @@ stdout_logfile={stdout_log}
                     pass
                 raise RuntimeError(f"Supervisor rejected config file: {fault_msg}")
             
-            # Get all process info to see what Supervisor knows about
-            all_processes = supervisor.supervisor.getAllProcessInfo()
-            program_names = [p['name'] for p in all_processes]
-            logger.debug(f"Supervisor knows about {len(program_names)} programs: {program_names[:10]}")
-            
-            # Check if our program was loaded
-            if supervisor_program_name not in program_names:
+            # Verify the program was added by checking if it exists
+            # Note: getAllProcessInfo() might return empty if programs haven't been started yet
+            # So we'll try getProcessInfo() directly
+            try:
+                info = supervisor.supervisor.getProcessInfo(supervisor_program_name)
+                logger.info(f"Program '{supervisor_program_name}' successfully registered. State: {info.get('statename', 'UNKNOWN')}")
+            except xmlrpc.client.Fault as fault_error:
+                fault_code = fault_error.faultCode if hasattr(fault_error, 'faultCode') else 'Unknown'
+                fault_msg = fault_error.faultString if hasattr(fault_error, 'faultString') else str(fault_error)
+                
+                # Get all process info to see what Supervisor knows about
+                try:
+                    all_processes = supervisor.supervisor.getAllProcessInfo()
+                    program_names = [p['name'] for p in all_processes]
+                    logger.debug(f"Supervisor knows about {len(program_names)} programs: {program_names[:10]}")
+                except Exception as e:
+                    logger.warning(f"Could not get all process info: {e}")
+                    program_names = []
+                
                 # Check Supervisor logs for why it wasn't loaded
                 # Try to read the config file to see if there's a syntax error
                 try:
@@ -313,41 +348,24 @@ stdout_logfile={stdout_log}
                 except Exception as read_error:
                     logger.error(f"Could not read config file: {read_error}")
                 
-                # Try to get process info to see the exact error
+                # Check Supervisor logs for more details
                 try:
-                    info = supervisor.supervisor.getProcessInfo(supervisor_program_name)
-                    logger.info(f"Program info retrieved: {info}")
-                except xmlrpc.client.Fault as fault_error:
-                    fault_code = fault_error.faultCode if hasattr(fault_error, 'faultCode') else 'Unknown'
-                    fault_msg = fault_error.faultString if hasattr(fault_error, 'faultString') else str(fault_error)
-                    logger.error(f"Supervisor Fault when checking program: Code={fault_code}, Message={fault_msg}")
-                    
-                    # Check Supervisor logs for more details
-                    try:
-                        log_result = subprocess.run(
-                            ["sudo", "tail", "-20", "/var/log/supervisor/supervisord.log"],
-                            capture_output=True,
-                            text=True,
-                            check=True
-                        )
-                        logger.error(f"Supervisor logs (last 20 lines):\n{log_result.stdout}")
-                    except Exception as log_error:
-                        logger.warning(f"Could not read Supervisor logs: {log_error}")
-                    
-                    raise RuntimeError(
-                        f"Program '{supervisor_program_name}' not found after reload. "
-                        f"Supervisor error (Code {fault_code}): {fault_msg}. "
-                        f"Config file: {config_file_path}. "
-                        f"Available programs: {program_names[:5]}"
+                    log_result = subprocess.run(
+                        ["sudo", "tail", "-20", "/var/log/supervisor/supervisord.log"],
+                        capture_output=True,
+                        text=True,
+                        check=True
                     )
-                except Exception as info_error:
-                    raise RuntimeError(
-                        f"Program '{supervisor_program_name}' not found after reload. "
-                        f"Available programs: {[p for p in program_names if 'strategy' in p][:5]}. "
-                        f"Error: {info_error}"
-                    )
-            else:
-                logger.info(f"Program '{supervisor_program_name}' successfully loaded by Supervisor")
+                    logger.error(f"Supervisor logs (last 20 lines):\n{log_result.stdout}")
+                except Exception as log_error:
+                    logger.warning(f"Could not read Supervisor logs: {log_error}")
+                
+                raise RuntimeError(
+                    f"Program '{supervisor_program_name}' not found after addProcessGroup. "
+                    f"Supervisor error (Code {fault_code}): {fault_msg}. "
+                    f"Config file: {config_file_path}. "
+                    f"Available programs: {program_names[:5]}"
+                )
         except RuntimeError:
             # Re-raise RuntimeErrors as-is
             raise
