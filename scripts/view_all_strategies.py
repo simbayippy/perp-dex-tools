@@ -84,36 +84,6 @@ def get_strategies_from_supervisor(supervisor_rpc_url: str = "http://localhost:9
         return []
 
 
-def get_strategies_from_ps() -> List[Dict[str, Any]]:
-    """Get strategy processes from system ps command."""
-    try:
-        # Find all runbot.py processes
-        result = subprocess.run(
-            ["ps", "aux"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        
-        processes = []
-        for line in result.stdout.split('\n'):
-            if 'runbot.py' in line or 'strategy' in line.lower():
-                parts = line.split()
-                if len(parts) >= 11:
-                    processes.append({
-                        'user': parts[0],
-                        'pid': parts[1],
-                        'cpu': parts[2],
-                        'mem': parts[3],
-                        'command': ' '.join(parts[10:])
-                    })
-        
-        return processes
-    except Exception as e:
-        logger.error(f"Failed to get processes from ps: {e}")
-        return []
-
-
 def format_table_strategies(strategies: List[Dict[str, Any]], source: str) -> str:
     """Format strategies as a table."""
     if not strategies:
@@ -232,18 +202,6 @@ async def main():
                 print(f"\nSupervisor strategies ({len(supervisor_strategies)}):")
                 import json
                 print(json.dumps(supervisor_strategies, indent=2, default=str))
-        
-        if args.source == "all":
-            logger.info("Fetching strategies from system processes...")
-            ps_strategies = get_strategies_from_ps()
-            results["processes"] = ps_strategies
-            
-            if args.format == "table":
-                print(format_table_strategies(ps_strategies, "ps"))
-            else:
-                print(f"\nSystem processes ({len(ps_strategies)}):")
-                import json
-                print(json.dumps(ps_strategies, indent=2, default=str))
         
         # Summary
         print("\n" + "="*100)

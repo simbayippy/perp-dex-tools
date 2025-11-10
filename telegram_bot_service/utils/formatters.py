@@ -359,7 +359,6 @@ class TelegramFormatter:
 /help - Show this help message
 
 <b>📊 Monitoring (Existing Strategies):</b>
-/status - Get strategy status
 /positions [account] - List active positions (optional account filter)
 /close - Close a position (interactive selection)
 

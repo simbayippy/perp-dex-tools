@@ -10,25 +10,7 @@ from telegram_bot_service.utils.api_client import ControlAPIClient
 
 
 class MonitoringHandler(BaseHandler):
-    """Handler for monitoring-related commands (status, positions, close)"""
-    
-    async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /status command."""
-        user, api_key = await self.require_auth(update, context)
-        if not user or not api_key:
-            return
-        
-        try:
-            client = ControlAPIClient(self.config.control_api_base_url, api_key)
-            data = await client.get_status()
-            message = self.formatter.format_status(data)
-            await update.message.reply_text(message, parse_mode='HTML')
-        except Exception as e:
-            self.logger.error(f"Status error: {e}")
-            await update.message.reply_text(
-                self.formatter.format_error(f"Failed to get status: {str(e)}"),
-                parse_mode='HTML'
-            )
+    """Handler for monitoring-related commands (positions, close)"""
     
     async def positions_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /positions command."""
@@ -242,7 +224,7 @@ class MonitoringHandler(BaseHandler):
     
     def register_handlers(self, application):
         """Register monitoring command and callback handlers"""
-        application.add_handler(CommandHandler("status", self.status_command))
+        # Note: /status removed - use /list_strategies instead for strategy status
         application.add_handler(CommandHandler("positions", self.positions_command))
         application.add_handler(CommandHandler("close", self.close_command))
         

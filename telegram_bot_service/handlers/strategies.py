@@ -14,7 +14,7 @@ class StrategyHandler(BaseHandler):
     """Handler for strategy execution commands and callbacks"""
     
     async def list_strategies_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /list_strategies or /status command."""
+        """Handle /list_strategies command."""
         user, _ = await self.require_auth(update, context)
         if not user:
             return

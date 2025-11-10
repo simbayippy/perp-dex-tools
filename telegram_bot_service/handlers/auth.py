@@ -47,7 +47,7 @@ class AuthHandler(BaseHandler):
             if result['success']:
                 await update.message.reply_text(
                     f"✅ {result['message']}\n\n"
-                    "You can now use commands like /positions, /status, etc.",
+                    "You can now use commands like /positions, /list_strategies, etc.",
                     parse_mode='HTML'
                 )
             else:
