@@ -354,8 +354,13 @@ class StrategyHandler(BaseHandler):
                 "SELECT config_name, strategy_type FROM strategy_configs WHERE id = :id",
                 {"id": config_id}
             )
-            config_name = config_row.get('config_name', 'Unknown') if config_row else 'Unknown'
-            strategy_type = config_row.get('strategy_type', 'unknown') if config_row else 'unknown'
+            if config_row:
+                config_name = config_row['config_name']
+                strategy_type = config_row['strategy_type']
+            else:
+                config_name = 'Unknown'
+                strategy_type = 'unknown'
+            
             strategy_type_display = {
                 'funding_arbitrage': 'Funding Arbitrage',
                 'grid': 'Grid'
@@ -371,7 +376,10 @@ class StrategyHandler(BaseHandler):
             )
             
             # Try to get log file from database first
-            log_file = row.get("log_file_path")
+            try:
+                log_file = row["log_file_path"]
+            except (KeyError, TypeError):
+                log_file = None
             
             # If not in DB or file doesn't exist, try to find it by matching UUID prefix
             if not log_file or not Path(log_file).exists():
