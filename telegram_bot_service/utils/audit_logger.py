@@ -4,6 +4,7 @@ Audit Logger Module
 Logs important user actions for compliance and debugging.
 """
 
+import json
 from typing import Dict, Any, Optional
 from datetime import datetime
 from databases import Database
@@ -41,25 +42,28 @@ class AuditLogger:
         """
         query = """
             INSERT INTO audit_log (user_id, action, details, created_at)
-            VALUES (:user_id, :action, :details, :created_at)
+            VALUES (:user_id, :action, CAST(:details AS jsonb), :created_at)
         """
         
         try:
             # Ensure user_id is a string
             user_id_str = str(user_id) if user_id else None
             
+            # Convert details dict to JSON string for JSONB storage
+            details_json = json.dumps(details or {}, default=str)
+            
             await self.database.execute(
                 query,
                 {
                     "user_id": user_id_str,
                     "action": action,
-                    "details": details or {},
+                    "details": details_json,
                     "created_at": datetime.now()
                 }
             )
         except Exception as e:
-            error_msg = "Failed to log audit action: " + str(e)
-            logger.error(error_msg, exc_info=True)
+            # Use % formatting to avoid issues with curly braces in error messages
+            logger.error("Failed to log audit action: %s", str(e), exc_info=True)
     
     async def log_strategy_start(
         self,
