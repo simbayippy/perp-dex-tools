@@ -36,6 +36,15 @@ class WizardRouter(BaseHandler):
             await self.account_handler.handle_edit_account_wizard(update, context, wizard, text)
         elif wizard_type == 'edit_config':
             await self.config_handler.handle_edit_config_wizard(update, context, wizard, text)
+        elif wizard_type == 'create_config_json':
+            step = wizard.get('step', 1)
+            if step == 2:
+                await self.config_handler.handle_create_config_json_name(update, context, wizard, text)
+            else:
+                await self.config_handler.handle_create_config_json(update, context, wizard, text)
+        elif wizard_type.startswith('create_config_'):
+            # Handle funding_arbitrage and grid wizards
+            await self.config_handler.handle_create_config_wizard(update, context, wizard, text)
     
     def register_handlers(self, application):
         """Register wizard message handler"""

@@ -4,10 +4,16 @@ Configuration management handlers for Telegram bot
 
 import json
 import yaml
+from decimal import Decimal
+from datetime import datetime
+from typing import Dict, Any, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
 from telegram_bot_service.handlers.base import BaseHandler
+from strategies.base_schema import ParameterType
+from strategies.implementations.funding_arbitrage.config_builder.schema import get_funding_arb_schema
+from strategies.implementations.grid.config_builder.schema import get_grid_schema
 
 
 class ConfigHandler(BaseHandler):
@@ -319,20 +325,388 @@ class ConfigHandler(BaseHandler):
         callback_data = query.data
         config_type = callback_data.split(":", 1)[1]
         
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
         if config_type == "json":
+            # Start JSON/YAML input wizard
+            context.user_data['wizard'] = {
+                'type': 'create_config_json',
+                'step': 1,
+                'data': {}
+            }
             await query.edit_message_text(
-                "📝 <b>JSON Config Input</b>\n\n"
-                "Send your config as JSON or YAML:\n"
-                "(This feature will be implemented)",
+                "📝 <b>JSON/YAML Config Input</b>\n\n"
+                "Send your config as JSON or YAML.\n\n"
+                "The config should include:\n"
+                "• <code>strategy</code>: strategy type (funding_arbitrage or grid)\n"
+                "• <code>config</code>: configuration object\n\n"
+                "Example:\n"
+                "<code>{\n"
+                '  "strategy": "funding_arbitrage",\n'
+                '  "config": {\n'
+                '    "scan_exchanges": ["lighter", "grvt"],\n'
+                '    "target_exposure": 100\n'
+                "  }\n"
+                "}</code>\n\n"
+                "Or send 'cancel' to cancel.",
                 parse_mode='HTML'
             )
         else:
+            # Start wizard for the selected strategy type
+            schema_map = {
+                'funding_arbitrage': get_funding_arb_schema(),
+                'grid': get_grid_schema()
+            }
+            
+            if config_type not in schema_map:
+                await query.edit_message_text(
+                    f"❌ Unknown strategy type: {config_type}",
+                    parse_mode='HTML'
+                )
+                return
+            
+            schema = schema_map[config_type]
+            
+            # Initialize wizard state
+            # Filter out max_oi_usd from initial params (handled separately)
+            base_params = [p for p in schema.parameters if p.key != "max_oi_usd"]
+            max_oi_param = next((p for p in schema.parameters if p.key == "max_oi_usd"), None)
+            
+            # Store param keys instead of full schema objects (can't pickle)
+            param_keys = [p.key for p in base_params]
+            max_oi_key = max_oi_param.key if max_oi_param else None
+            
+            context.user_data['wizard'] = {
+                'type': f'create_config_{config_type}',
+                'step': 0,  # 0 = config name, then params
+                'data': {
+                    'strategy_type': config_type,
+                    'param_keys': param_keys,
+                    'max_oi_key': max_oi_key,
+                    'config': {},
+                    'current_param_index': 0
+                }
+            }
+            
+            # Start with config name
             await query.edit_message_text(
-                f"📋 <b>Config Wizard: {config_type}</b>\n\n"
-                "(Wizard implementation coming soon)\n"
-                "For now, use JSON input or create configs manually.",
+                f"📋 <b>Config Wizard: {schema.display_name}</b>\n\n"
+                f"{schema.description}\n\n"
+                "Step 1/1: Enter a name for this configuration:\n"
+                "(e.g., 'My Funding Arb Config', 'Grid BTC Strategy')",
                 parse_mode='HTML'
             )
+    
+    def _get_schema(self, strategy_type: str):
+        """Get schema for a strategy type."""
+        schema_map = {
+            'funding_arbitrage': get_funding_arb_schema(),
+            'grid': get_grid_schema()
+        }
+        return schema_map.get(strategy_type)
+    
+    async def handle_create_config_wizard(self, update, context, wizard, text):
+        """Handle create config wizard steps for funding_arbitrage and grid."""
+        wizard_type = wizard['type']
+        data = wizard['data']
+        step = wizard['step']
+        strategy_type = data['strategy_type']
+        
+        # Get schema
+        schema = self._get_schema(strategy_type)
+        if not schema:
+            await update.message.reply_text(
+                f"❌ Unknown strategy type: {strategy_type}",
+                parse_mode='HTML'
+            )
+            context.user_data.pop('wizard', None)
+            return
+        
+        # Reconstruct params from keys
+        param_keys = data.get('param_keys', [])
+        params = [p for p in schema.parameters if p.key in param_keys]
+        max_oi_key = data.get('max_oi_key')
+        max_oi_param = next((p for p in schema.parameters if p.key == max_oi_key), None) if max_oi_key else None
+        
+        # Handle cancellation
+        if text.lower() in ['cancel', '/cancel']:
+            context.user_data.pop('wizard', None)
+            await update.message.reply_text(
+                "❌ Config creation cancelled.",
+                parse_mode='HTML'
+            )
+            return
+        
+        telegram_user_id = update.effective_user.id
+        user = await self.auth.get_user_by_telegram_id(telegram_user_id)
+        
+        try:
+            if step == 0:
+                # Step 0: Get config name
+                config_name = text.strip()
+                if not config_name:
+                    await update.message.reply_text(
+                        "❌ Config name cannot be empty. Please enter a name or 'cancel' to cancel.",
+                        parse_mode='HTML'
+                    )
+                    return
+                
+                # Check if name already exists for this user
+                existing = await self.database.fetch_one(
+                    """
+                    SELECT id FROM strategy_configs
+                    WHERE user_id = :user_id AND config_name = :config_name AND is_template = FALSE
+                    """,
+                    {"user_id": str(user["id"]), "config_name": config_name}
+                )
+                
+                if existing:
+                    await update.message.reply_text(
+                        f"❌ A config named <b>{config_name}</b> already exists.\n"
+                        "Please choose a different name or 'cancel' to cancel.",
+                        parse_mode='HTML'
+                    )
+                    return
+                
+                data['config_name'] = config_name
+                wizard['step'] = 1
+                
+                # Move to first parameter
+                await self._prompt_next_parameter(update, context, wizard, schema, params, max_oi_param)
+            
+            elif step == 1:
+                # Step 1+: Collecting parameters
+                current_index = data['current_param_index']
+                config = data['config']
+                
+                if current_index >= len(params):
+                    # All base params collected, check if we need max_oi_usd
+                    mandatory_exchange = config.get('mandatory_exchange')
+                    
+                    if max_oi_param and mandatory_exchange:
+                        # Need to prompt for max_oi_usd
+                        wizard['step'] = 2
+                        data['current_param_index'] = -1  # Special flag for max_oi
+                        await self._prompt_parameter(update, context, wizard, max_oi_param, schema, params, max_oi_param)
+                    else:
+                        # All done, finalize config
+                        await self._finalize_config(update, context, wizard, user)
+                else:
+                    # Process current parameter
+                    param = params[current_index]
+                    value = await self._process_parameter_input(text, param, config, update)
+                    
+                    if value is None:
+                        # Validation failed, error already sent
+                        return
+                    
+                    # Special handling for certain parameters
+                    if param.key == "mandatory_exchange":
+                        if isinstance(value, str):
+                            value_str = value.strip().lower()
+                            config[param.key] = value_str if value_str and value_str != "none" else None
+                        else:
+                            config[param.key] = None
+                    elif param.key == "min_profit_rate":
+                        # Convert APY to per-interval rate (handled in _process_parameter_input)
+                        config[param.key] = value
+                    else:
+                        config[param.key] = value
+                    
+                    # Move to next parameter
+                    data['current_param_index'] = current_index + 1
+                    await self._prompt_next_parameter(update, context, wizard, schema, params, max_oi_param)
+            
+            elif step == 2:
+                # Step 2: Handling max_oi_usd parameter
+                if max_oi_param:
+                    config = data['config']
+                    value = await self._process_parameter_input(text, max_oi_param, config, update)
+                    if value is None:
+                        return
+                    config[max_oi_param.key] = value
+                
+                # Finalize config
+                await self._finalize_config(update, context, wizard, user)
+        
+        except Exception as e:
+            self.logger.error(f"Error in create config wizard: {e}", exc_info=True)
+            await update.message.reply_text(
+                f"❌ Error: {str(e)}\n\nPlease try again with /create_config",
+                parse_mode='HTML'
+            )
+            context.user_data.pop('wizard', None)
+    
+    async def handle_create_config_json(self, update, context, wizard, text):
+        """Handle JSON/YAML config input."""
+        if text.lower() in ['cancel', '/cancel']:
+            context.user_data.pop('wizard', None)
+            await update.message.reply_text(
+                "❌ Config creation cancelled.",
+                parse_mode='HTML'
+            )
+            return
+        
+        telegram_user_id = update.effective_user.id
+        user = await self.auth.get_user_by_telegram_id(telegram_user_id)
+        
+        try:
+            # Try to parse as YAML first, then JSON
+            try:
+                config_dict = yaml.safe_load(text)
+            except Exception as yaml_error:
+                try:
+                    config_dict = json.loads(text)
+                except Exception as json_error:
+                    await update.message.reply_text(
+                        f"❌ Invalid format. Could not parse as YAML or JSON.\n\n"
+                        f"YAML error: {str(yaml_error)}\n"
+                        f"JSON error: {str(json_error)}\n\n"
+                        "Please check your format and try again, or send 'cancel' to cancel.",
+                        parse_mode='HTML'
+                    )
+                    return
+            
+            # Validate config structure
+            if not isinstance(config_dict, dict):
+                await update.message.reply_text(
+                    "❌ Config must be a dictionary/object.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Extract strategy and config data
+            strategy_type = config_dict.get('strategy')
+            config_data = config_dict.get('config', config_dict)  # Allow both formats
+            
+            if not strategy_type:
+                await update.message.reply_text(
+                    "❌ Missing 'strategy' field. Please specify strategy type (funding_arbitrage or grid).",
+                    parse_mode='HTML'
+                )
+                return
+            
+            if strategy_type not in ['funding_arbitrage', 'grid']:
+                await update.message.reply_text(
+                    f"❌ Invalid strategy type: {strategy_type}. Must be 'funding_arbitrage' or 'grid'.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            if not isinstance(config_data, dict):
+                await update.message.reply_text(
+                    "❌ Config data must be a dictionary/object.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Validate config using schema
+            schema_map = {
+                'funding_arbitrage': get_funding_arb_schema(),
+                'grid': get_grid_schema()
+            }
+            schema = schema_map[strategy_type]
+            
+            # Parse and validate
+            parsed_config = schema.parse_config(config_data)
+            is_valid, errors = schema.validate_config(parsed_config)
+            
+            if not is_valid:
+                error_msg = "\n".join(f"• {e}" for e in errors[:5])
+                if len(errors) > 5:
+                    error_msg += f"\n... and {len(errors) - 5} more errors"
+                await update.message.reply_text(
+                    f"❌ Config validation failed:\n\n{error_msg}\n\n"
+                    "Please fix the errors and try again, or send 'cancel' to cancel.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Get config name (prompt if not provided)
+            config_name = config_dict.get('config_name')
+            if not config_name:
+                # Ask for config name
+                wizard['step'] = 2
+                wizard['data'] = {
+                    'strategy_type': strategy_type,
+                    'config_data': parsed_config
+                }
+                await update.message.reply_text(
+                    "✅ Config parsed successfully!\n\n"
+                    "Enter a name for this configuration:\n"
+                    "(e.g., 'My Funding Arb Config', 'Grid BTC Strategy')",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Save config
+            await self._save_config_to_db(user, config_name, strategy_type, parsed_config)
+            
+            context.user_data.pop('wizard', None)
+            await update.message.reply_text(
+                f"✅ Config <b>{config_name}</b> created successfully!",
+                parse_mode='HTML'
+            )
+        
+        except Exception as e:
+            self.logger.error(f"Error creating config from JSON: {e}", exc_info=True)
+            await update.message.reply_text(
+                f"❌ Error creating config: {str(e)}\n\nPlease try again or send 'cancel' to cancel.",
+                parse_mode='HTML'
+            )
+    
+    async def handle_create_config_json_name(self, update, context, wizard, text):
+        """Handle config name input for JSON config."""
+        if text.lower() in ['cancel', '/cancel']:
+            context.user_data.pop('wizard', None)
+            await update.message.reply_text(
+                "❌ Config creation cancelled.",
+                parse_mode='HTML'
+            )
+            return
+        
+        telegram_user_id = update.effective_user.id
+        user = await self.auth.get_user_by_telegram_id(telegram_user_id)
+        
+        config_name = text.strip()
+        if not config_name:
+            await update.message.reply_text(
+                "❌ Config name cannot be empty. Please enter a name or 'cancel' to cancel.",
+                parse_mode='HTML'
+            )
+            return
+        
+        data = wizard['data']
+        strategy_type = data['strategy_type']
+        config_data = data['config_data']
+        
+        # Check if name already exists
+        existing = await self.database.fetch_one(
+            """
+            SELECT id FROM strategy_configs
+            WHERE user_id = :user_id AND config_name = :config_name AND is_template = FALSE
+            """,
+            {"user_id": str(user["id"]), "config_name": config_name}
+        )
+        
+        if existing:
+            await update.message.reply_text(
+                f"❌ A config named <b>{config_name}</b> already exists.\n"
+                "Please choose a different name or 'cancel' to cancel.",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Save config
+        await self._save_config_to_db(user, config_name, strategy_type, config_data)
+        
+        context.user_data.pop('wizard', None)
+        await update.message.reply_text(
+            f"✅ Config <b>{config_name}</b> created successfully!",
+            parse_mode='HTML'
+        )
     
     async def handle_edit_config_wizard(self, update, context, wizard, text):
         """Handle edit config wizard steps."""
@@ -406,6 +780,344 @@ class ConfigHandler(BaseHandler):
                 parse_mode='HTML'
             )
     
+    # Helper methods for wizard
+    
+    async def _prompt_next_parameter(self, update, context, wizard, schema, params, max_oi_param):
+        """Prompt for the next parameter in the wizard."""
+        data = wizard['data']
+        current_index = data['current_param_index']
+        config = data['config']
+        
+        if current_index >= len(params):
+            # Check if we need max_oi_usd
+            mandatory_exchange = config.get('mandatory_exchange')
+            
+            if max_oi_param and mandatory_exchange:
+                wizard['step'] = 2
+                data['current_param_index'] = -1
+                await self._prompt_parameter(update, context, wizard, max_oi_param, schema, params, max_oi_param)
+            else:
+                await self._finalize_config(update, context, wizard, None)
+            return
+        
+        param = params[current_index]
+        await self._prompt_parameter(update, context, wizard, param, schema, params, max_oi_param)
+    
+    async def _prompt_parameter_message(self, message, context, wizard, param, schema, params, max_oi_param):
+        """Prompt user for a parameter value using a Message object."""
+        data = wizard['data']
+        current_index = data['current_param_index']
+        total_params = len(params) + (1 if max_oi_param and data['config'].get('mandatory_exchange') else 0)
+        
+        # Calculate step number (1 for name, then params)
+        step_num = current_index + 2 if current_index >= 0 else total_params + 1
+        
+        prompt_text = f"<b>Step {step_num}/{total_params + 1}: {param.prompt}</b>\n\n"
+        
+        if param.help_text:
+            prompt_text += f"ℹ️ {param.help_text}\n\n"
+        
+        if param.show_default_in_prompt and param.default is not None:
+            default_str = self._format_value_display(param.default)
+            prompt_text += f"Default: <code>{default_str}</code>\n\n"
+        
+        # Handle different parameter types
+        if param.param_type == ParameterType.CHOICE:
+            keyboard = []
+            choices = param.choices or []
+            for choice in choices:
+                keyboard.append([InlineKeyboardButton(
+                    choice.upper() if choice == param.default else choice,
+                    callback_data=f"wizard_param:{param.key}:{choice}"
+                )])
+            keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="wizard_cancel")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await message.reply_text(
+                prompt_text + "Select an option:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+        
+        elif param.param_type == ParameterType.MULTI_CHOICE:
+            # For multi-choice, we'll use text input with comma-separated values
+            choices_str = ", ".join(param.choices or [])
+            prompt_text += f"Available options: <code>{choices_str}</code>\n"
+            prompt_text += "Enter comma-separated values (e.g., lighter,grvt,backpack):"
+            
+            await message.reply_text(
+                prompt_text,
+                parse_mode='HTML'
+            )
+        
+        elif param.param_type == ParameterType.BOOLEAN:
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Yes", callback_data=f"wizard_param:{param.key}:true"),
+                    InlineKeyboardButton("❌ No", callback_data=f"wizard_param:{param.key}:false")
+                ],
+                [InlineKeyboardButton("❌ Cancel", callback_data="wizard_cancel")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await message.reply_text(
+                prompt_text + "Select:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+        
+        else:
+            # Text, Integer, Decimal
+            prompt_text += "Enter value:"
+            if param.param_type == ParameterType.DECIMAL:
+                prompt_text += "\n(Enter a number, e.g., 100.5)"
+            elif param.param_type == ParameterType.INTEGER:
+                prompt_text += "\n(Enter a whole number, e.g., 5)"
+            
+            await message.reply_text(
+                prompt_text,
+                parse_mode='HTML'
+            )
+    
+    async def _prompt_parameter(self, update, context, wizard, param, schema, params, max_oi_param):
+        """Prompt user for a parameter value."""
+        await self._prompt_parameter_message(update.message, context, wizard, param, schema, params, max_oi_param)
+    
+    async def _process_parameter_input(self, text: str, param, config: Dict, update=None) -> Optional[Any]:
+        """Process and validate parameter input."""
+        # Handle special cases
+        if param.param_type == ParameterType.MULTI_CHOICE:
+            # Parse comma-separated values
+            values = [v.strip() for v in text.split(',')]
+            # Validate
+            is_valid, error_msg = param.validate(values)
+            if not is_valid:
+                if update:
+                    await update.message.reply_text(
+                        f"❌ {error_msg}\n\nPlease try again or send 'cancel' to cancel.",
+                        parse_mode='HTML'
+                    )
+                return None
+            return param.parse_value(values)
+        
+        # Validate
+        is_valid, error_msg = param.validate(text)
+        if not is_valid:
+            if update:
+                await update.message.reply_text(
+                    f"❌ {error_msg}\n\nPlease try again or send 'cancel' to cancel.",
+                    parse_mode='HTML'
+                )
+            return None
+        
+        # Parse value
+        parsed = param.parse_value(text)
+        
+        # Special handling for min_profit_rate (convert APY to per-interval)
+        if param.key == "min_profit_rate" and isinstance(parsed, Decimal):
+            from trading_config.config_builder import FUNDING_PAYMENTS_PER_YEAR
+            apy = parsed
+            per_interval = apy / FUNDING_PAYMENTS_PER_YEAR
+            return per_interval
+        
+        return parsed
+    
+    def _format_value_display(self, value: Any) -> str:
+        """Format a value for display."""
+        if isinstance(value, list):
+            return ", ".join(str(v) for v in value)
+        elif isinstance(value, bool):
+            return "Yes" if value else "No"
+        elif isinstance(value, Decimal):
+            return str(value)
+        else:
+            return str(value)
+    
+    async def _finalize_config(self, update, context, wizard, user):
+        """Finalize and save the config."""
+        if user is None:
+            telegram_user_id = update.effective_user.id
+            user = await self.auth.get_user_by_telegram_id(telegram_user_id)
+        
+        data = wizard['data']
+        config_name = data['config_name']
+        strategy_type = data['strategy_type']
+        config = data['config']
+        
+        # Post-process config (similar to config_builder.py)
+        scan_list = config.get("scan_exchanges") or []
+        mandatory_exchange = config.get("mandatory_exchange")
+        if mandatory_exchange:
+            if mandatory_exchange not in scan_list:
+                scan_list.append(mandatory_exchange)
+            ordered_unique = list(dict.fromkeys(scan_list))
+            config["scan_exchanges"] = [ex.lower() for ex in ordered_unique]
+        elif scan_list:
+            config["scan_exchanges"] = [ex.lower() for ex in scan_list]
+        
+        # Ensure max_oi_usd is set
+        if "max_oi_usd" not in config:
+            config["max_oi_usd"] = None
+        
+        # Save to database
+        await self._save_config_to_db(user, config_name, strategy_type, config)
+        
+        context.user_data.pop('wizard', None)
+        
+        await update.message.reply_text(
+            f"✅ Configuration <b>{config_name}</b> created successfully!\n\n"
+            f"Strategy: <b>{strategy_type}</b>\n"
+            f"You can now use this config when starting a strategy with /start_strategy",
+            parse_mode='HTML'
+        )
+    
+    async def _save_config_to_db(self, user, config_name: str, strategy_type: str, config_data: Dict):
+        """Save config to database."""
+        # Convert Decimal to float for JSON serialization
+        def decimal_to_float(obj):
+            if isinstance(obj, Decimal):
+                return float(obj)
+            elif isinstance(obj, dict):
+                return {k: decimal_to_float(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [decimal_to_float(item) for item in obj]
+            return obj
+        
+        config_json = json.dumps(decimal_to_float(config_data))
+        
+        await self.database.execute(
+            """
+            INSERT INTO strategy_configs (user_id, config_name, strategy_type, config_data)
+            VALUES (:user_id, :config_name, :strategy_type, CAST(:config_data AS jsonb))
+            """,
+            {
+                "user_id": str(user["id"]),
+                "config_name": config_name,
+                "strategy_type": strategy_type,
+                "config_data": config_json
+            }
+        )
+        
+        await self.audit_logger.log_action(
+            str(user["id"]),
+            "create_config",
+            {"config_name": config_name, "strategy_type": strategy_type}
+        )
+    
+    async def handle_wizard_param_callback(self, update, context):
+        """Handle parameter selection from inline keyboard."""
+        query = update.callback_query
+        await query.answer()
+        
+        callback_data = query.data
+        if callback_data == "wizard_cancel":
+            context.user_data.pop('wizard', None)
+            await query.edit_message_text(
+                "❌ Config creation cancelled.",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Parse callback: wizard_param:param_key:value
+        parts = callback_data.split(":", 2)
+        if len(parts) != 3:
+            await query.answer("Invalid callback", show_alert=True)
+            return
+        
+        param_key = parts[1]
+        param_value = parts[2]
+        
+        wizard = context.user_data.get('wizard')
+        if not wizard:
+            await query.answer("Wizard session expired", show_alert=True)
+            return
+        
+        wizard_type = wizard['type']
+        if not wizard_type.startswith('create_config_') or wizard_type == 'create_config_json':
+            await query.answer("Invalid wizard type", show_alert=True)
+            return
+        
+        data = wizard['data']
+        strategy_type = data['strategy_type']
+        
+        # Get schema
+        schema = self._get_schema(strategy_type)
+        if not schema:
+            await query.answer("Invalid strategy type", show_alert=True)
+            return
+        
+        # Reconstruct params
+        param_keys = data.get('param_keys', [])
+        params = [p for p in schema.parameters if p.key in param_keys]
+        max_oi_key = data.get('max_oi_key')
+        max_oi_param = next((p for p in schema.parameters if p.key == max_oi_key), None) if max_oi_key else None
+        
+        current_index = data['current_param_index']
+        
+        # Check if this is max_oi_param
+        if current_index == -1 and max_oi_param and max_oi_param.key == param_key:
+            param = max_oi_param
+        elif current_index >= len(params):
+            await query.answer("Invalid step", show_alert=True)
+            return
+        else:
+            param = params[current_index]
+            if param.key != param_key:
+                await query.answer("Parameter mismatch", show_alert=True)
+                return
+        
+        # Process the value
+        config = data['config']
+        value = param.parse_value(param_value)
+        
+        # Special handling
+        if param.key == "mandatory_exchange":
+            if isinstance(value, str):
+                value_str = value.strip().lower()
+                config[param.key] = value_str if value_str and value_str != "none" else None
+            else:
+                config[param.key] = None
+        else:
+            config[param.key] = value
+        
+        # Move to next parameter
+        if current_index == -1:
+            # Was max_oi_param, finalize
+            await query.edit_message_text(
+                f"✅ {param.prompt}: <b>{self._format_value_display(value)}</b>",
+                parse_mode='HTML'
+            )
+            # Send finalization message
+            await query.message.reply_text(
+                "⏳ Finalizing configuration...",
+                parse_mode='HTML'
+            )
+            await self._finalize_config(update, context, wizard, None)
+        else:
+            data['current_param_index'] = current_index + 1
+            
+            # Update message to show selection
+            await query.edit_message_text(
+                f"✅ {param.prompt}: <b>{self._format_value_display(value)}</b>",
+                parse_mode='HTML'
+            )
+            
+            # Prompt next parameter using message directly
+            # We need to get the current param to prompt
+            if current_index + 1 < len(params):
+                next_param = params[current_index + 1]
+                await self._prompt_parameter_message(query.message, context, wizard, next_param, schema, params, max_oi_param)
+            else:
+                # Check if we need max_oi
+                config = data['config']
+                mandatory_exchange = config.get('mandatory_exchange')
+                if max_oi_param and mandatory_exchange:
+                    wizard['step'] = 2
+                    data['current_param_index'] = -1
+                    await self._prompt_parameter_message(query.message, context, wizard, max_oi_param, schema, params, max_oi_param)
+                else:
+                    await self._finalize_config(update, context, wizard, None)
+    
     def register_handlers(self, application):
         """Register config management command and callback handlers"""
         # Commands
@@ -432,5 +1144,9 @@ class ConfigHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.config_type_callback,
             pattern="^config_type:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.handle_wizard_param_callback,
+            pattern="^wizard_param:|^wizard_cancel"
         ))
 
