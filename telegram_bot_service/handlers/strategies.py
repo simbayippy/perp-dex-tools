@@ -325,54 +325,189 @@ class StrategyHandler(BaseHandler):
         )
     
     async def stop_strategy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /stop or /stop_strategy command."""
+        """Handle /stop_strategy command - shows interactive list of running strategies."""
         user, _ = await self.require_auth(update, context)
         if not user:
             return
         
-        if not context.args or len(context.args) < 1:
+        try:
+            # Get user's running strategies (admins see all)
+            is_admin = user.get("is_admin", False)
+            user_id = None if is_admin else user["id"]
+            
+            # Query strategies with config info
+            if user_id:
+                query = """
+                    SELECT 
+                        sr.id, sr.user_id, sr.account_id, sr.config_id,
+                        sr.supervisor_program_name, sr.status, sr.control_api_port,
+                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
+                        sc.config_name, sc.strategy_type
+                    FROM strategy_runs sr
+                    JOIN strategy_configs sc ON sr.config_id = sc.id
+                    WHERE sr.user_id = :user_id 
+                    AND sr.status IN ('starting', 'running', 'paused')
+                    ORDER BY sr.started_at DESC
+                """
+                strategies = await self.database.fetch_all(query, {"user_id": user_id})
+            else:
+                query = """
+                    SELECT 
+                        sr.id, sr.user_id, sr.account_id, sr.config_id,
+                        sr.supervisor_program_name, sr.status, sr.control_api_port,
+                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
+                        sc.config_name, sc.strategy_type
+                    FROM strategy_runs sr
+                    JOIN strategy_configs sc ON sr.config_id = sc.id
+                    WHERE sr.status IN ('starting', 'running', 'paused')
+                    ORDER BY sr.started_at DESC
+                """
+                strategies = await self.database.fetch_all(query)
+            
+            strategies = [dict(row) for row in strategies]
+            
+            if not strategies:
+                await update.message.reply_text(
+                    "🛑 <b>No Running Strategies</b>\n\n"
+                    "No strategies are currently running.\n"
+                    "Start a strategy with /run",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Create strategy selection keyboard
+            keyboard = []
+            for strat in strategies:
+                run_id = str(strat['id'])
+                run_id_short = run_id[:8]
+                config_name = strat.get('config_name', 'Unknown')
+                strategy_type = strat.get('strategy_type', 'unknown')
+                
+                # Format strategy type for display
+                strategy_type_display = {
+                    'funding_arbitrage': 'Funding Arb',
+                    'grid': 'Grid'
+                }.get(strategy_type, strategy_type.title())
+                
+                status_emoji = {
+                    'running': '🟢',
+                    'starting': '🟡',
+                    'paused': '⏸'
+                }.get(strat['status'], '⚪')
+                
+                # Button label: "🟢 e9680e47 - Funding Arb"
+                button_label = f"{status_emoji} {run_id_short} - {strategy_type_display}"
+                keyboard.append([InlineKeyboardButton(
+                    button_label,
+                    callback_data=f"stop_strategy:{run_id}"
+                )])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            title = "🛑 <b>Stop Strategy</b>"
             await update.message.reply_text(
-                "❌ Usage: /stop &lt;run_id&gt;\n\n"
-                "Get run_id from /list_strategies",
+                f"{title}\n\n"
+                "Select a strategy to stop:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Stop strategy command error: {e}")
+            await update.message.reply_text(
+                f"❌ Failed to load strategies: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def stop_strategy_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle callback for stopping a strategy."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        # Parse callback data: "stop_strategy:{run_id}"
+        callback_data = query.data
+        if not callback_data.startswith("stop_strategy:"):
+            await query.edit_message_text(
+                "❌ Invalid selection. Please use /stop_strategy again.",
                 parse_mode='HTML'
             )
             return
         
-        run_id = context.args[0]
+        run_id = callback_data.split(":", 1)[1]
         
         try:
-            # Verify ownership
-            query = """
-                SELECT id FROM strategy_runs
-                WHERE id = :run_id AND user_id = :user_id
-            """
-            row = await self.database.fetch_one(query, {"run_id": run_id, "user_id": user["id"]})
+            # Verify ownership (security check)
+            is_admin = user.get("is_admin", False)
+            if is_admin:
+                # Admins can stop any strategy
+                verify_query = """
+                    SELECT id, status FROM strategy_runs
+                    WHERE id = :run_id
+                """
+                row = await self.database.fetch_one(
+                    verify_query,
+                    {"run_id": run_id}
+                )
+            else:
+                # Regular users can only stop their own strategies
+                verify_query = """
+                    SELECT id, status FROM strategy_runs
+                    WHERE id = :run_id AND user_id = :user_id
+                """
+                row = await self.database.fetch_one(
+                    verify_query,
+                    {"run_id": run_id, "user_id": user["id"]}
+                )
             
             if not row:
-                await update.message.reply_text(
-                    "❌ Strategy not found or you don't have permission",
+                await query.edit_message_text(
+                    "❌ Strategy not found or you don't have permission to stop it",
                     parse_mode='HTML'
                 )
                 return
+            
+            current_status = row['status']
+            if current_status in ('stopped', 'error'):
+                await query.edit_message_text(
+                    f"ℹ️ Strategy is already stopped (status: {current_status})",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Show loading message
+            run_id_short = run_id[:8]
+            await query.edit_message_text(
+                f"⏳ <b>Stopping strategy...</b>\n\n"
+                f"Run ID: <code>{run_id_short}</code>",
+                parse_mode='HTML'
+            )
             
             # Stop strategy
             success = await self.process_manager.stop_strategy(run_id)
             
             if success:
                 await self.audit_logger.log_strategy_stop(str(user["id"]), run_id)
-                await update.message.reply_text(
-                    f"✅ Strategy stopped: {run_id[:8]}",
+                await query.edit_message_text(
+                    f"✅ <b>Strategy Stopped</b>\n\n"
+                    f"Run ID: <code>{run_id_short}</code>\n"
+                    f"Status: stopped",
                     parse_mode='HTML'
                 )
             else:
-                await update.message.reply_text(
-                    f"❌ Failed to stop strategy: {run_id[:8]}",
+                await query.edit_message_text(
+                    f"❌ <b>Failed to Stop Strategy</b>\n\n"
+                    f"Run ID: <code>{run_id_short}</code>\n"
+                    f"Please try again or check logs.",
                     parse_mode='HTML'
                 )
                 
         except Exception as e:
-            self.logger.error(f"Stop strategy error: {e}")
-            await update.message.reply_text(
+            self.logger.error(f"Stop strategy callback error: {e}", exc_info=True)
+            await query.edit_message_text(
                 f"❌ Error stopping strategy: {str(e)}",
                 parse_mode='HTML'
             )
@@ -993,7 +1128,6 @@ class StrategyHandler(BaseHandler):
         # Commands
         application.add_handler(CommandHandler("run", self.run_strategy_command))
         application.add_handler(CommandHandler("list_strategies", self.list_strategies_command))
-        application.add_handler(CommandHandler("stop", self.stop_strategy_command))
         application.add_handler(CommandHandler("stop_strategy", self.stop_strategy_command))
         application.add_handler(CommandHandler("logs", self.logs_command))
         application.add_handler(CommandHandler("limits", self.limits_command))
@@ -1026,5 +1160,9 @@ class StrategyHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.back_to_logs_filters_callback,
             pattern="^back_to_logs_filters$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.stop_strategy_callback,
+            pattern="^stop_strategy:"
         ))
 

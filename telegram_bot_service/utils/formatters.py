@@ -354,29 +354,29 @@ class TelegramFormatter:
 
 <b>🔐 Authentication:</b>
 /start - Start bot and show instructions
-/auth &lt;api_key&gt; - Authenticate with API key
+/auth - Authenticate with API key
 /logout - Unlink Telegram account
 /help - Show this help message
 
 <b>📊 Monitoring (Existing Strategies):</b>
 /positions [account] - List active positions (optional account filter)
-/close - Close a position (interactive selection)
+/close - Close a position 
 
 <b>👤 Account Management:</b>
-/quick_start or /create_account - Create new account (wizard)
-/list_accounts - List your accounts (with edit/delete options)
-/add_exchange - Add exchange credentials (interactive)
-/add_proxy - Add proxy to account (interactive)
+/create_account - Create new account 
+/list_accounts - List your accounts 
+/add_exchange - Add exchange credentials 
+/add_proxy - Add proxy to account 
 
 <b>⚙️ Config Management:</b>
-/create_config or /new_config - Create strategy config (wizard or JSON)
-/list_configs or /my_configs - List your configs (with edit/delete options)
+/create_config - Create strategy config 
+/list_configs - List your configs 
 
 <b>🚀 Strategy Execution:</b>
 /run - Start new strategy
 /list_strategies - List running strategies
-/stop or /stop_strategy &lt;run_id&gt; - Stop running strategy
-/logs - View strategy logs (interactive selection)
+/stop_strategy - Stop running strategy
+/logs - View strategy logs 
 /limits - Check usage limits and quotas
 """
     

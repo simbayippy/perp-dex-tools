@@ -44,6 +44,13 @@ class AuthHandler(BaseHandler):
         try:
             result = await self.auth.authenticate_with_api_key(api_key, telegram_user_id)
             
+            # Delete the user's message containing the API key for security
+            # Do this after authentication attempt to ensure we have the data
+            try:
+                await update.message.delete()
+            except Exception as e:
+                self.logger.warning(f"Failed to delete API key message: {e}")
+            
             if result['success']:
                 await update.message.reply_text(
                     f"✅ {result['message']}\n\n"
@@ -57,6 +64,12 @@ class AuthHandler(BaseHandler):
                 )
         except Exception as e:
             self.logger.error(f"Auth error: {e}")
+            # Still try to delete the message even if auth failed
+            try:
+                await update.message.delete()
+            except Exception as delete_error:
+                self.logger.warning(f"Failed to delete API key message after error: {delete_error}")
+            
             await update.message.reply_text(
                 f"❌ Authentication failed: {str(e)}",
                 parse_mode='HTML'

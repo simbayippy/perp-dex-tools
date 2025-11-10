@@ -14,7 +14,7 @@ class ConfigHandler(BaseHandler):
     """Handler for configuration management commands, callbacks, and wizards"""
     
     async def list_configs_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /list_configs or /my_configs command."""
+        """Handle /list_configs command."""
         user, _ = await self.require_auth(update, context)
         if not user:
             return
@@ -87,7 +87,7 @@ class ConfigHandler(BaseHandler):
             )
     
     async def create_config_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /create_config or /new_config command."""
+        """Handle /create_config command."""
         user, _ = await self.require_auth(update, context)
         if not user:
             return
@@ -410,9 +410,7 @@ class ConfigHandler(BaseHandler):
         """Register config management command and callback handlers"""
         # Commands
         application.add_handler(CommandHandler("list_configs", self.list_configs_command))
-        application.add_handler(CommandHandler("my_configs", self.list_configs_command))
         application.add_handler(CommandHandler("create_config", self.create_config_command))
-        application.add_handler(CommandHandler("new_config", self.create_config_command))
         
         # Callbacks
         application.add_handler(CallbackQueryHandler(

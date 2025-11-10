@@ -1503,7 +1503,6 @@ class AccountHandler(BaseHandler):
         # Commands
         application.add_handler(CommandHandler("list_accounts", self.list_accounts_command))
         application.add_handler(CommandHandler("create_account", self.create_account_command))
-        application.add_handler(CommandHandler("quick_start", self.create_account_command))
         application.add_handler(CommandHandler("add_exchange", self.add_exchange_command))
         application.add_handler(CommandHandler("add_proxy", self.add_proxy_command))
         
