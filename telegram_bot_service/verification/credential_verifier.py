@@ -52,11 +52,20 @@ class CredentialVerifier:
         if missing_fields:
             return False, f"Missing required fields: {', '.join(missing_fields)}"
         
-        # Create minimal config for testing
-        test_config = {
-            'ticker': 'BTC',  # Dummy ticker for testing
-            'exchange': exchange_name
-        }
+        # Create minimal config object for testing
+        # Exchange clients expect config.ticker (attribute access), not config['ticker']
+        from types import SimpleNamespace
+        test_config = SimpleNamespace(
+            ticker='BTC',  # Dummy ticker for testing
+            exchange=exchange_name,
+            quantity=None,
+            contract_id=None,
+            tick_size=None,
+            strategy=None,
+            order_notional_usd=None,
+            target_leverage=None,
+            strategy_params={}
+        )
         
         try:
             # Create exchange client with test credentials

@@ -861,8 +861,8 @@ class AccountHandler(BaseHandler):
                     'lighter': {
                         'fields': [
                             ('private_key', 'Enter your private key (0x...):'),
-                            ('account_index', 'Enter account index (usually 0):'),
-                            ('api_key_index', 'Enter API key index (usually 0):')
+                            ('account_index', 'Enter account index:'),
+                            ('api_key_index', 'Enter API key index:')
                         ]
                     },
                     'aster': {
