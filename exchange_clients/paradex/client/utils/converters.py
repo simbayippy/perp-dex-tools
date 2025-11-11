@@ -68,8 +68,18 @@ def build_order_info_from_paradex(order_data: Dict[str, Any], order_id: Optional
             else:
                 status = 'CANCELED'
         
-        # Extract cancel reason if available
-        cancel_reason = str(order_data.get('cancel_reason', ''))
+        # Extract cancel reason if available and normalize to standard format
+        cancel_reason_raw = str(order_data.get('cancel_reason', '')).upper()
+        cancel_reason = ""
+        
+        # Normalize Paradex cancel reasons to standard CancelReason values
+        if cancel_reason_raw in ("POST_ONLY_WOULD_CROSS", "POST_ONLY"):
+            # Paradex uses POST_ONLY_WOULD_CROSS, normalize to our standard
+            from exchange_clients.base_models import CancelReason
+            cancel_reason = CancelReason.POST_ONLY_VIOLATION
+        elif cancel_reason_raw:
+            # Pass through other cancel reasons as-is (lowercase for consistency)
+            cancel_reason = cancel_reason_raw.lower()
         
         return OrderInfo(
             order_id=str(order_id),
