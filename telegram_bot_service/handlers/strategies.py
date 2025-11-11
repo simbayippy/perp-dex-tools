@@ -1113,6 +1113,9 @@ class StrategyHandler(BaseHandler):
                 )
                 return
             
+            # Convert Row to dict for safe access
+            strategy_dict = dict(strategy_row)
+            
             # Check permissions (user can only view their own strategies unless admin)
             is_admin = user.get("is_admin", False)
             if not is_admin:
@@ -1127,12 +1130,13 @@ class StrategyHandler(BaseHandler):
                     )
                     return
             
-            config_data_raw = strategy_row['config_data']
-            config_name = strategy_row['config_name'] or 'Unknown'
-            strategy_type = strategy_row['strategy_type'] or 'Unknown'
-            account_name = strategy_row['account_name'] or 'Unknown'
-            status = strategy_row['status']
-            supervisor_name = strategy_row.get('supervisor_program_name', '')
+            config_data_raw = strategy_dict.get('config_data')
+            config_name = strategy_dict.get('config_name') or 'Unknown'
+            strategy_type = strategy_dict.get('strategy_type') or 'Unknown'
+            account_name = strategy_dict.get('account_name') or 'Unknown'
+            status = strategy_dict.get('status')
+            supervisor_name = strategy_dict.get('supervisor_program_name', '')
+            config_user_id = strategy_dict.get('config_user_id')
             run_id_short = run_id[:8]
             
             # Get config file path (where supervisor reads it from)
@@ -1208,7 +1212,6 @@ class StrategyHandler(BaseHandler):
             keyboard = []
             
             # Add Edit Config button if user owns the config
-            config_user_id = strategy_row.get('config_user_id')
             if config_user_id and str(config_user_id) == str(user["id"]):
                 keyboard.append([
                     InlineKeyboardButton(
@@ -1216,6 +1219,14 @@ class StrategyHandler(BaseHandler):
                         callback_data=f"edit_strategy_config:{run_id}"
                     )
                 ])
+            
+            # Add Delete Strategy button
+            keyboard.append([
+                InlineKeyboardButton(
+                    "🗑️ Delete Strategy",
+                    callback_data=f"delete_strategy:{run_id}"
+                )
+            ])
             
             keyboard.append([
                 InlineKeyboardButton("⬅️ Back to Strategies", callback_data="back_to_strategies_filters")
@@ -1274,8 +1285,11 @@ class StrategyHandler(BaseHandler):
                 )
                 return
             
-            config_id = strategy_row['config_id']
-            config_user_id = strategy_row.get('config_user_id')
+            # Convert Row to dict
+            strategy_dict = dict(strategy_row)
+            
+            config_id = strategy_dict.get('config_id')
+            config_user_id = strategy_dict.get('config_user_id')
             
             # Check permissions
             if not config_user_id or str(config_user_id) != str(user["id"]):
@@ -1317,6 +1331,243 @@ class StrategyHandler(BaseHandler):
             self.logger.error(f"Edit strategy config error: {e}", exc_info=True)
             await query.edit_message_text(
                 f"❌ Failed to edit config: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def delete_strategy_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle delete strategy button click - show confirmation."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        callback_data = query.data
+        if not callback_data.startswith("delete_strategy:"):
+            await query.edit_message_text(
+                "❌ Invalid selection.",
+                parse_mode='HTML'
+            )
+            return
+        
+        run_id = callback_data.split(":", 1)[1]
+        
+        try:
+            # Get strategy details
+            strategy_row = await self.database.fetch_one(
+                """
+                SELECT sr.id, sr.status, sr.supervisor_program_name,
+                       sc.config_name, a.account_name
+                FROM strategy_runs sr
+                LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
+                LEFT JOIN accounts a ON sr.account_id = a.id
+                WHERE sr.id = :run_id
+                """,
+                {"run_id": run_id}
+            )
+            
+            if not strategy_row:
+                await query.edit_message_text(
+                    "❌ Strategy not found",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Convert Row to dict
+            strategy_dict = dict(strategy_row)
+            
+            # Check permissions (user can only delete their own strategies unless admin)
+            is_admin = user.get("is_admin", False)
+            if not is_admin:
+                user_strategy = await self.database.fetch_one(
+                    "SELECT user_id FROM strategy_runs WHERE id = :run_id",
+                    {"run_id": run_id}
+                )
+                if not user_strategy or str(user_strategy["user_id"]) != str(user["id"]):
+                    await query.edit_message_text(
+                        "❌ You don't have permission to delete this strategy.",
+                        parse_mode='HTML'
+                    )
+                    return
+            
+            status = strategy_dict.get('status')
+            config_name = strategy_dict.get('config_name') or 'Unknown'
+            account_name = strategy_dict.get('account_name') or 'Unknown'
+            supervisor_name = strategy_dict.get('supervisor_program_name')
+            run_id_short = run_id[:8]
+            
+            # Check if strategy is running
+            if status in ('running', 'starting', 'paused'):
+                await query.edit_message_text(
+                    f"⚠️ <b>Cannot Delete Running Strategy</b>\n\n"
+                    f"Strategy <b>{run_id_short}</b> is currently {status}.\n"
+                    f"Please stop the strategy first before deleting.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Show confirmation
+            keyboard = [
+                [
+                    InlineKeyboardButton(
+                        "✅ Yes, Delete",
+                        callback_data=f"delete_strategy_confirm:{run_id}"
+                    ),
+                    InlineKeyboardButton(
+                        "❌ Cancel",
+                        callback_data=f"view_strategy_config:{run_id}"
+                    )
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            message = (
+                f"⚠️ <b>Delete Strategy?</b>\n\n"
+                f"<b>Run ID:</b> {run_id_short}\n"
+                f"<b>Status:</b> {status}\n"
+                f"<b>Config:</b> {config_name}\n"
+                f"<b>Account:</b> {account_name}\n\n"
+                f"This will permanently delete this strategy run.\n\n"
+                f"<b>This action cannot be undone!</b>\n\n"
+                f"Are you sure you want to delete this strategy?"
+            )
+            
+            await query.edit_message_text(
+                message,
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Delete strategy callback error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Error: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def delete_strategy_confirm_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle strategy deletion confirmation."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        callback_data = query.data
+        if not callback_data.startswith("delete_strategy_confirm:"):
+            await query.edit_message_text(
+                "❌ Invalid selection.",
+                parse_mode='HTML'
+            )
+            return
+        
+        run_id = callback_data.split(":", 1)[1]
+        
+        try:
+            # Check permissions again
+            is_admin = user.get("is_admin", False)
+            if not is_admin:
+                user_strategy = await self.database.fetch_one(
+                    "SELECT user_id FROM strategy_runs WHERE id = :run_id",
+                    {"run_id": run_id}
+                )
+                if not user_strategy or str(user_strategy["user_id"]) != str(user["id"]):
+                    await query.edit_message_text(
+                        "❌ You don't have permission to delete this strategy.",
+                        parse_mode='HTML'
+                    )
+                    return
+            
+            # Get strategy details before deletion
+            strategy_row = await self.database.fetch_one(
+                """
+                SELECT supervisor_program_name, status
+                FROM strategy_runs
+                WHERE id = :run_id
+                """,
+                {"run_id": run_id}
+            )
+            
+            if not strategy_row:
+                await query.edit_message_text(
+                    "❌ Strategy not found",
+                    parse_mode='HTML'
+                )
+                return
+            
+            strategy_dict = dict(strategy_row)
+            supervisor_name = strategy_dict.get('supervisor_program_name')
+            status = strategy_dict.get('status')
+            
+            # Ensure strategy is stopped
+            if status in ('running', 'starting', 'paused'):
+                # Try to stop via supervisor first
+                if supervisor_name:
+                    try:
+                        supervisor = self.process_manager._get_supervisor_client()
+                        supervisor.supervisor.stopProcess(supervisor_name)
+                        self.logger.info(f"Stopped supervisor process: {supervisor_name}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to stop supervisor process: {e}")
+            
+            # Delete config file if it exists
+            import tempfile
+            from pathlib import Path
+            config_file = Path(tempfile.gettempdir()) / f"strategy_{run_id}.yml"
+            if config_file.exists():
+                try:
+                    config_file.unlink()
+                    self.logger.info(f"Deleted config file: {config_file}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to delete config file: {e}")
+            
+            # Delete supervisor config file if it exists
+            if supervisor_name:
+                supervisor_config_file = Path("/etc/supervisor/conf.d") / f"{supervisor_name}.conf"
+                if supervisor_config_file.exists():
+                    try:
+                        import subprocess
+                        subprocess.run(["sudo", "rm", str(supervisor_config_file)], check=False)
+                        self.logger.info(f"Deleted supervisor config: {supervisor_config_file}")
+                        
+                        # Reload supervisor config
+                        try:
+                            supervisor = self.process_manager._get_supervisor_client()
+                            supervisor.supervisor.reloadConfig()
+                            self.logger.info("Reloaded supervisor config")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to reload supervisor config: {e}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to delete supervisor config: {e}")
+            
+            # Delete from database
+            await self.database.execute(
+                "DELETE FROM strategy_runs WHERE id = :run_id",
+                {"run_id": run_id}
+            )
+            
+            await self.audit_logger.log_action(
+                str(user["id"]),
+                "delete_strategy",
+                {"run_id": run_id, "supervisor_name": supervisor_name}
+            )
+            
+            await query.edit_message_text(
+                f"✅ <b>Strategy Deleted</b>\n\n"
+                f"Run ID: <code>{run_id[:8]}</code>\n\n"
+                f"The strategy has been permanently deleted.",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Back to Strategies", callback_data="back_to_strategies_filters")]
+                ])
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Delete strategy confirm error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Failed to delete strategy: {str(e)}",
                 parse_mode='HTML'
             )
     
@@ -1991,5 +2242,13 @@ class StrategyHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.edit_strategy_config_callback,
             pattern="^edit_strategy_config:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.delete_strategy_callback,
+            pattern="^delete_strategy:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.delete_strategy_confirm_callback,
+            pattern="^delete_strategy_confirm:"
         ))
 
