@@ -442,6 +442,33 @@ class ParadexMarketData:
             return metadata
             
         except Exception as e:
+            error_str = str(e)
+            # Check if this is a MARKET_NOT_FOUND error
+            # The ApiError might be raised as Exception(ApiError) or the error might be in the string
+            is_market_not_found = False
+            
+            # Check string representation
+            if "MARKET_NOT_FOUND" in error_str or "Market not found" in error_str:
+                is_market_not_found = True
+            
+            # Check if exception has error attribute (ApiError object)
+            if hasattr(e, 'error'):
+                if str(e.error) == "MARKET_NOT_FOUND":
+                    is_market_not_found = True
+            
+            # Check if exception is an ApiError-like object
+            if hasattr(e, '__dict__') and 'error' in e.__dict__:
+                if str(e.__dict__['error']) == "MARKET_NOT_FOUND":
+                    is_market_not_found = True
+            
+            if is_market_not_found:
+                self.logger.warning(
+                    f"⚠️  [PARADEX] Market {contract_id} not found (MARKET_NOT_FOUND) - "
+                    "market exists in funding rates but is not tradeable"
+                )
+                # Return a special marker dict to indicate MARKET_NOT_FOUND
+                return {"_market_not_found": True}
+            
             self.logger.error(f"Failed to fetch market metadata for {contract_id}: {e}")
             return None
     

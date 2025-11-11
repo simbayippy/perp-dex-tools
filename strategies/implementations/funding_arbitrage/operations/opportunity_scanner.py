@@ -144,7 +144,42 @@ class OpportunityScanner:
         
         # Get leverage info for both exchanges
         from strategies.execution.core.leverage_validator import LeverageValidator
+        from funding_rate_service.core.opportunity_finder import OpportunityFinder
+        
         leverage_validator = LeverageValidator()
+        
+        # Check for MARKET_NOT_FOUND errors BEFORE calling LeverageValidator
+        # This prevents wasting time on untradeable symbols
+        long_dex_name = opportunity.long_dex
+        short_dex_name = opportunity.short_dex
+        
+        try:
+            # Check long exchange first
+            long_leverage_dict = await long_client.get_leverage_info(symbol)
+            if isinstance(long_leverage_dict, dict) and long_leverage_dict.get('error') == "MARKET_NOT_FOUND":
+                strategy.logger.warning(
+                    f"⚠️  [{long_dex_name.upper()}] Symbol {symbol} has MARKET_NOT_FOUND error - "
+                    "market exists in funding rates but is not tradeable. Marking as untradeable."
+                )
+                OpportunityFinder.mark_symbol_untradeable(long_dex_name, symbol)
+                strategy.failed_symbols.add(symbol)
+                return None
+        except Exception:
+            pass  # If get_leverage_info doesn't exist or fails, continue
+        
+        try:
+            # Check short exchange
+            short_leverage_dict = await short_client.get_leverage_info(symbol)
+            if isinstance(short_leverage_dict, dict) and short_leverage_dict.get('error') == "MARKET_NOT_FOUND":
+                strategy.logger.warning(
+                    f"⚠️  [{short_dex_name.upper()}] Symbol {symbol} has MARKET_NOT_FOUND error - "
+                    "market exists in funding rates but is not tradeable. Marking as untradeable."
+                )
+                OpportunityFinder.mark_symbol_untradeable(short_dex_name, symbol)
+                strategy.failed_symbols.add(symbol)
+                return None
+        except Exception:
+            pass  # If get_leverage_info doesn't exist or fails, continue
         
         try:
             long_leverage_info = await leverage_validator.get_leverage_info(long_client, symbol)
@@ -174,6 +209,19 @@ class OpportunityScanner:
                 )
                 return target_margin * Decimal("5")
         except Exception as exc:
+            error_str = str(exc).lower()
+            # Check if this is a MARKET_NOT_FOUND error
+            if "market_not_found" in error_str or "market not found" in error_str:
+                strategy.logger.warning(
+                    f"⚠️  [{symbol}] MARKET_NOT_FOUND error detected - "
+                    "market exists in funding rates but is not tradeable"
+                )
+                # Mark both exchanges as untradeable for this symbol (we don't know which one failed)
+                OpportunityFinder.mark_symbol_untradeable(opportunity.long_dex, symbol)
+                OpportunityFinder.mark_symbol_untradeable(opportunity.short_dex, symbol)
+                strategy.failed_symbols.add(symbol)
+                return None
+            
             strategy.logger.warning(
                 f"⚠️ Error calculating position size from target_margin for {symbol}: {exc}. "
                 "Falling back to conservative 5x estimate"

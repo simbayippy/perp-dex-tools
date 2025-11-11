@@ -242,6 +242,11 @@ class ParadexAccountManager:
                 'error': None,
             }
             
+            # Check if metadata indicates MARKET_NOT_FOUND
+            if metadata and metadata.get('_market_not_found'):
+                leverage_info['error'] = "MARKET_NOT_FOUND"
+                return leverage_info
+            
             if metadata:
                 # Calculate max leverage from IMF (Paradex doesn't provide max_leverage directly)
                 # Similar to Lighter: max_leverage = 1 / initial_margin_fraction
