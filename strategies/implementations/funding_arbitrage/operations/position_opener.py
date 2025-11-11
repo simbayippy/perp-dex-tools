@@ -164,17 +164,12 @@ class PositionOpener:
             f"✅ {symbol} available on both {long_dex.upper()} and {short_dex.upper()}"
         )
 
-        # Calculate requested size based on target_margin or target_exposure
-        requested_size = await self._calculate_requested_size(opportunity, long_client, short_client)
-        if requested_size is None:
-            strategy.failed_symbols.add(symbol)
-            return None
-
+        # Validate leverage and calculate adjusted size
+        # _validate_leverage will calculate requested size from target_margin internally
         adjusted_size = await self._validate_leverage(
             symbol=symbol,
             long_client=long_client,
             short_client=short_client,
-            requested_size=requested_size,
         )
 
         if adjusted_size is None:
@@ -334,37 +329,31 @@ class PositionOpener:
 
         return PersistenceOutcome(type="created", position=position)
 
-    async def _calculate_requested_size(
+    async def _validate_leverage(
         self,
-        opportunity,
+        *,
+        symbol: str,
         long_client: Any,
         short_client: Any,
     ) -> Optional[Decimal]:
         """
-        Calculate requested position size based on target_margin.
+        Normalize leverage and confirm balances.
         
-        Exposure is calculated dynamically based on leverage.
-        
-        Args:
-            opportunity: OpportunityData object
-            long_client: Long exchange client
-            short_client: Short exchange client
-            
-        Returns:
-            Requested size in USD, or None if calculation fails
+        Calculates requested size from target_margin internally to avoid redundant leverage calls.
         """
         strategy = self._strategy
-        symbol = opportunity.symbol
+        log_stage(strategy.logger, "Leverage Validation & Normalization", icon="🔍", stage_id="2")
+
         target_margin = strategy.config.target_margin
-        
         if target_margin is None:
             strategy.logger.error("target_margin not set in config")
             return None
-        
-        # Get leverage info for both exchanges
-        from strategies.execution.core.leverage_validator import LeverageValidator
-        leverage_validator = LeverageValidator()
-        
+
+        # Use shared leverage validator from strategy (for caching)
+        leverage_validator = strategy.leverage_validator
+
+        # Calculate requested size from target_margin
+        # We need leverage info anyway for validation, so calculate it here
         try:
             long_leverage_info = await leverage_validator.get_leverage_info(long_client, symbol)
             short_leverage_info = await leverage_validator.get_leverage_info(short_client, symbol)
@@ -379,41 +368,19 @@ class PositionOpener:
                 min_leverage = short_leverage_info.max_leverage
             
             if min_leverage:
-                # Calculate exposure: exposure = margin * leverage
-                calculated_exposure = target_margin * min_leverage
-                strategy.logger.info(
-                    f"📊 [{symbol}] Calculated exposure from target_margin=${target_margin:.2f}: "
-                    f"${calculated_exposure:.2f} (leverage: {min_leverage}x)"
-                )
-                return calculated_exposure
+                requested_size = target_margin * min_leverage
             else:
                 # Fallback to conservative estimate if leverage unavailable
                 strategy.logger.warning(
                     f"⚠️ Could not determine leverage for {symbol}, using conservative 5x estimate"
                 )
-                return target_margin * Decimal("5")
+                requested_size = target_margin * Decimal("5")
         except Exception as exc:
             strategy.logger.warning(
-                f"⚠️ Error calculating position size from target_margin for {symbol}: {exc}. "
+                f"⚠️ Error calculating requested size for {symbol}: {exc}. "
                 "Falling back to conservative 5x estimate"
             )
-            return target_margin * Decimal("5")
-
-    async def _validate_leverage(
-        self,
-        *,
-        symbol: str,
-        long_client: Any,
-        short_client: Any,
-        requested_size: Decimal,
-    ) -> Optional[Decimal]:
-        """Normalize leverage and confirm balances."""
-        strategy = self._strategy
-        log_stage(strategy.logger, "Leverage Validation & Normalization", icon="🔍", stage_id="2")
-
-        from strategies.execution.core.leverage_validator import LeverageValidator
-
-        leverage_validator = LeverageValidator()
+            requested_size = target_margin * Decimal("5")
 
         try:
             leverage_prep = await leverage_validator.prepare_leverage(

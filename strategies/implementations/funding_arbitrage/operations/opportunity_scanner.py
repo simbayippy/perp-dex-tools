@@ -148,13 +148,14 @@ class OpportunityScanner:
             return None
         
         # Get leverage info for both exchanges
-        from strategies.execution.core.leverage_validator import LeverageValidator
         from funding_rate_service.core.opportunity_finder import OpportunityFinder
         
-        leverage_validator = LeverageValidator()
+        # Use shared leverage validator from strategy (for caching)
+        leverage_validator = self._strategy.leverage_validator
         
         # Check for MARKET_NOT_FOUND errors BEFORE calling LeverageValidator
         # This prevents wasting time on untradeable symbols
+        # we use get_leverage_info to check if the symbol is tradeable
         long_dex_name = opportunity.long_dex
         short_dex_name = opportunity.short_dex
         

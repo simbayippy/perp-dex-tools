@@ -159,6 +159,10 @@ class FundingArbitrageStrategy(BaseStrategy):
             price_provider=self.price_provider  # Share the price source
         )
         
+        # ⭐ Leverage Validator (shared instance for caching across all operations)
+        from strategies.execution.core.leverage_validator import LeverageValidator
+        self.leverage_validator = LeverageValidator()
+        
         # ⭐ Position and state management (database-backed)
         # Compose what we need directly - no factory methods
         from .position_manager import FundingArbPositionManager

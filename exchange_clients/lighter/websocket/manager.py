@@ -250,7 +250,6 @@ class LighterWebSocketManager(BaseWebSocketManager):
             except (asyncio.CancelledError,):
                 raise
             except Exception as exc:
-                self._log(f"Error receiving websocket message: {exc}", "ERROR")
                 break
 
             # Process message
