@@ -1104,10 +1104,18 @@ class ConfigHandler(BaseHandler):
             
             # Check if we came from a specific strategy view
             run_id = data.get('run_id')
+            strategy_filter = data.get('strategy_filter', 'all')  # Get filter from wizard data
+            
+            # Build keyboard with back button
+            keyboard = []
             if run_id:
                 # Show specific strategy info
                 run_id_short = str(run_id)[:8]
                 message += f"\n\n🔄 Strategy <code>{run_id_short}</code> will use the updated config on the next cycle."
+                # Add back button to strategy list with filter
+                keyboard.append([
+                    InlineKeyboardButton("⬅️ Back to Strategies", callback_data=f"filter_strategies:{strategy_filter}")
+                ])
             elif affected_strategies:
                 # Show all affected strategies
                 message += f"\n\n🔄 Updated {len(affected_strategies)} running strateg{'y' if len(affected_strategies) == 1 else 'ies'}:"
@@ -1119,9 +1127,12 @@ class ConfigHandler(BaseHandler):
                     message += f"\n   ... and {len(affected_strategies) - 5} more"
                 message += "\n\nNote: Changes will apply on next strategy cycle."
             
+            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+            
             await update.message.reply_text(
                 message,
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=reply_markup
             )
         except Exception as e:
             self.logger.error(f"Error updating config: {e}")

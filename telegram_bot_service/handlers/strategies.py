@@ -128,6 +128,9 @@ class StrategyHandler(BaseHandler):
         callback_data = query.data
         filter_type = callback_data.split(":", 1)[1]
         
+        # Store filter in context for later use
+        context.user_data['strategy_filter'] = filter_type
+        
         try:
             # Get strategies with filter applied
             is_admin = user.get("is_admin", False)
@@ -1475,11 +1478,13 @@ class StrategyHandler(BaseHandler):
                 )
             ])
             
-            # Add back button - store filter context in callback data
-            # We'll need to determine the current filter from context or default to 'all'
-            # For now, use a generic back that goes to filter selection
+            # Store current filter in context for later use
+            # Try to get filter from context, default to 'all'
+            current_filter = context.user_data.get('strategy_filter', 'all')
+            
+            # Add back button - use filter if available
             keyboard.append([
-                InlineKeyboardButton("⬅️ Back to List", callback_data="back_to_strategies_filters")
+                InlineKeyboardButton("⬅️ Back to List", callback_data=f"filter_strategies:{current_filter}")
             ])
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -1706,6 +1711,9 @@ class StrategyHandler(BaseHandler):
                         pass
             config_data = config_data or {}
             
+            # Get current filter from context (stored when filtering strategies)
+            current_filter = context.user_data.get('strategy_filter', 'all')
+            
             # Start edit wizard
             context.user_data['wizard'] = {
                 'type': 'edit_config',
@@ -1714,7 +1722,8 @@ class StrategyHandler(BaseHandler):
                     'config_id': config_id,
                     'config_name': config_name or "config",
                     'strategy_type': strategy_type,
-                    'run_id': run_id  # Store run_id to show which strategy is affected
+                    'run_id': run_id,  # Store run_id to show which strategy is affected
+                    'strategy_filter': current_filter  # Store filter to go back to correct list
                 }
             }
             
