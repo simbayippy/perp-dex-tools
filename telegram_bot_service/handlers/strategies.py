@@ -589,6 +589,209 @@ class StrategyHandler(BaseHandler):
                 parse_mode='HTML'
             )
     
+    async def pause_strategy_direct_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle direct pause from detail view - pause immediately without dialog."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        callback_data = query.data
+        run_id = callback_data.split(":", 1)[1]
+        run_id_short = run_id[:8]
+        
+        try:
+            # Verify ownership
+            is_admin = user.get("is_admin", False)
+            if is_admin:
+                verify_query = """
+                    SELECT id, status FROM strategy_runs
+                    WHERE id = :run_id
+                """
+                row = await self.database.fetch_one(
+                    verify_query,
+                    {"run_id": run_id}
+                )
+            else:
+                verify_query = """
+                    SELECT id, status FROM strategy_runs
+                    WHERE id = :run_id AND user_id = :user_id
+                """
+                row = await self.database.fetch_one(
+                    verify_query,
+                    {"run_id": run_id, "user_id": user["id"]}
+                )
+            
+            if not row:
+                await query.edit_message_text(
+                    "❌ Strategy not found or you don't have permission to pause it",
+                    parse_mode='HTML'
+                )
+                return
+            
+            current_status = row['status']
+            if current_status in ('stopped', 'error'):
+                await query.edit_message_text(
+                    f"ℹ️ Strategy is already stopped (status: {current_status})",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Show loading message
+            await query.edit_message_text(
+                f"⏳ <b>Pausing strategy...</b>\n\n"
+                f"Run ID: <code>{run_id_short}</code>\n\n"
+                f"Positions will remain open.",
+                parse_mode='HTML'
+            )
+            
+            # Stop strategy
+            success = await self.process_manager.stop_strategy(run_id)
+            
+            # Immediately sync status to ensure DB is accurate
+            if success:
+                await self.process_manager.sync_status_with_supervisor()
+            
+            if success:
+                await self.audit_logger.log_strategy_stop(str(user["id"]), run_id)
+                # Add back button to return to detail view
+                keyboard = [
+                    [InlineKeyboardButton("⬅️ Back to Details", callback_data=f"view_strategy_config:{run_id}")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(
+                    f"✅ <b>Strategy Paused</b>\n\n"
+                    f"Run ID: <code>{run_id_short}</code>\n"
+                    f"Status: stopped\n\n"
+                    f"ℹ️ <b>Note:</b> Positions remain open. "
+                    f"You can close them manually with /close or resume the strategy later.",
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+            else:
+                await query.edit_message_text(
+                    f"❌ <b>Failed to Pause Strategy</b>\n\n"
+                    f"Run ID: <code>{run_id_short}</code>\n"
+                    f"Please try again or check logs.",
+                    parse_mode='HTML'
+                )
+                
+        except Exception as e:
+            self.logger.error(f"Pause strategy direct callback error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Error pausing strategy: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def resume_strategy_direct_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle direct resume from detail view - resume immediately."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        callback_data = query.data
+        run_id = callback_data.split(":", 1)[1]
+        run_id_short = run_id[:8]
+        
+        try:
+            # Verify ownership
+            is_admin = user.get("is_admin", False)
+            if is_admin:
+                verify_query = """
+                    SELECT id, status FROM strategy_runs
+                    WHERE id = :run_id
+                """
+                row = await self.database.fetch_one(
+                    verify_query,
+                    {"run_id": run_id}
+                )
+            else:
+                verify_query = """
+                    SELECT id, status FROM strategy_runs
+                    WHERE id = :run_id AND user_id = :user_id
+                """
+                row = await self.database.fetch_one(
+                    verify_query,
+                    {"run_id": run_id, "user_id": user["id"]}
+                )
+            
+            if not row:
+                await query.edit_message_text(
+                    "❌ Strategy not found or you don't have permission to resume it",
+                    parse_mode='HTML'
+                )
+                return
+            
+            current_status = row['status']
+            if current_status not in ('stopped', 'error', 'paused'):
+                await query.edit_message_text(
+                    f"ℹ️ Strategy is not stopped or paused (status: {current_status}).\n"
+                    f"Only stopped/paused strategies can be resumed.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Show loading message
+            await query.edit_message_text(
+                f"⏳ <b>Resuming strategy...</b>\n\n"
+                f"Run ID: <code>{run_id_short}</code>",
+                parse_mode='HTML'
+            )
+            
+            # Resume strategy
+            success = await self.process_manager.resume_strategy(run_id)
+            
+            # Immediately sync status to ensure DB is accurate
+            if success:
+                await self.process_manager.sync_status_with_supervisor()
+                
+                # Get updated status from DB
+                status_row = await self.database.fetch_one(
+                    "SELECT status FROM strategy_runs WHERE id = :run_id",
+                    {"run_id": run_id}
+                )
+                actual_status = status_row['status'] if status_row else 'starting'
+            else:
+                actual_status = None
+            
+            if success:
+                await self.audit_logger.log_action(
+                    user_id=str(user["id"]),
+                    action="resume_strategy",
+                    details={"run_id": run_id}
+                )
+                # Add back button to return to detail view
+                keyboard = [
+                    [InlineKeyboardButton("⬅️ Back to Details", callback_data=f"view_strategy_config:{run_id}")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(
+                    f"✅ <b>Strategy Resumed</b>\n\n"
+                    f"Run ID: <code>{run_id_short}</code>\n"
+                    f"Status: {actual_status}",
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+            else:
+                await query.edit_message_text(
+                    f"❌ <b>Failed to Resume Strategy</b>\n\n"
+                    f"Run ID: <code>{run_id_short}</code>\n"
+                    f"Please check logs or try again.",
+                    parse_mode='HTML'
+                )
+                
+        except Exception as e:
+            self.logger.error(f"Resume strategy direct callback error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Error resuming strategy: {str(e)}",
+                parse_mode='HTML'
+            )
+    
     async def stop_strategy_pause_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle pause option - just stop the strategy without closing positions."""
         query = update.callback_query
@@ -671,13 +874,19 @@ class StrategyHandler(BaseHandler):
             
             if success:
                 await self.audit_logger.log_strategy_stop(str(user["id"]), run_id)
+                # Add back button to return to detail view
+                keyboard = [
+                    [InlineKeyboardButton("⬅️ Back to Details", callback_data=f"view_strategy_config:{run_id}")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
                     f"✅ <b>Strategy Paused</b>\n\n"
                     f"Run ID: <code>{run_id_short}</code>\n"
                     f"Status: stopped\n\n"
                     f"ℹ️ <b>Note:</b> Positions remain open. "
                     f"You can close them manually with /close or resume the strategy later.",
-                    parse_mode='HTML'
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
                 )
             else:
                 await query.edit_message_text(
@@ -1051,11 +1260,17 @@ class StrategyHandler(BaseHandler):
                     action="resume_strategy",
                     details={"run_id": run_id}
                 )
+                # Add back button to return to detail view
+                keyboard = [
+                    [InlineKeyboardButton("⬅️ Back to Details", callback_data=f"view_strategy_config:{run_id}")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
                     f"✅ <b>Strategy Resumed</b>\n\n"
                     f"Run ID: <code>{run_id_short}</code>\n"
                     f"Status: {actual_status}",
-                    parse_mode='HTML'
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
                 )
             else:
                 await query.edit_message_text(
@@ -1209,8 +1424,25 @@ class StrategyHandler(BaseHandler):
                     message += config_yaml
                 message += "</code>"
             
-            # Add back button and edit config button
+            # Add action buttons
             keyboard = []
+            
+            # Add Pause/Resume button based on status
+            # Use direct pause/resume callbacks (no dialog) when called from detail view
+            if status in ('running', 'starting'):
+                keyboard.append([
+                    InlineKeyboardButton(
+                        "⏸️ Pause",
+                        callback_data=f"pause_strategy_direct:{run_id}"
+                    )
+                ])
+            elif status in ('stopped', 'error', 'paused'):
+                keyboard.append([
+                    InlineKeyboardButton(
+                        "▶️ Resume",
+                        callback_data=f"resume_strategy_direct:{run_id}"
+                    )
+                ])
             
             # Add Edit Config button if user owns the config
             if config_user_id and str(config_user_id) == str(user["id"]):
@@ -1229,8 +1461,11 @@ class StrategyHandler(BaseHandler):
                 )
             ])
             
+            # Add back button - store filter context in callback data
+            # We'll need to determine the current filter from context or default to 'all'
+            # For now, use a generic back that goes to filter selection
             keyboard.append([
-                InlineKeyboardButton("⬅️ Back to Strategies", callback_data="back_to_strategies_filters")
+                InlineKeyboardButton("⬅️ Back to List", callback_data="back_to_strategies_filters")
             ])
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -2001,6 +2236,116 @@ class StrategyHandler(BaseHandler):
         )
         account_name = account_row['account_name'] if account_row else account_id
         
+        # Check if config_id is already pre-selected (from run_from_list)
+        pre_selected_config_id = wizard['data'].get('config_id')
+        if pre_selected_config_id:
+            # Config already selected, run directly
+            await query.edit_message_text(
+                f"⏳ <b>Starting strategy...</b>\n\n"
+                f"Account: {account_name}\n"
+                f"Config: {wizard['data'].get('config_name', 'N/A')}\n"
+                f"{'🔓 Admin mode: Running on VPS IP' if user.get('is_admin') else '🔒 Proxy required'}",
+                parse_mode='HTML'
+            )
+            
+            # Get config data and run strategy
+            config_row = await self.database.fetch_one(
+                "SELECT config_data, config_name, strategy_type FROM strategy_configs WHERE id = :id",
+                {"id": pre_selected_config_id}
+            )
+            
+            if not config_row:
+                await query.edit_message_text(
+                    "❌ Config not found",
+                    parse_mode='HTML'
+                )
+                return
+            
+            config_data_raw = config_row['config_data']
+            config_name = config_row['config_name']
+            strategy_type = config_row['strategy_type']
+            
+            # Parse config data
+            import json
+            if isinstance(config_data_raw, str):
+                try:
+                    config_data = json.loads(config_data_raw)
+                except json.JSONDecodeError as e:
+                    self.logger.error(f"Failed to parse config_data JSON: {e}")
+                    await query.edit_message_text(
+                        f"❌ Invalid config data format: Failed to parse JSON",
+                        parse_mode='HTML'
+                    )
+                    return
+            elif isinstance(config_data_raw, dict):
+                config_data = config_data_raw
+            else:
+                await query.edit_message_text(
+                    f"❌ Invalid config data format: Expected dict or JSON string",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Ensure config_data has the correct structure
+            if isinstance(config_data, dict):
+                if 'strategy' not in config_data or 'config' not in config_data:
+                    config_data = {
+                        "strategy": strategy_type,
+                        "created_at": datetime.now().isoformat(),
+                        "version": "1.0",
+                        "config": config_data
+                    }
+            
+            # Validate config before running
+            valid, errors = await self.config_validator.validate_before_run(
+                config_data, account_id, is_admin=user.get("is_admin", False)
+            )
+            if not valid:
+                await query.edit_message_text(
+                    f"❌ Config validation failed:\n" + "\n".join(errors),
+                    parse_mode='HTML'
+                )
+                return
+            
+            try:
+                # Spawn strategy
+                result = await self.process_manager.spawn_strategy(
+                    user_id=user["id"],
+                    account_id=account_id,
+                    account_name=account_name,
+                    config_id=pre_selected_config_id,
+                    config_data=config_data,
+                    is_admin=user.get("is_admin", False)
+                )
+                
+                await self.audit_logger.log_strategy_start(
+                    str(user["id"]),
+                    result['run_id'],
+                    account_id,
+                    pre_selected_config_id,
+                    is_admin=user.get("is_admin", False)
+                )
+                
+                await query.edit_message_text(
+                    f"✅ <b>Strategy Started!</b>\n\n"
+                    f"Run ID: <code>{result['run_id'][:8]}</code>\n"
+                    f"Status: {result['status']}\n"
+                    f"Port: {result['port']}\n\n"
+                    f"View status: /list_strategies",
+                    parse_mode='HTML'
+                )
+                
+                context.user_data.pop('wizard', None)
+                
+            except Exception as e:
+                self.logger.error(f"Start strategy error: {e}", exc_info=True)
+                error_msg = str(e).replace('<', '&lt;').replace('>', '&gt;')
+                await query.edit_message_text(
+                    f"❌ Failed to start strategy: {error_msg}",
+                    parse_mode='HTML'
+                )
+            return
+        
         # Get user's configs
         config_query = """
             SELECT id, config_name, strategy_type
@@ -2020,29 +2365,70 @@ class StrategyHandler(BaseHandler):
         """
         templates = await self.database.fetch_all(template_query)
         
-        # Create config selection keyboard
+        # Create config selection keyboard with improved UI
         keyboard = []
+        message_parts = []
+        
         if user_configs:
-            keyboard.append([InlineKeyboardButton("📋 Your Configs", callback_data="config_header")])
+            # User configs section with distinct styling
+            message_parts.append("━━━━━━━━━━━━━━━━━━━━")
+            message_parts.append("💼 <b>Your Configs</b>")
+            message_parts.append("━━━━━━━━━━━━━━━━━━━━\n")
+            
             for cfg in user_configs:
+                cfg_dict = dict(cfg) if not isinstance(cfg, dict) else cfg
+                config_name = cfg_dict['config_name']
+                strategy_type = cfg_dict['strategy_type']
+                
+                # Format strategy type for display
+                strategy_display = {
+                    'funding_arbitrage': 'Funding Arb',
+                    'grid': 'Grid'
+                }.get(strategy_type, strategy_type.title())
+                
+                # Use distinct emoji and color for user configs
+                button_text = f"💼 {config_name} ({strategy_display})"
                 keyboard.append([InlineKeyboardButton(
-                    f"{cfg['config_name']} ({cfg['strategy_type']})",
-                    callback_data=f"run_config:{cfg['id']}"
+                    button_text,
+                    callback_data=f"run_config:{cfg_dict['id']}"
                 )])
         
         if templates:
-            keyboard.append([InlineKeyboardButton("📄 Templates", callback_data="config_header")])
+            # Templates section with distinct styling
+            if user_configs:
+                message_parts.append("")  # Add blank line separator
+            message_parts.append("━━━━━━━━━━━━━━━━━━━━")
+            message_parts.append("⭐ <b>Templates</b>")
+            message_parts.append("━━━━━━━━━━━━━━━━━━━━\n")
+            
             for tpl in templates:
+                tpl_dict = dict(tpl) if not isinstance(tpl, dict) else tpl
+                config_name = tpl_dict['config_name']
+                strategy_type = tpl_dict['strategy_type']
+                
+                # Format strategy type for display
+                strategy_display = {
+                    'funding_arbitrage': 'Funding Arb',
+                    'grid': 'Grid'
+                }.get(strategy_type, strategy_type.title())
+                
+                # Use distinct emoji for templates
+                button_text = f"⭐ {config_name} ({strategy_display})"
                 keyboard.append([InlineKeyboardButton(
-                    f"📄 {tpl['config_name']} ({tpl['strategy_type']})",
-                    callback_data=f"run_config:{tpl['id']}"
+                    button_text,
+                    callback_data=f"run_config:{tpl_dict['id']}"
                 )])
         
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
         
+        # Build message with sections
+        message = f"✅ Account selected: <b>{account_name}</b>\n\n"
+        message += "Step 2/2: Select configuration:\n\n"
+        if message_parts:
+            message += "\n".join(message_parts)
+        
         await query.edit_message_text(
-            f"✅ Account selected: <b>{account_name}</b>\n\n"
-            "Step 2/2: Select configuration:",
+            message,
             parse_mode='HTML',
             reply_markup=reply_markup
         )
@@ -2250,6 +2636,15 @@ class StrategyHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.stop_strategy_callback,
             pattern="^stop_strategy:"
+        ))
+        # Direct pause/resume from detail view
+        application.add_handler(CallbackQueryHandler(
+            self.pause_strategy_direct_callback,
+            pattern="^pause_strategy_direct:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.resume_strategy_direct_callback,
+            pattern="^resume_strategy_direct:"
         ))
         # Stop strategy pause callback
         application.add_handler(CallbackQueryHandler(

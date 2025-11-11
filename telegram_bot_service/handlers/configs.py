@@ -72,14 +72,18 @@ class ConfigHandler(BaseHandler):
                 config_name = cfg_dict["config_name"]
                 message += f"{status} <b>{config_name}</b> ({cfg_dict['strategy_type']})\n"
                 
-                # Add edit and delete buttons for each config
+                # Add run, edit, and delete buttons for each config
                 keyboard.append([
                     InlineKeyboardButton(
-                        f"✏️ {config_name}",
+                        f"🚀 Run",
+                        callback_data=f"run_from_list:{config_id}"
+                    ),
+                    InlineKeyboardButton(
+                        f"✏️ Edit",
                         callback_data=f"edit_config_btn:{config_id}"
                     ),
                     InlineKeyboardButton(
-                        f"🗑️ {config_name}",
+                        f"🗑️ Delete",
                         callback_data=f"delete_config_btn:{config_id}"
                     )
                 ])
@@ -94,7 +98,7 @@ class ConfigHandler(BaseHandler):
                 tpl_dict = dict(tpl) if not isinstance(tpl, dict) else tpl
                 config_id = str(tpl_dict['id'])
                 config_name = tpl_dict['config_name']
-                message += f"📄 {config_name} ({tpl_dict['strategy_type']})\n"
+                message += f"⭐ {config_name} ({tpl_dict['strategy_type']})\n"
                 
                 # Add copy button for each template
                 keyboard.append([
@@ -1843,6 +1847,103 @@ class ConfigHandler(BaseHandler):
                         reply_markup=reply_markup
             )
     
+    async def run_from_list_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle run button click from config list - show account selection."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        callback_data = query.data
+        config_id = callback_data.split(":", 1)[1]
+        
+        # Check safety limits
+        allowed, reason = await self.safety_manager.can_start_strategy(user["id"])
+        if not allowed:
+            await query.edit_message_text(
+                f"❌ Cannot start strategy: {reason}",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Check resource availability
+        resource_ok, resource_msg = await self.health_monitor.before_spawn_check()
+        if not resource_ok:
+            await query.edit_message_text(
+                f"❌ Resource check failed: {resource_msg}",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Check user limit
+        user_limit_ok, user_limit_msg = await self.health_monitor.check_user_running_count(user["id"])
+        if not user_limit_ok:
+            await query.edit_message_text(
+                f"❌ {user_limit_msg}",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Get config name for display
+        config_row = await self.database.fetch_one(
+            "SELECT config_name FROM strategy_configs WHERE id = :id",
+            {"id": config_id}
+        )
+        if not config_row:
+            await query.edit_message_text(
+                "❌ Config not found",
+                parse_mode='HTML'
+            )
+            return
+        
+        config_name = config_row['config_name']
+        
+        # Start wizard with config_id pre-selected
+        context.user_data['wizard'] = {
+            'type': 'run_strategy',
+            'step': 1,
+            'data': {
+                'config_id': config_id,
+                'config_name': config_name
+            }
+        }
+        
+        # Get user's accounts
+        accounts_query = """
+            SELECT a.id, a.account_name
+            FROM accounts a
+            WHERE a.user_id = :user_id AND a.is_active = TRUE
+            ORDER BY a.account_name
+        """
+        accounts = await self.database.fetch_all(accounts_query, {"user_id": user["id"]})
+        
+        if not accounts:
+            await query.edit_message_text(
+                "❌ No accounts found. Create an account first with /create_account",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Create account selection keyboard
+        keyboard = []
+        for acc in accounts:
+            keyboard.append([InlineKeyboardButton(
+                acc['account_name'],
+                callback_data=f"run_account:{acc['id']}"
+            )])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"🚀 <b>Run Strategy</b>\n\n"
+            f"Config: <b>{config_name}</b>\n\n"
+            "Step 1/2: Select account:",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+    
     def register_handlers(self, application):
         """Register config management command and callback handlers"""
         # Commands
@@ -1850,6 +1951,10 @@ class ConfigHandler(BaseHandler):
         application.add_handler(CommandHandler("create_config", self.create_config_command))
         
         # Callbacks
+        application.add_handler(CallbackQueryHandler(
+            self.run_from_list_callback,
+            pattern="^run_from_list:"
+        ))
         application.add_handler(CallbackQueryHandler(
             self.copy_template_config_callback,
             pattern="^copy_template_config:"

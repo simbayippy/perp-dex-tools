@@ -1164,7 +1164,7 @@ class AtomicMultiOrderExecutor:
 
             # Cache leverage info to avoid duplicate API calls
             leverage_info_cache: Dict[tuple, Any] = {}
-            
+
             exchange_margin_required: Dict[str, Decimal] = {}
             exchange_leverage_info: Dict[str, Dict[str, Any]] = {}  # Store leverage info for notifications
             
