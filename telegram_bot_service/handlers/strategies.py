@@ -2212,6 +2212,70 @@ class StrategyHandler(BaseHandler):
                 parse_mode='HTML'
             )
     
+    async def back_to_account_selection_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle back button from config selection - return to account selection."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        # Reset wizard to step 1 (account selection)
+        wizard = context.user_data.get('wizard', {})
+        wizard['step'] = 1
+        # Clear account_id but keep config_id if it was pre-selected (from run_from_list)
+        if 'config_id' in wizard.get('data', {}):
+            # Keep config_id but clear account_id
+            wizard['data'] = {'config_id': wizard['data'].get('config_id'), 'config_name': wizard['data'].get('config_name')}
+        else:
+            wizard['data'] = {}
+        context.user_data['wizard'] = wizard
+        
+        # Get user's accounts
+        accounts_query = """
+            SELECT a.id, a.account_name
+            FROM accounts a
+            WHERE a.user_id = :user_id AND a.is_active = TRUE
+            ORDER BY a.account_name
+        """
+        accounts = await self.database.fetch_all(accounts_query, {"user_id": user["id"]})
+        
+        if not accounts:
+            await query.edit_message_text(
+                "❌ No accounts found. Create an account first with /create_account",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Create account selection keyboard
+        keyboard = []
+        for acc in accounts:
+            keyboard.append([InlineKeyboardButton(
+                acc['account_name'],
+                callback_data=f"run_account:{acc['id']}"
+            )])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Check if config was pre-selected (from run_from_list)
+        config_name = wizard.get('data', {}).get('config_name')
+        if config_name:
+            await query.edit_message_text(
+                f"🚀 <b>Run Strategy</b>\n\n"
+                f"Config: <b>{config_name}</b>\n\n"
+                "Step 1/2: Select account:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+        else:
+            await query.edit_message_text(
+                "🚀 <b>Start Strategy</b>\n\n"
+                "Step 1/2: Select account:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+    
     async def run_account_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle account selection for run_strategy wizard."""
         query = update.callback_query
@@ -2427,6 +2491,11 @@ class StrategyHandler(BaseHandler):
         if message_parts:
             message += "\n".join(message_parts)
         
+        # Add back button to return to account selection
+        if keyboard:
+            keyboard.append([InlineKeyboardButton("⬅️ Back to Account Selection", callback_data="back_to_account_selection")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+        
         await query.edit_message_text(
             message,
             parse_mode='HTML',
@@ -2605,6 +2674,10 @@ class StrategyHandler(BaseHandler):
         application.add_handler(CommandHandler("limits", self.limits_command))
         
         # Callbacks
+        application.add_handler(CallbackQueryHandler(
+            self.back_to_account_selection_callback,
+            pattern="^back_to_account_selection$"
+        ))
         application.add_handler(CallbackQueryHandler(
             self.run_account_callback,
             pattern="^run_account:"
