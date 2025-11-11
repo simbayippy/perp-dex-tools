@@ -1104,6 +1104,20 @@ class ConfigHandler(BaseHandler):
                 )
                 return
             
+            # Extract the inner config if user sent full structure with 'strategy' and 'config' keys
+            # Database stores only the inner config dict, not the full structure
+            if 'config' in config_dict:
+                # User sent full structure: {strategy: ..., config: {...}}
+                # Extract just the config part
+                config_dict = config_dict['config']
+            elif 'strategy' in config_dict and 'config' not in config_dict:
+                # User sent structure with strategy but no config - invalid
+                await update.message.reply_text(
+                    "❌ Config structure invalid. Expected format: {strategy: '...', config: {...}} or just the config dict.",
+                    parse_mode='HTML'
+                )
+                return
+            
             # Update config in database
             await self.database.execute(
                 """
@@ -1308,6 +1322,8 @@ class ConfigHandler(BaseHandler):
             """,
             {"config_id": config_id}
         )
+        
+        self.logger.info(f"Found {len(running_strategies) if running_strategies else 0} running strategies using config_id: {config_id}")
         
         if not running_strategies:
             return []
