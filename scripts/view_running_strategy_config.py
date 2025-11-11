@@ -68,7 +68,7 @@ async def view_strategy_config(run_id: Optional[str] = None):
                 logger.error(f"Strategy {run_id} not found")
                 sys.exit(1)
             
-            strategies = [row]
+            strategies = [dict(row)]
         else:
             # Get all strategies (not just running)
             query = """
@@ -86,9 +86,13 @@ async def view_strategy_config(run_id: Optional[str] = None):
         temp_dir = Path(tempfile.gettempdir())
         
         for strat in strategies:
+            # Ensure strat is a dict
+            if not isinstance(strat, dict):
+                strat = dict(strat)
+            
             run_id = str(strat['id'])
-            supervisor_name = strat['supervisor_program_name']
-            status = strat['status']
+            supervisor_name = strat.get('supervisor_program_name')
+            status = strat.get('status')
             config_id = strat.get('config_id')
             
             print(f"\n{'='*70}")
