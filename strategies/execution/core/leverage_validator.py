@@ -55,7 +55,8 @@ class LeverageInfo:
         max_leverage: Optional[Decimal] = None,
         max_notional: Optional[Decimal] = None,  # Max position value
         max_position_size: Optional[Decimal] = None,  # Max position in base asset
-        margin_requirement: Optional[Decimal] = None  # e.g., 0.20 = 20% = 5x leverage
+        margin_requirement: Optional[Decimal] = None,  # e.g., 0.20 = 20% = 5x leverage
+        error: Optional[str] = None  # Error message if data unavailable (e.g., "MARKET_NOT_FOUND")
     ):
         self.exchange_name = exchange_name
         self.symbol = symbol
@@ -63,6 +64,7 @@ class LeverageInfo:
         self.max_notional = max_notional
         self.max_position_size = max_position_size
         self.margin_requirement = margin_requirement
+        self.error = error
     
     def get_max_size_usd(self, available_balance: Optional[Decimal] = None) -> Optional[Decimal]:
         """
@@ -173,7 +175,8 @@ class LeverageValidator:
                 symbol=symbol,
                 max_leverage=leverage_data.get('max_leverage'),
                 max_notional=leverage_data.get('max_notional'),
-                margin_requirement=leverage_data.get('margin_requirement')
+                margin_requirement=leverage_data.get('margin_requirement'),
+                error=leverage_data.get('error')  # Preserve error field for MARKET_NOT_FOUND detection
             )
             
             self.logger.debug(
