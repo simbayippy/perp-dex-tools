@@ -98,7 +98,8 @@ class ConfigHandler(BaseHandler):
                 tpl_dict = dict(tpl) if not isinstance(tpl, dict) else tpl
                 config_id = str(tpl_dict['id'])
                 config_name = tpl_dict['config_name']
-                message += f"⭐ {config_name} ({tpl_dict['strategy_type']})\n"
+                message += f"⭐ {config_name}\n"
+                # message += f"⭐ {config_name} ({tpl_dict['strategy_type']})\n"
                 
                 # Add copy button for each template
                 keyboard.append([
