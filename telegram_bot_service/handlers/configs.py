@@ -1106,17 +1106,61 @@ class ConfigHandler(BaseHandler):
             
             # Extract the inner config if user sent full structure with 'strategy' and 'config' keys
             # Database stores only the inner config dict, not the full structure
+            # Validate nesting level - reject double-nested configs (config.config)
             if 'config' in config_dict:
+                nested_config = config_dict['config']
+                
+                # Check for double-nesting: if nested config also has a 'config' key, reject it
+                if isinstance(nested_config, dict) and 'config' in nested_config:
+                    await update.message.reply_text(
+                        "❌ Invalid config structure: double-nesting detected.\n\n"
+                        "Found: config.config (not allowed)\n\n"
+                        "Expected format:\n"
+                        "```yaml\n"
+                        "strategy: funding_arbitrage\n"
+                        "config:\n"
+                        "  scan_exchanges:\n"
+                        "    - aster\n"
+                        "  target_margin: 35.0\n"
+                        "  ...\n"
+                        "```\n\n"
+                        "Or just the config dict without the outer structure.",
+                        parse_mode='Markdown'
+                    )
+                    return
+                
                 # User sent full structure: {strategy: ..., config: {...}}
                 # Extract just the config part
-                config_dict = config_dict['config']
-            elif 'strategy' in config_dict and 'config' not in config_dict:
-                # User sent structure with strategy but no config - invalid
+                config_dict = nested_config
+            
+            # Validate that the extracted config has required fields (not just empty or metadata)
+            if not isinstance(config_dict, dict) or not config_dict:
                 await update.message.reply_text(
-                    "❌ Config structure invalid. Expected format: {strategy: '...', config: {...}} or just the config dict.",
+                    "❌ Config is empty or invalid. Please provide a valid config dictionary.",
                     parse_mode='HTML'
                 )
                 return
+            
+            # Check if config has at least one strategy-specific field to ensure it's not just metadata
+            strategy_specific_fields = ['scan_exchanges', 'target_margin', 'risk_strategy', 'min_profit_rate', 
+                                       'exchanges', 'max_positions', 'mandatory_exchange']
+            if not any(field in config_dict for field in strategy_specific_fields):
+                await update.message.reply_text(
+                    "❌ Config appears to be invalid. Missing required fields like 'scan_exchanges', 'target_margin', etc.\n\n"
+                    "Please ensure your config contains the actual strategy parameters.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Check for invalid structure: has 'strategy' key but no 'config' key (and wasn't extracted above)
+            if 'strategy' in config_dict and 'config' not in config_dict:
+                # Check if it has actual config keys (might be valid if user sent just the config dict)
+                if not any(field in config_dict for field in strategy_specific_fields):
+                    await update.message.reply_text(
+                        "❌ Config structure invalid. Expected format: {strategy: '...', config: {...}} or just the config dict.",
+                        parse_mode='HTML'
+                    )
+                    return
             
             # Update config in database
             await self.database.execute(
