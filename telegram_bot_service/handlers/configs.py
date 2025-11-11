@@ -1202,8 +1202,11 @@ class ConfigHandler(BaseHandler):
                     # so it's ready when the strategy is restarted
                     await self._regenerate_strategy_config_file(run_id, config_id)
             
+            # Get user's API key for hot-reload (if available)
+            api_key = await self.auth.get_api_key_for_user(user) if user else None
+            
             # Try to hot-reload configs for active strategies via control API
-            reload_results = await self._hot_reload_running_strategies(affected_strategies)
+            reload_results = await self._hot_reload_running_strategies(affected_strategies, api_key=api_key)
             
             context.user_data.pop('wizard', None)
             
@@ -1538,12 +1541,20 @@ class ConfigHandler(BaseHandler):
             self.logger.error(f"Failed to write config file for strategy {run_id[:8]}: {e}", exc_info=True)
             return False
     
-    async def _hot_reload_running_strategies(self, strategies: List[Dict[str, Any]]) -> Dict[str, bool]:
+    async def _hot_reload_running_strategies(
+        self, 
+        strategies: List[Dict[str, Any]], 
+        api_key: Optional[str] = None
+    ) -> Dict[str, bool]:
         """
         Attempt to hot-reload configs for running strategies via control API.
         
         This allows config changes to take effect immediately without restarting.
         Falls back gracefully if control API is not available.
+        
+        Args:
+            strategies: List of strategy dicts with id and status
+            api_key: Optional API key for authentication (if None, hot-reload is skipped)
         
         Returns:
             Dict mapping run_id to success status (True if reloaded, False otherwise)
@@ -1553,67 +1564,57 @@ class ConfigHandler(BaseHandler):
         if not strategies:
             return reload_results
         
-        from telegram_bot_service.utils.api_client import ControlAPIClient
-        from telegram_bot_service.core.config import TelegramBotConfig
+        # Skip hot-reload if API key is not provided
+        if not api_key:
+            self.logger.debug("API key not provided, skipping hot-reload")
+            return reload_results
         
-        # Get API key and base URL from config
-        try:
-            config = TelegramBotConfig()
-            api_key = config.control_api_key
-            base_url = config.control_api_base_url
+        from telegram_bot_service.utils.api_client import ControlAPIClient
             
-            if not api_key or not base_url:
-                self.logger.debug("Control API not configured, skipping hot-reload")
-                return reload_results
+        # Try to reload config for each running strategy
+        for strategy in strategies:
+            run_id = str(strategy.get('id', ''))
+            status = strategy.get('status', '')
             
-            # Try to reload config for each running strategy
-            for strategy in strategies:
-                run_id = str(strategy.get('id', ''))
-                status = strategy.get('status', '')
+            # Only reload if strategy is actually running
+            if status not in ('running', 'starting'):
+                reload_results[run_id] = False
+                continue
+            
+            try:
+                # Get control API port for this strategy
+                strategy_row = await self.database.fetch_one(
+                    """
+                    SELECT control_api_port
+                    FROM strategy_runs
+                    WHERE id = :run_id
+                    """,
+                    {"run_id": run_id}
+                )
                 
-                # Only reload if strategy is actually running
-                if status not in ('running', 'starting'):
+                if not strategy_row or not strategy_row.get('control_api_port'):
+                    self.logger.debug(f"Strategy {run_id[:8]} has no control API port, skipping hot-reload")
                     reload_results[run_id] = False
                     continue
                 
-                try:
-                    # Get control API port for this strategy
-                    strategy_row = await self.database.fetch_one(
-                        """
-                        SELECT control_api_port
-                        FROM strategy_runs
-                        WHERE id = :run_id
-                        """,
-                        {"run_id": run_id}
-                    )
-                    
-                    if not strategy_row or not strategy_row.get('control_api_port'):
-                        self.logger.debug(f"Strategy {run_id[:8]} has no control API port, skipping hot-reload")
-                        reload_results[run_id] = False
-                        continue
-                    
-                    # Create client with strategy-specific port
-                    port = strategy_row['control_api_port']
-                    strategy_url = f"http://127.0.0.1:{port}"
-                    strategy_client = ControlAPIClient(strategy_url, api_key)
-                    
-                    # Attempt reload
-                    result = await strategy_client.reload_config()
-                    if result.get('success'):
-                        self.logger.info(f"✅ Hot-reloaded config for strategy {run_id[:8]}")
-                        reload_results[run_id] = True
-                    else:
-                        self.logger.warning(f"⚠️ Hot-reload failed for strategy {run_id[:8]}: {result.get('error', 'Unknown error')}")
-                        reload_results[run_id] = False
-                        
-                except Exception as e:
-                    # Log but don't fail - hot-reload is optional
-                    self.logger.debug(f"Could not hot-reload config for strategy {run_id[:8]}: {e}")
+                # Create client with strategy-specific port
+                port = strategy_row['control_api_port']
+                strategy_url = f"http://127.0.0.1:{port}"
+                strategy_client = ControlAPIClient(strategy_url, api_key)
+                
+                # Attempt reload
+                result = await strategy_client.reload_config()
+                if result.get('success'):
+                    self.logger.info(f"✅ Hot-reloaded config for strategy {run_id[:8]}")
+                    reload_results[run_id] = True
+                else:
+                    self.logger.warning(f"⚠️ Hot-reload failed for strategy {run_id[:8]}: {result.get('error', 'Unknown error')}")
                     reload_results[run_id] = False
                     
-        except Exception as e:
-            # Don't fail if hot-reload is unavailable
-            self.logger.debug(f"Hot-reload not available: {e}")
+            except Exception as e:
+                # Log but don't fail - hot-reload is optional
+                self.logger.debug(f"Could not hot-reload config for strategy {run_id[:8]}: {e}")
+                reload_results[run_id] = False
         
         return reload_results
     
