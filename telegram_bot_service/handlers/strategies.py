@@ -1315,7 +1315,7 @@ class StrategyHandler(BaseHandler):
                 """
                 SELECT sr.id, sr.status, sr.config_id, sr.supervisor_program_name,
                        sc.config_name, sc.config_data, sc.strategy_type, sc.user_id as config_user_id,
-                       a.account_name
+                       sc.is_template, a.account_name
                 FROM strategy_runs sr
                 LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
                 LEFT JOIN accounts a ON sr.account_id = a.id
@@ -1355,7 +1355,17 @@ class StrategyHandler(BaseHandler):
             status = strategy_dict.get('status')
             supervisor_name = strategy_dict.get('supervisor_program_name', '')
             config_user_id = strategy_dict.get('config_user_id')
+            is_template = strategy_dict.get('is_template', False)
             run_id_short = run_id[:8]
+            
+            # Determine config ownership/type
+            config_type_info = ""
+            if is_template or not config_user_id:
+                config_type_info = "📄 <b>Template Config</b> (Public)\n"
+            elif str(config_user_id) == str(user["id"]):
+                config_type_info = "👤 <b>Your Config</b>\n"
+            else:
+                config_type_info = "👥 <b>Other User's Config</b>\n"
             
             # Get config file path (where supervisor reads it from)
             import tempfile
@@ -1375,6 +1385,7 @@ class StrategyHandler(BaseHandler):
             # Format config for display (show key parameters)
             message = (
                 f"📋 <b>Strategy Config</b>\n\n"
+                f"{config_type_info}"
                 f"<b>Run ID:</b> {run_id_short}\n"
                 f"<b>Status:</b> {status}\n"
                 f"<b>Config:</b> {config_name}\n"
@@ -1509,7 +1520,7 @@ class StrategyHandler(BaseHandler):
             strategy_row = await self.database.fetch_one(
                 """
                 SELECT sr.config_id, sc.user_id as config_user_id, sc.config_name, 
-                       sc.strategy_type, sc.config_data
+                       sc.strategy_type, sc.config_data, sc.is_template
                 FROM strategy_runs sr
                 LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
                 WHERE sr.id = :run_id
@@ -1532,9 +1543,142 @@ class StrategyHandler(BaseHandler):
             config_name = strategy_dict.get('config_name')
             strategy_type = strategy_dict.get('strategy_type')
             config_data = strategy_dict.get('config_data')
+            is_template = strategy_dict.get('is_template', False)
             
-            # Check permissions
+            # Track if we created a copy
+            copy_created = False
+            
+            # Check if config is a template (public template)
+            if is_template or not config_user_id:
+                copy_created = True
+                # Automatically create a copy of the template
+                template_name = config_name or "Template"
+                copy_name = f"{template_name} (Copy)"
+                
+                # Check if copy name already exists, add number if needed
+                existing_count_row = await self.database.fetch_one(
+                    """
+                    SELECT COUNT(*) as count
+                    FROM strategy_configs
+                    WHERE user_id = :user_id AND config_name LIKE :pattern
+                    """,
+                    {"user_id": str(user["id"]), "pattern": f"{copy_name}%"}
+                )
+                
+                existing_count = 0
+                if existing_count_row:
+                    existing_count = dict(existing_count_row).get('count', 0)
+                
+                if existing_count > 0:
+                    copy_name = f"{template_name} (Copy {existing_count + 1})"
+                
+                # Parse config_data
+                if isinstance(config_data, str):
+                    try:
+                        config_data_dict = json.loads(config_data)
+                    except json.JSONDecodeError:
+                        try:
+                            config_data_dict = yaml.safe_load(config_data)
+                        except Exception:
+                            config_data_dict = {}
+                else:
+                    config_data_dict = config_data or {}
+                
+                # Create copy
+                new_config_result = await self.database.fetch_one(
+                    """
+                    INSERT INTO strategy_configs (
+                        user_id, config_name, strategy_type, config_data,
+                        is_template, is_active, created_at, updated_at
+                    )
+                    VALUES (
+                        :user_id, :config_name, :strategy_type, CAST(:config_data AS jsonb),
+                        FALSE, TRUE, NOW(), NOW()
+                    )
+                    RETURNING id
+                    """,
+                    {
+                        "user_id": str(user["id"]),
+                        "config_name": copy_name,
+                        "strategy_type": strategy_type,
+                        "config_data": json.dumps(config_data_dict)
+                    }
+                )
+                
+                new_config_id = str(dict(new_config_result)['id'])
+                
+                # Update strategy to use the new copy
+                await self.database.execute(
+                    """
+                    UPDATE strategy_runs
+                    SET config_id = :new_config_id
+                    WHERE id = :run_id
+                    """,
+                    {"new_config_id": new_config_id, "run_id": run_id}
+                )
+                
+                # If strategy is running, regenerate its temp config file
+                strategy_status_check = await self.database.fetch_one(
+                    "SELECT status FROM strategy_runs WHERE id = :run_id",
+                    {"run_id": run_id}
+                )
+                if strategy_status_check:
+                    status = dict(strategy_status_check).get('status')
+                    if status in ('running', 'starting', 'paused'):
+                        # Regenerate temp config file
+                        import tempfile
+                        from pathlib import Path
+                        from datetime import datetime
+                        from decimal import Decimal
+                        
+                        temp_dir = Path(tempfile.gettempdir())
+                        config_file = temp_dir / f"strategy_{run_id}.yml"
+                        
+                        try:
+                            full_config = {
+                                "strategy": strategy_type,
+                                "created_at": datetime.now().isoformat(),
+                                "version": "1.0",
+                                "config": config_data_dict
+                            }
+                            
+                            # Register Decimal representer for YAML
+                            def decimal_representer(dumper, data):
+                                return dumper.represent_scalar('tag:yaml.org,2002:float', str(data))
+                            yaml.add_representer(Decimal, decimal_representer)
+                            
+                            with open(config_file, 'w') as f:
+                                yaml.dump(
+                                    full_config,
+                                    f,
+                                    default_flow_style=False,
+                                    sort_keys=False,
+                                    allow_unicode=True,
+                                    indent=2
+                                )
+                            self.logger.info(f"Regenerated temp config file for strategy {run_id[:8]}: {config_file}")
+                        except Exception as e:
+                            self.logger.error(f"Failed to regenerate temp config for strategy {run_id[:8]}: {e}", exc_info=True)
+                
+                await self.audit_logger.log_action(
+                    str(user["id"]),
+                    "copy_template_for_strategy",
+                    {
+                        "run_id": run_id,
+                        "template_config_id": config_id,
+                        "new_config_id": new_config_id,
+                        "new_config_name": copy_name
+                    }
+                )
+                
+                # Update variables to use the new config
+                config_id = new_config_id
+                config_name = copy_name
+                self.logger.info(f"Created copy of template config {config_id} -> {new_config_id} for strategy {run_id[:8]}")
+            
+            # Check permissions (now that we've created a copy if needed)
             if not config_user_id or str(config_user_id) != str(user["id"]):
+                # This shouldn't happen after creating copy, but check anyway
                 await query.edit_message_text(
                     "❌ You don't have permission to edit this config.",
                     parse_mode='HTML'
@@ -1548,7 +1692,7 @@ class StrategyHandler(BaseHandler):
                 )
                 return
             
-            # Parse config_data
+            # Parse config_data for display
             if isinstance(config_data, str):
                 try:
                     config_data = json.loads(config_data)
@@ -1591,10 +1735,16 @@ class StrategyHandler(BaseHandler):
             if strategy_status in ('running', 'starting', 'paused'):
                 status_note = f"\n\n⚠️ <b>Note:</b> This strategy is currently <b>{strategy_status}</b>. Changes will apply on the next cycle."
             
+            # Check if we created a copy (template was used)
+            copy_note = ""
+            if copy_created:
+                copy_note = f"\n\n📋 <b>Note:</b> A copy of the template config was created: <b>{config_name}</b>\n"
+                copy_note += "The strategy now uses this copy, which you can edit freely."
+            
             await query.edit_message_text(
                 f"✏️ <b>Edit Config: {config_name}</b>\n\n"
                 f"Strategy Type: <b>{strategy_type}</b>\n"
-                f"Run ID: <code>{run_id[:8]}</code>{status_note}\n\n"
+                f"Run ID: <code>{run_id[:8]}</code>{copy_note}{status_note}\n\n"
                 f"Current config (YAML):\n"
                 f"<code>{config_yaml[:500]}{'...' if len(config_yaml) > 500 else ''}</code>\n\n"
                 f"Send updated config as JSON/YAML, or 'cancel' to cancel:",
