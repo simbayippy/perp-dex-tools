@@ -378,9 +378,16 @@ class ConfigHandler(BaseHandler):
                 {"config_id": config_id, "config_name": config_name}
             )
             
+            # Add back button to return to config list
+            keyboard = [
+                [InlineKeyboardButton("⬅️ Back to Configs", callback_data="list_configs_back")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
             await query.edit_message_text(
                 f"✅ Config <b>{config_name}</b> deleted successfully.",
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=reply_markup
             )
         except Exception as e:
             self.logger.error(f"Error in delete_config_confirm_callback: {e}", exc_info=True)
@@ -394,9 +401,16 @@ class ConfigHandler(BaseHandler):
         query = update.callback_query
         await query.answer("Deletion cancelled.")
         
+        # Add back button to return to config list
+        keyboard = [
+            [InlineKeyboardButton("⬅️ Back to Configs", callback_data="list_configs_back")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         await query.edit_message_text(
             "❌ Config deletion cancelled.",
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=reply_markup
         )
     
     async def config_strategy_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
