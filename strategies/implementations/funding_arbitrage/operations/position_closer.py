@@ -24,6 +24,18 @@ class PositionCloser:
     _ZERO_TOLERANCE = Decimal("0")
     _IMBALANCE_THRESHOLD = Decimal("0.05")  # 5% maximum allowed difference
 
+    @staticmethod
+    def _to_decimal(value: Any) -> Decimal:
+        """Convert value to Decimal safely, handling None, float, int, and Decimal."""
+        if value is None:
+            return Decimal("0")
+        if isinstance(value, Decimal):
+            return value
+        try:
+            return Decimal(str(value))
+        except (ValueError, TypeError, Exception):
+            return Decimal("0")
+
     def __init__(self, strategy: "FundingArbitrageStrategy") -> None:
         self._strategy = strategy
         self._risk_manager = self._build_risk_manager()
@@ -157,9 +169,10 @@ class PositionCloser:
             for dex in [position.long_dex, position.short_dex]:
                 snapshot = pre_close_snapshots.get(dex) or pre_close_snapshots.get(dex.lower())
                 if snapshot and snapshot.realized_pnl is not None:
-                    total_realized_pnl += snapshot.realized_pnl
+                    realized_pnl_decimal = self._to_decimal(snapshot.realized_pnl)
+                    total_realized_pnl += realized_pnl_decimal
                     strategy.logger.debug(
-                        f"[{dex}] Pre-close Realized PnL: ${snapshot.realized_pnl:.2f}"
+                        f"[{dex}] Pre-close Realized PnL: ${realized_pnl_decimal:.2f}"
                     )
             
             # Close positions on exchanges
@@ -180,7 +193,8 @@ class PositionCloser:
             for dex in [position.long_dex, position.short_dex]:
                 snapshot = post_close_snapshots.get(dex) or post_close_snapshots.get(dex.lower())
                 if snapshot and snapshot.realized_pnl is not None:
-                    post_close_realized_pnl += snapshot.realized_pnl
+                    realized_pnl_decimal = self._to_decimal(snapshot.realized_pnl)
+                    post_close_realized_pnl += realized_pnl_decimal
             
             # Use post-close PnL if available and different (exchange updated it), otherwise use pre-close
             if post_close_realized_pnl != 0 and post_close_realized_pnl != total_realized_pnl:
@@ -219,22 +233,30 @@ class PositionCloser:
                             entry_price = leg_meta.get("entry_price")
                             
                             if entry_price:
+                                # Convert to Decimal to avoid type mismatch errors
+                                fill_price_decimal = self._to_decimal(fill_price)
+                                entry_price_decimal = self._to_decimal(entry_price)
+                                filled_qty_decimal = self._to_decimal(filled_qty)
+                                
                                 # Calculate PnL for this leg
                                 # For long: PnL = (exit_price - entry_price) * quantity
                                 # For short: PnL = (entry_price - exit_price) * quantity
                                 side = leg_meta.get("side", "long")
                                 if side == "long":
-                                    leg_pnl = (fill_price - entry_price) * filled_qty
+                                    leg_pnl = (fill_price_decimal - entry_price_decimal) * filled_qty_decimal
                                 else:  # short
-                                    leg_pnl = (entry_price - fill_price) * filled_qty
+                                    leg_pnl = (entry_price_decimal - fill_price_decimal) * filled_qty_decimal
                                 price_pnl += leg_pnl
                                 strategy.logger.debug(
                                     f"[{dex}] Price PnL from websocket fills: ${leg_pnl:.2f} "
-                                    f"(entry=${entry_price:.6f}, exit=${fill_price:.6f}, qty={filled_qty})"
+                                    f"(entry=${entry_price_decimal:.6f}, exit=${fill_price_decimal:.6f}, qty={filled_qty_decimal})"
                                 )
                     
                     # Total PnL = price movement + funding - fees
-                    pnl = price_pnl + cumulative_funding - position.total_fees_paid
+                    # Ensure all values are Decimal before arithmetic
+                    cumulative_funding_decimal = self._to_decimal(cumulative_funding)
+                    total_fees_decimal = self._to_decimal(position.total_fees_paid)
+                    pnl = price_pnl + cumulative_funding_decimal - total_fees_decimal
                     strategy.logger.debug(
                         f"Calculated PnL from websocket fills: price=${price_pnl:.2f}, "
                         f"funding=${cumulative_funding:.2f}, fees=${position.total_fees_paid:.2f}, "
@@ -252,7 +274,9 @@ class PositionCloser:
             else:
                 # Use exchange realized PnL from snapshots, subtract our tracked fees
                 # Note: Exchange realized_pnl already includes funding, so we don't add cumulative_funding
-                pnl = total_realized_pnl - position.total_fees_paid
+                # Ensure both values are Decimal before arithmetic
+                total_fees_decimal = self._to_decimal(position.total_fees_paid)
+                pnl = total_realized_pnl - total_fees_decimal
                 strategy.logger.debug(
                     f"Using exchange realized PnL from snapshots: ${total_realized_pnl:.2f}, "
                     f"fees=${position.total_fees_paid:.2f}, net=${pnl:.2f}"

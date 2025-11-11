@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
 if TYPE_CHECKING:
     from ..strategy import FundingArbitrageStrategy
@@ -102,7 +102,11 @@ class OpportunityScanner:
             )
             return False
 
-        size_usd = strategy.config.default_position_size_usd
+        # Calculate position size based on target_margin or target_exposure
+        size_usd = await self._calculate_position_size(opportunity)
+        if size_usd is None:
+            return False
+        
         if size_usd > strategy.config.max_position_size_usd:
             return False
 
@@ -111,6 +115,70 @@ class OpportunityScanner:
             return False
 
         return True
+
+    async def _calculate_position_size(self, opportunity) -> Optional[Decimal]:
+        """
+        Calculate position size based on target_margin.
+        
+        Exposure is calculated dynamically based on leverage.
+        
+        Args:
+            opportunity: OpportunityData object
+            
+        Returns:
+            Position size in USD, or None if calculation fails
+        """
+        strategy = self._strategy
+        symbol = opportunity.symbol
+        target_margin = strategy.config.target_margin
+        
+        if target_margin is None:
+            strategy.logger.error("target_margin not set in config")
+            return None
+        
+        long_client = strategy.exchange_clients.get(opportunity.long_dex)
+        short_client = strategy.exchange_clients.get(opportunity.short_dex)
+        
+        if not long_client or not short_client:
+            return None
+        
+        # Get leverage info for both exchanges
+        from strategies.execution.core.leverage_validator import LeverageValidator
+        leverage_validator = LeverageValidator()
+        
+        try:
+            long_leverage_info = await leverage_validator.get_leverage_info(long_client, symbol)
+            short_leverage_info = await leverage_validator.get_leverage_info(short_client, symbol)
+            
+            # Use the minimum leverage (most restrictive)
+            min_leverage = None
+            if long_leverage_info.max_leverage and short_leverage_info.max_leverage:
+                min_leverage = min(long_leverage_info.max_leverage, short_leverage_info.max_leverage)
+            elif long_leverage_info.max_leverage:
+                min_leverage = long_leverage_info.max_leverage
+            elif short_leverage_info.max_leverage:
+                min_leverage = short_leverage_info.max_leverage
+            
+            if min_leverage:
+                # Calculate exposure: exposure = margin * leverage
+                calculated_exposure = target_margin * min_leverage
+                strategy.logger.debug(
+                    f"📊 [{symbol}] Calculated exposure from target_margin=${target_margin:.2f}: "
+                    f"${calculated_exposure:.2f} (leverage: {min_leverage}x)"
+                )
+                return calculated_exposure
+            else:
+                # Fallback to conservative estimate if leverage unavailable
+                strategy.logger.warning(
+                    f"⚠️ Could not determine leverage for {symbol}, using conservative 5x estimate"
+                )
+                return target_margin * Decimal("5")
+        except Exception as exc:
+            strategy.logger.warning(
+                f"⚠️ Error calculating position size from target_margin for {symbol}: {exc}. "
+                "Falling back to conservative 5x estimate"
+            )
+            return target_margin * Decimal("5")
 
     async def has_capacity(self) -> bool:
         strategy = self._strategy

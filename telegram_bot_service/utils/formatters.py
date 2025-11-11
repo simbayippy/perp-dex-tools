@@ -373,7 +373,7 @@ class TelegramFormatter:
 /list_configs - List your configs 
 
 <b>🚀 Strategy Execution:</b>
-/run - Start new strategy
+/run_strategy - Start new strategy
 /list_strategies - List running strategies
 /stop_strategy - Stop running strategy
 /resume_strategy - Resume stopped strategy

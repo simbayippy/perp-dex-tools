@@ -164,11 +164,17 @@ class PositionOpener:
             f"✅ {symbol} available on both {long_dex.upper()} and {short_dex.upper()}"
         )
 
+        # Calculate requested size based on target_margin or target_exposure
+        requested_size = await self._calculate_requested_size(opportunity, long_client, short_client)
+        if requested_size is None:
+            strategy.failed_symbols.add(symbol)
+            return None
+
         adjusted_size = await self._validate_leverage(
             symbol=symbol,
             long_client=long_client,
             short_client=short_client,
-            requested_size=strategy.config.default_position_size_usd,
+            requested_size=requested_size,
         )
 
         if adjusted_size is None:
@@ -327,6 +333,71 @@ class PositionOpener:
         strategy.position_opened_this_session = True
 
         return PersistenceOutcome(type="created", position=position)
+
+    async def _calculate_requested_size(
+        self,
+        opportunity,
+        long_client: Any,
+        short_client: Any,
+    ) -> Optional[Decimal]:
+        """
+        Calculate requested position size based on target_margin.
+        
+        Exposure is calculated dynamically based on leverage.
+        
+        Args:
+            opportunity: OpportunityData object
+            long_client: Long exchange client
+            short_client: Short exchange client
+            
+        Returns:
+            Requested size in USD, or None if calculation fails
+        """
+        strategy = self._strategy
+        symbol = opportunity.symbol
+        target_margin = strategy.config.target_margin
+        
+        if target_margin is None:
+            strategy.logger.error("target_margin not set in config")
+            return None
+        
+        # Get leverage info for both exchanges
+        from strategies.execution.core.leverage_validator import LeverageValidator
+        leverage_validator = LeverageValidator()
+        
+        try:
+            long_leverage_info = await leverage_validator.get_leverage_info(long_client, symbol)
+            short_leverage_info = await leverage_validator.get_leverage_info(short_client, symbol)
+            
+            # Use the minimum leverage (most restrictive)
+            min_leverage = None
+            if long_leverage_info.max_leverage and short_leverage_info.max_leverage:
+                min_leverage = min(long_leverage_info.max_leverage, short_leverage_info.max_leverage)
+            elif long_leverage_info.max_leverage:
+                min_leverage = long_leverage_info.max_leverage
+            elif short_leverage_info.max_leverage:
+                min_leverage = short_leverage_info.max_leverage
+            
+            if min_leverage:
+                # Calculate exposure: exposure = margin * leverage
+                calculated_exposure = target_margin * min_leverage
+                strategy.logger.info(
+                    f"📊 [{symbol}] Calculated exposure from target_margin=${target_margin:.2f}: "
+                    f"${calculated_exposure:.2f} (leverage: {min_leverage}x)"
+                )
+                return calculated_exposure
+            else:
+                # Fallback to conservative estimate if leverage unavailable
+                strategy.logger.warning(
+                    f"⚠️ Could not determine leverage for {symbol}, using conservative 5x estimate"
+                )
+                return target_margin * Decimal("5")
+        except Exception as exc:
+            strategy.logger.warning(
+                f"⚠️ Error calculating position size from target_margin for {symbol}: {exc}. "
+                "Falling back to conservative 5x estimate"
+            )
+            return target_margin * Decimal("5")
 
     async def _validate_leverage(
         self,

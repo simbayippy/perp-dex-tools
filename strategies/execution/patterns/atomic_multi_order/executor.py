@@ -70,12 +70,14 @@ class AtomicExecutionResult:
 class AtomicMultiOrderExecutor:
     """Executes multiple orders atomically—either all succeed or the trade is unwound."""
 
-    def __init__(self, price_provider=None) -> None:
+    def __init__(self, price_provider=None, account_name: Optional[str] = None, notification_service: Optional[Any] = None) -> None:
         self.price_provider = price_provider
         self.logger = get_core_logger("atomic_multi_order")
         self._hedge_manager = HedgeManager(price_provider=price_provider)
         self._post_trade_max_imbalance_pct = Decimal("0.02")  # 2% net exposure tolerance
         self._post_trade_base_tolerance = Decimal("0.0001")  # residual quantity tolerance
+        self.account_name = account_name
+        self.notification_service = notification_service
 
     async def execute_atomically(
         self,
@@ -474,10 +476,116 @@ class AtomicMultiOrderExecutor:
                 rollback_cost=rollback_cost or Decimal("0"),
             )
 
-    @staticmethod
-    def _estimate_required_margin(size_usd: Decimal) -> Decimal:
-        """Conservative margin estimate (assumes 20% initial margin)."""
-        return size_usd * Decimal("0.20")
+    async def _estimate_required_margin(
+        self, order_spec: OrderSpec, leverage_info_cache: Optional[Dict[tuple, Any]] = None
+    ) -> Decimal:
+        """
+        Estimate required margin based on actual leverage info for the symbol/exchange.
+        
+        Args:
+            order_spec: Order specification with exchange_client, symbol, and size_usd
+            leverage_info_cache: Optional cache dict keyed by (exchange_name, symbol) to avoid duplicate API calls
+            
+        Returns:
+            Estimated margin required in USD
+        """
+        from strategies.execution.core.leverage_validator import LeverageValidator
+        
+        exchange_name = order_spec.exchange_client.get_exchange_name()
+        symbol = order_spec.symbol
+        cache_key = (exchange_name, symbol)
+        
+        # Try to get leverage info from cache or fetch it
+        leverage_info = None
+        if leverage_info_cache and cache_key in leverage_info_cache:
+            leverage_info = leverage_info_cache[cache_key]
+        else:
+            try:
+                leverage_validator = LeverageValidator()
+                leverage_info = await leverage_validator.get_leverage_info(
+                    order_spec.exchange_client, symbol
+                )
+                if leverage_info_cache is not None:
+                    leverage_info_cache[cache_key] = leverage_info
+            except Exception as exc:
+                self.logger.warning(
+                    f"⚠️ Could not fetch leverage info for {exchange_name}:{symbol}: {exc}. "
+                    "Using conservative 20% margin estimate."
+                )
+        
+        # Calculate margin based on leverage info
+        if leverage_info and leverage_info.margin_requirement is not None:
+            # Use margin requirement directly (e.g., 0.3333 for 3x leverage)
+            margin_requirement = leverage_info.margin_requirement
+            estimated_margin = order_spec.size_usd * margin_requirement
+            self.logger.debug(
+                f"📊 [{exchange_name}] Margin for {symbol}: ${estimated_margin:.2f} "
+                f"({margin_requirement*100:.2f}% of ${order_spec.size_usd:.2f})"
+            )
+            return estimated_margin
+        elif leverage_info and leverage_info.max_leverage is not None:
+            # Calculate from max leverage (margin = size / leverage)
+            max_leverage = leverage_info.max_leverage
+            estimated_margin = order_spec.size_usd / max_leverage
+            self.logger.debug(
+                f"📊 [{exchange_name}] Margin for {symbol}: ${estimated_margin:.2f} "
+                f"(${order_spec.size_usd:.2f} / {max_leverage}x leverage)"
+            )
+            return estimated_margin
+        else:
+            # Fallback to conservative 20% estimate if leverage info unavailable
+            self.logger.warning(
+                f"⚠️ No leverage info available for {exchange_name}:{symbol}, "
+                "using conservative 20% margin estimate"
+            )
+            return order_spec.size_usd * Decimal("0.20")
+
+    async def _send_insufficient_margin_notification(
+        self,
+        exchange_name: str,
+        available_balance: Decimal,
+        required_margin: Decimal,
+        exchange_leverage_info: Dict[str, Any],
+        orders: List[OrderSpec]
+    ) -> None:
+        """
+        Attempt to send insufficient margin notification via notification service.
+        
+        Args:
+            exchange_name: Name of the exchange with insufficient margin
+            available_balance: Available balance on the exchange
+            required_margin: Required margin amount
+            exchange_leverage_info: Dict of symbol -> LeverageInfo for this exchange
+            orders: List of orders that failed margin check
+        """
+        if not self.notification_service:
+            return
+        
+        try:
+            # Get symbol from orders (use first order's symbol)
+            symbol = orders[0].symbol if orders else "UNKNOWN"
+            
+            # Get leverage info for the symbol
+            leverage_info = exchange_leverage_info.get(symbol)
+            leverage_str = "N/A"
+            if leverage_info:
+                if hasattr(leverage_info, 'max_leverage') and leverage_info.max_leverage:
+                    leverage_str = f"{leverage_info.max_leverage}x"
+                elif hasattr(leverage_info, 'margin_requirement') and leverage_info.margin_requirement:
+                    calculated_leverage = Decimal("1") / leverage_info.margin_requirement
+                    leverage_str = f"{calculated_leverage:.1f}x"
+            
+            # Call notification service
+            await self.notification_service.notify_insufficient_margin(
+                symbol=symbol,
+                exchange_name=exchange_name,
+                available_balance=available_balance,
+                required_margin=required_margin,
+                leverage_info=leverage_str
+            )
+        except Exception as exc:
+            # Don't fail the preflight check if notification fails
+            self.logger.debug(f"Could not send insufficient margin notification: {exc}")
 
     def _calculate_imbalance(
         self,
@@ -1054,12 +1162,24 @@ class AtomicMultiOrderExecutor:
             log_stage(self.logger, "Margin & Balance Checks", icon="💰", stage_id=compose_stage("2"))
             self.logger.info("Running balance checks...")
 
+            # Cache leverage info to avoid duplicate API calls
+            leverage_info_cache: Dict[tuple, Any] = {}
+
             exchange_margin_required: Dict[str, Decimal] = {}
+            exchange_leverage_info: Dict[str, Dict[str, Any]] = {}  # Store leverage info for notifications
+            
             for order_spec in orders:
                 exchange_name = order_spec.exchange_client.get_exchange_name()
-                estimated_margin = self._estimate_required_margin(order_spec.size_usd)
+                estimated_margin = await self._estimate_required_margin(order_spec, leverage_info_cache)
                 exchange_margin_required.setdefault(exchange_name, Decimal("0"))
                 exchange_margin_required[exchange_name] += estimated_margin
+                
+                # Store leverage info for potential notifications
+                cache_key = (exchange_name, order_spec.symbol)
+                if cache_key in leverage_info_cache:
+                    if exchange_name not in exchange_leverage_info:
+                        exchange_leverage_info[exchange_name] = {}
+                    exchange_leverage_info[exchange_name][order_spec.symbol] = leverage_info_cache[cache_key]
 
             for exchange_name, required_margin in exchange_margin_required.items():
                 exchange_client = next(
@@ -1095,6 +1215,16 @@ class AtomicMultiOrderExecutor:
                         f"(${required_margin:.2f} + 10% buffer)"
                     )
                     self.logger.error(f"❌ {error_msg}")
+                    
+                    # Attempt to send notification
+                    await self._send_insufficient_margin_notification(
+                        exchange_name=exchange_name,
+                        available_balance=available_balance,
+                        required_margin=required_margin,
+                        exchange_leverage_info=exchange_leverage_info.get(exchange_name, {}),
+                        orders=orders
+                    )
+                    
                     return False, error_msg
 
                 self.logger.info(

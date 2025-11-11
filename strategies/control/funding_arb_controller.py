@@ -551,4 +551,31 @@ class FundingArbStrategyController(BaseStrategyController):
                 "error": str(e),
                 "message": f"Failed to close position: {e}"
             }
+    
+    async def reload_config(self) -> Dict[str, Any]:
+        """
+        Reload strategy configuration from the config file.
+        
+        Returns:
+            Dict with reload operation result
+        """
+        try:
+            success = await self.strategy.reload_config()
+            if success:
+                return {
+                    "success": True,
+                    "message": "Config reloaded successfully. Changes will take effect on the next cycle."
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Failed to reload config",
+                    "message": "Config reload failed. Check logs for details."
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Error reloading config: {e}"
+            }
 

@@ -6,7 +6,7 @@ import json
 import yaml
 from decimal import Decimal
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
@@ -65,19 +65,25 @@ class ConfigHandler(BaseHandler):
         if user_configs:
             message += "<b>Your Configs:</b>\n"
             for cfg in user_configs:
-                status = "🟢" if cfg["is_active"] else "⚫"
-                config_id = str(cfg["id"])
-                config_name = cfg["config_name"]
-                message += f"{status} <b>{config_name}</b> ({cfg['strategy_type']})\n"
+                # Convert Row to dict for safe access
+                cfg_dict = dict(cfg) if not isinstance(cfg, dict) else cfg
+                status = "🟢" if cfg_dict["is_active"] else "⚫"
+                config_id = str(cfg_dict["id"])
+                config_name = cfg_dict["config_name"]
+                message += f"{status} <b>{config_name}</b> ({cfg_dict['strategy_type']})\n"
                 
-                # Add edit and delete buttons for each config
+                # Add run, edit, and delete buttons for each config
                 keyboard.append([
                     InlineKeyboardButton(
-                        f"✏️ {config_name}",
+                        f"🚀 Run",
+                        callback_data=f"run_from_list:{config_id}"
+                    ),
+                    InlineKeyboardButton(
+                        f"✏️ Edit",
                         callback_data=f"edit_config_btn:{config_id}"
                     ),
                     InlineKeyboardButton(
-                        f"🗑️ {config_name}",
+                        f"🗑️ Delete",
                         callback_data=f"delete_config_btn:{config_id}"
                     )
                 ])
@@ -88,7 +94,20 @@ class ConfigHandler(BaseHandler):
         if templates:
             message += "<b>Public Templates:</b>\n"
             for tpl in templates[:10]:  # Limit to 10 templates
-                message += f"📄 {tpl['config_name']} ({tpl['strategy_type']})\n"
+                # Convert Row to dict for safe access
+                tpl_dict = dict(tpl) if not isinstance(tpl, dict) else tpl
+                config_id = str(tpl_dict['id'])
+                config_name = tpl_dict['config_name']
+                message += f"⭐ {config_name}\n"
+                # message += f"⭐ {config_name} ({tpl_dict['strategy_type']})\n"
+                
+                # Add copy button for each template
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"📋 Copy {config_name}",
+                        callback_data=f"copy_template_config:{config_id}"
+                    )
+                ])
             if len(templates) > 10:
                 message += f"... and {len(templates) - 10} more\n"
         
@@ -124,10 +143,13 @@ class ConfigHandler(BaseHandler):
             callback_data = query.data
             config_id = callback_data.split(":", 1)[1]
             
+            telegram_user_id = query.from_user.id
+            user = await self.auth.get_user_by_telegram_id(telegram_user_id)
+            
             # Get config details
             config_row = await self.database.fetch_one(
                 """
-                SELECT config_name, strategy_type, config_data, is_active
+                SELECT config_name, strategy_type, config_data, is_active, is_template, user_id
                 FROM strategy_configs
                 WHERE id = :id
                 """,
@@ -141,7 +163,47 @@ class ConfigHandler(BaseHandler):
                 )
                 return
             
-            config_name = config_row['config_name']
+            # Convert Row to dict for safe access
+            config_dict = dict(config_row)
+            
+            config_name = config_dict['config_name']
+            is_template = config_dict.get('is_template', False)
+            config_user_id = config_dict.get('user_id')
+            
+            # Check if user is trying to edit a template
+            if is_template:
+                # Offer to create a copy instead
+                keyboard = [
+                    [
+                        InlineKeyboardButton(
+                            "✅ Yes, Create Copy",
+                            callback_data=f"copy_template_config:{config_id}"
+                        ),
+                        InlineKeyboardButton(
+                            "❌ Cancel",
+                            callback_data="list_configs_back"
+                        )
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(
+                    f"⚠️ <b>Templates Cannot Be Edited</b>\n\n"
+                    f"Config <b>{config_name}</b> is a public template.\n\n"
+                    f"To customize it, we'll create a copy for you that you can edit.\n\n"
+                    f"Would you like to create a copy?",
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+                return
+            
+            # Check if user owns this config
+            if config_user_id and str(config_user_id) != str(user["id"]):
+                await query.edit_message_text(
+                    "❌ You don't have permission to edit this config.",
+                    parse_mode='HTML'
+                )
+                return
             
             # Start edit wizard (for now, just show current config and allow JSON edit)
             context.user_data['wizard'] = {
@@ -150,10 +212,10 @@ class ConfigHandler(BaseHandler):
                 'data': {
                     'config_id': config_id,
                     'config_name': config_name,
-                    'strategy_type': config_row['strategy_type']
+                    'strategy_type': config_dict['strategy_type']
                 }
             }
-            config_data = config_row['config_data']
+            config_data = config_dict['config_data']
             if isinstance(config_data, str):
                 try:
                     config_data = json.loads(config_data)
@@ -164,22 +226,53 @@ class ConfigHandler(BaseHandler):
                         pass
             config_data = config_data or {}
             structured_config = {
-                "strategy": config_row['strategy_type'],
+                "strategy": config_dict['strategy_type'],
                 "config": config_data
             }
             config_yaml = yaml.dump(structured_config, default_flow_style=False, indent=2, sort_keys=False)
             
-            await query.edit_message_text(
+            # Telegram message limit is 4096 characters
+            # Reserve space for header text and buttons (~500 chars)
+            max_config_length = 3500
+            
+            # Build header message
+            header_message = (
                 f"✏️ <b>Edit Config: {config_name}</b>\n\n"
-                f"Strategy Type: <b>{config_row['strategy_type']}</b>\n\n"
+                f"Strategy Type: <b>{config_dict['strategy_type']}</b>\n\n"
                 f"Current config (YAML):\n"
-                f"<code>{config_yaml[:500]}{'...' if len(config_yaml) > 500 else ''}</code>\n\n"
-                f"Send updated config as JSON/YAML, or 'cancel' to cancel:",
-                parse_mode='HTML',
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⬅️ Back", callback_data="list_configs_back")]
-                ])
             )
+            
+            # If config is too long, send it in a separate message
+            if len(config_yaml) > max_config_length:
+                # Send header first
+                await query.edit_message_text(
+                    header_message +
+                    f"<code>{config_yaml[:max_config_length]}...</code>\n\n"
+                    f"⚠️ Config is too long to display fully. Sending full config in next message...",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⬅️ Back", callback_data="list_configs_back")]
+                    ])
+                )
+                
+                # Send full config in a separate message
+                await query.message.reply_text(
+                    f"📋 <b>Full Config (YAML):</b>\n\n"
+                    f"<code>{config_yaml}</code>\n\n"
+                    f"Send updated config as JSON/YAML, or 'cancel' to cancel:",
+                    parse_mode='HTML'
+                )
+            else:
+                # Send everything in one message
+                await query.edit_message_text(
+                    header_message +
+                    f"<code>{config_yaml}</code>\n\n"
+                    f"Send updated config as JSON/YAML, or 'cancel' to cancel:",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⬅️ Back", callback_data="list_configs_back")]
+                    ])
+                )
         except Exception as e:
             self.logger.error(f"Error in edit_config_callback: {e}", exc_info=True)
             try:
@@ -215,7 +308,9 @@ class ConfigHandler(BaseHandler):
                 )
                 return
             
-            config_name = config_row['config_name']
+            # Convert Row to dict
+            config_dict = dict(config_row)
+            config_name = config_dict['config_name']
             
             # Check if config is in use
             running_strategies = await self.database.fetch_all(
@@ -227,7 +322,11 @@ class ConfigHandler(BaseHandler):
                 {"config_id": config_id}
             )
             
-            has_running = running_strategies[0]['count'] > 0 if running_strategies else False
+            has_running = False
+            if running_strategies:
+                # Convert Row to dict
+                first_row = dict(running_strategies[0])
+                has_running = first_row.get('count', 0) > 0
             
             if has_running:
                 await query.edit_message_text(
@@ -294,7 +393,9 @@ class ConfigHandler(BaseHandler):
                 )
                 return
             
-            config_name = config_row['config_name']
+            # Convert Row to dict
+            config_dict = dict(config_row)
+            config_name = config_dict['config_name']
             
             # Delete config
             await self.database.execute(
@@ -308,9 +409,16 @@ class ConfigHandler(BaseHandler):
                 {"config_id": config_id, "config_name": config_name}
             )
             
+            # Add back button to return to config list
+            keyboard = [
+                [InlineKeyboardButton("⬅️ Back to Configs", callback_data="list_configs_back")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
             await query.edit_message_text(
                 f"✅ Config <b>{config_name}</b> deleted successfully.",
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=reply_markup
             )
         except Exception as e:
             self.logger.error(f"Error in delete_config_confirm_callback: {e}", exc_info=True)
@@ -324,9 +432,16 @@ class ConfigHandler(BaseHandler):
         query = update.callback_query
         await query.answer("Deletion cancelled.")
         
+        # Add back button to return to config list
+        keyboard = [
+            [InlineKeyboardButton("⬅️ Back to Configs", callback_data="list_configs_back")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         await query.edit_message_text(
             "❌ Config deletion cancelled.",
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=reply_markup
         )
     
     async def config_strategy_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -989,6 +1104,64 @@ class ConfigHandler(BaseHandler):
                 )
                 return
             
+            # Extract the inner config if user sent full structure with 'strategy' and 'config' keys
+            # Database stores only the inner config dict, not the full structure
+            # Validate nesting level - reject double-nested configs (config.config)
+            if 'config' in config_dict:
+                nested_config = config_dict['config']
+                
+                # Check for double-nesting: if nested config also has a 'config' key, reject it
+                if isinstance(nested_config, dict) and 'config' in nested_config:
+                    await update.message.reply_text(
+                        "❌ Invalid config structure: double-nesting detected.\n\n"
+                        "Found: config.config (not allowed)\n\n"
+                        "Expected format:\n"
+                        "```yaml\n"
+                        "strategy: funding_arbitrage\n"
+                        "config:\n"
+                        "  scan_exchanges:\n"
+                        "    - aster\n"
+                        "  target_margin: 35.0\n"
+                        "  ...\n"
+                        "```\n\n"
+                        "Or just the config dict without the outer structure.",
+                        parse_mode='Markdown'
+                    )
+                    return
+                
+                # User sent full structure: {strategy: ..., config: {...}}
+                # Extract just the config part
+                config_dict = nested_config
+            
+            # Validate that the extracted config has required fields (not just empty or metadata)
+            if not isinstance(config_dict, dict) or not config_dict:
+                await update.message.reply_text(
+                    "❌ Config is empty or invalid. Please provide a valid config dictionary.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Check if config has at least one strategy-specific field to ensure it's not just metadata
+            strategy_specific_fields = ['scan_exchanges', 'target_margin', 'risk_strategy', 'min_profit_rate', 
+                                       'exchanges', 'max_positions', 'mandatory_exchange']
+            if not any(field in config_dict for field in strategy_specific_fields):
+                await update.message.reply_text(
+                    "❌ Config appears to be invalid. Missing required fields like 'scan_exchanges', 'target_margin', etc.\n\n"
+                    "Please ensure your config contains the actual strategy parameters.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Check for invalid structure: has 'strategy' key but no 'config' key (and wasn't extracted above)
+            if 'strategy' in config_dict and 'config' not in config_dict:
+                # Check if it has actual config keys (might be valid if user sent just the config dict)
+                if not any(field in config_dict for field in strategy_specific_fields):
+                    await update.message.reply_text(
+                        "❌ Config structure invalid. Expected format: {strategy: '...', config: {...}} or just the config dict.",
+                        parse_mode='HTML'
+                    )
+                    return
+            
             # Update config in database
             await self.database.execute(
                 """
@@ -1010,11 +1183,93 @@ class ConfigHandler(BaseHandler):
                 {"config_id": config_id, "config_name": data['config_name']}
             )
             
+            # Regenerate config files for active strategies using this config
+            # (includes running, starting, and paused - any status where the process exists)
+            affected_strategies = await self._regenerate_configs_for_active_strategies(config_id)
+            
+            # If editing from a specific strategy view, also regenerate that strategy's config file
+            # (only if it wasn't already regenerated above, i.e., if it's stopped/failed)
+            run_id = data.get('run_id')
+            if run_id:
+                # Check if this strategy was already regenerated (i.e., it's active: running/starting/paused)
+                already_regenerated = any(
+                    str(strat.get('id')) == str(run_id) 
+                    for strat in affected_strategies
+                )
+                
+                if not already_regenerated:
+                    # Strategy is stopped/failed (not active), regenerate its config file
+                    # so it's ready when the strategy is restarted
+                    await self._regenerate_strategy_config_file(run_id, config_id)
+            
+            # Get user's API key for hot-reload (if available)
+            api_key = await self.auth.get_api_key_for_user(user) if user else None
+            
+            if api_key:
+                self.logger.info(f"Attempting hot-reload for {len(affected_strategies)} active strategies")
+            else:
+                self.logger.info("No API key available for hot-reload (user may not be authenticated)")
+            
+            # Try to hot-reload configs for active strategies via control API
+            reload_results = await self._hot_reload_running_strategies(affected_strategies, api_key=api_key)
+            
             context.user_data.pop('wizard', None)
             
+            # Build success message
+            message = f"✅ Config <b>{data['config_name']}</b> updated successfully!"
+            
+            # Check if we came from a specific strategy view
+            run_id = data.get('run_id')
+            strategy_filter = data.get('strategy_filter', 'all')  # Get filter from wizard data
+            
+            # Build keyboard with back button
+            keyboard = []
+            if run_id:
+                # Show specific strategy info
+                run_id_short = str(run_id)[:8]
+                run_id_str = str(run_id)
+                if reload_results.get(run_id_str, False):
+                    message += f"\n\n✅ Strategy <code>{run_id_short}</code> config reloaded instantly!"
+                else:
+                    # Check strategy status to determine message
+                    strategy_row = await self.database.fetch_one(
+                        "SELECT status FROM strategy_runs WHERE id = :run_id",
+                        {"run_id": run_id}
+                    )
+                    status = dict(strategy_row).get('status') if strategy_row else None
+                    if status in ('running', 'starting'):
+                        message += f"\n\n⚠️ Strategy <code>{run_id_short}</code> config updated. Hot-reload unavailable - changes will apply on next cycle."
+                    elif status == 'paused':
+                        message += f"\n\nℹ️ Strategy <code>{run_id_short}</code> is paused. Changes will apply when resumed."
+                    else:
+                        message += f"\n\nℹ️ Strategy <code>{run_id_short}</code> config updated."
+                # Add back button to strategy list with filter
+                keyboard.append([
+                    InlineKeyboardButton("⬅️ Back to Strategies", callback_data=f"filter_strategies:{strategy_filter}")
+                ])
+            elif affected_strategies:
+                # Show all affected strategies
+                reloaded_count = sum(1 for s in affected_strategies if reload_results.get(str(s['id']), False))
+                message += f"\n\n🔄 Updated {len(affected_strategies)} active strateg{'y' if len(affected_strategies) == 1 else 'ies'}:"
+                for strat in affected_strategies[:5]:  # Show max 5
+                    run_id_short = str(strat['id'])[:8]
+                    status = strat['status']
+                    reloaded = reload_results.get(str(strat['id']), False)
+                    icon = "✅" if reloaded else "🔄"
+                    message += f"\n   {icon} {run_id_short} ({status})"
+                if len(affected_strategies) > 5:
+                    message += f"\n   ... and {len(affected_strategies) - 5} more"
+                if reloaded_count > 0:
+                    message += f"\n\n✅ {reloaded_count} strateg{'y' if reloaded_count == 1 else 'ies'} reloaded instantly."
+                if reloaded_count < len(affected_strategies):
+                    message += f"\n⚠️ {len(affected_strategies) - reloaded_count} strateg{'y' if len(affected_strategies) - reloaded_count == 1 else 'ies'} will apply changes on next cycle."
+            
+            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+            
             await update.message.reply_text(
-                f"✅ Config <b>{data['config_name']}</b> updated successfully!",
-                parse_mode='HTML'
+                message,
+                parse_mode='HTML',
+                reply_markup=reply_markup
             )
         except Exception as e:
             self.logger.error(f"Error updating config: {e}")
@@ -1022,6 +1277,358 @@ class ConfigHandler(BaseHandler):
                 f"❌ Failed to update config: {str(e)}",
                 parse_mode='HTML'
             )
+    
+    async def copy_template_config_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle copy template config button click."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            callback_data = query.data
+            template_config_id = callback_data.split(":", 1)[1]
+            
+            telegram_user_id = query.from_user.id
+            user = await self.auth.get_user_by_telegram_id(telegram_user_id)
+            
+            # Get template config
+            template_row = await self.database.fetch_one(
+                """
+                SELECT config_name, strategy_type, config_data
+                FROM strategy_configs
+                WHERE id = :id AND is_template = TRUE
+                """,
+                {"id": template_config_id}
+            )
+            
+            if not template_row:
+                await query.edit_message_text(
+                    "❌ Template not found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Convert Row to dict
+            template_dict = dict(template_row)
+            
+            template_name = template_dict['config_name']
+            strategy_type = template_dict['strategy_type']
+            config_data = template_dict['config_data']
+            
+            # Create copy name
+            copy_name = f"{template_name} (Copy)"
+            
+            # Check if copy name already exists, add number if needed
+            existing_count = await self.database.fetch_one(
+                """
+                SELECT COUNT(*) as count
+                FROM strategy_configs
+                WHERE user_id = :user_id AND config_name LIKE :pattern
+                """,
+                {"user_id": str(user["id"]), "pattern": f"{copy_name}%"}
+            )
+            
+            if existing_count and existing_count['count'] > 0:
+                copy_name = f"{template_name} (Copy {existing_count['count'] + 1})"
+            
+            # Create copy
+            if isinstance(config_data, str):
+                config_data_dict = json.loads(config_data)
+            else:
+                config_data_dict = config_data
+            
+            await self.database.execute(
+                """
+                INSERT INTO strategy_configs (
+                    user_id, config_name, strategy_type, config_data,
+                    is_template, is_active, created_at, updated_at
+                )
+                VALUES (
+                    :user_id, :config_name, :strategy_type, CAST(:config_data AS jsonb),
+                    FALSE, TRUE, NOW(), NOW()
+                )
+                """,
+                {
+                    "user_id": str(user["id"]),
+                    "config_name": copy_name,
+                    "strategy_type": strategy_type,
+                    "config_data": json.dumps(config_data_dict)
+                }
+            )
+            
+            await self.audit_logger.log_action(
+                str(user["id"]),
+                "copy_template_config",
+                {"template_id": template_config_id, "template_name": template_name, "copy_name": copy_name}
+            )
+            
+            # Now start edit wizard for the new copy
+            new_config_row = await self.database.fetch_one(
+                """
+                SELECT id FROM strategy_configs
+                WHERE user_id = :user_id AND config_name = :config_name
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                {"user_id": str(user["id"]), "config_name": copy_name}
+            )
+            
+            if new_config_row:
+                # Show success and redirect to list configs
+                await query.edit_message_text(
+                    f"✅ Created copy: <b>{copy_name}</b>\n\n"
+                    f"You can now edit it from /list_configs",
+                    parse_mode='HTML'
+                )
+            else:
+                await query.edit_message_text(
+                    f"✅ Created copy: <b>{copy_name}</b>\n\n"
+                    f"Use /list_configs to edit it.",
+                    parse_mode='HTML'
+                )
+                
+        except Exception as e:
+            self.logger.error(f"Error copying template: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Failed to copy template: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def _regenerate_configs_for_active_strategies(self, config_id: str) -> List[Dict[str, Any]]:
+        """
+        Regenerate config files for all active strategies using this config.
+        
+        Active strategies are those with status: 'running', 'starting', or 'paused'.
+        These are strategies where the process exists and may be reading the config file.
+        Stopped/failed strategies are excluded as they don't need immediate config updates.
+        
+        When a config is edited, all active strategies that use it need their temp
+        config files updated so they pick up the changes.
+        
+        Args:
+            config_id: The config UUID that was updated
+            
+        Returns:
+            List of affected strategy runs (with id, supervisor_program_name, status)
+        """
+        # Find active strategies using this config
+        # Active = running, starting, or paused (process exists and may read config)
+        active_strategies = await self.database.fetch_all(
+            """
+            SELECT id, supervisor_program_name, status
+            FROM strategy_runs
+            WHERE config_id = :config_id
+            AND status IN ('running', 'starting', 'paused')
+            """,
+            {"config_id": config_id}
+        )
+        
+        self.logger.info(f"Found {len(active_strategies) if active_strategies else 0} active strategies using config_id: {config_id}")
+        
+        if not active_strategies:
+            return []
+        
+        # Regenerate config file for each active strategy using the core function
+        affected_strategies = []
+        for strategy in active_strategies:
+            # Convert Row to dict
+            strategy_dict = dict(strategy) if not isinstance(strategy, dict) else strategy
+            run_id = str(strategy_dict['id'])
+            
+            # Use the core regeneration function
+            success = await self._regenerate_strategy_config_file(run_id, config_id)
+            if success:
+                affected_strategies.append(strategy_dict)
+        
+        return affected_strategies
+    
+    async def _regenerate_strategy_config_file(self, run_id: str, config_id: str) -> bool:
+        """
+        Regenerate the temp config file for a specific strategy from the database config.
+        
+        This is the core function for regenerating strategy config files. It fetches the config
+        from the database and writes it to the temp file that the supervisor uses.
+        
+        Args:
+            run_id: Strategy run UUID
+            config_id: Config UUID
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Get config from database
+            config_row = await self.database.fetch_one(
+                """
+                SELECT config_data, strategy_type
+                FROM strategy_configs
+                WHERE id = :config_id
+                """,
+                {"config_id": config_id}
+            )
+            
+            if not config_row:
+                self.logger.warning(f"Config not found for config_id: {config_id}")
+                return False
+            
+            # Convert Row to dict
+            config_dict_row = dict(config_row)
+            config_data_raw = config_dict_row['config_data']
+            strategy_type = config_dict_row['strategy_type']
+            
+            # Parse config data
+            if isinstance(config_data_raw, str):
+                config_dict = json.loads(config_data_raw)
+            else:
+                config_dict = config_data_raw
+            
+            # Write the config file
+            return await self._write_strategy_config_file(run_id, config_dict, strategy_type)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to regenerate config file for strategy {run_id[:8]}: {e}", exc_info=True)
+            return False
+    
+    async def _write_strategy_config_file(
+        self, 
+        run_id: str, 
+        config_dict: Dict[str, Any], 
+        strategy_type: str
+    ) -> bool:
+        """
+        Write strategy config to temp file.
+        
+        This is the low-level function that actually writes the config file.
+        It's separated to allow reuse when config data is already available.
+        
+        Args:
+            run_id: Strategy run UUID
+            config_dict: Parsed config dictionary
+            strategy_type: Strategy type (e.g., 'funding_arbitrage')
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            import tempfile
+            from pathlib import Path
+            
+            temp_dir = Path(tempfile.gettempdir())
+            config_file = temp_dir / f"strategy_{run_id}.yml"
+            
+            # Build full config structure
+            full_config = {
+                "strategy": strategy_type,
+                "created_at": datetime.now().isoformat(),
+                "version": "1.0",
+                "config": config_dict
+            }
+            
+            # Register Decimal representer for YAML
+            def decimal_representer(dumper, data):
+                return dumper.represent_scalar('tag:yaml.org,2002:float', str(data))
+            yaml.add_representer(Decimal, decimal_representer)
+            
+            # Write config file
+            with open(config_file, 'w') as f:
+                yaml.dump(
+                    full_config,
+                    f,
+                    default_flow_style=False,
+                    sort_keys=False,
+                    allow_unicode=True,
+                    indent=2
+                )
+            
+            self.logger.info(f"Regenerated config file for strategy {run_id[:8]}: {config_file}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to write config file for strategy {run_id[:8]}: {e}", exc_info=True)
+            return False
+    
+    async def _hot_reload_running_strategies(
+        self, 
+        strategies: List[Dict[str, Any]], 
+        api_key: Optional[str] = None
+    ) -> Dict[str, bool]:
+        """
+        Attempt to hot-reload configs for running strategies via control API.
+        
+        This allows config changes to take effect immediately without restarting.
+        Falls back gracefully if control API is not available.
+        
+        Args:
+            strategies: List of strategy dicts with id and status
+            api_key: Optional API key for authentication (if None, hot-reload is skipped)
+        
+        Returns:
+            Dict mapping run_id to success status (True if reloaded, False otherwise)
+        """
+        reload_results = {}
+        
+        if not strategies:
+            return reload_results
+        
+        # Skip hot-reload if API key is not provided
+        if not api_key:
+            self.logger.info("Skipping hot-reload: API key not provided (user may not be authenticated via /auth)")
+            return reload_results
+        
+        from telegram_bot_service.utils.api_client import ControlAPIClient
+        
+        self.logger.info(f"Attempting hot-reload for {len(strategies)} strategies")
+            
+        # Try to reload config for each running strategy
+        for strategy in strategies:
+            run_id = str(strategy.get('id', ''))
+            status = strategy.get('status', '')
+            
+            # Only reload if strategy is actually running
+            if status not in ('running', 'starting'):
+                self.logger.debug(f"Strategy {run_id[:8]} status is '{status}', skipping hot-reload (only 'running' or 'starting' can be reloaded)")
+                reload_results[run_id] = False
+                continue
+            
+            try:
+                # Get control API port for this strategy
+                strategy_row = await self.database.fetch_one(
+                    """
+                    SELECT control_api_port
+                    FROM strategy_runs
+                    WHERE id = :run_id
+                    """,
+                    {"run_id": run_id}
+                )
+                
+                # Convert Row to dict for safe access
+                strategy_dict = dict(strategy_row) if strategy_row else {}
+                
+                if not strategy_dict or not strategy_dict.get('control_api_port'):
+                    self.logger.warning(f"Strategy {run_id[:8]} has no control_api_port in database, cannot hot-reload")
+                    reload_results[run_id] = False
+                    continue
+                
+                # Create client with strategy-specific port
+                port = strategy_dict['control_api_port']
+                strategy_url = f"http://127.0.0.1:{port}"
+                self.logger.info(f"Attempting hot-reload for strategy {run_id[:8]} via {strategy_url}")
+                strategy_client = ControlAPIClient(strategy_url, api_key)
+                
+                # Attempt reload
+                result = await strategy_client.reload_config()
+                if result.get('success'):
+                    self.logger.info(f"✅ Hot-reloaded config for strategy {run_id[:8]}")
+                    reload_results[run_id] = True
+                else:
+                    self.logger.warning(f"⚠️ Hot-reload failed for strategy {run_id[:8]}: {result.get('error', 'Unknown error')}")
+                    reload_results[run_id] = False
+                    
+            except Exception as e:
+                # Log but don't fail - hot-reload is optional
+                self.logger.warning(f"Could not hot-reload config for strategy {run_id[:8]}: {e}", exc_info=True)
+                reload_results[run_id] = False
+        
+        return reload_results
     
     # Helper methods for wizard
     
@@ -1554,6 +2161,103 @@ class ConfigHandler(BaseHandler):
                         reply_markup=reply_markup
             )
     
+    async def run_from_list_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle run button click from config list - show account selection."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        callback_data = query.data
+        config_id = callback_data.split(":", 1)[1]
+        
+        # Check safety limits
+        allowed, reason = await self.safety_manager.can_start_strategy(user["id"])
+        if not allowed:
+            await query.edit_message_text(
+                f"❌ Cannot start strategy: {reason}",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Check resource availability
+        resource_ok, resource_msg = await self.health_monitor.before_spawn_check()
+        if not resource_ok:
+            await query.edit_message_text(
+                f"❌ Resource check failed: {resource_msg}",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Check user limit
+        user_limit_ok, user_limit_msg = await self.health_monitor.check_user_running_count(user["id"])
+        if not user_limit_ok:
+            await query.edit_message_text(
+                f"❌ {user_limit_msg}",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Get config name for display
+        config_row = await self.database.fetch_one(
+            "SELECT config_name FROM strategy_configs WHERE id = :id",
+            {"id": config_id}
+        )
+        if not config_row:
+            await query.edit_message_text(
+                "❌ Config not found",
+                parse_mode='HTML'
+            )
+            return
+        
+        config_name = config_row['config_name']
+        
+        # Start wizard with config_id pre-selected
+        context.user_data['wizard'] = {
+            'type': 'run_strategy',
+            'step': 1,
+            'data': {
+                'config_id': config_id,
+                'config_name': config_name
+            }
+        }
+        
+        # Get user's accounts
+        accounts_query = """
+            SELECT a.id, a.account_name
+            FROM accounts a
+            WHERE a.user_id = :user_id AND a.is_active = TRUE
+            ORDER BY a.account_name
+        """
+        accounts = await self.database.fetch_all(accounts_query, {"user_id": user["id"]})
+        
+        if not accounts:
+            await query.edit_message_text(
+                "❌ No accounts found. Create an account first with /create_account",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Create account selection keyboard
+        keyboard = []
+        for acc in accounts:
+            keyboard.append([InlineKeyboardButton(
+                acc['account_name'],
+                callback_data=f"run_account:{acc['id']}"
+            )])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"🚀 <b>Run Strategy</b>\n\n"
+            f"Config: <b>{config_name}</b>\n\n"
+            "Step 1/2: Select account:",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+    
     def register_handlers(self, application):
         """Register config management command and callback handlers"""
         # Commands
@@ -1561,6 +2265,14 @@ class ConfigHandler(BaseHandler):
         application.add_handler(CommandHandler("create_config", self.create_config_command))
         
         # Callbacks
+        application.add_handler(CallbackQueryHandler(
+            self.run_from_list_callback,
+            pattern="^run_from_list:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.copy_template_config_callback,
+            pattern="^copy_template_config:"
+        ))
         application.add_handler(CallbackQueryHandler(
             self.edit_config_callback,
             pattern="^edit_config_btn:"

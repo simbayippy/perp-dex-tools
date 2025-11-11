@@ -69,6 +69,20 @@ class BaseStrategyController(ABC):
         pass
     
     @abstractmethod
+    async def reload_config(self) -> Dict[str, Any]:
+        """
+        Reload strategy configuration from file.
+        
+        Returns:
+            Dict with reload operation result:
+            {
+                "success": bool,
+                "message": str
+            }
+        """
+        pass
+    
+    @abstractmethod
     def get_strategy_name(self) -> str:
         """Get the strategy name."""
         pass
