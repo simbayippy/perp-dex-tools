@@ -4,6 +4,7 @@ Strategy execution handlers for Telegram bot
 
 from datetime import datetime
 from pathlib import Path
+import xmlrpc.client
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
@@ -1501,16 +1502,45 @@ class StrategyHandler(BaseHandler):
             supervisor_name = strategy_dict.get('supervisor_program_name')
             status = strategy_dict.get('status')
             
-            # Ensure strategy is stopped
-            if status in ('running', 'starting', 'paused'):
-                # Try to stop via supervisor first
-                if supervisor_name:
+            # Ensure strategy is stopped and remove from supervisor
+            if supervisor_name:
+                try:
+                    supervisor = self.process_manager._get_supervisor_client()
+                    
+                    # Stop the process if running
+                    if status in ('running', 'starting', 'paused'):
+                        try:
+                            supervisor.supervisor.stopProcess(supervisor_name)
+                            self.logger.info(f"Stopped supervisor process: {supervisor_name}")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to stop supervisor process: {e}")
+                    
+                    # Remove process group from supervisor
                     try:
-                        supervisor = self.process_manager._get_supervisor_client()
-                        supervisor.supervisor.stopProcess(supervisor_name)
-                        self.logger.info(f"Stopped supervisor process: {supervisor_name}")
+                        # First check if process group exists
+                        try:
+                            process_info = supervisor.supervisor.getProcessInfo(supervisor_name)
+                            # Process exists, remove it
+                            try:
+                                supervisor.supervisor.removeProcessGroup(supervisor_name)
+                                self.logger.info(f"Removed process group from supervisor: {supervisor_name}")
+                            except xmlrpc.client.Fault as fault:
+                                # If already removed or doesn't exist, that's OK
+                                if 'NOT_RUNNING' in str(fault) or 'BAD_NAME' in str(fault):
+                                    self.logger.info(f"Process group already removed or doesn't exist: {supervisor_name}")
+                                else:
+                                    raise
+                        except xmlrpc.client.Fault as fault:
+                            # Process doesn't exist, that's OK
+                            if 'BAD_NAME' in str(fault) or 'NOT_RUNNING' in str(fault):
+                                self.logger.info(f"Process group doesn't exist in supervisor: {supervisor_name}")
+                            else:
+                                raise
                     except Exception as e:
-                        self.logger.warning(f"Failed to stop supervisor process: {e}")
+                        self.logger.warning(f"Failed to remove process group from supervisor: {e}")
+                        
+                except Exception as e:
+                    self.logger.warning(f"Failed to interact with supervisor: {e}")
             
             # Delete config file if it exists
             import tempfile
