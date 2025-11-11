@@ -1457,8 +1457,9 @@ class StrategyHandler(BaseHandler):
                     )
                 ])
             
-            # Add Edit Config button if user owns the config
-            if config_user_id and str(config_user_id) == str(user["id"]):
+            # Add Edit Config button if user owns the config OR if it's a template
+            # (templates will auto-create a copy when editing)
+            if (config_user_id and str(config_user_id) == str(user["id"])) or is_template or not config_user_id:
                 keyboard.append([
                     InlineKeyboardButton(
                         "✏️ Edit Config",
