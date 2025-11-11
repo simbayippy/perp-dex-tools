@@ -6,7 +6,7 @@ import json
 import yaml
 from decimal import Decimal
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
@@ -124,10 +124,13 @@ class ConfigHandler(BaseHandler):
             callback_data = query.data
             config_id = callback_data.split(":", 1)[1]
             
+            telegram_user_id = query.from_user.id
+            user = await self.auth.get_user_by_telegram_id(telegram_user_id)
+            
             # Get config details
             config_row = await self.database.fetch_one(
                 """
-                SELECT config_name, strategy_type, config_data, is_active
+                SELECT config_name, strategy_type, config_data, is_active, is_template, user_id
                 FROM strategy_configs
                 WHERE id = :id
                 """,
@@ -142,6 +145,43 @@ class ConfigHandler(BaseHandler):
                 return
             
             config_name = config_row['config_name']
+            is_template = config_row.get('is_template', False)
+            config_user_id = config_row.get('user_id')
+            
+            # Check if user is trying to edit a template
+            if is_template:
+                # Offer to create a copy instead
+                keyboard = [
+                    [
+                        InlineKeyboardButton(
+                            "✅ Yes, Create Copy",
+                            callback_data=f"copy_template_config:{config_id}"
+                        ),
+                        InlineKeyboardButton(
+                            "❌ Cancel",
+                            callback_data="list_configs_back"
+                        )
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(
+                    f"⚠️ <b>Templates Cannot Be Edited</b>\n\n"
+                    f"Config <b>{config_name}</b> is a public template.\n\n"
+                    f"To customize it, we'll create a copy for you that you can edit.\n\n"
+                    f"Would you like to create a copy?",
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+                return
+            
+            # Check if user owns this config
+            if config_user_id and str(config_user_id) != str(user["id"]):
+                await query.edit_message_text(
+                    "❌ You don't have permission to edit this config.",
+                    parse_mode='HTML'
+                )
+                return
             
             # Start edit wizard (for now, just show current config and allow JSON edit)
             context.user_data['wizard'] = {
@@ -1010,10 +1050,26 @@ class ConfigHandler(BaseHandler):
                 {"config_id": config_id, "config_name": data['config_name']}
             )
             
+            # Regenerate config files for running strategies using this config
+            affected_strategies = await self._regenerate_running_strategy_configs(config_id)
+            
             context.user_data.pop('wizard', None)
             
+            # Build success message
+            message = f"✅ Config <b>{data['config_name']}</b> updated successfully!"
+            
+            if affected_strategies:
+                message += f"\n\n🔄 Updated {len(affected_strategies)} running strateg{'y' if len(affected_strategies) == 1 else 'ies'}:"
+                for strat in affected_strategies[:5]:  # Show max 5
+                    run_id_short = str(strat['id'])[:8]
+                    status = strat['status']
+                    message += f"\n   • {run_id_short} ({status})"
+                if len(affected_strategies) > 5:
+                    message += f"\n   ... and {len(affected_strategies) - 5} more"
+                message += "\n\nNote: Changes will apply on next strategy cycle."
+            
             await update.message.reply_text(
-                f"✅ Config <b>{data['config_name']}</b> updated successfully!",
+                message,
                 parse_mode='HTML'
             )
         except Exception as e:
@@ -1022,6 +1078,206 @@ class ConfigHandler(BaseHandler):
                 f"❌ Failed to update config: {str(e)}",
                 parse_mode='HTML'
             )
+    
+    async def copy_template_config_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle copy template config button click."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            callback_data = query.data
+            template_config_id = callback_data.split(":", 1)[1]
+            
+            telegram_user_id = query.from_user.id
+            user = await self.auth.get_user_by_telegram_id(telegram_user_id)
+            
+            # Get template config
+            template_row = await self.database.fetch_one(
+                """
+                SELECT config_name, strategy_type, config_data
+                FROM strategy_configs
+                WHERE id = :id AND is_template = TRUE
+                """,
+                {"id": template_config_id}
+            )
+            
+            if not template_row:
+                await query.edit_message_text(
+                    "❌ Template not found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            template_name = template_row['config_name']
+            strategy_type = template_row['strategy_type']
+            config_data = template_row['config_data']
+            
+            # Create copy name
+            copy_name = f"{template_name} (Copy)"
+            
+            # Check if copy name already exists, add number if needed
+            existing_count = await self.database.fetch_one(
+                """
+                SELECT COUNT(*) as count
+                FROM strategy_configs
+                WHERE user_id = :user_id AND config_name LIKE :pattern
+                """,
+                {"user_id": str(user["id"]), "pattern": f"{copy_name}%"}
+            )
+            
+            if existing_count and existing_count['count'] > 0:
+                copy_name = f"{template_name} (Copy {existing_count['count'] + 1})"
+            
+            # Create copy
+            if isinstance(config_data, str):
+                config_data_dict = json.loads(config_data)
+            else:
+                config_data_dict = config_data
+            
+            await self.database.execute(
+                """
+                INSERT INTO strategy_configs (
+                    user_id, config_name, strategy_type, config_data,
+                    is_template, is_active, created_at, updated_at
+                )
+                VALUES (
+                    :user_id, :config_name, :strategy_type, CAST(:config_data AS jsonb),
+                    FALSE, TRUE, NOW(), NOW()
+                )
+                """,
+                {
+                    "user_id": str(user["id"]),
+                    "config_name": copy_name,
+                    "strategy_type": strategy_type,
+                    "config_data": json.dumps(config_data_dict)
+                }
+            )
+            
+            await self.audit_logger.log_action(
+                str(user["id"]),
+                "copy_template_config",
+                {"template_id": template_config_id, "template_name": template_name, "copy_name": copy_name}
+            )
+            
+            # Now start edit wizard for the new copy
+            new_config_row = await self.database.fetch_one(
+                """
+                SELECT id FROM strategy_configs
+                WHERE user_id = :user_id AND config_name = :config_name
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                {"user_id": str(user["id"]), "config_name": copy_name}
+            )
+            
+            if new_config_row:
+                # Show success and redirect to list configs
+                await query.edit_message_text(
+                    f"✅ Created copy: <b>{copy_name}</b>\n\n"
+                    f"You can now edit it from /list_configs",
+                    parse_mode='HTML'
+                )
+            else:
+                await query.edit_message_text(
+                    f"✅ Created copy: <b>{copy_name}</b>\n\n"
+                    f"Use /list_configs to edit it.",
+                    parse_mode='HTML'
+                )
+                
+        except Exception as e:
+            self.logger.error(f"Error copying template: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Failed to copy template: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def _regenerate_running_strategy_configs(self, config_id: str) -> List[Dict[str, Any]]:
+        """
+        Regenerate config files for all running strategies using this config.
+        
+        Returns:
+            List of affected strategy runs
+        """
+        import tempfile
+        from pathlib import Path
+        from decimal import Decimal
+        
+        # Find running strategies using this config
+        running_strategies = await self.database.fetch_all(
+            """
+            SELECT id, supervisor_program_name, status
+            FROM strategy_runs
+            WHERE config_id = :config_id
+            AND status IN ('running', 'starting', 'paused')
+            """,
+            {"config_id": config_id}
+        )
+        
+        if not running_strategies:
+            return []
+        
+        # Get updated config from database
+        config_row = await self.database.fetch_one(
+            """
+            SELECT config_data, strategy_type
+            FROM strategy_configs
+            WHERE id = :config_id
+            """,
+            {"config_id": config_id}
+        )
+        
+        if not config_row:
+            return []
+        
+        config_data_raw = config_row['config_data']
+        strategy_type = config_row['strategy_type']
+        
+        # Parse config data
+        if isinstance(config_data_raw, str):
+            config_dict = json.loads(config_data_raw)
+        else:
+            config_dict = config_data_raw
+        
+        # Regenerate config file for each running strategy
+        temp_dir = Path(tempfile.gettempdir())
+        affected_strategies = []
+        
+        for strategy in running_strategies:
+            run_id = str(strategy['id'])
+            config_file = temp_dir / f"strategy_{run_id}.yml"
+            
+            try:
+                # Build full config structure
+                full_config = {
+                    "strategy": strategy_type,
+                    "created_at": datetime.now().isoformat(),
+                    "version": "1.0",
+                    "config": config_dict
+                }
+                
+                # Register Decimal representer for YAML
+                def decimal_representer(dumper, data):
+                    return dumper.represent_scalar('tag:yaml.org,2002:float', str(data))
+                yaml.add_representer(Decimal, decimal_representer)
+                
+                # Write config file
+                with open(config_file, 'w') as f:
+                    yaml.dump(
+                        full_config,
+                        f,
+                        default_flow_style=False,
+                        sort_keys=False,
+                        allow_unicode=True,
+                        indent=2
+                    )
+                
+                affected_strategies.append(dict(strategy))
+                self.logger.info(f"Regenerated config file for strategy {run_id[:8]}: {config_file}")
+                
+            except Exception as e:
+                self.logger.error(f"Failed to regenerate config for strategy {run_id[:8]}: {e}", exc_info=True)
+        
+        return affected_strategies
     
     # Helper methods for wizard
     
@@ -1561,6 +1817,10 @@ class ConfigHandler(BaseHandler):
         application.add_handler(CommandHandler("create_config", self.create_config_command))
         
         # Callbacks
+        application.add_handler(CallbackQueryHandler(
+            self.copy_template_config_callback,
+            pattern="^copy_template_config:"
+        ))
         application.add_handler(CallbackQueryHandler(
             self.edit_config_callback,
             pattern="^edit_config_btn:"

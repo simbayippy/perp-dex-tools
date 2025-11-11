@@ -1096,7 +1096,7 @@ class StrategyHandler(BaseHandler):
             strategy_row = await self.database.fetch_one(
                 """
                 SELECT sr.id, sr.status, sr.config_id, sr.supervisor_program_name,
-                       sc.config_name, sc.config_data, sc.strategy_type,
+                       sc.config_name, sc.config_data, sc.strategy_type, sc.user_id as config_user_id,
                        a.account_name
                 FROM strategy_runs sr
                 LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
@@ -1204,10 +1204,22 @@ class StrategyHandler(BaseHandler):
                     message += config_yaml
                 message += "</code>"
             
-            # Add back button
-            keyboard = [
-                [InlineKeyboardButton("⬅️ Back to Strategies", callback_data="back_to_strategies_filters")]
-            ]
+            # Add back button and edit config button
+            keyboard = []
+            
+            # Add Edit Config button if user owns the config
+            config_user_id = strategy_row.get('config_user_id')
+            if config_user_id and str(config_user_id) == str(user["id"]):
+                keyboard.append([
+                    InlineKeyboardButton(
+                        "✏️ Edit Config",
+                        callback_data=f"edit_strategy_config:{run_id}"
+                    )
+                ])
+            
+            keyboard.append([
+                InlineKeyboardButton("⬅️ Back to Strategies", callback_data="back_to_strategies_filters")
+            ])
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
@@ -1221,6 +1233,90 @@ class StrategyHandler(BaseHandler):
             error_msg = str(e).replace('<', '&lt;').replace('>', '&gt;')
             await query.edit_message_text(
                 f"❌ Failed to load config: {error_msg}",
+                parse_mode='HTML'
+            )
+    
+    async def edit_strategy_config_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle edit config from strategy view."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        callback_data = query.data
+        if not callback_data.startswith("edit_strategy_config:"):
+            await query.edit_message_text(
+                "❌ Invalid selection.",
+                parse_mode='HTML'
+            )
+            return
+        
+        run_id = callback_data.split(":", 1)[1]
+        
+        try:
+            # Get strategy config_id
+            strategy_row = await self.database.fetch_one(
+                """
+                SELECT sr.config_id, sc.user_id as config_user_id
+                FROM strategy_runs sr
+                LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
+                WHERE sr.id = :run_id
+                """,
+                {"run_id": run_id}
+            )
+            
+            if not strategy_row:
+                await query.edit_message_text(
+                    "❌ Strategy not found",
+                    parse_mode='HTML'
+                )
+                return
+            
+            config_id = strategy_row['config_id']
+            config_user_id = strategy_row.get('config_user_id')
+            
+            # Check permissions
+            if not config_user_id or str(config_user_id) != str(user["id"]):
+                await query.edit_message_text(
+                    "❌ You don't have permission to edit this config.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Get config name for better UX
+            config_row = await self.database.fetch_one(
+                """
+                SELECT config_name FROM strategy_configs WHERE id = :config_id
+                """,
+                {"config_id": config_id}
+            )
+            
+            config_name = config_row['config_name'] if config_row else "config"
+            
+            # Show message with button to go to config list
+            keyboard = [
+                [InlineKeyboardButton(
+                    "📋 Go to Configs",
+                    callback_data="list_configs_back"
+                )]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"✏️ <b>Edit Config</b>\n\n"
+                f"Config: <b>{config_name}</b>\n\n"
+                f"Use /list_configs to edit this config.\n"
+                f"Changes will automatically update running strategies.",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Edit strategy config error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Failed to edit config: {str(e)}",
                 parse_mode='HTML'
             )
     
@@ -1891,5 +1987,9 @@ class StrategyHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.view_strategy_config_callback,
             pattern="^view_strategy_config:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.edit_strategy_config_callback,
+            pattern="^edit_strategy_config:"
         ))
 
