@@ -51,11 +51,13 @@ async def get_db_strategies(db: Database) -> Dict[str, Dict[str, Any]]:
     
     strategies = {}
     for row in rows:
-        supervisor_name = row.get('supervisor_program_name')
+        # Convert Row to dict for safe access
+        row_dict = dict(row)
+        supervisor_name = row_dict.get('supervisor_program_name')
         if supervisor_name:
             strategies[supervisor_name] = {
-                'run_id': str(row['id']),
-                'status': row.get('status'),
+                'run_id': str(row_dict['id']),
+                'status': row_dict.get('status'),
                 'supervisor_name': supervisor_name
             }
     
@@ -70,9 +72,18 @@ def get_supervisor_strategies() -> List[Dict[str, Any]]:
         
         strategies = []
         for proc in all_processes:
+            # XML-RPC returns dicts directly
+            if not isinstance(proc, dict):
+                # Try to convert if possible
+                try:
+                    proc = dict(proc)
+                except (TypeError, ValueError):
+                    logger.warning(f"Skipping non-dict process info: {type(proc)}")
+                    continue
+            
             # Only include strategy processes (start with "strategy" or "strategys")
             name = proc.get('name', '')
-            if name.startswith('strategy'):
+            if name and name.startswith('strategy'):
                 strategies.append({
                     'name': name,
                     'state': proc.get('statename', 'UNKNOWN'),
@@ -87,7 +98,7 @@ def get_supervisor_strategies() -> List[Dict[str, Any]]:
         
         return strategies
     except Exception as e:
-        logger.error(f"Failed to get supervisor strategies: {e}")
+        logger.error(f"Failed to get supervisor strategies: {e}", exc_info=True)
         return []
 
 
