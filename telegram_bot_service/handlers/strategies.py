@@ -5,6 +5,8 @@ Strategy execution handlers for Telegram bot
 from datetime import datetime
 from pathlib import Path
 import xmlrpc.client
+import json
+import yaml
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
@@ -1503,10 +1505,11 @@ class StrategyHandler(BaseHandler):
         run_id = callback_data.split(":", 1)[1]
         
         try:
-            # Get strategy config_id
+            # Get strategy config_id and config details
             strategy_row = await self.database.fetch_one(
                 """
-                SELECT sr.config_id, sc.user_id as config_user_id
+                SELECT sr.config_id, sc.user_id as config_user_id, sc.config_name, 
+                       sc.strategy_type, sc.config_data
                 FROM strategy_runs sr
                 LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
                 WHERE sr.id = :run_id
@@ -1526,6 +1529,9 @@ class StrategyHandler(BaseHandler):
             
             config_id = strategy_dict.get('config_id')
             config_user_id = strategy_dict.get('config_user_id')
+            config_name = strategy_dict.get('config_name')
+            strategy_type = strategy_dict.get('strategy_type')
+            config_data = strategy_dict.get('config_data')
             
             # Check permissions
             if not config_user_id or str(config_user_id) != str(user["id"]):
@@ -1535,32 +1541,67 @@ class StrategyHandler(BaseHandler):
                 )
                 return
             
-            # Get config name for better UX
-            config_row = await self.database.fetch_one(
-                """
-                SELECT config_name FROM strategy_configs WHERE id = :config_id
-                """,
-                {"config_id": config_id}
+            if not config_id:
+                await query.edit_message_text(
+                    "❌ Config not found for this strategy.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Parse config_data
+            if isinstance(config_data, str):
+                try:
+                    config_data = json.loads(config_data)
+                except json.JSONDecodeError:
+                    try:
+                        config_data = yaml.safe_load(config_data)
+                    except Exception:
+                        pass
+            config_data = config_data or {}
+            
+            # Start edit wizard
+            context.user_data['wizard'] = {
+                'type': 'edit_config',
+                'step': 1,
+                'data': {
+                    'config_id': config_id,
+                    'config_name': config_name or "config",
+                    'strategy_type': strategy_type,
+                    'run_id': run_id  # Store run_id to show which strategy is affected
+                }
+            }
+            
+            # Build config display
+            structured_config = {
+                "strategy": strategy_type,
+                "config": config_data
+            }
+            config_yaml = yaml.dump(structured_config, default_flow_style=False, indent=2, sort_keys=False)
+            
+            # Check if strategy is running
+            strategy_status_row = await self.database.fetch_one(
+                "SELECT status FROM strategy_runs WHERE id = :run_id",
+                {"run_id": run_id}
             )
+            strategy_status = None
+            if strategy_status_row:
+                strategy_status = dict(strategy_status_row).get('status')
             
-            config_name = config_row['config_name'] if config_row else "config"
-            
-            # Show message with button to go to config list
-            keyboard = [
-                [InlineKeyboardButton(
-                    "📋 Go to Configs",
-                    callback_data="list_configs_back"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            status_note = ""
+            if strategy_status in ('running', 'starting', 'paused'):
+                status_note = f"\n\n⚠️ <b>Note:</b> This strategy is currently <b>{strategy_status}</b>. Changes will apply on the next cycle."
             
             await query.edit_message_text(
-                f"✏️ <b>Edit Config</b>\n\n"
-                f"Config: <b>{config_name}</b>\n\n"
-                f"Use /list_configs to edit this config.\n"
-                f"Changes will automatically update running strategies.",
+                f"✏️ <b>Edit Config: {config_name}</b>\n\n"
+                f"Strategy Type: <b>{strategy_type}</b>\n"
+                f"Run ID: <code>{run_id[:8]}</code>{status_note}\n\n"
+                f"Current config (YAML):\n"
+                f"<code>{config_yaml[:500]}{'...' if len(config_yaml) > 500 else ''}</code>\n\n"
+                f"Send updated config as JSON/YAML, or 'cancel' to cancel:",
                 parse_mode='HTML',
-                reply_markup=reply_markup
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Back to Strategy", callback_data=f"view_strategy_config:{run_id}")]
+                ])
             )
             
         except Exception as e:

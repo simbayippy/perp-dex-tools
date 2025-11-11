@@ -1088,7 +1088,14 @@ class ConfigHandler(BaseHandler):
             # Build success message
             message = f"✅ Config <b>{data['config_name']}</b> updated successfully!"
             
-            if affected_strategies:
+            # Check if we came from a specific strategy view
+            run_id = data.get('run_id')
+            if run_id:
+                # Show specific strategy info
+                run_id_short = str(run_id)[:8]
+                message += f"\n\n🔄 Strategy <code>{run_id_short}</code> will use the updated config on the next cycle."
+            elif affected_strategies:
+                # Show all affected strategies
                 message += f"\n\n🔄 Updated {len(affected_strategies)} running strateg{'y' if len(affected_strategies) == 1 else 'ies'}:"
                 for strat in affected_strategies[:5]:  # Show max 5
                     run_id_short = str(strat['id'])[:8]
