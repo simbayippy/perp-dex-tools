@@ -1600,13 +1600,16 @@ class ConfigHandler(BaseHandler):
                     {"run_id": run_id}
                 )
                 
-                if not strategy_row or not strategy_row.get('control_api_port'):
+                # Convert Row to dict for safe access
+                strategy_dict = dict(strategy_row) if strategy_row else {}
+                
+                if not strategy_dict or not strategy_dict.get('control_api_port'):
                     self.logger.warning(f"Strategy {run_id[:8]} has no control_api_port in database, cannot hot-reload")
                     reload_results[run_id] = False
                     continue
                 
                 # Create client with strategy-specific port
-                port = strategy_row['control_api_port']
+                port = strategy_dict['control_api_port']
                 strategy_url = f"http://127.0.0.1:{port}"
                 self.logger.info(f"Attempting hot-reload for strategy {run_id[:8]} via {strategy_url}")
                 strategy_client = ControlAPIClient(strategy_url, api_key)
