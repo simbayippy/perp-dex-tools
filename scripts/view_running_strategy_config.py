@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-View Running Strategy Config
+View Strategy Config
 
-Shows the config file path and contents for a running strategy.
+Shows the config file path and contents for strategies (running or stopped).
 
 Usage:
-    python scripts/view_running_strategy_config.py <run_id>
-    python scripts/view_running_strategy_config.py  # Shows all running strategies
+    python scripts/view_running_strategy_config.py <run_id>  # Short (8 chars) or full UUID
+    python scripts/view_running_strategy_config.py  # Shows all strategies
 """
 
 import asyncio
@@ -32,7 +32,7 @@ logger = get_logger("scripts", "view_running_strategy_config")
 
 
 async def view_strategy_config(run_id: Optional[str] = None):
-    """View config for a running strategy."""
+    """View config for a strategy (running or stopped)."""
     
     database_url = os.getenv('DATABASE_URL')
     if not database_url:
@@ -44,13 +44,25 @@ async def view_strategy_config(run_id: Optional[str] = None):
     
     try:
         if run_id:
-            # Get specific strategy
-            query = """
-                SELECT id, supervisor_program_name, status, config_id
-                FROM strategy_runs
-                WHERE id = :run_id
-            """
-            row = await db.fetch_one(query, {"run_id": run_id})
+            # Handle short run_id (8 chars) - find matching UUID
+            if len(run_id) < 32:
+                # Query by partial UUID match (first 8 characters)
+                query = """
+                    SELECT id, supervisor_program_name, status, config_id
+                    FROM strategy_runs
+                    WHERE id::text LIKE :run_id_pattern
+                    ORDER BY started_at DESC
+                    LIMIT 1
+                """
+                row = await db.fetch_one(query, {"run_id_pattern": f"{run_id}%"})
+            else:
+                # Full UUID provided
+                query = """
+                    SELECT id, supervisor_program_name, status, config_id
+                    FROM strategy_runs
+                    WHERE id = :run_id
+                """
+                row = await db.fetch_one(query, {"run_id": run_id})
             
             if not row:
                 logger.error(f"Strategy {run_id} not found")
@@ -58,18 +70,17 @@ async def view_strategy_config(run_id: Optional[str] = None):
             
             strategies = [row]
         else:
-            # Get all running strategies
+            # Get all strategies (not just running)
             query = """
                 SELECT id, supervisor_program_name, status, config_id
                 FROM strategy_runs
-                WHERE status IN ('running', 'starting', 'paused')
                 ORDER BY started_at DESC
             """
             rows = await db.fetch_all(query)
             strategies = [dict(row) for row in rows]
         
         if not strategies:
-            logger.info("No running strategies found")
+            logger.info("No strategies found")
             return
         
         temp_dir = Path(tempfile.gettempdir())
@@ -83,7 +94,8 @@ async def view_strategy_config(run_id: Optional[str] = None):
             print(f"\n{'='*70}")
             print(f"Strategy: {run_id[:8]}")
             print(f"Status: {status}")
-            print(f"Supervisor: {supervisor_name}")
+            if supervisor_name:
+                print(f"Supervisor: {supervisor_name}")
             print(f"{'='*70}")
             
             # Config file path (where supervisor reads it from)
