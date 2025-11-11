@@ -91,8 +91,19 @@ class AsterWebSocketHandlers:
             # Parse cancellation reason if applicable
             cancel_reason = ""
             if status in {"CANCELED", "CANCELLED", "REJECTED", "EXPIRED"}:
-                if status == "EXPIRED":
+                # Check for error code in order data (Aster may include error codes)
+                error_code = order_data.get("code") or order_data.get("errorCode") or order_data.get("error_code")
+                error_msg = order_data.get("msg") or order_data.get("message") or order_data.get("error") or ""
+                
+                # Normalize Aster error codes to standard CancelReason values
+                if error_code == -2021 or (isinstance(error_msg, str) and 'ORDER_WOULD_IMMEDIATELY_TRIGGER' in error_msg.upper()):
+                    # Aster uses -2021 for GTX (post-only) orders that would immediately cross
+                    cancel_reason = CancelReason.POST_ONLY_VIOLATION
+                elif status == "EXPIRED":
                     cancel_reason = CancelReason.EXPIRED
+                elif error_code:
+                    # Other error codes - pass through as lowercase string
+                    cancel_reason = str(error_code).lower()
                 else:
                     cancel_reason = CancelReason.UNKNOWN
 
