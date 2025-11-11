@@ -231,17 +231,48 @@ class ConfigHandler(BaseHandler):
             }
             config_yaml = yaml.dump(structured_config, default_flow_style=False, indent=2, sort_keys=False)
             
-            await query.edit_message_text(
+            # Telegram message limit is 4096 characters
+            # Reserve space for header text and buttons (~500 chars)
+            max_config_length = 3500
+            
+            # Build header message
+            header_message = (
                 f"✏️ <b>Edit Config: {config_name}</b>\n\n"
                 f"Strategy Type: <b>{config_dict['strategy_type']}</b>\n\n"
                 f"Current config (YAML):\n"
-                f"<code>{config_yaml[:500]}{'...' if len(config_yaml) > 500 else ''}</code>\n\n"
-                f"Send updated config as JSON/YAML, or 'cancel' to cancel:",
-                parse_mode='HTML',
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⬅️ Back", callback_data="list_configs_back")]
-                ])
             )
+            
+            # If config is too long, send it in a separate message
+            if len(config_yaml) > max_config_length:
+                # Send header first
+                await query.edit_message_text(
+                    header_message +
+                    f"<code>{config_yaml[:max_config_length]}...</code>\n\n"
+                    f"⚠️ Config is too long to display fully. Sending full config in next message...",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⬅️ Back", callback_data="list_configs_back")]
+                    ])
+                )
+                
+                # Send full config in a separate message
+                await query.message.reply_text(
+                    f"📋 <b>Full Config (YAML):</b>\n\n"
+                    f"<code>{config_yaml}</code>\n\n"
+                    f"Send updated config as JSON/YAML, or 'cancel' to cancel:",
+                    parse_mode='HTML'
+                )
+            else:
+                # Send everything in one message
+                await query.edit_message_text(
+                    header_message +
+                    f"<code>{config_yaml}</code>\n\n"
+                    f"Send updated config as JSON/YAML, or 'cancel' to cancel:",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⬅️ Back", callback_data="list_configs_back")]
+                    ])
+                )
         except Exception as e:
             self.logger.error(f"Error in edit_config_callback: {e}", exc_info=True)
             try:
