@@ -1675,11 +1675,13 @@ class StrategyHandler(BaseHandler):
                 # Update variables to use the new config
                 config_id = new_config_id
                 config_name = copy_name
+                config_user_id = str(user["id"])  # Update to user's ID since it's now their copy
+                # Use the config_data_dict we already parsed for the copy
+                config_data = config_data_dict
                 self.logger.info(f"Created copy of template config {config_id} -> {new_config_id} for strategy {run_id[:8]}")
             
             # Check permissions (now that we've created a copy if needed)
             if not config_user_id or str(config_user_id) != str(user["id"]):
-                # This shouldn't happen after creating copy, but check anyway
                 await query.edit_message_text(
                     "❌ You don't have permission to edit this config.",
                     parse_mode='HTML'
@@ -1693,7 +1695,7 @@ class StrategyHandler(BaseHandler):
                 )
                 return
             
-            # Parse config_data for display
+            # Parse config_data for display (only if we didn't already parse it during copy creation)
             if isinstance(config_data, str):
                 try:
                     config_data = json.loads(config_data)
