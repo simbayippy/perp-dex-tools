@@ -87,6 +87,12 @@ class StrategyNotificationService:
         entry_divergence: Decimal,
         long_price: Optional[Decimal] = None,
         short_price: Optional[Decimal] = None,
+        long_exposure: Optional[Decimal] = None,
+        short_exposure: Optional[Decimal] = None,
+        long_quantity: Optional[Decimal] = None,
+        short_quantity: Optional[Decimal] = None,
+        normalized_leverage: Optional[int] = None,
+        margin_used: Optional[Decimal] = None,
     ) -> bool:
         """
         Send notification when a position is opened.
@@ -95,10 +101,16 @@ class StrategyNotificationService:
             symbol: Trading symbol (e.g., "BTC")
             long_dex: DEX name for long leg
             short_dex: DEX name for short leg
-            size_usd: Position size in USD
+            size_usd: Delta-neutral exposure (minimum of both legs' exposures)
             entry_divergence: Entry funding rate divergence
             long_price: Optional entry price for long leg
             short_price: Optional entry price for short leg
+            long_exposure: Optional exposure for long leg
+            short_exposure: Optional exposure for short leg
+            long_quantity: Optional quantity for long leg
+            short_quantity: Optional quantity for short leg
+            normalized_leverage: Optional normalized leverage used
+            margin_used: Optional margin used (size / leverage)
             
         Returns:
             True if notification queued successfully, False otherwise
@@ -121,20 +133,48 @@ class StrategyNotificationService:
             
             user_id = str(run_row["user_id"])
             
-            # Format message
+            # Format message with improved clarity
             divergence_pct = entry_divergence * Decimal("100")
+            
+            # Build message with clearer information
             message = (
                 f"✅ <b>Position Opened</b>\n\n"
                 f"Symbol: <b>{symbol}</b>\n"
-                f"Size: ${size_usd:.2f}\n"
-                f"Long: {long_dex.upper()}"
+                f"Position Size: <b>${size_usd:.2f}</b>\n"
             )
+            
+            # Add margin and leverage info if available
+            if margin_used is not None:
+                message += f"Margin Used: <b>${margin_used:.2f}</b>"
+                if normalized_leverage:
+                    message += f" | Leverage: <b>{normalized_leverage}x</b>"
+                message += "\n\n"
+            elif normalized_leverage:
+                message += f"Leverage: <b>{normalized_leverage}x</b>\n\n"
+            else:
+                message += "\n"
+            
+            # Long leg details
+            message += f"<b>Long:</b> {long_dex.upper()}"
             if long_price:
                 message += f" @ ${long_price:.6f}"
-            message += f"\nShort: {short_dex.upper()}"
+            if long_quantity:
+                message += f"\n  Qty: {long_quantity:.4f}"
+            if long_exposure:
+                message += f" | Size: ${long_exposure:.2f}"
+            
+            message += "\n"
+            
+            # Short leg details
+            message += f"<b>Short:</b> {short_dex.upper()}"
             if short_price:
                 message += f" @ ${short_price:.6f}"
-            message += f"\nDivergence: {divergence_pct:.4f}%"
+            if short_quantity:
+                message += f"\n  Qty: {short_quantity:.4f}"
+            if short_exposure:
+                message += f" | Size: ${short_exposure:.2f}"
+            
+            message += f"\n\nDivergence: {divergence_pct:.4f}%"
             
             # Prepare details
             details: Dict[str, Any] = {
@@ -148,6 +188,18 @@ class StrategyNotificationService:
                 details["long_price"] = float(long_price)
             if short_price:
                 details["short_price"] = float(short_price)
+            if long_exposure:
+                details["long_exposure"] = float(long_exposure)
+            if short_exposure:
+                details["short_exposure"] = float(short_exposure)
+            if long_quantity:
+                details["long_quantity"] = float(long_quantity)
+            if short_quantity:
+                details["short_quantity"] = float(short_quantity)
+            if normalized_leverage:
+                details["normalized_leverage"] = normalized_leverage
+            if margin_used:
+                details["margin_used"] = float(margin_used)
             
             # Insert notification
             await database.execute(

@@ -98,16 +98,37 @@ class PositionOpener:
             
             # Send Telegram notification
             try:
-                long_price = execution.long_fill.get("fill_price")
-                short_price = execution.short_fill.get("fill_price")
+                # Use entry prices from position metadata (these are the actual entry prices stored)
+                # This ensures we show the same prices that are stored in DB and used by position_monitor
+                position_legs = execution.position.metadata.get("legs", {})
+                long_leg = position_legs.get(execution.position.long_dex, {})
+                short_leg = position_legs.get(execution.position.short_dex, {})
+                
+                long_entry_price = long_leg.get("entry_price")
+                short_entry_price = short_leg.get("entry_price")
+                long_exposure = long_leg.get("exposure_usd")
+                short_exposure = short_leg.get("exposure_usd")
+                long_quantity = long_leg.get("quantity")
+                short_quantity = short_leg.get("quantity")
+                
+                # Get leverage and margin from position metadata
+                normalized_leverage = execution.position.metadata.get("normalized_leverage")
+                margin_used = execution.position.metadata.get("margin_used")
+                
                 await self._strategy.notification_service.notify_position_opened(
                     symbol=execution.position.symbol,
                     long_dex=execution.position.long_dex,
                     short_dex=execution.position.short_dex,
                     size_usd=execution.position.size_usd,
                     entry_divergence=execution.position.entry_divergence,
-                    long_price=Decimal(str(long_price)) if long_price else None,
-                    short_price=Decimal(str(short_price)) if short_price else None,
+                    long_price=Decimal(str(long_entry_price)) if long_entry_price else None,
+                    short_price=Decimal(str(short_entry_price)) if short_entry_price else None,
+                    long_exposure=Decimal(str(long_exposure)) if long_exposure else None,
+                    short_exposure=Decimal(str(short_exposure)) if short_exposure else None,
+                    long_quantity=Decimal(str(long_quantity)) if long_quantity else None,
+                    short_quantity=Decimal(str(short_quantity)) if short_quantity else None,
+                    normalized_leverage=normalized_leverage,
+                    margin_used=Decimal(str(margin_used)) if margin_used else None,
                 )
             except Exception as exc:
                 # Don't fail position opening if notification fails
@@ -166,15 +187,18 @@ class PositionOpener:
 
         # Validate leverage and calculate adjusted size
         # _validate_leverage will calculate requested size from target_margin internally
-        adjusted_size = await self._validate_leverage(
+        leverage_result = await self._validate_leverage(
             symbol=symbol,
             long_client=long_client,
             short_client=short_client,
         )
 
-        if adjusted_size is None:
+        if leverage_result is None:
             strategy.failed_symbols.add(symbol)
             return None
+        
+        adjusted_size = leverage_result["adjusted_size"]
+        normalized_leverage = leverage_result.get("normalized_leverage")
 
         strategy.logger.info(
             f"🎯 Execution plan for {symbol}: "
@@ -264,6 +288,7 @@ class PositionOpener:
             short_exposure=short_exposure,
             imbalance_usd=imbalance_usd,
             planned_quantity=plan.quantity,
+            normalized_leverage=normalized_leverage,
         )
 
         return TradeExecutionResult(
@@ -335,11 +360,14 @@ class PositionOpener:
         symbol: str,
         long_client: Any,
         short_client: Any,
-    ) -> Optional[Decimal]:
+    ) -> Optional[Dict[str, Any]]:
         """
         Normalize leverage and confirm balances.
         
         Calculates requested size from target_margin internally to avoid redundant leverage calls.
+        
+        Returns:
+            Dict with "adjusted_size" and "normalized_leverage", or None if validation fails
         """
         strategy = self._strategy
         log_stage(strategy.logger, "Leverage Validation & Normalization", icon="🔍", stage_id="2")
@@ -407,7 +435,10 @@ class PositionOpener:
             )
             return None
 
-        return adjusted_size
+        return {
+            "adjusted_size": adjusted_size,
+            "normalized_leverage": leverage_prep.normalized_leverage,
+        }
 
     async def _prepare_order_plan(
         self,
@@ -617,6 +648,7 @@ class PositionOpener:
         short_exposure: Decimal,
         imbalance_usd: Decimal,
         planned_quantity: Decimal,
+        normalized_leverage: Optional[int] = None,
     ) -> tuple[FundingArbPosition, str]:
         """Instantiate a FundingArbPosition populated with initial metadata."""
         partial_fee = entry_fees / Decimal("2") if entry_fees else Decimal("0")
@@ -634,6 +666,11 @@ class PositionOpener:
             opened_at=datetime.now(),
             total_fees_paid=total_cost,
         )
+
+        # Calculate margin used if leverage is available
+        margin_used = None
+        if normalized_leverage and normalized_leverage > 0:
+            margin_used = size_usd / Decimal(str(normalized_leverage))
 
         position.metadata.update(
             {
@@ -662,6 +699,8 @@ class PositionOpener:
                 "total_slippage_usd": total_slippage,
                 "planned_quantity": planned_quantity,
                 "residual_imbalance_usd": imbalance_usd,
+                "normalized_leverage": normalized_leverage,
+                "margin_used": float(margin_used) if margin_used else None,
             }
         )
 
