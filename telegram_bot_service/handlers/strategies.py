@@ -148,7 +148,7 @@ class StrategyHandler(BaseHandler):
                 await query.edit_message_text(
                     f"{title} - {filter_label}\n\n"
                     "No strategies found matching this filter.\n"
-                    "Start a strategy with /run",
+                    "Start a strategy with /run_strategy",
                     parse_mode='HTML',
                     reply_markup=reply_markup
                 )
@@ -321,7 +321,7 @@ class StrategyHandler(BaseHandler):
         return [dict(row) for row in rows]
     
     async def run_strategy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /run command."""
+        """Handle /run_strategy command."""
         user, _ = await self.require_auth(update, context)
         if not user:
             return
@@ -439,7 +439,7 @@ class StrategyHandler(BaseHandler):
                 await update.message.reply_text(
                     "🛑 <b>No Running Strategies</b>\n\n"
                     "No strategies are currently running.\n"
-                    "Start a strategy with /run",
+                    "Start a strategy with /run_strategy",
                     parse_mode='HTML'
                 )
                 return
@@ -1122,7 +1122,7 @@ class StrategyHandler(BaseHandler):
                 await update.message.reply_text(
                     "▶️ <b>No Stopped Strategies</b>\n\n"
                     "No stopped strategies available to resume.\n"
-                    "Start a strategy with /run",
+                    "Start a strategy with /run_strategy",
                     parse_mode='HTML'
                 )
                 return
@@ -1901,7 +1901,7 @@ class StrategyHandler(BaseHandler):
                 await query.edit_message_text(
                     f"📄 <b>View Logs</b> - {filter_label}\n\n"
                     "No strategies found matching this filter.\n"
-                    "Start a strategy with /run",
+                    "Start a strategy with /run_strategy",
                     parse_mode='HTML',
                     reply_markup=reply_markup
                 )
@@ -2449,7 +2449,7 @@ class StrategyHandler(BaseHandler):
         
         if not account_id:
             await query.edit_message_text(
-                "❌ Error: Account not selected. Please start over with /run",
+                "❌ Error: Account not selected. Please start over with /run_strategy",
                 parse_mode='HTML'
             )
             return
@@ -2597,7 +2597,7 @@ class StrategyHandler(BaseHandler):
     def register_handlers(self, application):
         """Register strategy execution command and callback handlers"""
         # Commands
-        application.add_handler(CommandHandler("run", self.run_strategy_command))
+        application.add_handler(CommandHandler("run_strategy", self.run_strategy_command))
         application.add_handler(CommandHandler("list_strategies", self.list_strategies_command))
         application.add_handler(CommandHandler("stop_strategy", self.stop_strategy_command))
         application.add_handler(CommandHandler("resume_strategy", self.resume_strategy_command))
