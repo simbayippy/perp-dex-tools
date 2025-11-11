@@ -2,6 +2,7 @@
 Monitoring handlers for Telegram bot (status, positions, close)
 """
 
+import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
@@ -20,6 +21,27 @@ class MonitoringHandler(BaseHandler):
         
         # Optional account filter
         account_name = context.args[0] if context.args and len(context.args) > 0 else None
+        
+        # Check if there are any running strategies first
+        is_admin = user.get("is_admin", False)
+        user_id = None if is_admin else user["id"]
+        
+        if user_id:
+            running_query = """
+                SELECT COUNT(*) as count
+                FROM strategy_runs
+                WHERE user_id = :user_id AND status IN ('starting', 'running', 'paused')
+            """
+            running_result = await self.database.fetch_one(running_query, {"user_id": user_id})
+        else:
+            running_query = """
+                SELECT COUNT(*) as count
+                FROM strategy_runs
+                WHERE status IN ('starting', 'running', 'paused')
+            """
+            running_result = await self.database.fetch_one(running_query)
+        
+        has_running_strategies = running_result and running_result['count'] > 0
         
         try:
             client = ControlAPIClient(self.config.control_api_base_url, api_key)
@@ -96,10 +118,28 @@ class MonitoringHandler(BaseHandler):
                 
         except Exception as e:
             self.logger.error(f"Positions error: {e}")
-            await update.message.reply_text(
-                self.formatter.format_error(f"Failed to get positions: {str(e)}"),
-                parse_mode='HTML'
+            
+            # Handle edge case: no running strategies + connection error = no positions
+            error_str = str(e).lower()
+            is_connection_error = (
+                isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError)) or
+                "connection" in error_str or
+                "all connection attempts failed" in error_str
             )
+            
+            if not has_running_strategies and is_connection_error:
+                # No running strategies and connection failed - treat as no positions
+                await update.message.reply_text(
+                    "📊 <b>No Active Positions</b>\n\n"
+                    "No positions found. All strategies are currently paused.",
+                    parse_mode='HTML'
+                )
+            else:
+                # Real error - show it
+                await update.message.reply_text(
+                    self.formatter.format_error(f"Failed to get positions: {str(e)}"),
+                    parse_mode='HTML'
+                )
     
     async def positions_account_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle account selection callback - show positions for selected account."""
@@ -121,6 +161,27 @@ class MonitoringHandler(BaseHandler):
         user, api_key = await self.require_auth(update, context)
         if not user or not api_key:
             return
+        
+        # Check if there are any running strategies first
+        is_admin = user.get("is_admin", False)
+        user_id = None if is_admin else user["id"]
+        
+        if user_id:
+            running_query = """
+                SELECT COUNT(*) as count
+                FROM strategy_runs
+                WHERE user_id = :user_id AND status IN ('starting', 'running', 'paused')
+            """
+            running_result = await self.database.fetch_one(running_query, {"user_id": user_id})
+        else:
+            running_query = """
+                SELECT COUNT(*) as count
+                FROM strategy_runs
+                WHERE status IN ('starting', 'running', 'paused')
+            """
+            running_result = await self.database.fetch_one(running_query)
+        
+        has_running_strategies = running_result and running_result['count'] > 0
         
         try:
             client = ControlAPIClient(self.config.control_api_base_url, api_key)
@@ -186,10 +247,28 @@ class MonitoringHandler(BaseHandler):
             
         except Exception as e:
             self.logger.error(f"Positions account callback error: {e}")
-            await query.edit_message_text(
-                self.formatter.format_error(f"Failed to get positions: {str(e)}"),
-                parse_mode='HTML'
+            
+            # Handle edge case: no running strategies + connection error = no positions
+            error_str = str(e).lower()
+            is_connection_error = (
+                isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError)) or
+                "connection" in error_str or
+                "all connection attempts failed" in error_str
             )
+            
+            if not has_running_strategies and is_connection_error:
+                # No running strategies and connection failed - treat as no positions
+                await query.edit_message_text(
+                    f"📊 <b>{account_name}</b>\n\n"
+                    "No active positions. All strategies are currently paused.",
+                    parse_mode='HTML'
+                )
+            else:
+                # Real error - show it
+                await query.edit_message_text(
+                    self.formatter.format_error(f"Failed to get positions: {str(e)}"),
+                    parse_mode='HTML'
+                )
     
     async def positions_back_to_all_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle back button - return to all positions view."""
@@ -200,6 +279,27 @@ class MonitoringHandler(BaseHandler):
         user, api_key = await self.require_auth(update, context)
         if not user or not api_key:
             return
+        
+        # Check if there are any running strategies first
+        is_admin = user.get("is_admin", False)
+        user_id = None if is_admin else user["id"]
+        
+        if user_id:
+            running_query = """
+                SELECT COUNT(*) as count
+                FROM strategy_runs
+                WHERE user_id = :user_id AND status IN ('starting', 'running', 'paused')
+            """
+            running_result = await self.database.fetch_one(running_query, {"user_id": user_id})
+        else:
+            running_query = """
+                SELECT COUNT(*) as count
+                FROM strategy_runs
+                WHERE status IN ('starting', 'running', 'paused')
+            """
+            running_result = await self.database.fetch_one(running_query)
+        
+        has_running_strategies = running_result and running_result['count'] > 0
         
         try:
             client = ControlAPIClient(self.config.control_api_base_url, api_key)
@@ -268,10 +368,28 @@ class MonitoringHandler(BaseHandler):
             
         except Exception as e:
             self.logger.error(f"Back to all positions error: {e}")
-            await query.edit_message_text(
-                self.formatter.format_error(f"Failed to get positions: {str(e)}"),
-                parse_mode='HTML'
+            
+            # Handle edge case: no running strategies + connection error = no positions
+            error_str = str(e).lower()
+            is_connection_error = (
+                isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError)) or
+                "connection" in error_str or
+                "all connection attempts failed" in error_str
             )
+            
+            if not has_running_strategies and is_connection_error:
+                # No running strategies and connection failed - treat as no positions
+                await query.edit_message_text(
+                    "📊 <b>No Active Positions</b>\n\n"
+                    "No positions found. All strategies are currently paused.",
+                    parse_mode='HTML'
+                )
+            else:
+                # Real error - show it
+                await query.edit_message_text(
+                    self.formatter.format_error(f"Failed to get positions: {str(e)}"),
+                    parse_mode='HTML'
+                )
     
     async def close_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /close command - shows interactive position selection."""
