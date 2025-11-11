@@ -54,13 +54,18 @@ class OpportunityScanner:
 
             opportunities = await strategy.opportunity_finder.find_opportunities(filters)
 
-            # Temporary: Skip CC opportunities
+            # Temporary: Skip CC opportunities and Z (which is incorrectly normalized from 2Z)
             # Original code (uncomment to revert):
             # strategy.logger.info(f"Found {len(opportunities)} opportunities")
             original_count = len(opportunities)
-            opportunities = [opp for opp in opportunities if opp.symbol != "CC"]
-            if len(opportunities) < original_count:
-                strategy.logger.info("⏭️  Skipped CC opportunities (temporary filter)")
+            skipped_symbols = []
+            if any(opp.symbol == "CC" for opp in opportunities):
+                skipped_symbols.append("CC")
+            if any(opp.symbol == "Z" for opp in opportunities):
+                skipped_symbols.append("Z")
+            opportunities = [opp for opp in opportunities if opp.symbol not in ["CC", "Z"]]
+            if len(opportunities) < original_count and skipped_symbols:
+                strategy.logger.info(f"⏭️  Skipped opportunities for symbols: {', '.join(skipped_symbols)} (temporary filter)")
 
             strategy.logger.info(f"Found {len(opportunities)} opportunities")
 

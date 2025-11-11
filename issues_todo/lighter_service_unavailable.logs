@@ -1,0 +1,45 @@
+## ISSUE - when lighter has maintanenece on their platform
+
+===========================
+2025-11-09 12:07:16 | INFO     | trading_bot:_connect_exchanges:257       | Connecting to aster...
+2025-11-09 12:07:18 | INFO     | manager:_log:98                          | [ASTER] 🔗 Connected to ws
+2025-11-09 12:07:18 | INFO     | trading_bot:_connect_exchanges:259       | Connected to aster
+2025-11-09 12:07:18 | INFO     | trading_bot:_connect_exchanges:257       | Connecting to lighter...
+2025-11-09 12:07:19 | ERROR    | ...:_initialize_lighter_client:171       | Failed to initialize Lighter client: couldn't get nonce b'<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body>\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n</body>\r\n</html>\r\n'
+2025-11-09 12:07:19 | ERROR    | core:connect:327                         | Error connecting to Lighter: couldn't get nonce b'<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body>\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n</body>\r\n</html>\r\n'
+2025-11-09 12:07:19 | ERROR    | trading_bot:run:472                      | Critical error: couldn't get nonce b'<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body>\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n</body>\r\n</html>\r\n'
+2025-11-09 12:07:19 | ERROR    | trading_bot:run:473                      | Traceback: Traceback (most recent call last):
+  File "/root/perp-dex-tools/trading_bot.py", line 458, in run
+    await self._connect_exchanges()
+  File "/root/perp-dex-tools/trading_bot.py", line 258, in _connect_exchanges
+    await client.connect()
+  File "/root/perp-dex-tools/exchange_clients/lighter/client/core.py", line 187, in connect
+    await self._initialize_lighter_client()
+  File "/root/perp-dex-tools/exchange_clients/lighter/client/core.py", line 159, in _initialize_lighter_client
+    self.lighter_client = SignerClient(
+                          ^^^^^^^^^^^^^
+  File "/root/perp-dex-tools/venv/lib/python3.12/site-packages/lighter/signer_client.py", line 191, in __init__
+    self.nonce_manager = nonce_manager.nonce_manager_factory(
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/perp-dex-tools/venv/lib/python3.12/site-packages/lighter/nonce_manager.py", line 119, in nonce_manager_factory
+    return OptimisticNonceManager(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/perp-dex-tools/venv/lib/python3.12/site-packages/lighter/nonce_manager.py", line 71, in __init__
+    super().__init__(account_index, api_client, start_api_key, end_api_key)
+  File "/root/perp-dex-tools/venv/lib/python3.12/site-packages/lighter/nonce_manager.py", line 41, in __init__
+    api_key_index: get_nonce_from_api(api_client, account_index, api_key_index) - 1
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/perp-dex-tools/venv/lib/python3.12/site-packages/lighter/nonce_manager.py", line 19, in get_nonce_from_api
+    raise Exception(f"couldn't get nonce {req.content}")
+Exception: couldn't get nonce b'<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body>\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n</body>\r\n</html>\r\n'
+
+2025-11-09 12:07:19 | INFO     | trading_bot:graceful_shutdown:295        | Starting graceful shutdown: Critical error: couldn't get nonce b'<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body>\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n</body>\r\n</html>\r\n'
+2025-11-09 12:07:19 | INFO     | base_strategy:cleanup:186                | Strategy 'Funding Rate Arbitrage' cleanup completed
+2025-11-09 12:07:19 | INFO     | manager:_log:98                          | WebSocket disconnected
+2025-11-09 12:07:19 | INFO     | trading_bot:graceful_shutdown:317        | Disconnected from aster
+2025-11-09 12:07:19 | INFO     | trading_bot:graceful_shutdown:317        | Disconnected from lighter
+2025-11-09 12:07:19 | INFO     | trading_bot:graceful_shutdown:317        | Disconnected from paradex
+2025-11-09 12:07:19 | INFO     | trading_bot:graceful_shutdown:324        | Graceful shutdown completed
+Bot execution failed: couldn't get nonce b'<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body>\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n</body>\r\n</html>\r\n'
+2025-11-09 12:07:19.942 - ERROR - Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x7f3afeff5a60>
