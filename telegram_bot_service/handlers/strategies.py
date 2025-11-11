@@ -2373,7 +2373,7 @@ class StrategyHandler(BaseHandler):
             # User configs section with distinct styling
             message_parts.append("━━━━━━━━━━━━━━━━━━━━")
             message_parts.append("💼 <b>Your Configs</b>")
-            message_parts.append("━━━━━━━━━━━━━━━━━━━━\n")
+            message_parts.append("━━━━━━━━━━━━━━━━━━━━")
             
             for cfg in user_configs:
                 cfg_dict = dict(cfg) if not isinstance(cfg, dict) else cfg
@@ -2413,7 +2413,7 @@ class StrategyHandler(BaseHandler):
                 }.get(strategy_type, strategy_type.title())
                 
                 # Use distinct emoji for templates
-                button_text = f"⭐ {config_name} ({strategy_display})"
+                button_text = f"⭐ {config_name} (template)"
                 keyboard.append([InlineKeyboardButton(
                     button_text,
                     callback_data=f"run_config:{tpl_dict['id']}"
