@@ -114,9 +114,14 @@ class FundingArbConfig(BaseModel):
         description="Max new positions to open per cycle"
     )
     
+    target_margin: Optional[Decimal] = Field(
+        default=None,
+        description="Target margin per position in USD. If set, exposure will be calculated dynamically based on leverage."
+    )
+    
     default_position_size_usd: Decimal = Field(
         default=Decimal("1000"),
-        description="Default size for each position in USD"
+        description="Default size for each position in USD (calculated from target_margin if set)"
     )
     
     max_position_size_usd: Decimal = Field(

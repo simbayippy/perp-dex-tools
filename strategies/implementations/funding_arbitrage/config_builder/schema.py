@@ -70,14 +70,14 @@ FUNDING_ARB_SCHEMA = StrategySchema(
         # Position Sizing
         # ====================================================================
         create_decimal_parameter(
-            key="target_exposure",
-            prompt="What is your target position size per side (USD)?",
-            default=Decimal("100"),
+            key="target_margin",
+            prompt="What is your target margin per position (USD)?",
+            default=Decimal("40"),
             min_value=Decimal("0.10"),
             max_value=Decimal("100000"),
             required=True,
-            help_text="This is the USD value of each long/short position. "
-            "Example: $100 means $100 long + $100 short = $200 total notional",
+            help_text="Maximum margin to use per position. Exposure will vary by leverage. "
+            "Example: $40 margin with 3x leverage = $120 exposure, with 50x leverage = $2000 exposure.",
         ),
         ParameterSchema(
             key="max_positions",
@@ -219,7 +219,7 @@ FUNDING_ARB_SCHEMA = StrategySchema(
     # Category grouping for better UX
     categories={
         "Exchanges": ["scan_exchanges", "mandatory_exchange"],
-        "Position Sizing": ["target_exposure", "max_positions", "max_total_exposure_usd"],
+        "Position Sizing": ["target_margin", "max_positions", "max_total_exposure_usd"],
         "Profitability": ["min_profit_rate", "max_oi_usd"],
         "Risk Management": [
             "risk_strategy",
@@ -255,7 +255,7 @@ def create_default_funding_config() -> dict:
     return {
         "mandatory_exchange": None,
         "scan_exchanges": ["lighter", "aster", "paradex"],
-        "target_exposure": Decimal("100"),
+        "target_margin": Decimal("40"),
         "max_positions": 1,
         "max_total_exposure_usd": Decimal("1000"),
         "min_profit_rate": DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL,

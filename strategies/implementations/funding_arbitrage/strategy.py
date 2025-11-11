@@ -136,8 +136,19 @@ class FundingArbitrageStrategy(BaseStrategy):
         from strategies.execution.core.price_provider import PriceProvider
         self.price_provider = PriceProvider()
         
+        # Pass account_name for multi-account support (needed for notification service and executor)
+        account_name = getattr(funding_config, 'account_name', None)
+        
+        # Notification service for Telegram notifications (needed by executor)
+        from .utils.notification_service import StrategyNotificationService
+        self.notification_service = StrategyNotificationService(account_name=account_name)
+        
         # ⭐ Execution Common layer (atomic delta-neutral execution)
-        self.atomic_executor = AtomicMultiOrderExecutor(price_provider=self.price_provider)
+        self.atomic_executor = AtomicMultiOrderExecutor(
+            price_provider=self.price_provider,
+            account_name=account_name,
+            notification_service=self.notification_service
+        )
         self.liquidity_analyzer = LiquidityAnalyzer(
             max_slippage_pct=Decimal("0.005"),  # 0.5% max slippage
             max_spread_bps=50,  # 50 basis points
@@ -149,14 +160,8 @@ class FundingArbitrageStrategy(BaseStrategy):
         # Compose what we need directly - no factory methods
         from .position_manager import FundingArbPositionManager
         
-        # Pass account_name for multi-account support
-        account_name = getattr(funding_config, 'account_name', None)
         # Pass strategy logger to position manager for unified logging
         self.position_manager = FundingArbPositionManager(account_name=account_name, logger=self.logger)
-        
-        # Notification service for Telegram notifications
-        from .utils.notification_service import StrategyNotificationService
-        self.notification_service = StrategyNotificationService(account_name=account_name)
 
         # Tracking
         self.failed_symbols = set()  # Track symbols that failed validation (avoid retrying same cycle)
@@ -306,8 +311,35 @@ class FundingArbitrageStrategy(BaseStrategy):
         from .config import RiskManagementConfig
         from funding_rate_service.config import settings
         
-        # Get target exposure from strategy_params
-        target_exposure = Decimal(str(strategy_params.get('target_exposure', 100.0)))
+        # Get target_margin from strategy_params
+        # For backward compatibility: if target_exposure is set but target_margin is not,
+        # convert target_exposure to target_margin using a conservative leverage assumption
+        target_margin = strategy_params.get('target_margin')
+        target_exposure = strategy_params.get('target_exposure')
+        
+        if target_margin is not None:
+            target_margin_decimal = Decimal(str(target_margin))
+        elif target_exposure is not None:
+            # Backward compatibility: convert target_exposure to target_margin
+            # Assume 10x leverage as a conservative estimate
+            # margin = exposure / leverage
+            target_exposure_decimal = Decimal(str(target_exposure))
+            target_margin_decimal = target_exposure_decimal / Decimal('10')
+            self.logger.info(
+                f"⚠️ Config uses deprecated 'target_exposure'=${target_exposure_decimal:.2f}. "
+                f"Converted to target_margin=${target_margin_decimal:.2f} (assuming 10x leverage). "
+                f"Please update your config to use 'target_margin' instead."
+            )
+        else:
+            # Default fallback
+            target_margin_decimal = Decimal("40")
+            self.logger.warning(
+                "Neither target_margin nor target_exposure specified, using default target_margin=$40"
+            )
+        
+        # Calculate default exposure for max_position_size_usd calculation (conservative estimate)
+        # This is just for the max size limit, actual exposure will be calculated dynamically
+        target_exposure_decimal = target_margin_decimal * Decimal('10')  # Assume 10x leverage for max size calc
 
         config_path = strategy_params.get("_config_path")
 
@@ -358,9 +390,10 @@ class FundingArbitrageStrategy(BaseStrategy):
             mandatory_exchange=mandatory_exchange,
             symbols=[trading_config.ticker],
             max_positions=strategy_params.get('max_positions', 5),
-            default_position_size_usd=target_exposure,  # Use target_exposure as default position size
-            max_position_size_usd=target_exposure * Decimal('10'),  # Max is 10x the default
-            max_total_exposure_usd=Decimal(str(strategy_params.get('max_total_exposure_usd', float(target_exposure) * 5))),
+            target_margin=target_margin_decimal,
+            default_position_size_usd=target_exposure_decimal,  # Will be adjusted dynamically if target_margin is set
+            max_position_size_usd=target_exposure_decimal * Decimal('10'),  # Max is 10x the default
+            max_total_exposure_usd=Decimal(str(strategy_params.get('max_total_exposure_usd', float(target_exposure_decimal) * 5))),
             min_profit=Decimal(str(strategy_params.get('min_profit_rate', DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL))),
             limit_order_offset_pct=limit_order_offset_pct,
             max_oi_usd=max_oi_usd,

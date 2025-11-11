@@ -7,7 +7,7 @@ config:
   - lighter
   - paradex
   mandatory_exchange: lighter
-  target_exposure: !!float '120'
+  target_margin: !!float '40'
   max_positions: 1
   max_total_exposure_usd: !!float '200'
   min_profit_rate: 0.0002283105022831050228310502283

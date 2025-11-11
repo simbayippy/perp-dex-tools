@@ -151,9 +151,17 @@ class ConfigValidator:
             if min_profit is None or (isinstance(min_profit, (int, float)) and min_profit <= 0):
                 errors.append("min_profit_percent/min_profit_rate must be positive")
             
-            position_size = config.get("position_size_usd") or config.get("target_exposure")
-            if position_size is None or (isinstance(position_size, (int, float)) and position_size <= 0):
-                errors.append("position_size_usd/target_exposure must be positive")
+            # Check for target_margin (new) or target_exposure (backward compatibility)
+            target_margin = config.get("target_margin")
+            target_exposure = config.get("target_exposure")
+            
+            if target_margin is None and target_exposure is None:
+                errors.append("target_margin must be specified")
+            elif target_margin is not None and (isinstance(target_margin, (int, float)) and target_margin <= 0):
+                errors.append("target_margin must be positive")
+            elif target_exposure is not None and (isinstance(target_exposure, (int, float)) and target_exposure <= 0):
+                # Backward compatibility: warn but don't fail
+                logger.warning("Config uses deprecated 'target_exposure', will be converted to target_margin")
         
         elif strategy_type == "grid":
             # Validate grid specific params

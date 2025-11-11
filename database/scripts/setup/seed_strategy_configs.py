@@ -40,7 +40,7 @@ TEMPLATES = [
         'config_data': {
             'scan_exchanges': ['aster', 'lighter', 'paradex'],
             'mandatory_exchange': 'lighter',
-            'target_exposure': 120.0,
+            'target_margin': 40.0,
             'max_positions': 1,
             'max_total_exposure_usd': 200.0,
             'min_profit_rate': 0.0002283105022831050228310502283,
@@ -113,7 +113,42 @@ async def seed_strategy_configs():
             )
             
             if existing:
-                logger.info(f"Template '{config_name}' already exists, skipping")
+                logger.info(f"Template '{config_name}' already exists, checking if update needed...")
+                
+                # Check if template needs migration (has target_exposure but no target_margin)
+                existing_config = await db.fetch_one(
+                    """
+                    SELECT config_data FROM strategy_configs 
+                    WHERE config_name = :name AND is_template = TRUE
+                    """,
+                    {'name': config_name}
+                )
+                
+                if existing_config:
+                    existing_data = existing_config['config_data']
+                    if isinstance(existing_data, str):
+                        existing_dict = json.loads(existing_data)
+                    else:
+                        existing_dict = existing_data
+                    
+                    # If it has target_exposure but no target_margin, update it
+                    if existing_dict.get('target_exposure') and not existing_dict.get('target_margin'):
+                        logger.info(f"Updating template '{config_name}' to use target_margin")
+                        await db.execute(
+                            """
+                            UPDATE strategy_configs
+                            SET config_data = CAST(:config_data AS jsonb),
+                                updated_at = NOW()
+                            WHERE config_name = :name AND is_template = TRUE
+                            """,
+                            {
+                                'config_name': config_name,
+                                'config_data': json.dumps(config_data)
+                            }
+                        )
+                        logger.info(f"✅ Updated template: {config_name}")
+                    else:
+                        logger.info(f"Template '{config_name}' already up to date, skipping")
                 continue
             
             # Insert template (user_id is NULL for templates)

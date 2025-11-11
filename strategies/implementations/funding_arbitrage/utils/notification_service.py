@@ -280,3 +280,92 @@ class StrategyNotificationService:
             logger.error(f"Error sending position closed notification: {e}")
             return False
 
+    async def notify_insufficient_margin(
+        self,
+        symbol: str,
+        exchange_name: str,
+        available_balance: Decimal,
+        required_margin: Decimal,
+        leverage_info: Optional[str] = None,
+    ) -> bool:
+        """
+        Send notification when there's insufficient margin for a trade.
+        
+        Args:
+            symbol: Trading symbol (e.g., "PROVE", "BTC")
+            exchange_name: Exchange name with insufficient margin
+            available_balance: Available balance on the exchange
+            required_margin: Required margin amount
+            leverage_info: Optional leverage information (e.g., "3x", "50x")
+            
+        Returns:
+            True if notification queued successfully, False otherwise
+        """
+        run_id = await self._get_strategy_run_id()
+        if not run_id:
+            return False
+        
+        try:
+            # Get user_id from strategy_run
+            if not DATABASE_AVAILABLE or not database.is_connected:
+                return False
+            
+            run_row = await database.fetch_one(
+                "SELECT user_id FROM strategy_runs WHERE id = :run_id",
+                {"run_id": run_id}
+            )
+            if not run_row:
+                return False
+            
+            user_id = str(run_row["user_id"])
+            
+            # Format message
+            message = (
+                f"⚠️ <b>Insufficient Margin</b>\n\n"
+                f"Symbol: <b>{symbol}</b>\n"
+                f"Exchange: {exchange_name.upper()}\n"
+                f"Available: ${available_balance:.2f}\n"
+                f"Required: ${required_margin:.2f}"
+            )
+            
+            if leverage_info:
+                message += f"\nLeverage: {leverage_info}"
+            
+            message += f"\n\nPlease top up margin on {exchange_name.upper()}"
+            
+            # Prepare details
+            details: Dict[str, Any] = {
+                "symbol": symbol,
+                "exchange_name": exchange_name,
+                "available_balance": float(available_balance),
+                "required_margin": float(required_margin),
+            }
+            if leverage_info:
+                details["leverage_info"] = leverage_info
+            
+            # Insert notification
+            await database.execute(
+                """
+                INSERT INTO strategy_notifications (
+                    strategy_run_id, user_id, notification_type,
+                    symbol, message, details
+                )
+                VALUES (
+                    :run_id, :user_id, 'insufficient_margin',
+                    :symbol, :message, CAST(:details AS jsonb)
+                )
+                """,
+                {
+                    "run_id": run_id,
+                    "user_id": user_id,
+                    "symbol": symbol,
+                    "message": message,
+                    "details": json.dumps(details)
+                }
+            )
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error sending insufficient margin notification: {e}")
+            return False
+
