@@ -1139,10 +1139,26 @@ class ConfigHandler(BaseHandler):
                 {"config_id": config_id, "config_name": data['config_name']}
             )
             
-            # Regenerate config files for running strategies using this config
-            affected_strategies = await self._regenerate_running_strategy_configs(config_id)
+            # Regenerate config files for active strategies using this config
+            # (includes running, starting, and paused - any status where the process exists)
+            affected_strategies = await self._regenerate_configs_for_active_strategies(config_id)
             
-            # Try to hot-reload configs for running strategies via control API
+            # If editing from a specific strategy view, also regenerate that strategy's config file
+            # (only if it wasn't already regenerated above, i.e., if it's stopped/failed)
+            run_id = data.get('run_id')
+            if run_id:
+                # Check if this strategy was already regenerated (i.e., it's active: running/starting/paused)
+                already_regenerated = any(
+                    str(strat.get('id')) == str(run_id) 
+                    for strat in affected_strategies
+                )
+                
+                if not already_regenerated:
+                    # Strategy is stopped/failed (not active), regenerate its config file
+                    # so it's ready when the strategy is restarted
+                    await self._regenerate_strategy_config_file(run_id, config_id)
+            
+            # Try to hot-reload configs for active strategies via control API
             reload_results = await self._hot_reload_running_strategies(affected_strategies)
             
             context.user_data.pop('wizard', None)
@@ -1182,7 +1198,7 @@ class ConfigHandler(BaseHandler):
             elif affected_strategies:
                 # Show all affected strategies
                 reloaded_count = sum(1 for s in affected_strategies if reload_results.get(str(s['id']), False))
-                message += f"\n\n🔄 Updated {len(affected_strategies)} running strateg{'y' if len(affected_strategies) == 1 else 'ies'}:"
+                message += f"\n\n🔄 Updated {len(affected_strategies)} active strateg{'y' if len(affected_strategies) == 1 else 'ies'}:"
                 for strat in affected_strategies[:5]:  # Show max 5
                     run_id_short = str(strat['id'])[:8]
                     status = strat['status']
@@ -1325,19 +1341,26 @@ class ConfigHandler(BaseHandler):
                 parse_mode='HTML'
             )
     
-    async def _regenerate_running_strategy_configs(self, config_id: str) -> List[Dict[str, Any]]:
+    async def _regenerate_configs_for_active_strategies(self, config_id: str) -> List[Dict[str, Any]]:
         """
-        Regenerate config files for all running strategies using this config.
+        Regenerate config files for all active strategies using this config.
         
+        Active strategies are those with status: 'running', 'starting', or 'paused'.
+        These are strategies where the process exists and may be reading the config file.
+        Stopped/failed strategies are excluded as they don't need immediate config updates.
+        
+        When a config is edited, all active strategies that use it need their temp
+        config files updated so they pick up the changes.
+        
+        Args:
+            config_id: The config UUID that was updated
+            
         Returns:
-            List of affected strategy runs
+            List of affected strategy runs (with id, supervisor_program_name, status)
         """
-        import tempfile
-        from pathlib import Path
-        from decimal import Decimal
-        
-        # Find running strategies using this config
-        running_strategies = await self.database.fetch_all(
+        # Find active strategies using this config
+        # Active = running, starting, or paused (process exists and may read config)
+        active_strategies = await self.database.fetch_all(
             """
             SELECT id, supervisor_program_name, status
             FROM strategy_runs
@@ -1347,78 +1370,129 @@ class ConfigHandler(BaseHandler):
             {"config_id": config_id}
         )
         
-        self.logger.info(f"Found {len(running_strategies) if running_strategies else 0} running strategies using config_id: {config_id}")
+        self.logger.info(f"Found {len(active_strategies) if active_strategies else 0} active strategies using config_id: {config_id}")
         
-        if not running_strategies:
+        if not active_strategies:
             return []
         
-        # Get updated config from database
-        config_row = await self.database.fetch_one(
-            """
-            SELECT config_data, strategy_type
-            FROM strategy_configs
-            WHERE id = :config_id
-            """,
-            {"config_id": config_id}
-        )
-        
-        if not config_row:
-            return []
-        
-        # Convert Row to dict
-        config_dict_row = dict(config_row)
-        
-        config_data_raw = config_dict_row['config_data']
-        strategy_type = config_dict_row['strategy_type']
-        
-        # Parse config data
-        if isinstance(config_data_raw, str):
-            config_dict = json.loads(config_data_raw)
-        else:
-            config_dict = config_data_raw
-        
-        # Regenerate config file for each running strategy
-        temp_dir = Path(tempfile.gettempdir())
+        # Regenerate config file for each active strategy using the core function
         affected_strategies = []
-        
-        for strategy in running_strategies:
+        for strategy in active_strategies:
             # Convert Row to dict
             strategy_dict = dict(strategy) if not isinstance(strategy, dict) else strategy
             run_id = str(strategy_dict['id'])
-            config_file = temp_dir / f"strategy_{run_id}.yml"
             
-            try:
-                # Build full config structure
-                full_config = {
-                    "strategy": strategy_type,
-                    "created_at": datetime.now().isoformat(),
-                    "version": "1.0",
-                    "config": config_dict
-                }
-                
-                # Register Decimal representer for YAML
-                def decimal_representer(dumper, data):
-                    return dumper.represent_scalar('tag:yaml.org,2002:float', str(data))
-                yaml.add_representer(Decimal, decimal_representer)
-                
-                # Write config file
-                with open(config_file, 'w') as f:
-                    yaml.dump(
-                        full_config,
-                        f,
-                        default_flow_style=False,
-                        sort_keys=False,
-                        allow_unicode=True,
-                        indent=2
-                    )
-                
+            # Use the core regeneration function
+            success = await self._regenerate_strategy_config_file(run_id, config_id)
+            if success:
                 affected_strategies.append(strategy_dict)
-                self.logger.info(f"Regenerated config file for strategy {run_id[:8]}: {config_file}")
-                
-            except Exception as e:
-                self.logger.error(f"Failed to regenerate config for strategy {run_id[:8]}: {e}", exc_info=True)
         
         return affected_strategies
+    
+    async def _regenerate_strategy_config_file(self, run_id: str, config_id: str) -> bool:
+        """
+        Regenerate the temp config file for a specific strategy from the database config.
+        
+        This is the core function for regenerating strategy config files. It fetches the config
+        from the database and writes it to the temp file that the supervisor uses.
+        
+        Args:
+            run_id: Strategy run UUID
+            config_id: Config UUID
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Get config from database
+            config_row = await self.database.fetch_one(
+                """
+                SELECT config_data, strategy_type
+                FROM strategy_configs
+                WHERE id = :config_id
+                """,
+                {"config_id": config_id}
+            )
+            
+            if not config_row:
+                self.logger.warning(f"Config not found for config_id: {config_id}")
+                return False
+            
+            # Convert Row to dict
+            config_dict_row = dict(config_row)
+            config_data_raw = config_dict_row['config_data']
+            strategy_type = config_dict_row['strategy_type']
+            
+            # Parse config data
+            if isinstance(config_data_raw, str):
+                config_dict = json.loads(config_data_raw)
+            else:
+                config_dict = config_data_raw
+            
+            # Write the config file
+            return await self._write_strategy_config_file(run_id, config_dict, strategy_type)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to regenerate config file for strategy {run_id[:8]}: {e}", exc_info=True)
+            return False
+    
+    async def _write_strategy_config_file(
+        self, 
+        run_id: str, 
+        config_dict: Dict[str, Any], 
+        strategy_type: str
+    ) -> bool:
+        """
+        Write strategy config to temp file.
+        
+        This is the low-level function that actually writes the config file.
+        It's separated to allow reuse when config data is already available.
+        
+        Args:
+            run_id: Strategy run UUID
+            config_dict: Parsed config dictionary
+            strategy_type: Strategy type (e.g., 'funding_arbitrage')
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            import tempfile
+            from pathlib import Path
+            
+            temp_dir = Path(tempfile.gettempdir())
+            config_file = temp_dir / f"strategy_{run_id}.yml"
+            
+            # Build full config structure
+            full_config = {
+                "strategy": strategy_type,
+                "created_at": datetime.now().isoformat(),
+                "version": "1.0",
+                "config": config_dict
+            }
+            
+            # Register Decimal representer for YAML
+            def decimal_representer(dumper, data):
+                return dumper.represent_scalar('tag:yaml.org,2002:float', str(data))
+            yaml.add_representer(Decimal, decimal_representer)
+            
+            # Write config file
+            with open(config_file, 'w') as f:
+                yaml.dump(
+                    full_config,
+                    f,
+                    default_flow_style=False,
+                    sort_keys=False,
+                    allow_unicode=True,
+                    indent=2
+                )
+            
+            self.logger.info(f"Regenerated config file for strategy {run_id[:8]}: {config_file}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to write config file for strategy {run_id[:8]}: {e}", exc_info=True)
+            return False
     
     async def _hot_reload_running_strategies(self, strategies: List[Dict[str, Any]]) -> Dict[str, bool]:
         """
