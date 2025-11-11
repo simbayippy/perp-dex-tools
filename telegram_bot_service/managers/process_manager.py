@@ -543,10 +543,14 @@ stdout_logfile={stdout_log}
         
         supervisor_program_name = row["supervisor_program_name"]
         current_status = row["status"]
+        config_id = row["config_id"]
         try:
             old_port = row["control_api_port"]
         except (KeyError, TypeError):
             old_port = None
+        
+        # Regenerate temp config file before resuming (to pick up any config changes)
+        await self._regenerate_strategy_config_file(run_id, config_id)
         
         # Can only resume stopped or paused strategies
         if current_status not in ("stopped", "error", "paused"):
@@ -722,6 +726,81 @@ stdout_logfile={stdout_log}
         
         logger.info(f"Resumed strategy {run_id} on port {port}, status: {final_status}")
         return True
+    
+    async def _regenerate_strategy_config_file(self, run_id: str, config_id: str) -> bool:
+        """
+        Regenerate the temp config file for a strategy from the database config.
+        
+        Args:
+            run_id: Strategy run UUID
+            config_id: Config UUID
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Get config from database
+            config_row = await self.database.fetch_one(
+                """
+                SELECT config_data, strategy_type
+                FROM strategy_configs
+                WHERE id = :config_id
+                """,
+                {"config_id": config_id}
+            )
+            
+            if not config_row:
+                logger.warning(f"Config not found for config_id: {config_id}")
+                return False
+            
+            # Convert Row to dict
+            config_dict_row = dict(config_row)
+            config_data_raw = config_dict_row['config_data']
+            strategy_type = config_dict_row['strategy_type']
+            
+            # Parse config data
+            if isinstance(config_data_raw, str):
+                config_dict = json.loads(config_data_raw)
+            else:
+                config_dict = config_data_raw
+            
+            # Regenerate temp config file
+            import yaml
+            from decimal import Decimal
+            
+            temp_dir = Path(tempfile.gettempdir())
+            config_file = temp_dir / f"strategy_{run_id}.yml"
+            
+            # Build full config structure
+            full_config = {
+                "strategy": strategy_type,
+                "created_at": datetime.now().isoformat(),
+                "version": "1.0",
+                "config": config_dict
+            }
+            
+            # Register Decimal representer for YAML
+            def decimal_representer(dumper, data):
+                return dumper.represent_scalar('tag:yaml.org,2002:float', str(data))
+            yaml.add_representer(Decimal, decimal_representer)
+            
+            # Write config file
+            with open(config_file, 'w') as f:
+                yaml.dump(
+                    full_config,
+                    f,
+                    default_flow_style=False,
+                    sort_keys=False,
+                    allow_unicode=True,
+                    indent=2
+                )
+            
+            logger.info(f"Regenerated config file for strategy {run_id[:8]}: {config_file}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to regenerate config file for strategy {run_id[:8]}: {e}", exc_info=True)
+            return False
     
     async def get_running_strategies(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
