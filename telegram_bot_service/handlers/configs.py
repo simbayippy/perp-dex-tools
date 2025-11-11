@@ -65,10 +65,12 @@ class ConfigHandler(BaseHandler):
         if user_configs:
             message += "<b>Your Configs:</b>\n"
             for cfg in user_configs:
-                status = "🟢" if cfg["is_active"] else "⚫"
-                config_id = str(cfg["id"])
-                config_name = cfg["config_name"]
-                message += f"{status} <b>{config_name}</b> ({cfg['strategy_type']})\n"
+                # Convert Row to dict for safe access
+                cfg_dict = dict(cfg) if not isinstance(cfg, dict) else cfg
+                status = "🟢" if cfg_dict["is_active"] else "⚫"
+                config_id = str(cfg_dict["id"])
+                config_name = cfg_dict["config_name"]
+                message += f"{status} <b>{config_name}</b> ({cfg_dict['strategy_type']})\n"
                 
                 # Add edit and delete buttons for each config
                 keyboard.append([
@@ -88,7 +90,19 @@ class ConfigHandler(BaseHandler):
         if templates:
             message += "<b>Public Templates:</b>\n"
             for tpl in templates[:10]:  # Limit to 10 templates
-                message += f"📄 {tpl['config_name']} ({tpl['strategy_type']})\n"
+                # Convert Row to dict for safe access
+                tpl_dict = dict(tpl) if not isinstance(tpl, dict) else tpl
+                config_id = str(tpl_dict['id'])
+                config_name = tpl_dict['config_name']
+                message += f"📄 {config_name} ({tpl_dict['strategy_type']})\n"
+                
+                # Add copy button for each template
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"📋 Copy {config_name}",
+                        callback_data=f"copy_template_config:{config_id}"
+                    )
+                ])
             if len(templates) > 10:
                 message += f"... and {len(templates) - 10} more\n"
         
@@ -144,9 +158,12 @@ class ConfigHandler(BaseHandler):
                 )
                 return
             
-            config_name = config_row['config_name']
-            is_template = config_row.get('is_template', False)
-            config_user_id = config_row.get('user_id')
+            # Convert Row to dict for safe access
+            config_dict = dict(config_row)
+            
+            config_name = config_dict['config_name']
+            is_template = config_dict.get('is_template', False)
+            config_user_id = config_dict.get('user_id')
             
             # Check if user is trying to edit a template
             if is_template:
@@ -190,10 +207,10 @@ class ConfigHandler(BaseHandler):
                 'data': {
                     'config_id': config_id,
                     'config_name': config_name,
-                    'strategy_type': config_row['strategy_type']
+                    'strategy_type': config_dict['strategy_type']
                 }
             }
-            config_data = config_row['config_data']
+            config_data = config_dict['config_data']
             if isinstance(config_data, str):
                 try:
                     config_data = json.loads(config_data)
@@ -204,14 +221,14 @@ class ConfigHandler(BaseHandler):
                         pass
             config_data = config_data or {}
             structured_config = {
-                "strategy": config_row['strategy_type'],
+                "strategy": config_dict['strategy_type'],
                 "config": config_data
             }
             config_yaml = yaml.dump(structured_config, default_flow_style=False, indent=2, sort_keys=False)
             
             await query.edit_message_text(
                 f"✏️ <b>Edit Config: {config_name}</b>\n\n"
-                f"Strategy Type: <b>{config_row['strategy_type']}</b>\n\n"
+                f"Strategy Type: <b>{config_dict['strategy_type']}</b>\n\n"
                 f"Current config (YAML):\n"
                 f"<code>{config_yaml[:500]}{'...' if len(config_yaml) > 500 else ''}</code>\n\n"
                 f"Send updated config as JSON/YAML, or 'cancel' to cancel:",
@@ -255,7 +272,9 @@ class ConfigHandler(BaseHandler):
                 )
                 return
             
-            config_name = config_row['config_name']
+            # Convert Row to dict
+            config_dict = dict(config_row)
+            config_name = config_dict['config_name']
             
             # Check if config is in use
             running_strategies = await self.database.fetch_all(
@@ -267,7 +286,11 @@ class ConfigHandler(BaseHandler):
                 {"config_id": config_id}
             )
             
-            has_running = running_strategies[0]['count'] > 0 if running_strategies else False
+            has_running = False
+            if running_strategies:
+                # Convert Row to dict
+                first_row = dict(running_strategies[0])
+                has_running = first_row.get('count', 0) > 0
             
             if has_running:
                 await query.edit_message_text(
@@ -334,7 +357,9 @@ class ConfigHandler(BaseHandler):
                 )
                 return
             
-            config_name = config_row['config_name']
+            # Convert Row to dict
+            config_dict = dict(config_row)
+            config_name = config_dict['config_name']
             
             # Delete config
             await self.database.execute(
@@ -1108,9 +1133,12 @@ class ConfigHandler(BaseHandler):
                 )
                 return
             
-            template_name = template_row['config_name']
-            strategy_type = template_row['strategy_type']
-            config_data = template_row['config_data']
+            # Convert Row to dict
+            template_dict = dict(template_row)
+            
+            template_name = template_dict['config_name']
+            strategy_type = template_dict['strategy_type']
+            config_data = template_dict['config_data']
             
             # Create copy name
             copy_name = f"{template_name} (Copy)"
@@ -1229,8 +1257,11 @@ class ConfigHandler(BaseHandler):
         if not config_row:
             return []
         
-        config_data_raw = config_row['config_data']
-        strategy_type = config_row['strategy_type']
+        # Convert Row to dict
+        config_dict_row = dict(config_row)
+        
+        config_data_raw = config_dict_row['config_data']
+        strategy_type = config_dict_row['strategy_type']
         
         # Parse config data
         if isinstance(config_data_raw, str):
@@ -1243,7 +1274,9 @@ class ConfigHandler(BaseHandler):
         affected_strategies = []
         
         for strategy in running_strategies:
-            run_id = str(strategy['id'])
+            # Convert Row to dict
+            strategy_dict = dict(strategy) if not isinstance(strategy, dict) else strategy
+            run_id = str(strategy_dict['id'])
             config_file = temp_dir / f"strategy_{run_id}.yml"
             
             try:
@@ -1271,7 +1304,7 @@ class ConfigHandler(BaseHandler):
                         indent=2
                     )
                 
-                affected_strategies.append(dict(strategy))
+                affected_strategies.append(strategy_dict)
                 self.logger.info(f"Regenerated config file for strategy {run_id[:8]}: {config_file}")
                 
             except Exception as e:
