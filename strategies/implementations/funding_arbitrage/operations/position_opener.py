@@ -401,7 +401,9 @@ class PositionOpener:
 
         if leverage_prep.below_minimum:
             strategy.logger.warning(
-                f"⛔ {symbol}: Position size too small after leverage adjustment (${adjusted_size:.2f})"
+                f"⛔ SAFEGUARD: {symbol}: Position size too small after leverage adjustment - "
+                f"${adjusted_size:.2f} < minimum ${Decimal('5'):.2f}. "
+                f"This may occur if balance is insufficient or leverage limits are too restrictive."
             )
             return None
 

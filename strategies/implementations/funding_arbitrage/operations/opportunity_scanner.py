@@ -110,13 +110,25 @@ class OpportunityScanner:
         # Calculate position size based on target_margin or target_exposure
         size_usd = await self._calculate_position_size(opportunity)
         if size_usd is None:
+            # _calculate_position_size already logs the reason
             return False
         
         if size_usd > strategy.config.max_position_size_usd:
+            strategy.logger.warning(
+                f"⛔ SAFEGUARD: Skipping {opportunity.symbol} opportunity - "
+                f"Calculated position size ${size_usd:.2f} exceeds max_position_size_usd "
+                f"${strategy.config.max_position_size_usd:.2f}"
+            )
             return False
 
         current_exposure = await self.calculate_total_exposure()
         if current_exposure + size_usd > strategy.config.max_total_exposure_usd:
+            strategy.logger.warning(
+                f"⛔ SAFEGUARD: Skipping {opportunity.symbol} opportunity - "
+                f"Total exposure would exceed limit: "
+                f"current=${current_exposure:.2f} + new=${size_usd:.2f} = ${current_exposure + size_usd:.2f} "
+                f"> max_total_exposure_usd=${strategy.config.max_total_exposure_usd:.2f}"
+            )
             return False
 
         return True
@@ -192,9 +204,9 @@ class OpportunityScanner:
             if min_leverage:
                 # Calculate exposure: exposure = margin * leverage
                 calculated_exposure = target_margin * min_leverage
-                strategy.logger.debug(
-                    f"📊 [{symbol}] Calculated exposure from target_margin=${target_margin:.2f}: "
-                    f"${calculated_exposure:.2f} (leverage: {min_leverage}x)"
+                strategy.logger.info(
+                    f"📊 [{symbol}] Calculated position size: target_margin=${target_margin:.2f} × "
+                    f"leverage={min_leverage}x = ${calculated_exposure:.2f} exposure"
                 )
                 return calculated_exposure
             else:
@@ -202,7 +214,12 @@ class OpportunityScanner:
                 strategy.logger.warning(
                     f"⚠️ Could not determine leverage for {symbol}, using conservative 5x estimate"
                 )
-                return target_margin * Decimal("5")
+                calculated_exposure = target_margin * Decimal("5")
+                strategy.logger.info(
+                    f"📊 [{symbol}] Calculated position size (fallback): target_margin=${target_margin:.2f} × "
+                    f"leverage=5x = ${calculated_exposure:.2f} exposure"
+                )
+                return calculated_exposure
         except Exception as exc:
             error_str = str(exc).lower()
             # Check if this is a MARKET_NOT_FOUND error
@@ -221,7 +238,12 @@ class OpportunityScanner:
                 f"⚠️ Error calculating position size from target_margin for {symbol}: {exc}. "
                 "Falling back to conservative 5x estimate"
             )
-            return target_margin * Decimal("5")
+            calculated_exposure = target_margin * Decimal("5")
+            strategy.logger.info(
+                f"📊 [{symbol}] Calculated position size (error fallback): target_margin=${target_margin:.2f} × "
+                f"leverage=5x = ${calculated_exposure:.2f} exposure"
+            )
+            return calculated_exposure
 
     async def has_capacity(self) -> bool:
         strategy = self._strategy
