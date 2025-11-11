@@ -168,10 +168,14 @@ class StrategyHandler(BaseHandler):
                 run_id = str(strat['id'])
                 run_id_short = run_id[:8]
                 status = strat['status']
+                config_name = strat.get('config_name', 'Unknown')
+                account_name = strat.get('account_name', 'Unknown')
                 
                 message += (
                     f"{status_emoji} <b>{run_id_short}</b>\n"
                     f"   Status: {status}\n"
+                    f"   Config: {config_name}\n"
+                    f"   Account: {account_name}\n"
                 )
                 
                 # Show uptime for running strategies, or "Stopped X ago" for stopped strategies
@@ -205,31 +209,34 @@ class StrategyHandler(BaseHandler):
                 
                 message += "\n"
                 
-                # Add action button based on status
+                # Add action buttons: View Config + Stop/Resume
+                row_buttons = []
+                
+                # View Config button (always available)
+                row_buttons.append(
+                    InlineKeyboardButton(
+                        f"📋 Config",
+                        callback_data=f"view_strategy_config:{run_id}"
+                    )
+                )
+                
+                # Stop/Resume button
                 if status in ('running', 'starting'):
-                    # Running strategies can be stopped
-                    keyboard.append([
+                    row_buttons.append(
                         InlineKeyboardButton(
-                            f"🛑 Stop {run_id_short}",
+                            f"🛑 Stop",
                             callback_data=f"stop_strategy:{run_id}"
                         )
-                    ])
-                elif status in ('stopped', 'error'):
-                    # Stopped strategies can be resumed
-                    keyboard.append([
+                    )
+                elif status in ('stopped', 'error', 'paused'):
+                    row_buttons.append(
                         InlineKeyboardButton(
-                            f"🟢 Resume {run_id_short}",
+                            f"🟢 Resume",
                             callback_data=f"resume_strategy:{run_id}"
                         )
-                    ])
-                elif status == 'paused':
-                    # Paused strategies can be resumed
-                    keyboard.append([
-                        InlineKeyboardButton(
-                            f"🟢 Resume {run_id_short}",
-                            callback_data=f"resume_strategy:{run_id}"
-                        )
-                    ])
+                    )
+                
+                keyboard.append(row_buttons)
             
             # Add back button at the bottom
             keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="back_to_strategies_filters")])
@@ -262,18 +269,24 @@ class StrategyHandler(BaseHandler):
                 for i, status in enumerate(status_list):
                     params[f"status{i}"] = status
                 query = f"""
-                    SELECT id, status, started_at, stopped_at, supervisor_program_name
-                    FROM strategy_runs
-                    WHERE user_id = :user_id AND status IN ({placeholders})
-                    ORDER BY started_at DESC
+                    SELECT sr.id, sr.status, sr.started_at, sr.stopped_at, sr.supervisor_program_name,
+                           sc.config_name, a.account_name
+                    FROM strategy_runs sr
+                    LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
+                    LEFT JOIN accounts a ON sr.account_id = a.id
+                    WHERE sr.user_id = :user_id AND sr.status IN ({placeholders})
+                    ORDER BY sr.started_at DESC
                 """
                 rows = await self.database.fetch_all(query, params)
             else:
                 query = """
-                    SELECT id, status, started_at, stopped_at, supervisor_program_name
-                    FROM strategy_runs
-                    WHERE user_id = :user_id
-                    ORDER BY started_at DESC
+                    SELECT sr.id, sr.status, sr.started_at, sr.stopped_at, sr.supervisor_program_name,
+                           sc.config_name, a.account_name
+                    FROM strategy_runs sr
+                    LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
+                    LEFT JOIN accounts a ON sr.account_id = a.id
+                    WHERE sr.user_id = :user_id
+                    ORDER BY sr.started_at DESC
                 """
                 rows = await self.database.fetch_all(query, {"user_id": user_id})
         else:
@@ -284,17 +297,23 @@ class StrategyHandler(BaseHandler):
                 for i, status in enumerate(status_list):
                     params[f"status{i}"] = status
                 query = f"""
-                    SELECT id, status, started_at, stopped_at, supervisor_program_name
-                    FROM strategy_runs
-                    WHERE status IN ({placeholders})
-                    ORDER BY started_at DESC
+                    SELECT sr.id, sr.status, sr.started_at, sr.stopped_at, sr.supervisor_program_name,
+                           sc.config_name, a.account_name
+                    FROM strategy_runs sr
+                    LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
+                    LEFT JOIN accounts a ON sr.account_id = a.id
+                    WHERE sr.status IN ({placeholders})
+                    ORDER BY sr.started_at DESC
                 """
                 rows = await self.database.fetch_all(query, params)
             else:
                 query = """
-                    SELECT id, status, started_at, stopped_at, supervisor_program_name
-                    FROM strategy_runs
-                    ORDER BY started_at DESC
+                    SELECT sr.id, sr.status, sr.started_at, sr.stopped_at, sr.supervisor_program_name,
+                           sc.config_name, a.account_name
+                    FROM strategy_runs sr
+                    LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
+                    LEFT JOIN accounts a ON sr.account_id = a.id
+                    ORDER BY sr.started_at DESC
                 """
                 rows = await self.database.fetch_all(query)
         
@@ -1052,6 +1071,159 @@ class StrategyHandler(BaseHandler):
                 parse_mode='HTML'
             )
     
+    async def view_strategy_config_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle view strategy config callback."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        # Parse callback data: "view_strategy_config:{run_id}"
+        callback_data = query.data
+        if not callback_data.startswith("view_strategy_config:"):
+            await query.edit_message_text(
+                "❌ Invalid selection. Please use /list_strategies again.",
+                parse_mode='HTML'
+            )
+            return
+        
+        run_id = callback_data.split(":", 1)[1]
+        
+        try:
+            # Get strategy run details
+            strategy_row = await self.database.fetch_one(
+                """
+                SELECT sr.id, sr.status, sr.config_id, sr.supervisor_program_name,
+                       sc.config_name, sc.config_data, sc.strategy_type,
+                       a.account_name
+                FROM strategy_runs sr
+                LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
+                LEFT JOIN accounts a ON sr.account_id = a.id
+                WHERE sr.id = :run_id
+                """,
+                {"run_id": run_id}
+            )
+            
+            if not strategy_row:
+                await query.edit_message_text(
+                    "❌ Strategy not found",
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Check permissions (user can only view their own strategies unless admin)
+            is_admin = user.get("is_admin", False)
+            if not is_admin:
+                user_strategy = await self.database.fetch_one(
+                    "SELECT user_id FROM strategy_runs WHERE id = :run_id",
+                    {"run_id": run_id}
+                )
+                if not user_strategy or str(user_strategy["user_id"]) != str(user["id"]):
+                    await query.edit_message_text(
+                        "❌ You don't have permission to view this strategy",
+                        parse_mode='HTML'
+                    )
+                    return
+            
+            config_data_raw = strategy_row['config_data']
+            config_name = strategy_row['config_name'] or 'Unknown'
+            strategy_type = strategy_row['strategy_type'] or 'Unknown'
+            account_name = strategy_row['account_name'] or 'Unknown'
+            status = strategy_row['status']
+            supervisor_name = strategy_row.get('supervisor_program_name', '')
+            run_id_short = run_id[:8]
+            
+            # Get config file path (where supervisor reads it from)
+            import tempfile
+            config_file_path = Path(tempfile.gettempdir()) / f"strategy_{run_id}.yml"
+            
+            # Parse config data
+            import json
+            import yaml
+            if isinstance(config_data_raw, str):
+                config_dict = json.loads(config_data_raw)
+            else:
+                config_dict = config_data_raw
+            
+            # Extract actual config (might be nested)
+            actual_config = config_dict.get('config', config_dict)
+            
+            # Format config for display (show key parameters)
+            message = (
+                f"📋 <b>Strategy Config</b>\n\n"
+                f"<b>Run ID:</b> {run_id_short}\n"
+                f"<b>Status:</b> {status}\n"
+                f"<b>Config:</b> {config_name}\n"
+                f"<b>Account:</b> {account_name}\n"
+                f"<b>Strategy:</b> {strategy_type.replace('_', ' ').title()}\n"
+            )
+            
+            # Show config file path if available
+            if supervisor_name:
+                message += f"<b>Supervisor:</b> {supervisor_name}\n"
+            message += f"<b>Config File:</b> <code>{config_file_path}</code>\n\n"
+            
+            message += f"<b>Configuration:</b>\n"
+            
+            # Format key config parameters
+            if strategy_type == 'funding_arbitrage':
+                target_margin = actual_config.get('target_margin')
+                target_exposure = actual_config.get('target_exposure')
+                scan_exchanges = actual_config.get('scan_exchanges', [])
+                mandatory_exchange = actual_config.get('mandatory_exchange')
+                max_positions = actual_config.get('max_positions', 1)
+                min_profit_rate = actual_config.get('min_profit_rate')
+                
+                if target_margin:
+                    message += f"💰 Target Margin: ${target_margin:.2f}\n"
+                elif target_exposure:
+                    message += f"💰 Target Exposure: ${target_exposure:.2f} (deprecated)\n"
+                
+                if scan_exchanges:
+                    exchanges_str = ', '.join([ex.upper() for ex in scan_exchanges])
+                    message += f"🏦 Exchanges: {exchanges_str}\n"
+                
+                if mandatory_exchange:
+                    message += f"⭐ Mandatory: {mandatory_exchange.upper()}\n"
+                
+                message += f"📊 Max Positions: {max_positions}\n"
+                
+                if min_profit_rate:
+                    min_profit_pct = float(min_profit_rate) * 100
+                    message += f"📈 Min Profit Rate: {min_profit_pct:.4f}%\n"
+            else:
+                # For other strategy types, show a summary
+                message += "<code>"
+                config_yaml = yaml.dump(actual_config, default_flow_style=False, indent=2, sort_keys=False)
+                # Truncate if too long
+                if len(config_yaml) > 1000:
+                    message += config_yaml[:1000] + "\n... (truncated)"
+                else:
+                    message += config_yaml
+                message += "</code>"
+            
+            # Add back button
+            keyboard = [
+                [InlineKeyboardButton("⬅️ Back to Strategies", callback_data="back_to_strategies_filters")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                message,
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            self.logger.error(f"View strategy config error: {e}", exc_info=True)
+            error_msg = str(e).replace('<', '&lt;').replace('>', '&gt;')
+            await query.edit_message_text(
+                f"❌ Failed to load config: {error_msg}",
+                parse_mode='HTML'
+            )
+    
     async def logs_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /logs command - shows filter options."""
         user, _ = await self.require_auth(update, context)
@@ -1715,5 +1887,9 @@ class StrategyHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.resume_strategy_callback,
             pattern="^resume_strategy:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.view_strategy_config_callback,
+            pattern="^view_strategy_config:"
         ))
 
