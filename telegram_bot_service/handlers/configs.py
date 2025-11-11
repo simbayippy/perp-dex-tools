@@ -1142,6 +1142,9 @@ class ConfigHandler(BaseHandler):
             # Regenerate config files for running strategies using this config
             affected_strategies = await self._regenerate_running_strategy_configs(config_id)
             
+            # Try to hot-reload configs for running strategies via control API
+            reload_results = await self._hot_reload_running_strategies(affected_strategies)
+            
             context.user_data.pop('wizard', None)
             
             # Build success message
@@ -1156,21 +1159,42 @@ class ConfigHandler(BaseHandler):
             if run_id:
                 # Show specific strategy info
                 run_id_short = str(run_id)[:8]
-                message += f"\n\n🔄 Strategy <code>{run_id_short}</code> will use the updated config on the next cycle."
+                run_id_str = str(run_id)
+                if reload_results.get(run_id_str, False):
+                    message += f"\n\n✅ Strategy <code>{run_id_short}</code> config reloaded instantly!"
+                else:
+                    # Check strategy status to determine message
+                    strategy_row = await self.database.fetch_one(
+                        "SELECT status FROM strategy_runs WHERE id = :run_id",
+                        {"run_id": run_id}
+                    )
+                    status = dict(strategy_row).get('status') if strategy_row else None
+                    if status in ('running', 'starting'):
+                        message += f"\n\n⚠️ Strategy <code>{run_id_short}</code> config updated. Hot-reload unavailable - changes will apply on next cycle."
+                    elif status == 'paused':
+                        message += f"\n\nℹ️ Strategy <code>{run_id_short}</code> is paused. Changes will apply when resumed."
+                    else:
+                        message += f"\n\nℹ️ Strategy <code>{run_id_short}</code> config updated."
                 # Add back button to strategy list with filter
                 keyboard.append([
                     InlineKeyboardButton("⬅️ Back to Strategies", callback_data=f"filter_strategies:{strategy_filter}")
                 ])
             elif affected_strategies:
                 # Show all affected strategies
+                reloaded_count = sum(1 for s in affected_strategies if reload_results.get(str(s['id']), False))
                 message += f"\n\n🔄 Updated {len(affected_strategies)} running strateg{'y' if len(affected_strategies) == 1 else 'ies'}:"
                 for strat in affected_strategies[:5]:  # Show max 5
                     run_id_short = str(strat['id'])[:8]
                     status = strat['status']
-                    message += f"\n   • {run_id_short} ({status})"
+                    reloaded = reload_results.get(str(strat['id']), False)
+                    icon = "✅" if reloaded else "🔄"
+                    message += f"\n   {icon} {run_id_short} ({status})"
                 if len(affected_strategies) > 5:
                     message += f"\n   ... and {len(affected_strategies) - 5} more"
-                message += "\n\nNote: Changes will apply on next strategy cycle."
+                if reloaded_count > 0:
+                    message += f"\n\n✅ {reloaded_count} strateg{'y' if reloaded_count == 1 else 'ies'} reloaded instantly."
+                if reloaded_count < len(affected_strategies):
+                    message += f"\n⚠️ {len(affected_strategies) - reloaded_count} strateg{'y' if len(affected_strategies) - reloaded_count == 1 else 'ies'} will apply changes on next cycle."
             
             reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
             
@@ -1395,6 +1419,85 @@ class ConfigHandler(BaseHandler):
                 self.logger.error(f"Failed to regenerate config for strategy {run_id[:8]}: {e}", exc_info=True)
         
         return affected_strategies
+    
+    async def _hot_reload_running_strategies(self, strategies: List[Dict[str, Any]]) -> Dict[str, bool]:
+        """
+        Attempt to hot-reload configs for running strategies via control API.
+        
+        This allows config changes to take effect immediately without restarting.
+        Falls back gracefully if control API is not available.
+        
+        Returns:
+            Dict mapping run_id to success status (True if reloaded, False otherwise)
+        """
+        reload_results = {}
+        
+        if not strategies:
+            return reload_results
+        
+        from telegram_bot_service.utils.api_client import ControlAPIClient
+        from telegram_bot_service.core.config import TelegramBotConfig
+        
+        # Get API key and base URL from config
+        try:
+            config = TelegramBotConfig()
+            api_key = config.control_api_key
+            base_url = config.control_api_base_url
+            
+            if not api_key or not base_url:
+                self.logger.debug("Control API not configured, skipping hot-reload")
+                return reload_results
+            
+            # Try to reload config for each running strategy
+            for strategy in strategies:
+                run_id = str(strategy.get('id', ''))
+                status = strategy.get('status', '')
+                
+                # Only reload if strategy is actually running
+                if status not in ('running', 'starting'):
+                    reload_results[run_id] = False
+                    continue
+                
+                try:
+                    # Get control API port for this strategy
+                    strategy_row = await self.database.fetch_one(
+                        """
+                        SELECT control_api_port
+                        FROM strategy_runs
+                        WHERE id = :run_id
+                        """,
+                        {"run_id": run_id}
+                    )
+                    
+                    if not strategy_row or not strategy_row.get('control_api_port'):
+                        self.logger.debug(f"Strategy {run_id[:8]} has no control API port, skipping hot-reload")
+                        reload_results[run_id] = False
+                        continue
+                    
+                    # Create client with strategy-specific port
+                    port = strategy_row['control_api_port']
+                    strategy_url = f"http://127.0.0.1:{port}"
+                    strategy_client = ControlAPIClient(strategy_url, api_key)
+                    
+                    # Attempt reload
+                    result = await strategy_client.reload_config()
+                    if result.get('success'):
+                        self.logger.info(f"✅ Hot-reloaded config for strategy {run_id[:8]}")
+                        reload_results[run_id] = True
+                    else:
+                        self.logger.warning(f"⚠️ Hot-reload failed for strategy {run_id[:8]}: {result.get('error', 'Unknown error')}")
+                        reload_results[run_id] = False
+                        
+                except Exception as e:
+                    # Log but don't fail - hot-reload is optional
+                    self.logger.debug(f"Could not hot-reload config for strategy {run_id[:8]}: {e}")
+                    reload_results[run_id] = False
+                    
+        except Exception as e:
+            # Don't fail if hot-reload is unavailable
+            self.logger.debug(f"Hot-reload not available: {e}")
+        
+        return reload_results
     
     # Helper methods for wizard
     

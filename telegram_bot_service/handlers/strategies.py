@@ -1748,8 +1748,10 @@ class StrategyHandler(BaseHandler):
                 strategy_status = dict(strategy_status_row).get('status')
             
             status_note = ""
-            if strategy_status in ('running', 'starting', 'paused'):
-                status_note = f"\n\n⚠️ <b>Note:</b> This strategy is currently <b>{strategy_status}</b>. Changes will apply on the next cycle."
+            if strategy_status in ('running', 'starting'):
+                status_note = f"\n\nℹ️ <b>Note:</b> This strategy is currently <b>{strategy_status}</b>. Config changes will be reloaded instantly."
+            elif strategy_status == 'paused':
+                status_note = f"\n\n⚠️ <b>Note:</b> This strategy is currently <b>{strategy_status}</b>. Changes will apply when resumed."
             
             # Check if we created a copy (template was used)
             copy_note = ""

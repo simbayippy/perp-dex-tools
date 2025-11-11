@@ -95,6 +95,9 @@ class FundingArbitrageStrategy(BaseStrategy):
         super().__init__(funding_config, exchange_client=None)
         self.config = funding_config  # Store the converted config
         
+        # Store original config path for hot-reloading
+        self._config_path = funding_config.config_path if hasattr(funding_config, 'config_path') else None
+        
         # Store exchange clients dict (multi-DEX support)
         self.exchange_clients = exchange_clients
         
@@ -411,6 +414,58 @@ class FundingArbitrageStrategy(BaseStrategy):
         )
         
         return funding_config
+    
+    async def reload_config(self) -> bool:
+        """
+        Reload configuration from the config file without restarting.
+        
+        This allows hot-reloading of config changes. The new config will be
+        used on the next execution cycle.
+        
+        Returns:
+            True if reloaded successfully, False otherwise
+        """
+        if not self._config_path:
+            self.logger.warning("Cannot reload config: no config path stored")
+            return False
+        
+        try:
+            from pathlib import Path
+            from trading_config.config_yaml import load_config_from_yaml
+            
+            config_path = Path(self._config_path)
+            if not config_path.exists():
+                self.logger.error(f"Config file not found: {config_path}")
+                return False
+            
+            # Load new config from file
+            loaded = load_config_from_yaml(config_path)
+            strategy_config = loaded["config"]
+            
+            # Convert to FundingArbConfig
+            # We need to reconstruct the TradingConfig-like object first
+            class TempTradingConfig:
+                def __init__(self, config_dict):
+                    self.exchange = config_dict.get("mandatory_exchange") or "multi"
+                    self.ticker = "ALL"
+                    self.strategy = "funding_arbitrage"
+                    self.strategy_params = config_dict
+                    self._config_path = str(config_path)
+            
+            temp_config = TempTradingConfig(strategy_config)
+            new_funding_config = self._convert_trading_config(temp_config)
+            
+            # Update the config
+            self.config = new_funding_config
+            self._config_path = str(config_path)  # Update path in case it changed
+            
+            self.logger.info(f"✅ Config reloaded successfully from {config_path}")
+            self.logger.info(f"   New target_margin: ${self.config.target_margin}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to reload config: {e}", exc_info=True)
+            return False
 
     # ========================================================================
     # Internal Loops

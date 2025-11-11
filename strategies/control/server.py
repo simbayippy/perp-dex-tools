@@ -260,6 +260,36 @@ async def close_position(
         )
 
 
+@app.post("/api/v1/config/reload", response_model=Dict[str, Any])
+async def reload_config(user_info: Dict[str, Any] = Depends(get_user_info)):
+    """
+    Reload strategy configuration from the config file without restarting.
+    
+    Changes will take effect on the next execution cycle.
+    
+    Returns:
+        Reload operation result
+    """
+    controller = get_strategy_controller()
+    
+    try:
+        result = await controller.reload_config()
+        
+        if not result.get("success"):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=result.get("error", "Failed to reload config")
+            )
+        
+        return result
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error reloading config: {str(e)}"
+        )
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""

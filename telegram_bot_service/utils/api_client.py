@@ -90,4 +90,18 @@ class ControlAPIClient:
             )
             response.raise_for_status()
             return response.json()
+    
+    async def reload_config(self) -> Dict[str, Any]:
+        """
+        Reload strategy configuration from the config file.
+        
+        Changes will take effect on the next execution cycle.
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{self.base_url}/api/v1/config/reload",
+                headers=self.headers
+            )
+            response.raise_for_status()
+            return response.json()
 
