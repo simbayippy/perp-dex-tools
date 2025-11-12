@@ -58,10 +58,9 @@ async def find_stale_records(
     await database.connect()
     
     try:
-        age_threshold = datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
-        
-        # Build query to find stale records
-        query = """
+        # Build query to find stale records using PostgreSQL INTERVAL syntax
+        # This avoids timezone issues by letting PostgreSQL handle the comparison
+        query = f"""
             SELECT 
                 d.name as dex_name,
                 s.symbol,
@@ -73,11 +72,11 @@ async def find_stale_records(
             JOIN dexes d ON ds.dex_id = d.id
             JOIN symbols s ON ds.symbol_id = s.id
             WHERE ds.updated_at IS NOT NULL
-            AND ds.updated_at < :age_threshold
+            AND ds.updated_at < NOW() - INTERVAL '{age_minutes} minutes'
             AND d.is_active = TRUE
         """
         
-        params = {"age_threshold": age_threshold}
+        params = {}
         
         # Exclude EdgeX and other excluded exchanges
         excluded_list = list(EXCLUDED_EXCHANGES)
@@ -113,8 +112,7 @@ async def find_stale_records(
         return {
             'records': by_exchange,
             'total_count': len(rows),
-            'age_threshold_minutes': age_minutes,
-            'age_threshold': age_threshold
+            'age_threshold_minutes': age_minutes
         }
         
     finally:
@@ -138,10 +136,9 @@ async def delete_stale_records(
     await database.connect()
     
     try:
-        age_threshold = datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
-        
-        # Build delete query
-        query = """
+        # Build delete query using PostgreSQL INTERVAL syntax
+        # This avoids timezone issues by letting PostgreSQL handle the comparison
+        query = f"""
             UPDATE dex_symbols ds
             SET 
                 volume_24h = NULL,
@@ -151,11 +148,11 @@ async def delete_stale_records(
             WHERE ds.dex_id = d.id
             AND ds.symbol_id = s.id
             AND ds.updated_at IS NOT NULL
-            AND ds.updated_at < :age_threshold
+            AND ds.updated_at < NOW() - INTERVAL '{age_minutes} minutes'
             AND d.is_active = TRUE
         """
         
-        params = {"age_threshold": age_threshold}
+        params = {}
         
         # Exclude EdgeX and other excluded exchanges
         excluded_list = list(EXCLUDED_EXCHANGES)
@@ -174,8 +171,7 @@ async def delete_stale_records(
         
         return {
             'deleted_count': result,
-            'age_threshold_minutes': age_minutes,
-            'age_threshold': age_threshold
+            'age_threshold_minutes': age_minutes
         }
         
     finally:
