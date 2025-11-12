@@ -84,14 +84,20 @@ async def find_stale_records(
         """
         diagnostic_rows = await database.fetch_all(diagnostic_query)
         if diagnostic_rows:
-            console.print("[yellow]🔍 Diagnostic: Paradex records in database:[/yellow]")
-            for row in diagnostic_rows:
-                console.print(f"  {row['dex_name']} {row['symbol']}: "
-                            f"ds.updated_at={row['updated_at']}, "
-                            f"ds.age={row['age_minutes']}, "
-                            f"funding_updated={row['funding_updated_at']}, "
-                            f"has_ds_record={'YES' if row['updated_at'] is not None or row['volume_24h'] is not None else 'NO'}")
-            console.print()
+            has_market_data = any(row['updated_at'] is not None or row['volume_24h'] is not None for row in diagnostic_rows)
+            if not has_market_data:
+                console.print("[yellow]⚠️  Note: Paradex records don't have market data in dex_symbols table[/yellow]")
+                console.print("[dim]   The view script shows age from funding rate data, not market data.[/dim]")
+                console.print("[dim]   Since there's no market data to clean, these records are skipped.[/dim]\n")
+            else:
+                console.print("[yellow]🔍 Diagnostic: Paradex records in database:[/yellow]")
+                for row in diagnostic_rows:
+                    console.print(f"  {row['dex_name']} {row['symbol']}: "
+                                f"ds.updated_at={row['updated_at']}, "
+                                f"ds.age={row['age_minutes']}, "
+                                f"funding_updated={row['funding_updated_at']}, "
+                                f"has_ds_record={'YES' if row['updated_at'] is not None or row['volume_24h'] is not None else 'NO'}")
+                console.print()
         
         # Build query to find stale records using PostgreSQL INTERVAL syntax
         # This avoids timezone issues by letting PostgreSQL handle the comparison
