@@ -312,27 +312,54 @@ class ConfigHandler(BaseHandler):
             config_dict = dict(config_row)
             config_name = config_dict['config_name']
             
-            # Check if config is in use
-            running_strategies = await self.database.fetch_all(
+            # Check if config is in use (check for ALL strategies, not just running ones)
+            all_strategies = await self.database.fetch_all(
                 """
-                SELECT COUNT(*) as count
+                SELECT id, status
                 FROM strategy_runs
-                WHERE config_id = :config_id AND status IN ('running', 'starting', 'paused')
+                WHERE config_id = :config_id
+                ORDER BY started_at DESC
+                LIMIT 10
                 """,
                 {"config_id": config_id}
             )
             
-            has_running = False
-            if running_strategies:
-                # Convert Row to dict
-                first_row = dict(running_strategies[0])
-                has_running = first_row.get('count', 0) > 0
-            
-            if has_running:
-                await query.edit_message_text(
+            if all_strategies:
+                # Build message showing strategies using this config
+                message = (
                     f"⚠️ <b>Cannot Delete Config</b>\n\n"
-                    f"Config <b>{config_name}</b> is being used by running strategies.\n"
-                    f"Please stop all strategies using this config first.",
+                    f"Config <b>{config_name}</b> is still being used by one or more strategies.\n\n"
+                    f"You must delete all strategies using this config before you can delete it.\n\n"
+                )
+                
+                # Count by status
+                running_count = sum(1 for s in all_strategies if dict(s).get('status') in ('running', 'starting', 'paused'))
+                stopped_count = len(all_strategies) - running_count
+                
+                message += f"<b>Strategies using this config:</b>\n"
+                if running_count > 0:
+                    message += f"• {running_count} running/active\n"
+                if stopped_count > 0:
+                    message += f"• {stopped_count} stopped/completed\n"
+                
+                # Count total if we got 10 (might be more)
+                if len(all_strategies) >= 10:
+                    total_count = await self.database.fetch_one(
+                        """
+                        SELECT COUNT(*) as count
+                        FROM strategy_runs
+                        WHERE config_id = :config_id
+                        """,
+                        {"config_id": config_id}
+                    )
+                    total = dict(total_count).get('count', len(all_strategies)) if total_count else len(all_strategies)
+                    if total > 10:
+                        message += f"• Total: {total} strategies\n"
+                
+                message += "\nUse /list_strategies to view and delete strategies."
+                
+                await query.edit_message_text(
+                    message,
                     parse_mode='HTML'
                 )
                 return
@@ -422,10 +449,71 @@ class ConfigHandler(BaseHandler):
             )
         except Exception as e:
             self.logger.error(f"Error in delete_config_confirm_callback: {e}", exc_info=True)
-            await query.edit_message_text(
-                f"❌ Failed to delete config: {str(e)}",
-                parse_mode='HTML'
-            )
+            
+            # Check if this is a foreign key constraint violation
+            error_str = str(e).lower()
+            if "violates foreign key constraint" in error_str or "strategy_runs_config_id_fkey" in error_str:
+                # Config is still referenced by strategy runs
+                # Query for strategies using this config
+                strategies = await self.database.fetch_all(
+                    """
+                    SELECT id, status, supervisor_program_name, started_at
+                    FROM strategy_runs
+                    WHERE config_id = :config_id
+                    ORDER BY started_at DESC
+                    LIMIT 10
+                    """,
+                    {"config_id": config_id}
+                )
+                
+                # Build error message
+                message = (
+                    f"⚠️ <b>Cannot Delete Config</b>\n\n"
+                    f"Config <b>{config_name}</b> is still being used by one or more strategies.\n\n"
+                    f"You must delete all strategies using this config before you can delete it.\n\n"
+                )
+                
+                if strategies:
+                    message += f"<b>Strategies using this config ({len(strategies)}):</b>\n"
+                    for strat in strategies:
+                        strat_dict = dict(strat) if not isinstance(strat, dict) else strat
+                        run_id_short = str(strat_dict['id'])[:8]
+                        status = strat_dict.get('status', 'unknown')
+                        message += f"• <code>{run_id_short}</code> ({status})\n"
+                    
+                    if len(strategies) >= 10:
+                        # Count total strategies
+                        total_count = await self.database.fetch_one(
+                            """
+                            SELECT COUNT(*) as count
+                            FROM strategy_runs
+                            WHERE config_id = :config_id
+                            """,
+                            {"config_id": config_id}
+                        )
+                        total = dict(total_count).get('count', len(strategies)) if total_count else len(strategies)
+                        if total > 10:
+                            message += f"\n... and {total - 10} more\n"
+                
+                message += "\nUse /list_strategies to view and delete strategies."
+                
+                # Add back button
+                keyboard = [
+                    [InlineKeyboardButton("⬅️ Back to Configs", callback_data="list_configs_back")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(
+                    message,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+            else:
+                # Other error - show generic message
+                await query.edit_message_text(
+                    f"❌ Failed to delete config: {str(e)}",
+                    parse_mode='HTML'
+                )
     
     async def delete_config_cancel_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle config deletion cancellation."""
