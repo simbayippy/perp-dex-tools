@@ -15,7 +15,7 @@ Key features:
 """
 
 from typing import Dict, Optional
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from dataclasses import dataclass
 import time
@@ -942,8 +942,75 @@ class OrderExecutor:
             else:
                 limit_price = best_bid  # At touch for immediate fill
             
+            # Debug: Log BBO and tick_size before rounding
+            tick_size = getattr(exchange_client.config, 'tick_size', None)
+            self.logger.debug(
+                f"[{exchange_name.upper()}] Before rounding: best_bid={best_bid}, best_ask={best_ask}, "
+                f"limit_price={limit_price}, tick_size={tick_size}"
+            )
+            
             # Round to tick size
+            limit_price_before_rounding = limit_price
             limit_price = exchange_client.round_to_tick(limit_price)
+            
+            # Debug: Log after rounding
+            self.logger.debug(
+                f"[{exchange_name.upper()}] After rounding: limit_price={limit_price} "
+                f"(was {limit_price_before_rounding}, tick_size={tick_size})"
+            )
+            
+            # Safety check: if rounding changed price dramatically (>10%), something is wrong
+            if limit_price_before_rounding > 0:
+                price_change_pct = abs((limit_price - limit_price_before_rounding) / limit_price_before_rounding) * 100
+                if price_change_pct > 10:
+                    self.logger.error(
+                        f"[{exchange_name.upper()}] ⚠️ CRITICAL: round_to_tick changed price by {price_change_pct:.1f}%! "
+                        f"Before: {limit_price_before_rounding}, After: {limit_price}, tick_size: {tick_size}. "
+                        f"This suggests tick_size is incorrect or not set for {symbol}!"
+                    )
+                    # Try to fetch correct tick_size for this symbol
+                    try:
+                        # Try to get tick_size from market_data manager if available
+                        if hasattr(exchange_client, 'market_data') and exchange_client.market_data:
+                            # Use the symbol to fetch contract attributes
+                            contract_id, correct_tick_size = await exchange_client.market_data.get_contract_attributes(symbol)
+                            self.logger.warning(
+                                f"[{exchange_name.upper()}] Fetched correct tick_size={correct_tick_size} for {symbol} "
+                                f"(contract_id={contract_id}). Re-rounding..."
+                            )
+                            # Update config tick_size for future use
+                            exchange_client.config.tick_size = correct_tick_size
+                            # Re-round with correct tick_size
+                            limit_price = limit_price_before_rounding.quantize(
+                                correct_tick_size, 
+                                rounding=ROUND_HALF_UP
+                            )
+                            self.logger.info(
+                                f"[{exchange_name.upper()}] Corrected limit_price={limit_price} "
+                                f"(was {limit_price_before_rounding})"
+                            )
+                        elif hasattr(exchange_client, 'get_contract_attributes'):
+                            # Fallback: try get_contract_attributes (uses config.ticker)
+                            contract_id, correct_tick_size = await exchange_client.get_contract_attributes()
+                            self.logger.warning(
+                                f"[{exchange_name.upper()}] Fetched correct tick_size={correct_tick_size} "
+                                f"(contract_id={contract_id}). Re-rounding..."
+                            )
+                            # Update config tick_size for future use
+                            exchange_client.config.tick_size = correct_tick_size
+                            # Re-round with correct tick_size
+                            limit_price = limit_price_before_rounding.quantize(
+                                correct_tick_size, 
+                                rounding=ROUND_HALF_UP
+                            )
+                            self.logger.info(
+                                f"[{exchange_name.upper()}] Corrected limit_price={limit_price} "
+                                f"(was {limit_price_before_rounding})"
+                            )
+                    except Exception as e:
+                        self.logger.error(
+                            f"[{exchange_name.upper()}] Failed to fetch correct tick_size: {e}"
+                        )
             
             # Calculate quantity
             if quantity is not None:
