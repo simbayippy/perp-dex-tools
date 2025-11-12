@@ -473,7 +473,7 @@ class FundingArbitrageStrategy(BaseStrategy):
             self._config_path = str(config_path)  # Update path in case it changed
             
             self.logger.info(f"✅ Config reloaded successfully from {config_path}")
-            self.logger.info(f"   New target_margin: ${self.config.target_margin}")
+            self.logger.info(f"New config: {self.config}")
             return True
             
         except Exception as e:

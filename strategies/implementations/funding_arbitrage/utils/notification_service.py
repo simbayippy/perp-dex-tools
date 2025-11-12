@@ -13,6 +13,17 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# Exchange emoji mapping
+EXCHANGE_EMOJIS = {
+    "lighter": "⚡",
+    "aster": "✨",
+    "backpack": "🎒",
+    "paradex": "🎪",
+}
+
+# Funding payments per year (8-hour intervals)
+FUNDING_PAYMENTS_PER_YEAR = Decimal("1095")  # 365 days * 3 payments per day
+
 # Try to import database connection
 try:
     from database.connection import database
@@ -34,6 +45,12 @@ class StrategyNotificationService:
         """
         self.account_name = account_name
         self._run_id_cache: Optional[str] = None
+    
+    @staticmethod
+    def _get_exchange_emoji(dex_name: str) -> str:
+        """Get emoji for exchange name."""
+        dex_lower = dex_name.lower()
+        return EXCHANGE_EMOJIS.get(dex_lower, "")
     
     async def _get_strategy_run_id(self) -> Optional[str]:
         """
@@ -136,16 +153,23 @@ class StrategyNotificationService:
             # Format message with improved clarity
             divergence_pct = entry_divergence * Decimal("100")
             
+            # Calculate entry APY (annualized percentage yield)
+            entry_apy = entry_divergence * FUNDING_PAYMENTS_PER_YEAR * Decimal("100")
+            
+            # Get emojis for exchanges
+            long_emoji = self._get_exchange_emoji(long_dex)
+            short_emoji = self._get_exchange_emoji(short_dex)
+            
             # Build message with clearer information
             message = (
                 f"✅ <b>Position Opened</b>\n\n"
-                f"Symbol: <b>{symbol}</b>\n"
-                f"Position Size: <b>${size_usd:.2f}</b>\n"
+                f"💎 Symbol: <b>{symbol}</b>\n"
+                f"💰 Position Size: <b>${size_usd:.2f}</b>\n"
             )
             
             # Add margin and leverage info if available
             if margin_used is not None:
-                message += f"Margin Used: <b>${margin_used:.2f}</b>"
+                message += f"💵 Margin Used: <b>${margin_used:.2f}</b>"
                 if normalized_leverage:
                     message += f" | Leverage: <b>{normalized_leverage}x</b>"
                 message += "\n\n"
@@ -154,8 +178,9 @@ class StrategyNotificationService:
             else:
                 message += "\n"
             
-            # Long leg details
-            message += f"<b>Long:</b> {long_dex.upper()}"
+            # Long leg details with emoji
+            long_display = f"{long_emoji} {long_dex.upper()}" if long_emoji else long_dex.upper()
+            message += f"<b>🚀 Long:</b> {long_display}"
             if long_price:
                 message += f" @ ${long_price:.6f}"
             if long_quantity:
@@ -165,8 +190,9 @@ class StrategyNotificationService:
             
             message += "\n"
             
-            # Short leg details
-            message += f"<b>Short:</b> {short_dex.upper()}"
+            # Short leg details with emoji
+            short_display = f"{short_emoji} {short_dex.upper()}" if short_emoji else short_dex.upper()
+            message += f"<b>⬇️ Short:</b> {short_display}"
             if short_price:
                 message += f" @ ${short_price:.6f}"
             if short_quantity:
@@ -174,7 +200,8 @@ class StrategyNotificationService:
             if short_exposure:
                 message += f" | Size: ${short_exposure:.2f}"
             
-            message += f"\n\nDivergence: {divergence_pct:.4f}%"
+            message += f"\n\n⚡ Divergence: {divergence_pct:.4f}%"
+            message += f"\n💸 Entry APY: <b>{entry_apy:.2f}%</b>"
             
             # Prepare details
             details: Dict[str, Any] = {
@@ -183,6 +210,7 @@ class StrategyNotificationService:
                 "short_dex": short_dex,
                 "size_usd": float(size_usd),
                 "entry_divergence": float(entry_divergence),
+                "entry_apy": float(entry_apy),
             }
             if long_price:
                 details["long_price"] = float(long_price)
