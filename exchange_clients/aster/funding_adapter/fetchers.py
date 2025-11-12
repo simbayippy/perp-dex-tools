@@ -4,8 +4,9 @@ Data fetching logic for Aster funding adapter.
 Handles fetching funding rates and market data from Aster API.
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional, Callable
+from typing import Dict, Optional, Callable, List
 from decimal import Decimal, InvalidOperation
 
 from exchange_clients.base_models import FundingRateSample
@@ -13,6 +14,14 @@ from exchange_clients.base_models import FundingRateSample
 
 class AsterFundingFetchers:
     """Handles data fetching from Aster funding API."""
+
+    # Open Interest multiplier for two-sided calculation
+    # Aster API returns one-sided OI (base currency), but total OI
+    # shown on their website is long + short (two-sided), hence × 2
+    OI_TWO_SIDED_MULTIPLIER = 2
+    
+    # Concurrency limit for OI fetching (optimal based on testing)
+    OI_FETCH_CONCURRENCY = 10
 
     def __init__(
         self,
@@ -200,6 +209,102 @@ class AsterFundingFetchers:
         
         return rates_dict
 
+    async def _fetch_oi_for_symbol(
+        self,
+        aster_client,
+        symbol: str,
+        semaphore: asyncio.Semaphore
+    ) -> Optional[Dict[str, Decimal]]:
+        """
+        Fetch OI for a single symbol.
+        
+        Args:
+            aster_client: Aster SDK client instance
+            symbol: Symbol to fetch OI for (e.g., "BTCUSDT")
+            semaphore: Semaphore for rate limiting
+            
+        Returns:
+            Dictionary with 'open_interest_base' (base currency) or None if failed
+        """
+        async with semaphore:
+            try:
+                # Aster SDK is synchronous, so run in executor
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: aster_client.query("/fapi/v1/openInterest", {"symbol": symbol})
+                )
+                
+                if isinstance(response, dict) and "openInterest" in response:
+                    oi_base = Decimal(str(response["openInterest"]))
+                    return {"open_interest_base": oi_base}
+            except Exception:
+                # Silently fail - some symbols may not have OI data
+                return None
+        return None
+
+    async def _fetch_all_oi(
+        self,
+        aster_client,
+        symbols: List[str],
+        mark_prices_lookup: Dict[str, Dict]
+    ) -> Dict[str, Decimal]:
+        """
+        Fetch OI for all symbols concurrently and convert to USD.
+        
+        Args:
+            aster_client: Aster SDK client instance
+            symbols: List of symbols to fetch OI for
+            mark_prices_lookup: Dictionary mapping symbol to mark price data
+            
+        Returns:
+            Dictionary mapping normalized symbol to OI in USD (two-sided)
+        """
+        semaphore = asyncio.Semaphore(self.OI_FETCH_CONCURRENCY)
+        
+        # Fetch OI for all symbols concurrently
+        tasks = [
+            self._fetch_oi_for_symbol(aster_client, symbol, semaphore)
+            for symbol in symbols
+        ]
+        oi_results = await asyncio.gather(*tasks)
+        
+        # Convert to USD and apply two-sided multiplier
+        oi_usd_dict: Dict[str, Decimal] = {}
+        
+        for symbol, oi_result in zip(symbols, oi_results):
+            if oi_result is None:
+                continue
+                
+            oi_base = oi_result.get("open_interest_base")
+            if oi_base is None:
+                continue
+            
+            # Get mark price for USD conversion
+            mark_data = mark_prices_lookup.get(symbol, {})
+            mark_price = mark_data.get("markPrice") or mark_data.get("mark_price")
+            
+            if mark_price is None:
+                continue
+            
+            try:
+                mark_price_decimal = Decimal(str(mark_price))
+                
+                # Convert base currency OI to USD (one-sided)
+                one_sided_oi_usd = oi_base * mark_price_decimal
+                
+                # Convert to two-sided OI (long + short)
+                two_sided_oi_usd = one_sided_oi_usd * self.OI_TWO_SIDED_MULTIPLIER
+                
+                normalized_symbol = self.normalize_symbol(symbol)
+                oi_usd_dict[normalized_symbol] = two_sided_oi_usd
+                
+            except (ValueError, TypeError, InvalidOperation):
+                # Skip invalid conversions
+                continue
+        
+        return oi_usd_dict
+
     async def fetch_market_data(self) -> Dict[str, Dict[str, Decimal]]:
         """
         Fetch market data (volume, open interest) from Aster.
@@ -217,15 +322,15 @@ class AsterFundingFetchers:
         aster_client = self.funding_client.ensure_client()
         
         try:
-            # Fetch 24hr ticker data for volume and mark prices for open interest
+            # Fetch 24hr ticker data for volume and mark prices for OI conversion
             ticker_data = aster_client.ticker_24hr_price_change()
             mark_prices_data = aster_client.mark_price()
             
             if not ticker_data:
                 return {}
             
-            # Create lookup for mark prices data (for open interest if available)
-            mark_prices_lookup = {}
+            # Create lookup for mark prices data (needed for OI USD conversion)
+            mark_prices_lookup: Dict[str, Dict] = {}
             if mark_prices_data:
                 if isinstance(mark_prices_data, list):
                     for mark_item in mark_prices_data:
@@ -238,16 +343,30 @@ class AsterFundingFetchers:
                     if symbol:
                         mark_prices_lookup[symbol] = mark_prices_data
             
-            # Extract market data
-            market_data = {}
-            
-            # Handle both single dict and list of dicts response for ticker
+            # Extract symbols from ticker data for OI fetching
             if isinstance(ticker_data, dict):
                 ticker_list = [ticker_data]
             elif isinstance(ticker_data, list):
                 ticker_list = ticker_data
             else:
                 return {}
+            
+            # Collect all USDT symbols for OI fetching
+            symbols_for_oi = []
+            for ticker in ticker_list:
+                symbol = ticker.get('symbol', '')
+                if symbol.endswith('USDT'):
+                    symbols_for_oi.append(symbol)
+            
+            # Fetch OI for all symbols concurrently
+            oi_usd_dict = await self._fetch_all_oi(
+                aster_client,
+                symbols_for_oi,
+                mark_prices_lookup
+            )
+            
+            # Extract market data from ticker and merge with OI
+            market_data = {}
             
             for ticker in ticker_list:
                 try:
@@ -268,24 +387,8 @@ class AsterFundingFetchers:
                         ticker.get('baseVolume')
                     )
                     
-                    # Try to get open interest from ticker first (might be available even if not documented)
-                    # Then fallback to mark prices
-                    open_interest = (
-                        ticker.get('openInterest') or
-                        ticker.get('openInterestValue') or
-                        ticker.get('open_interest') or
-                        ticker.get('oi') or
-                        ticker.get('openInterestUsd')
-                    )
-                    
-                    # If not in ticker, try mark prices (though API docs don't show OI there)
-                    if open_interest is None:
-                        mark_data = mark_prices_lookup.get(symbol, {})
-                        open_interest = (
-                            mark_data.get('openInterest') or 
-                            mark_data.get('openInterestValue') or 
-                            mark_data.get('open_interest')
-                        )
+                    # Get OI from fetched data
+                    open_interest_usd = oi_usd_dict.get(normalized_symbol)
                     
                     # Create market data entry
                     data = {}
@@ -293,8 +396,8 @@ class AsterFundingFetchers:
                     if volume_24h is not None:
                         data['volume_24h'] = Decimal(str(volume_24h))
                     
-                    if open_interest is not None:
-                        data['open_interest'] = Decimal(str(open_interest))
+                    if open_interest_usd is not None:
+                        data['open_interest'] = open_interest_usd
                     
                     if data:  # Only add if we have some data
                         market_data[normalized_symbol] = data
