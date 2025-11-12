@@ -144,10 +144,23 @@ async def seed_strategy_configs():
                     
                     # Add new default filters if missing
                     if strategy_type == 'funding_arbitrage':
-                        if 'min_volume_24h' not in existing_dict or existing_dict.get('min_volume_24h') != config_data.get('min_volume_24h'):
+                        # Check min_volume_24h
+                        existing_min_vol = existing_dict.get('min_volume_24h')
+                        expected_min_vol = config_data.get('min_volume_24h')
+                        
+                        # Update if field is missing, None, or different value
+                        if existing_min_vol is None or existing_min_vol != expected_min_vol:
+                            logger.info(f"  Found min_volume_24h: existing={existing_min_vol}, expected={expected_min_vol}")
                             needs_update = True
                             update_reason.append("add/update min_volume_24h default")
-                        if 'min_oi_usd' not in existing_dict or existing_dict.get('min_oi_usd') != config_data.get('min_oi_usd'):
+                        
+                        # Check min_oi_usd
+                        existing_min_oi = existing_dict.get('min_oi_usd')
+                        expected_min_oi = config_data.get('min_oi_usd')
+                        
+                        # Update if field is missing, None, or different value
+                        if existing_min_oi is None or existing_min_oi != expected_min_oi:
+                            logger.info(f"  Found min_oi_usd: existing={existing_min_oi}, expected={expected_min_oi}")
                             needs_update = True
                             update_reason.append("add/update min_oi_usd default")
                     
