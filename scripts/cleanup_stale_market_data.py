@@ -138,15 +138,16 @@ async def delete_stale_records(
     try:
         # Build delete query using PostgreSQL INTERVAL syntax
         # This avoids timezone issues by letting PostgreSQL handle the comparison
+        # Use proper JOIN syntax instead of old-style comma joins
         query = f"""
             UPDATE dex_symbols ds
             SET 
                 volume_24h = NULL,
                 open_interest_usd = NULL,
                 updated_at = NULL
-            FROM dexes d, symbols s
+            FROM dexes d
+            JOIN symbols s ON ds.symbol_id = s.id
             WHERE ds.dex_id = d.id
-            AND ds.symbol_id = s.id
             AND ds.updated_at IS NOT NULL
             AND ds.updated_at < NOW() - INTERVAL '{age_minutes} minutes'
             AND d.is_active = TRUE
