@@ -261,19 +261,31 @@ class AsterFundingFetchers:
                     normalized_symbol = self.normalize_symbol(symbol)
                     
                     # Get volume (24h) - try multiple possible field names
+                    # According to API docs: 'volume' is base asset volume, 'quoteVolume' is quote asset volume (USD)
                     volume_24h = (
+                        ticker.get('quoteVolume') or  # Prefer quoteVolume (USD) over base volume
                         ticker.get('volume') or 
-                        ticker.get('baseVolume') or 
-                        ticker.get('quoteVolume')
+                        ticker.get('baseVolume')
                     )
                     
-                    # Get open interest from mark prices if available
-                    mark_data = mark_prices_lookup.get(symbol, {})
+                    # Try to get open interest from ticker first (might be available even if not documented)
+                    # Then fallback to mark prices
                     open_interest = (
-                        mark_data.get('openInterest') or 
-                        mark_data.get('openInterestValue') or 
-                        mark_data.get('open_interest')
+                        ticker.get('openInterest') or
+                        ticker.get('openInterestValue') or
+                        ticker.get('open_interest') or
+                        ticker.get('oi') or
+                        ticker.get('openInterestUsd')
                     )
+                    
+                    # If not in ticker, try mark prices (though API docs don't show OI there)
+                    if open_interest is None:
+                        mark_data = mark_prices_lookup.get(symbol, {})
+                        open_interest = (
+                            mark_data.get('openInterest') or 
+                            mark_data.get('openInterestValue') or 
+                            mark_data.get('open_interest')
+                        )
                     
                     # Create market data entry
                     data = {}
