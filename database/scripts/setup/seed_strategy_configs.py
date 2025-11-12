@@ -52,7 +52,9 @@ TEMPLATES = [
             'limit_order_offset_pct': 0.0002,
             'check_interval_seconds': 60,
             'dry_run': False,
-            'max_oi_usd': 1500000.0
+            'max_oi_usd': 1500000.0,
+            'min_volume_24h': 350000.0,
+            'min_oi_usd': 100000.0
         }
     },
     {
@@ -131,9 +133,26 @@ async def seed_strategy_configs():
                     else:
                         existing_dict = existing_data
                     
-                    # If it has target_exposure but no target_margin, update it
+                    # Check if template needs update
+                    needs_update = False
+                    update_reason = []
+                    
+                    # Migration: target_exposure -> target_margin
                     if existing_dict.get('target_exposure') and not existing_dict.get('target_margin'):
-                        logger.info(f"Updating template '{config_name}' to use target_margin")
+                        needs_update = True
+                        update_reason.append("target_exposure -> target_margin migration")
+                    
+                    # Add new default filters if missing
+                    if strategy_type == 'funding_arbitrage':
+                        if 'min_volume_24h' not in existing_dict or existing_dict.get('min_volume_24h') != config_data.get('min_volume_24h'):
+                            needs_update = True
+                            update_reason.append("add/update min_volume_24h default")
+                        if 'min_oi_usd' not in existing_dict or existing_dict.get('min_oi_usd') != config_data.get('min_oi_usd'):
+                            needs_update = True
+                            update_reason.append("add/update min_oi_usd default")
+                    
+                    if needs_update:
+                        logger.info(f"Updating template '{config_name}': {', '.join(update_reason)}")
                         await db.execute(
                             """
                             UPDATE strategy_configs

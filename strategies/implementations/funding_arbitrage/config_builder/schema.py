@@ -130,7 +130,7 @@ FUNDING_ARB_SCHEMA = StrategySchema(
         create_decimal_parameter(
             key="min_volume_24h",
             prompt="Minimum 24h volume filter (USD)?",
-            default=None,
+            default=Decimal("350000"),
             min_value=Decimal("1000"),
             max_value=Decimal("999999999"),
             required=False,
@@ -142,7 +142,7 @@ FUNDING_ARB_SCHEMA = StrategySchema(
         create_decimal_parameter(
             key="min_oi_usd",
             prompt="Minimum open interest filter (USD)?",
-            default=None,
+            default=Decimal("100000"),
             min_value=Decimal("1000"),
             max_value=Decimal("999999999"),
             required=False,
@@ -284,6 +284,8 @@ def create_default_funding_config() -> dict:
         "max_total_exposure_usd": Decimal("1000"),
         "min_profit_rate": DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL,
         "max_oi_usd": None,
+        "min_volume_24h": Decimal("350000"),
+        "min_oi_usd": Decimal("100000"),
         "risk_strategy": "combined",
         "profit_erosion_threshold": Decimal("0.5"),
         "min_hold_hours": 0,

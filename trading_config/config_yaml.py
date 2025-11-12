@@ -208,7 +208,9 @@ def create_example_configs():
             "max_position_age_hours": 168,
             "max_new_positions_per_cycle": 2,
             "check_interval_seconds": 60,
-            "dry_run": True
+            "dry_run": True,
+            "min_volume_24h": Decimal("350000"),
+            "min_oi_usd": Decimal("100000")
         }
     }
     
