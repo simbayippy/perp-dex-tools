@@ -58,6 +58,41 @@ async def find_stale_records(
     await database.connect()
     
     try:
+        # First, let's check what Paradex records actually look like in the database
+        # This helps diagnose why they're not being found
+        diagnostic_query = """
+            SELECT 
+                d.name as dex_name,
+                s.symbol,
+                ds.volume_24h,
+                ds.open_interest_usd,
+                ds.updated_at,
+                CASE 
+                    WHEN ds.updated_at IS NOT NULL 
+                    THEN EXTRACT(EPOCH FROM (NOW() - ds.updated_at)) / 60
+                    ELSE NULL
+                END as age_minutes,
+                lfr.updated_at as funding_updated_at
+            FROM dexes d
+            JOIN symbols s ON 1=1
+            LEFT JOIN dex_symbols ds ON ds.dex_id = d.id AND ds.symbol_id = s.id
+            LEFT JOIN latest_funding_rates lfr ON lfr.dex_id = d.id AND lfr.symbol_id = s.id
+            WHERE d.name = 'paradex'
+            AND s.symbol IN ('KBONK', 'KFLOKI', 'KPEPE', 'KSHIB')
+            ORDER BY s.symbol
+            LIMIT 10
+        """
+        diagnostic_rows = await database.fetch_all(diagnostic_query)
+        if diagnostic_rows:
+            console.print("[yellow]🔍 Diagnostic: Paradex records in database:[/yellow]")
+            for row in diagnostic_rows:
+                console.print(f"  {row['dex_name']} {row['symbol']}: "
+                            f"ds.updated_at={row['updated_at']}, "
+                            f"ds.age={row['age_minutes']}, "
+                            f"funding_updated={row['funding_updated_at']}, "
+                            f"has_ds_record={'YES' if row['updated_at'] is not None or row['volume_24h'] is not None else 'NO'}")
+            console.print()
+        
         # Build query to find stale records using PostgreSQL INTERVAL syntax
         # This avoids timezone issues by letting PostgreSQL handle the comparison
         # Find records where:
