@@ -1,0 +1,283 @@
+## PREVIOUSLY OPENED POSITIONS LOG
+[32m2025-11-12 05:57:04[0m | [1mINFO    [0m | [36mopportunity_finde:find_opportunities:171[0m | [1mFound 10 raw opportunities, 10 after filtering, returning top 1[0m
+[32m2025-11-12 05:57:04[0m | [1mINFO    [0m | [36mposition_c:_should_skip_erosion_exit:679[0m | [1mHolding MYX: erosion trigger fired but opportunity still ranks highest (0.1272164600% net).[0m
+[32m2025-11-12 05:58:05[0m | [1mINFO    [0m | [36mposition_monit:_log_exchange_metrics:296[0m | [1mPosition MYX snapshot [Account: acc1]
+Yield (annualised) | entry 723.5377% | current 140.9230% | erosion 19.48% (limit 40.00%)
+Min hold: satisfied (risk checks active since 2025-11-12 04:35:03)
+Max hold: 9h 37m remaining (force close at 2025-11-12 15:35:03, configured: 12h)
+------------------------------------------------------------------------------------------------
+Exchange     Side   Qty         Entry        Mark         uPnL         Funding      Funding APY 
+------------------------------------------------------------------------------------------------
+LIGHTER     short    178.7000    2.517300    2.524300       -1.25        0.01    54.3120%
+PARADEX     long     187.9000    2.517280    2.521316        1.87        1.02   -86.6110%[0m
+
+## Now, it initiates a close bc of severe erosion reason -> attempts to close
+## However, paradex market fill fails bc of max slippage -> fails atomic close
+
+[32m2025-11-12 05:58:05[0m | [1mINFO    [0m | [36mposition_clos:_close_legs_atomically:818[0m | [1m🔒 Closing position MYX atomically | Reason: SEVERE_EROSION | Legs: [PARADEX:sell:187.9, LIGHTER:buy:178.70][0m
+[32m2025-11-12 05:58:05[0m | [1mINFO    [0m | [36mexecutor:execute_atomically:111         [0m | [1mStarting atomic execution of 2 orders (rollback_on_partial=True)[0m
+[32m2025-11-12 05:58:05[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1m=======================================================[0m
+[32m2025-11-12 05:58:05[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1mclose.2. 🚀 Order Placement[0m
+[32m2025-11-12 05:58:05[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1m=======================================================[0m
+[32m2025-11-12 05:58:05[0m | [1mINFO    [0m | [36mexecutor:execute_atomically:138         [0m | [1m🚀 Placing all orders simultaneously...[0m
+[32m2025-11-12 05:58:05[0m | [1mINFO    [0m | [36morder_executor:execute_order:173        [0m | [1m🔴 [PARADEX] Executing sell MYX ($473.75531398 qty=187.9) in mode limit_only[0m
+[32m2025-11-12 05:58:05[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [PARADEX] BBO: bid=2.52, ask=2.524[0m
+[32m2025-11-12 05:58:05[0m | [1mINFO    [0m | [36morder_executor:_execute_limit:311       [0m | [1m[PARADEX] Placing limit sell MYX (contract_id=MYX-USD-PERP): 187.9 @ $2.521 (mid: $2.522, offset: 0.0200%)[0m
+[32m2025-11-12 05:58:05[0m | [1mINFO    [0m | [36morder_executor:execute_order:173        [0m | [1m🟢 [LIGHTER] Executing buy MYX ($451.110280 qty=178.70) in mode limit_only[0m
+[32m2025-11-12 05:58:05[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=2.5239, ask=2.5249[0m
+[32m2025-11-12 05:58:05[0m | [1mINFO    [0m | [36morder_executor:_execute_limit:311       [0m | [1m[LIGHTER] Placing limit buy MYX (contract_id=80): 178.70 @ $2.5244 (mid: $2.5244, offset: 0.0200%)[0m
+[32m2025-11-12 05:58:05[0m | [1mINFO    [0m | [36morder_manager:place_limit_order:185     [0m | [1m📤 [LIGHTER] Submitting order: market=80 client_id=85941 side=BID price=25244 amount=17870[0m
+[32m2025-11-12 05:58:07[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:171   [0m | [1m[WEBSOCKET] [LIGHTER] OPEN 178.70 @ 2.5244[0m
+[32m2025-11-12 05:58:07[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:182   [0m | [1m[WEBSOCKET] [LIGHTER] PARTIALLY_FILLED 0.02 @ 2.5244[0m
+[32m2025-11-12 05:58:07[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:182   [0m | [1m[WEBSOCKET] [LIGHTER] PARTIALLY_FILLED 0.08 @ 2.5244[0m
+[32m2025-11-12 05:58:10[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:182   [0m | [1m[WEBSOCKET] [LIGHTER] PARTIALLY_FILLED 0.11 @ 2.5244[0m
+[32m2025-11-12 05:58:10[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:182   [0m | [1m[WEBSOCKET] [LIGHTER] PARTIALLY_FILLED 0.12 @ 2.5244[0m
+[32m2025-11-12 05:58:14[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:182   [0m | [1m[WEBSOCKET] [LIGHTER] FILLED 178.70 @ 2.5244[0m
+[32m2025-11-12 05:58:14[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:212   [0m | [1mTRANSACTION: BUY 178.70 @ 2.5244 | Order: 85941 | Status: FILLED[0m
+[32m2025-11-12 05:58:14[0m | [33m[1mWARNING [0m | [36m...:handle_positions_stream_update:435  [0m | [33m[1m⚠️ [LIGHTER] Position suddenly zeroed: MYX | Previous qty: 178.58 | Market ID: 80 | Possible liquidation (no liquidation notification received)[0m
+[32m2025-11-12 05:58:15[0m | [1mINFO    [0m | [36morder_executor:_execute_limit:445       [0m | [1m[LIGHTER] Limit order filled: 178.70 @ $2.5244[0m
+[32m2025-11-12 05:58:15[0m | [1mINFO    [0m | [36mexecutor:_handle_full_fill_trigger:786  [0m | [1m✅ LIGHTER MYX fully filled (178.70). Cancelling remaining limit orders and hedging to prevent directional exposure.[0m
+[32m2025-11-12 05:58:15[0m | [1mINFO    [0m | [36mexecutor:_handle_full_fill_trigger:795  [0m | [1m🔄 Cancelling limit order for PARADEX MYX (remaining: 187.9) → will hedge with market order[0m
+[32m2025-11-12 05:58:15[0m | [1mINFO    [0m | [36morder_executor:_execute_limit:400       [0m | [1m[PARADEX] Cancellation requested for limit order 1762927086080201709220540000[0m
+[32m2025-11-12 05:58:16[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:107   [0m | [1m[WEBSOCKET] [PARADEX] CANCELED 0.0 @ 2.521[0m
+[32m2025-11-12 05:58:16[0m | [1mINFO    [0m | [36mhedge_manager:hedge:80                  [0m | [1m⚡ Hedging MYX on PARADEX for remaining qty=178.70, $473.76[0m
+[32m2025-11-12 05:58:16[0m | [1mINFO    [0m | [36morder_executor:execute_order:173        [0m | [1m🔴 [PARADEX] Executing sell MYX (qty=178.70) in mode market_only[0m
+[32m2025-11-12 05:58:16[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [PARADEX] BBO: bid=2.513, ask=2.523[0m
+[32m2025-11-12 05:58:16[0m | [1mINFO    [0m | [36morder_executor:_execute_market:588      [0m | [1m[PARADEX] Placing market sell MYX (contract_id=MYX-USD-PERP): 178.7 @ ~$2.513[0m
+[32m2025-11-12 05:58:16[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:107   [0m | [1m[WEBSOCKET] [PARADEX] CANCELED 167.7 @ 2.509[0m
+[32m2025-11-12 05:58:17[0m | [31m[1mERROR   [0m | [36morder_executor:_execute_market:647      [0m | [31m[1m[PARADEX] Market order canceled: 1762927096460201709278850000 | Status: CANCELED | Reason: exceeds_max_slippage[0m
+[32m2025-11-12 05:58:17[0m | [31m[1mERROR   [0m | [36mhedge_manager:hedge:110                 [0m | [31m[1mMarket order canceled: CANCELED (exceeds_max_slippage)[0m
+[32m2025-11-12 05:58:17[0m | [33m[1mWARNING [0m | [36mexecutor:_handle_full_fill_trigger:889  [0m | [33m[1mHedge failed (Market order canceled: CANCELED (exceeds_max_slippage)) — attempting rollback of partial fills[0m
+[32m2025-11-12 05:58:17[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1311   [0m | [33m[1m🚨 EMERGENCY ROLLBACK: Closing 1 filled orders[0m
+[32m2025-11-12 05:58:17[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1317   [0m | [1mStep 1/3: Canceling all orders to prevent further fills...[0m
+[32m2025-11-12 05:58:18[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1336   [0m | [1mStep 2/3: Querying actual filled amounts...[0m
+[32m2025-11-12 05:58:18[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1406   [0m | [1mStep 3/3: Closing 1 filled positions...[0m
+[32m2025-11-12 05:58:18[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1416   [0m | [1mRollback: sell MYX 178.70 @ market (contract_id=80, exchange=lighter)[0m
+[32m2025-11-12 05:58:18[0m | [1mINFO    [0m | [36morder_manager:place_market_order:392    [0m | [1m📤 [LIGHTER] Placing market order: market=80, client_id=98152, side=SELL, base_amount=17870, avg_execution_price=23942[0m
+[32m2025-11-12 05:58:18[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1460   [0m | [33m[1mRollback cost for MYX: $0.00 (entry: $2.5244, exit: $2.5244)[0m
+[32m2025-11-12 05:58:18[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1465   [0m | [33m[1m✅ Rollback complete. Total cost: $0.00[0m
+[32m2025-11-12 05:58:18[0m | [33m[1mWARNING [0m | [36mexecutor:_handle_full_fill_trigger:930  [0m | [33m[1mRollback completed after hedge failure; total cost $0.0000[0m
+[32m2025-11-12 05:58:18[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:182   [0m | [1m[WEBSOCKET] [LIGHTER] FILLED 178.70 @ 2.3942[0m
+[32m2025-11-12 05:58:18[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:212   [0m | [1mTRANSACTION: SELL 178.70 @ 2.3942 | Order: 98152 | Status: FILLED[0m
+[32m2025-11-12 05:58:20[0m | [1mINFO    [0m | [36m...:reconcile_context_after_cancel:169  [0m | [1mReconcile: MYX order 85941 - adding fill: additional=178.70 @ 2.5244, total will be 178.70[0m
+[32m2025-11-12 05:58:20[0m | [31m[1mERROR   [0m | [36mposition_closer:close:325               [0m | [31m[1mError closing position e9c73a33-9d80-4499-a7c3-613f6de8af27: Atomic close failed for MYX: Market order canceled: CANCELED (exceeds_max_slippage)[0m
+[32m2025-11-12 05:58:20[0m | [31m[1mERROR   [0m | [36mstrategy:_monitor_positions_loop:506    [0m | [31m[1mMonitor loop error: Atomic close failed for MYX: Market order canceled: CANCELED (exceeds_max_slippage)[0m
+[32m2025-11-12 05:59:21[0m | [1mINFO    [0m | [36mposition_m:_get_funding_for_snapshot:338[0m | [1m[LIGHTER] Querying position_funding() API for MYX (no cache)[0m
+[32m2025-11-12 05:59:22[0m | [1mINFO    [0m | [36mposition_mana:get_cumulative_funding:687[0m | [1m[LIGHTER] Funding for current position (market_id=80): $0.0306 (from 13 records, filtered 11 before position opened at 1762918503.821173)[0m
+[32m2025-11-12 05:59:22[0m | [1mINFO    [0m | [36mposition_monit:_log_exchange_metrics:296[0m | [1mPosition MYX snapshot [Account: acc1]
+Yield (annualised) | entry 723.5377% | current 131.8344% | erosion 18.22% (limit 40.00%)
+Min hold: satisfied (risk checks active since 2025-11-12 04:35:03)
+Max hold: 9h 36m remaining (force close at 2025-11-12 15:35:03, configured: 12h)
+------------------------------------------------------------------------------------------------
+Exchange     Side   Qty         Entry        Mark         uPnL         Funding      Funding APY 
+------------------------------------------------------------------------------------------------
+LIGHTER     short    178.7000    2.518500    2.519750       -0.22        0.03    54.3120%
+PARADEX     long      20.2000    2.517280    2.517237        0.11        0.11   -77.5224%[0m
+[32m2025-11-12 05:59:23[0m | [33m[1mWARNING [0m | [36mposition_closer:_detect_imbalance:542   [0m | [33m[1m⚠️ Severe imbalance detected for MYX: paradex=20 tokens vs lighter=179 tokens (diff=88.7%, threshold=5.0%)[0m
+[32m2025-11-12 05:59:23[0m | [1mINFO    [0m | [36mposition_clos:_close_legs_atomically:818[0m | [1m🔒 Closing position MYX atomically | Reason: SEVERE_IMBALANCE | Legs: [PARADEX:sell:20.2, LIGHTER:buy:178.70][0m
+[32m2025-11-12 05:59:23[0m | [1mINFO    [0m | [36mexecutor:execute_atomically:111         [0m | [1mStarting atomic execution of 2 orders (rollback_on_partial=True)[0m
+[32m2025-11-12 05:59:23[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1m=======================================================[0m
+[32m2025-11-12 05:59:23[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1mclose.2. 🚀 Order Placement[0m
+[32m2025-11-12 05:59:23[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1m=======================================================[0m
+[32m2025-11-12 05:59:23[0m | [1mINFO    [0m | [36mexecutor:execute_atomically:138         [0m | [1m🚀 Placing all orders simultaneously...[0m
+[32m2025-11-12 05:59:23[0m | [1mINFO    [0m | [36morder_executor:execute_order:173        [0m | [1m🔴 [PARADEX] Executing sell MYX ($50.848181744 qty=20.2) in mode market_only[0m
+[32m2025-11-12 05:59:23[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [PARADEX] BBO: bid=2.512, ask=2.52[0m
+[32m2025-11-12 05:59:23[0m | [1mINFO    [0m | [36morder_executor:_execute_market:588      [0m | [1m[PARADEX] Placing market sell MYX (contract_id=MYX-USD-PERP): 20.2 @ ~$2.512[0m
+[32m2025-11-12 05:59:23[0m | [1mINFO    [0m | [36morder_executor:execute_order:173        [0m | [1m🟢 [LIGHTER] Executing buy MYX ($450.2793250 qty=178.70) in mode market_only[0m
+[32m2025-11-12 05:59:23[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=2.5193, ask=2.5202[0m
+[32m2025-11-12 05:59:23[0m | [1mINFO    [0m | [36morder_executor:_execute_market:588      [0m | [1m[LIGHTER] Placing market buy MYX (contract_id=80): 178.70 @ ~$2.5202[0m
+[32m2025-11-12 05:59:23[0m | [1mINFO    [0m | [36morder_manager:place_market_order:392    [0m | [1m📤 [LIGHTER] Placing market order: market=80, client_id=163514, side=BUY, base_amount=17870, avg_execution_price=26457[0m
+[32m2025-11-12 05:59:23[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:107   [0m | [1m[WEBSOCKET] [PARADEX] FILLED 20.2 @ 2.504[0m
+[32m2025-11-12 05:59:24[0m | [1mINFO    [0m | [36morder_executor:_execute_market:685      [0m | [1m[PARADEX] Market order filled: 20.2 @ $2.504 (slippage: $0.16 / 0.318%)[0m
+[32m2025-11-12 05:59:24[0m | [1mINFO    [0m | [36mexecutor:_handle_full_fill_trigger:786  [0m | [1m✅ PARADEX MYX fully filled (20.2). Cancelling remaining limit orders and hedging to prevent directional exposure.[0m
+[32m2025-11-12 05:59:24[0m | [1mINFO    [0m | [36mexecutor:_handle_full_fill_trigger:795  [0m | [1m🔄 Cancelling limit order for LIGHTER MYX (remaining: 178.70) → will hedge with market order[0m
+[32m2025-11-12 05:59:24[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:182   [0m | [1m[WEBSOCKET] [LIGHTER] FILLED 178.70 @ 2.6457[0m
+[32m2025-11-12 05:59:24[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:212   [0m | [1mTRANSACTION: BUY 178.70 @ 2.6457 | Order: 163514 | Status: FILLED[0m
+[32m2025-11-12 05:59:25[0m | [1mINFO    [0m | [36morder_executor:_execute_market:685      [0m | [1m[LIGHTER] Market order filled: 178.70 @ $2.6457 (slippage: $22.43 / 4.980%)[0m
+[32m2025-11-12 05:59:25[0m | [33m[1mWARNING [0m | [36m...:handle_positions_stream_update:435  [0m | [33m[1m⚠️ [LIGHTER] Position suddenly zeroed: MYX | Previous qty: 178.70 | Market ID: 80 | Possible liquidation (no liquidation notification received)[0m
+[32m2025-11-12 05:59:25[0m | [31m[1mERROR   [0m | [36mexecutor:execute_atomically:339         [0m | [31m[1m⚠️ CRITICAL IMBALANCE detected despite all orders filled: longs=$450.28, shorts=$50.58, imbalance=$399.70 (88.8%). Triggering emergency rollback.[0m
+[32m2025-11-12 05:59:25[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1311   [0m | [33m[1m🚨 EMERGENCY ROLLBACK: Closing 2 filled orders[0m
+[32m2025-11-12 05:59:25[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1317   [0m | [1mStep 1/3: Canceling all orders to prevent further fills...[0m
+[32m2025-11-12 05:59:25[0m | [31m[1mERROR   [0m | [36morder_manager:cancel_order:364          [0m | [31m[1mFailed to cancel order 1762927163650201709179500002: ApiError(error='ORDER_IS_CLOSED', message='order is closed: 1762927163650201709179500002', data=None)[0m
+[32m2025-11-12 05:59:26[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1336   [0m | [1mStep 2/3: Querying actual filled amounts...[0m
+[32m2025-11-12 05:59:26[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1406   [0m | [1mStep 3/3: Closing 2 filled positions...[0m
+[32m2025-11-12 05:59:26[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1416   [0m | [1mRollback: buy MYX 20.2 @ market (contract_id=MYX-USD-PERP, exchange=paradex)[0m
+[32m2025-11-12 05:59:26[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1416   [0m | [1mRollback: sell MYX 178.70 @ market (contract_id=80, exchange=lighter)[0m
+[32m2025-11-12 05:59:26[0m | [1mINFO    [0m | [36morder_manager:place_market_order:392    [0m | [1m📤 [LIGHTER] Placing market order: market=80, client_id=166109, side=SELL, base_amount=17870, avg_execution_price=23928[0m
+[32m2025-11-12 05:59:26[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:107   [0m | [1m[WEBSOCKET] [PARADEX] FILLED 20.2 @ 2.529[0m
+[32m2025-11-12 05:59:26[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:182   [0m | [1m[WEBSOCKET] [LIGHTER] FILLED 178.70 @ 2.3928[0m
+[32m2025-11-12 05:59:26[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:212   [0m | [1mTRANSACTION: SELL 178.70 @ 2.3928 | Order: 166109 | Status: FILLED[0m
+[32m2025-11-12 05:59:27[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1460   [0m | [33m[1mRollback cost for MYX: $0.50 (entry: $2.504, exit: $2.529)[0m
+[32m2025-11-12 05:59:27[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1460   [0m | [33m[1mRollback cost for MYX: $0.00 (entry: $2.6457, exit: $2.6457)[0m
+[32m2025-11-12 05:59:27[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1465   [0m | [33m[1m✅ Rollback complete. Total cost: $0.50[0m
+[32m2025-11-12 05:59:27[0m | [33m[1mWARNING [0m | [36m...:_perform_emergency_rollback:697     [0m | [33m[1m🛡️ Emergency rollback completed; cost=$0.5050. Prevented $399.70 (88.8%) directional exposure.[0m
+[32m2025-11-12 05:59:27[0m | [31m[1mERROR   [0m | [36mposition_closer:close:325               [0m | [31m[1mError closing position e9c73a33-9d80-4499-a7c3-613f6de8af27: Atomic close failed for MYX: Rolled back due to critical imbalance: $399.70[0m
+[32m2025-11-12 05:59:27[0m | [31m[1mERROR   [0m | [36mstrategy:_monitor_positions_loop:506    [0m | [31m[1mMonitor loop error: Atomic close failed for MYX: Rolled back due to critical imbalance: $399.70[0m
+[32m2025-11-12 06:00:28[0m | [1mINFO    [0m | [36mposition_m:_get_funding_for_snapshot:338[0m | [1m[LIGHTER] Querying position_funding() API for MYX (no cache)[0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36mposition_mana:get_cumulative_funding:687[0m | [1m[LIGHTER] Funding for current position (market_id=80): $0.0306 (from 13 records, filtered 11 before position opened at 1762918503.821173)[0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36mposition_monit:_log_exchange_metrics:296[0m | [1mPosition MYX snapshot [Account: acc1]
+Yield (annualised) | entry 723.5377% | current 129.6011% | erosion 17.91% (limit 40.00%)
+Min hold: satisfied (risk checks active since 2025-11-12 04:35:03)
+Max hold: 9h 35m remaining (force close at 2025-11-12 15:35:03, configured: 12h)
+------------------------------------------------------------------------------------------------
+Exchange     Side   Qty         Entry        Mark         uPnL         Funding      Funding APY 
+------------------------------------------------------------------------------------------------
+LIGHTER     short    178.7000    2.516700    2.518750       -0.37        0.03    54.3120%
+PARADEX     long      20.2000    2.519482    2.514852       -0.08        0.00   -75.2891%[0m
+[32m2025-11-12 06:00:29[0m | [33m[1mWARNING [0m | [36mposition_closer:_detect_imbalance:542   [0m | [33m[1m⚠️ Severe imbalance detected for MYX: paradex=20 tokens vs lighter=179 tokens (diff=88.7%, threshold=5.0%)[0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36mposition_clos:_close_legs_atomically:818[0m | [1m🔒 Closing position MYX atomically | Reason: SEVERE_IMBALANCE | Legs: [PARADEX:sell:20.2, LIGHTER:buy:178.70][0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36mexecutor:execute_atomically:111         [0m | [1mStarting atomic execution of 2 orders (rollback_on_partial=True)[0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1m=======================================================[0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1mclose.2. 🚀 Order Placement[0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1m=======================================================[0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36mexecutor:execute_atomically:138         [0m | [1m🚀 Placing all orders simultaneously...[0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36morder_executor:execute_order:173        [0m | [1m🔴 [PARADEX] Executing sell MYX ($50.800013430 qty=20.2) in mode market_only[0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [PARADEX] BBO: bid=2.512, ask=2.518[0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36morder_executor:_execute_market:588      [0m | [1m[PARADEX] Placing market sell MYX (contract_id=MYX-USD-PERP): 20.2 @ ~$2.512[0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36morder_executor:execute_order:173        [0m | [1m🟢 [LIGHTER] Executing buy MYX ($450.288260 qty=178.70) in mode market_only[0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=2.5182, ask=2.5214[0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36morder_executor:_execute_market:588      [0m | [1m[LIGHTER] Placing market buy MYX (contract_id=80): 178.70 @ ~$2.5214[0m
+[32m2025-11-12 06:00:29[0m | [1mINFO    [0m | [36morder_manager:place_market_order:392    [0m | [1m📤 [LIGHTER] Placing market order: market=80, client_id=229897, side=BUY, base_amount=17870, avg_execution_price=26458[0m
+[32m2025-11-12 06:00:30[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:107   [0m | [1m[WEBSOCKET] [PARADEX] FILLED 20.2 @ 2.502[0m
+[32m2025-11-12 06:00:30[0m | [1mINFO    [0m | [36morder_executor:_execute_market:685      [0m | [1m[PARADEX] Market order filled: 20.2 @ $2.502 (slippage: $0.20 / 0.398%)[0m
+[32m2025-11-12 06:00:30[0m | [1mINFO    [0m | [36mexecutor:_handle_full_fill_trigger:786  [0m | [1m✅ PARADEX MYX fully filled (20.2). Cancelling remaining limit orders and hedging to prevent directional exposure.[0m
+[32m2025-11-12 06:00:30[0m | [1mINFO    [0m | [36mexecutor:_handle_full_fill_trigger:795  [0m | [1m🔄 Cancelling limit order for LIGHTER MYX (remaining: 178.70) → will hedge with market order[0m
+[32m2025-11-12 06:00:31[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:182   [0m | [1m[WEBSOCKET] [LIGHTER] FILLED 178.70 @ 2.6458[0m
+[32m2025-11-12 06:00:31[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:212   [0m | [1mTRANSACTION: BUY 178.70 @ 2.6458 | Order: 229897 | Status: FILLED[0m
+[32m2025-11-12 06:00:31[0m | [1mINFO    [0m | [36morder_executor:_execute_market:685      [0m | [1m[LIGHTER] Market order filled: 178.70 @ $2.6458 (slippage: $22.23 / 4.934%)[0m
+[32m2025-11-12 06:00:31[0m | [33m[1mWARNING [0m | [36m...:handle_positions_stream_update:435  [0m | [33m[1m⚠️ [LIGHTER] Position suddenly zeroed: MYX | Previous qty: 178.70 | Market ID: 80 | Possible liquidation (no liquidation notification received)[0m
+[32m2025-11-12 06:00:31[0m | [31m[1mERROR   [0m | [36mexecutor:execute_atomically:339         [0m | [31m[1m⚠️ CRITICAL IMBALANCE detected despite all orders filled: longs=$450.29, shorts=$50.54, imbalance=$399.75 (88.8%). Triggering emergency rollback.[0m
+[32m2025-11-12 06:00:31[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1311   [0m | [33m[1m🚨 EMERGENCY ROLLBACK: Closing 2 filled orders[0m
+[32m2025-11-12 06:00:31[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1317   [0m | [1mStep 1/3: Canceling all orders to prevent further fills...[0m
+[32m2025-11-12 06:00:31[0m | [31m[1mERROR   [0m | [36morder_manager:cancel_order:364          [0m | [31m[1mFailed to cancel order 1762927230040201709220540000: ApiError(error='ORDER_IS_CLOSED', message='order is closed: 1762927230040201709220540000', data=None)[0m
+[32m2025-11-12 06:00:32[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1336   [0m | [1mStep 2/3: Querying actual filled amounts...[0m
+[32m2025-11-12 06:00:32[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1406   [0m | [1mStep 3/3: Closing 2 filled positions...[0m
+[32m2025-11-12 06:00:32[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1416   [0m | [1mRollback: buy MYX 20.2 @ market (contract_id=MYX-USD-PERP, exchange=paradex)[0m
+[32m2025-11-12 06:00:32[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1416   [0m | [1mRollback: sell MYX 178.70 @ market (contract_id=80, exchange=lighter)[0m
+[32m2025-11-12 06:00:32[0m | [1mINFO    [0m | [36morder_manager:place_market_order:392    [0m | [1m📤 [LIGHTER] Placing market order: market=80, client_id=232217, side=SELL, base_amount=17870, avg_execution_price=23923[0m
+[32m2025-11-12 06:00:32[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:107   [0m | [1m[WEBSOCKET] [PARADEX] FILLED 20.2 @ 2.527[0m
+[32m2025-11-12 06:00:32[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:182   [0m | [1m[WEBSOCKET] [LIGHTER] FILLED 178.70 @ 2.3923[0m
+[32m2025-11-12 06:00:32[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:212   [0m | [1mTRANSACTION: SELL 178.70 @ 2.3923 | Order: 232217 | Status: FILLED[0m
+[32m2025-11-12 06:00:33[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1460   [0m | [33m[1mRollback cost for MYX: $0.50 (entry: $2.502, exit: $2.527)[0m
+[32m2025-11-12 06:00:33[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1460   [0m | [33m[1mRollback cost for MYX: $0.00 (entry: $2.6458, exit: $2.6458)[0m
+[32m2025-11-12 06:00:33[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1465   [0m | [33m[1m✅ Rollback complete. Total cost: $0.50[0m
+[32m2025-11-12 06:00:33[0m | [33m[1mWARNING [0m | [36m...:_perform_emergency_rollback:697     [0m | [33m[1m🛡️ Emergency rollback completed; cost=$0.5050. Prevented $399.75 (88.8%) directional exposure.[0m
+[32m2025-11-12 06:00:33[0m | [31m[1mERROR   [0m | [36mposition_closer:close:325               [0m | [31m[1mError closing position e9c73a33-9d80-4499-a7c3-613f6de8af27: Atomic close failed for MYX: Rolled back due to critical imbalance: $399.75[0m
+[32m2025-11-12 06:00:33[0m | [31m[1mERROR   [0m | [36mstrategy:_monitor_positions_loop:506    [0m | [31m[1mMonitor loop error: Atomic close failed for MYX: Rolled back due to critical imbalance: $399.75[0m
+
+## ...... (all repeat logs of this atomic close failing) same reason as above
+
+[32m2025-11-12 06:40:36[0m | [1mINFO    [0m | [36mposition_m:_get_funding_for_snapshot:338[0m | [1m[LIGHTER] Querying position_funding() API for MYX (no cache)[0m
+[32m2025-11-12 06:40:37[0m | [1mINFO    [0m | [36mposition_mana:get_cumulative_funding:687[0m | [1m[LIGHTER] Funding for current position (market_id=80): $0.0584 (from 14 records, filtered 11 before position opened at 1762918503.821173)[0m
+[32m2025-11-12 06:40:37[0m | [1mINFO    [0m | [36mposition_monit:_log_exchange_metrics:296[0m | [1mPosition MYX snapshot [Account: acc1]
+Yield (annualised) | entry 723.5377% | current -26.8825% | erosion -3.72% (limit 40.00%)
+Min hold: satisfied (risk checks active since 2025-11-12 04:35:03)
+Max hold: 8h 54m remaining (force close at 2025-11-12 15:35:03, configured: 12h)
+------------------------------------------------------------------------------------------------
+Exchange     Side   Qty         Entry        Mark         uPnL         Funding      Funding APY 
+------------------------------------------------------------------------------------------------
+LIGHTER     short    178.7000    2.533600    2.533100        0.09        0.06    10.5120%
+PARADEX     long      20.2000    2.534380    2.531300       -0.05       -0.00    37.3945%[0m
+[32m2025-11-12 06:40:38[0m | [33m[1mWARNING [0m | [36mposition_closer:_detect_imbalance:542   [0m | [33m[1m⚠️ Severe imbalance detected for MYX: paradex=20 tokens vs lighter=179 tokens (diff=88.7%, threshold=5.0%)[0m
+[32m2025-11-12 06:40:38[0m | [1mINFO    [0m | [36mposition_clos:_close_legs_atomically:818[0m | [1m🔒 Closing position MYX atomically | Reason: SEVERE_IMBALANCE | Legs: [PARADEX:sell:20.2, LIGHTER:buy:178.70][0m
+[32m2025-11-12 06:40:38[0m | [1mINFO    [0m | [36mexecutor:execute_atomically:111         [0m | [1mStarting atomic execution of 2 orders (rollback_on_partial=True)[0m
+[32m2025-11-12 06:40:38[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1m=======================================================[0m
+[32m2025-11-12 06:40:38[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1mclose.2. 🚀 Order Placement[0m
+[32m2025-11-12 06:40:38[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1m=======================================================[0m
+[32m2025-11-12 06:40:38[0m | [1mINFO    [0m | [36mexecutor:execute_atomically:138         [0m | [1m🚀 Placing all orders simultaneously...[0m
+[32m2025-11-12 06:40:38[0m | [1mINFO    [0m | [36morder_executor:execute_order:173        [0m | [1m🔴 [PARADEX] Executing sell MYX ($51.133252628 qty=20.2) in mode market_only[0m
+[32m2025-11-12 06:40:38[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [PARADEX] BBO: bid=2.464, ask=2.532[0m
+[32m2025-11-12 06:40:38[0m | [1mINFO    [0m | [36morder_executor:_execute_market:588      [0m | [1m[PARADEX] Placing market sell MYX (contract_id=MYX-USD-PERP): 20.2 @ ~$2.464[0m
+[32m2025-11-12 06:40:38[0m | [1mINFO    [0m | [36morder_executor:execute_order:173        [0m | [1m🟢 [LIGHTER] Executing buy MYX ($452.5309450 qty=178.70) in mode market_only[0m
+[32m2025-11-12 06:40:38[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=2.5319, ask=2.5328[0m
+[32m2025-11-12 06:40:38[0m | [1mINFO    [0m | [36morder_executor:_execute_market:588      [0m | [1m[LIGHTER] Placing market buy MYX (contract_id=80): 178.70 @ ~$2.5328[0m
+[32m2025-11-12 06:40:38[0m | [1mINFO    [0m | [36morder_manager:place_market_order:392    [0m | [1m📤 [LIGHTER] Placing market order: market=80, client_id=638054, side=BUY, base_amount=17870, avg_execution_price=26590[0m
+[32m2025-11-12 06:40:38[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:107   [0m | [1m[WEBSOCKET] [PARADEX] FILLED 20.2 @ 2.518[0m
+[32m2025-11-12 06:40:39[0m | [1mINFO    [0m | [36morder_executor:_execute_market:685      [0m | [1m[PARADEX] Market order filled: 20.2 @ $2.518 (slippage: $1.09 / 2.192%)[0m
+[32m2025-11-12 06:40:39[0m | [1mINFO    [0m | [36mexecutor:_handle_full_fill_trigger:786  [0m | [1m✅ PARADEX MYX fully filled (20.2). Cancelling remaining limit orders and hedging to prevent directional exposure.[0m
+[32m2025-11-12 06:40:39[0m | [1mINFO    [0m | [36mexecutor:_handle_full_fill_trigger:795  [0m | [1m🔄 Cancelling limit order for LIGHTER MYX (remaining: 178.70) → will hedge with market order[0m
+[32m2025-11-12 06:40:39[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:182   [0m | [1m[WEBSOCKET] [LIGHTER] FILLED 178.70 @ 2.6590[0m
+[32m2025-11-12 06:40:39[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:212   [0m | [1mTRANSACTION: BUY 178.70 @ 2.6590 | Order: 638054 | Status: FILLED[0m
+[32m2025-11-12 06:40:39[0m | [1mINFO    [0m | [36morder_executor:_execute_market:685      [0m | [1m[LIGHTER] Market order filled: 178.70 @ $2.6590 (slippage: $22.55 / 4.983%)[0m
+[32m2025-11-12 06:40:39[0m | [33m[1mWARNING [0m | [36m...:handle_positions_stream_update:435  [0m | [33m[1m⚠️ [LIGHTER] Position suddenly zeroed: MYX | Previous qty: 178.70 | Market ID: 80 | Possible liquidation (no liquidation notification received)[0m
+[32m2025-11-12 06:40:39[0m | [31m[1mERROR   [0m | [36mexecutor:execute_atomically:339         [0m | [31m[1m⚠️ CRITICAL IMBALANCE detected despite all orders filled: longs=$452.53, shorts=$50.86, imbalance=$401.67 (88.8%). Triggering emergency rollback.[0m
+[32m2025-11-12 06:40:39[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1311   [0m | [33m[1m🚨 EMERGENCY ROLLBACK: Closing 2 filled orders[0m
+[32m2025-11-12 06:40:39[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1317   [0m | [1mStep 1/3: Canceling all orders to prevent further fills...[0m
+[32m2025-11-12 06:40:39[0m | [31m[1mERROR   [0m | [36morder_manager:cancel_order:364          [0m | [31m[1mFailed to cancel order 1762929638210201709197690000: ApiError(error='ORDER_IS_CLOSED', message='order is closed: 1762929638210201709197690000', data=None)[0m
+[32m2025-11-12 06:40:40[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1336   [0m | [1mStep 2/3: Querying actual filled amounts...[0m
+[32m2025-11-12 06:40:40[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1406   [0m | [1mStep 3/3: Closing 2 filled positions...[0m
+[32m2025-11-12 06:40:40[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1416   [0m | [1mRollback: buy MYX 20.2 @ market (contract_id=MYX-USD-PERP, exchange=paradex)[0m
+[32m2025-11-12 06:40:40[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1416   [0m | [1mRollback: sell MYX 178.70 @ market (contract_id=80, exchange=lighter)[0m
+[32m2025-11-12 06:40:40[0m | [1mINFO    [0m | [36morder_manager:place_market_order:392    [0m | [1m📤 [LIGHTER] Placing market order: market=80, client_id=640540, side=SELL, base_amount=17870, avg_execution_price=24058[0m
+[32m2025-11-12 06:40:40[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:107   [0m | [1m[WEBSOCKET] [PARADEX] FILLED 20.2 @ 2.543[0m
+[32m2025-11-12 06:40:41[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:182   [0m | [1m[WEBSOCKET] [LIGHTER] FILLED 178.70 @ 2.4058[0m
+[32m2025-11-12 06:40:41[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:212   [0m | [1mTRANSACTION: SELL 178.70 @ 2.4058 | Order: 640540 | Status: FILLED[0m
+[32m2025-11-12 06:40:41[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1460   [0m | [33m[1mRollback cost for MYX: $0.50 (entry: $2.518, exit: $2.543)[0m
+[32m2025-11-12 06:40:41[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1460   [0m | [33m[1mRollback cost for MYX: $0.00 (entry: $2.6590, exit: $2.6590)[0m
+[32m2025-11-12 06:40:41[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1465   [0m | [33m[1m✅ Rollback complete. Total cost: $0.50[0m
+[32m2025-11-12 06:40:41[0m | [33m[1mWARNING [0m | [36m...:_perform_emergency_rollback:697     [0m | [33m[1m🛡️ Emergency rollback completed; cost=$0.5050. Prevented $401.67 (88.8%) directional exposure.[0m
+[32m2025-11-12 06:40:41[0m | [31m[1mERROR   [0m | [36mposition_closer:close:325               [0m | [31m[1mError closing position e9c73a33-9d80-4499-a7c3-613f6de8af27: Atomic close failed for MYX: Rolled back due to critical imbalance: $401.67[0m
+[32m2025-11-12 06:40:41[0m | [31m[1mERROR   [0m | [36mstrategy:_monitor_positions_loop:506    [0m | [31m[1mMonitor loop error: Atomic close failed for MYX: Rolled back due to critical imbalance: $401.67[0m
+
+
+## Here, i also try to initiate a telegram close with the close legs atomically function
+## However, it fails with the same error as above
+
+[32m2025-11-12 06:42:56[0m | [1mINFO    [0m | [36mposition_clos:_close_legs_atomically:818[0m | [1m🔒 Closing position MYX atomically | Reason: telegram_stop_with_close | Legs: [PARADEX:sell:20.2, LIGHTER:buy:178.70][0m
+[32m2025-11-12 06:42:56[0m | [1mINFO    [0m | [36mexecutor:execute_atomically:111         [0m | [1mStarting atomic execution of 2 orders (rollback_on_partial=True)[0m
+[32m2025-11-12 06:42:56[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1m=======================================================[0m
+[32m2025-11-12 06:42:56[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1mclose.2. 🚀 Order Placement[0m
+[32m2025-11-12 06:42:56[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1m=======================================================[0m
+[32m2025-11-12 06:42:56[0m | [1mINFO    [0m | [36mexecutor:execute_atomically:138         [0m | [1m🚀 Placing all orders simultaneously...[0m
+[32m2025-11-12 06:42:56[0m | [1mINFO    [0m | [36morder_executor:execute_order:173        [0m | [1m🔴 [PARADEX] Executing sell MYX ($50.758276594 qty=20.2) in mode market_only[0m
+[32m2025-11-12 06:42:56[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [PARADEX] BBO: bid=2.507, ask=2.517[0m
+[32m2025-11-12 06:42:56[0m | [1mINFO    [0m | [36morder_executor:_execute_market:588      [0m | [1m[PARADEX] Placing market sell MYX (contract_id=MYX-USD-PERP): 20.2 @ ~$2.507[0m
+[32m2025-11-12 06:42:56[0m | [1mINFO    [0m | [36morder_executor:execute_order:173        [0m | [1m🟢 [LIGHTER] Executing buy MYX ($449.251800 qty=178.70) in mode market_only[0m
+[32m2025-11-12 06:42:56[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=2.5128, ask=2.5152[0m
+[32m2025-11-12 06:42:56[0m | [1mINFO    [0m | [36morder_executor:_execute_market:588      [0m | [1m[LIGHTER] Placing market buy MYX (contract_id=80): 178.70 @ ~$2.5152[0m
+[32m2025-11-12 06:42:56[0m | [1mINFO    [0m | [36morder_manager:place_market_order:392    [0m | [1m📤 [LIGHTER] Placing market order: market=80, client_id=776894, side=BUY, base_amount=17870, avg_execution_price=26397[0m
+[32m2025-11-12 06:42:57[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:107   [0m | [1m[WEBSOCKET] [PARADEX] FILLED 20.2 @ 2.5[0m
+[32m2025-11-12 06:42:57[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:182   [0m | [1m[WEBSOCKET] [LIGHTER] FILLED 178.70 @ 2.6397[0m
+[32m2025-11-12 06:42:57[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:212   [0m | [1mTRANSACTION: BUY 178.70 @ 2.6397 | Order: 776894 | Status: FILLED[0m
+[32m2025-11-12 06:42:57[0m | [1mINFO    [0m | [36morder_executor:_execute_market:685      [0m | [1m[LIGHTER] Market order filled: 178.70 @ $2.6397 (slippage: $22.25 / 4.950%)[0m
+[32m2025-11-12 06:42:57[0m | [1mINFO    [0m | [36mexecutor:_handle_full_fill_trigger:786  [0m | [1m✅ LIGHTER MYX fully filled (178.70). Cancelling remaining limit orders and hedging to prevent directional exposure.[0m
+[32m2025-11-12 06:42:57[0m | [1mINFO    [0m | [36mexecutor:_handle_full_fill_trigger:795  [0m | [1m🔄 Cancelling limit order for PARADEX MYX (remaining: 20.2) → will hedge with market order[0m
+[32m2025-11-12 06:42:57[0m | [33m[1mWARNING [0m | [36m...:handle_positions_stream_update:435  [0m | [33m[1m⚠️ [LIGHTER] Position suddenly zeroed: MYX | Previous qty: 178.70 | Market ID: 80 | Possible liquidation (no liquidation notification received)[0m
+[32m2025-11-12 06:42:57[0m | [1mINFO    [0m | [36morder_executor:_execute_market:685      [0m | [1m[PARADEX] Market order filled: 20.2 @ $2.5 (slippage: $0.14 / 0.279%)[0m
+[32m2025-11-12 06:42:58[0m | [33m[1mWARNING [0m | [36mexecutor:_handle_full_fill_trigger:860  [0m | [33m[1m⚠️ [HEDGE] Calculated hedge target 178.70 exceeds spec quantity 20.2 by >10%. Capping to spec quantity.[0m
+[32m2025-11-12 06:42:58[0m | [1mINFO    [0m | [36mhedge_manager:hedge:80                  [0m | [1m⚡ Hedging MYX on PARADEX for remaining $0.26[0m
+[32m2025-11-12 06:42:58[0m | [1mINFO    [0m | [36morder_executor:execute_order:173        [0m | [1m🔴 [PARADEX] Executing sell MYX ($0.258276594) in mode market_only[0m
+[32m2025-11-12 06:42:58[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [PARADEX] BBO: bid=2.507, ask=2.517[0m
+[32m2025-11-12 06:42:58[0m | [1mINFO    [0m | [36morder_executor:_execute_market:588      [0m | [1m[PARADEX] Placing market sell MYX (contract_id=MYX-USD-PERP): 0.1 @ ~$2.507[0m
+[32m2025-11-12 06:42:58[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:107   [0m | [1m[WEBSOCKET] [PARADEX] CANCELED 0.0 @ 2.5[0m
+[32m2025-11-12 06:42:59[0m | [31m[1mERROR   [0m | [36morder_executor:_execute_market:647      [0m | [31m[1m[PARADEX] Market order canceled: 1762929778360201709263710000 | Status: CANCELED | Reason: order_size_below_min[0m
+[32m2025-11-12 06:42:59[0m | [31m[1mERROR   [0m | [36mhedge_manager:hedge:110                 [0m | [31m[1mMarket order canceled: CANCELED (order_size_below_min)[0m
+[32m2025-11-12 06:42:59[0m | [33m[1mWARNING [0m | [36mexecutor:_handle_full_fill_trigger:889  [0m | [33m[1mHedge failed (Market order canceled: CANCELED (order_size_below_min)) — attempting rollback of partial fills[0m
+[32m2025-11-12 06:42:59[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1311   [0m | [33m[1m🚨 EMERGENCY ROLLBACK: Closing 2 filled orders[0m
+[32m2025-11-12 06:42:59[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1317   [0m | [1mStep 1/3: Canceling all orders to prevent further fills...[0m
+[32m2025-11-12 06:42:59[0m | [31m[1mERROR   [0m | [36morder_manager:cancel_order:364          [0m | [31m[1mFailed to cancel order 1762929777050201709187350000: ApiError(error='ORDER_IS_CLOSED', message='order is closed: 1762929777050201709187350000', data=None)[0m
+[32m2025-11-12 06:43:00[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1336   [0m | [1mStep 2/3: Querying actual filled amounts...[0m
+[32m2025-11-12 06:43:00[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1406   [0m | [1mStep 3/3: Closing 2 filled positions...[0m
+[32m2025-11-12 06:43:00[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1416   [0m | [1mRollback: buy MYX 20.2 @ market (contract_id=MYX-USD-PERP, exchange=paradex)[0m
+[32m2025-11-12 06:43:00[0m | [1mINFO    [0m | [36mexecutor:_rollback_filled_orders:1416   [0m | [1mRollback: sell MYX 178.70 @ market (contract_id=80, exchange=lighter)[0m
+[32m2025-11-12 06:43:00[0m | [1mINFO    [0m | [36morder_manager:place_market_order:392    [0m | [1m📤 [LIGHTER] Placing market order: market=80, client_id=780043, side=SELL, base_amount=17870, avg_execution_price=23880[0m
+[32m2025-11-12 06:43:00[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:107   [0m | [1m[WEBSOCKET] [PARADEX] FILLED 20.2 @ 2.525[0m
+[32m2025-11-12 06:43:00[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:182   [0m | [1m[WEBSOCKET] [LIGHTER] FILLED 178.70 @ 2.3880[0m
+[32m2025-11-12 06:43:00[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:212   [0m | [1mTRANSACTION: SELL 178.70 @ 2.3880 | Order: 780043 | Status: FILLED[0m
+[32m2025-11-12 06:43:01[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1460   [0m | [33m[1mRollback cost for MYX: $0.50 (entry: $2.5, exit: $2.525)[0m
+[32m2025-11-12 06:43:01[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1460   [0m | [33m[1mRollback cost for MYX: $0.00 (entry: $2.6397, exit: $2.6397)[0m
+[32m2025-11-12 06:43:01[0m | [33m[1mWARNING [0m | [36mexecutor:_rollback_filled_orders:1465   [0m | [33m[1m✅ Rollback complete. Total cost: $0.50[0m
+[32m2025-11-12 06:43:01[0m | [33m[1mWARNING [0m | [36mexecutor:_handle_full_fill_trigger:930  [0m | [33m[1mRollback completed after hedge failure; total cost $0.5050[0m
+[32m2025-11-12 06:43:01[0m | [1mINFO    [0m | [36m...:reconcile_context_after_cancel:169  [0m | [1mReconcile: MYX order 1762929777050201709187350000 - adding fill: additional=20.2 @ 2.5, total will be 20.2[0m
+[32m2025-11-12 06:43:02[0m | [1mINFO    [0m | [36m...:reconcile_context_after_cancel:169  [0m | [1mReconcile: MYX order 776894 - adding fill: additional=178.70 @ 2.6397, total will be 178.70[0m
+[32m2025-11-12 06:43:02[0m | [31m[1mERROR   [0m | [36mposition_closer:close:325               [0m | [31m[1mError closing position e9c73a33-9d80-4499-a7c3-613f6de8af27: Atomic close failed for MYX: Market order canceled: CANCELED (order_size_below_min)[0m
+[32m2025-11-12 06:43:02[0m | [1mINFO    [0m | [36mtrading_bot:_override_signal_handler:416[0m | [1m📡 Signal handler called: SIGTERM[0m
+[32m2025-11-12 06:43:02[0m | [1mINFO    [0m | [36mtrading_bot:graceful_shutdown:310       [0m | [1m🛑 Graceful shutdown initiated: Shutdown requested[0m
+[32m2025-11-12 06:43:02[0m | [1mINFO    [0m | [36mposition_manager:shutdown:1069          [0m | [1mDatabase connection closed[0m
+[32m2025-11-12 06:43:02[0m | [1mINFO    [0m | [36mbase_strategy:cleanup:186               [0m | [1mStrategy 'Funding Rate Arbitrage' cleanup completed[0m
+[32m2025-11-12 06:43:03[0m | [1mINFO    [0m | [36mmanager:_log:98                         [0m | [1mWebSocket disconnected[0m
+[32m2025-11-12 06:43:03[0m | [1mINFO    [0m | [36mmanager:_log:79                         [0m | [1mWebSocket listener stopped[0m
+[32m2025-11-12 06:43:03[0m | [1mINFO    [0m | [36mmanager:_log:79                         [0m | [1mWebSocket disconnected[0m
+[32m2025-11-12 06:43:04[0m | [1mINFO    [0m | [36mmanager:disconnect:145                  [0m | [1m[PARADEX] WebSocket disconnected[0m
+[32m2025-11-12 06:43:04[0m | [1mINFO    [0m | [36mtrading_bot:graceful_shutdown:358       [0m | [1m✅ Disconnected from: aster, lighter, paradex[0m
+[32m2025-11-12 06:43:04[0m | [1mINFO    [0m | [36mtrading_bot:graceful_shutdown:359       [0m | [1m✅ Shutdown complete[0m

@@ -15,7 +15,7 @@ Key features:
 """
 
 from typing import Dict, Optional
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from dataclasses import dataclass
 import time
@@ -643,7 +643,36 @@ class OrderExecutor:
             # Check for cancellation (market orders can be canceled by exchange)
             if status in {'CANCELED', 'CANCELLED', 'REJECTED', 'EXPIRED'}:
                 cancel_reason = getattr(order_info, "cancel_reason", "") or "unknown"
+                cancel_reason_lower = cancel_reason.lower()
                 exchange_name = exchange_client.get_exchange_name()
+                
+                # Check if this is a slippage-related error that we can fallback to limit orders
+                slippage_related_keywords = [
+                    "exceeds_max_slippage",
+                    "max_slippage",
+                    "slippage",
+                    "insufficient_liquidity",
+                    "price_impact_too_high"
+                ]
+                
+                is_slippage_error = any(keyword in cancel_reason_lower for keyword in slippage_related_keywords)
+                
+                if is_slippage_error:
+                    self.logger.warning(
+                        f"[{exchange_name.upper()}] Market order canceled due to slippage: {cancel_reason}. "
+                        f"Falling back to aggressive limit order for {symbol}"
+                    )
+                    # Fallback to limit order with aggressive pricing
+                    return await self._fallback_to_limit_on_slippage_error(
+                        exchange_client=exchange_client,
+                        symbol=symbol,
+                        side=side,
+                        size_usd=size_usd,
+                        quantity=quantity,
+                        reduce_only=reduce_only,
+                        original_cancel_reason=cancel_reason
+                    )
+                
                 self.logger.error(
                     f"[{exchange_name.upper()}] Market order canceled: {order_id} | "
                     f"Status: {status} | Reason: {cancel_reason}"
@@ -866,6 +895,190 @@ class OrderExecutor:
         
         # Timeout - return None (caller will handle)
         return None
+    
+    async def _fallback_to_limit_on_slippage_error(
+        self,
+        exchange_client: BaseExchangeClient,
+        symbol: str,
+        side: str,
+        size_usd: Optional[Decimal],
+        quantity: Optional[Decimal],
+        reduce_only: bool,
+        original_cancel_reason: str
+    ) -> ExecutionResult:
+        """
+        Fallback to limit order when market order fails due to slippage.
+        
+        Uses aggressive pricing (at touch or slightly inside spread) to ensure fill
+        while avoiding exchange-side slippage protection.
+        
+        Args:
+            exchange_client: Exchange client instance
+            symbol: Trading pair
+            side: "buy" or "sell"
+            size_usd: Order size in USD
+            quantity: Order quantity
+            reduce_only: If True, order can only reduce existing position
+            original_cancel_reason: Original cancellation reason from market order
+            
+        Returns:
+            ExecutionResult from limit order execution
+        """
+        try:
+            exchange_name = exchange_client.get_exchange_name()
+            self.logger.info(
+                f"[{exchange_name.upper()}] Attempting limit order fallback for {symbol} "
+                f"(original error: {original_cancel_reason})"
+            )
+            
+            # Fetch fresh BBO prices
+            best_bid, best_ask = await self._fetch_bbo_prices(exchange_client, symbol)
+            
+            # Use aggressive pricing: at touch (best bid/ask) or slightly inside to ensure fill
+            # For buy: use best_ask (at touch) - this ensures immediate fill
+            # For sell: use best_bid (at touch) - this ensures immediate fill
+            if side == "buy":
+                limit_price = best_ask  # At touch for immediate fill
+            else:
+                limit_price = best_bid  # At touch for immediate fill
+            
+            # Debug: Log BBO and tick_size before rounding
+            tick_size = getattr(exchange_client.config, 'tick_size', None)
+            self.logger.debug(
+                f"[{exchange_name.upper()}] Before rounding: best_bid={best_bid}, best_ask={best_ask}, "
+                f"limit_price={limit_price}, tick_size={tick_size}"
+            )
+            
+            # Round to tick size
+            limit_price_before_rounding = limit_price
+            limit_price = exchange_client.round_to_tick(limit_price)
+            
+            # Debug: Log after rounding
+            self.logger.debug(
+                f"[{exchange_name.upper()}] After rounding: limit_price={limit_price} "
+                f"(was {limit_price_before_rounding}, tick_size={tick_size})"
+            )
+            
+            # Safety check: if rounding changed price dramatically (>10%), something is wrong
+            if limit_price_before_rounding > 0:
+                price_change_pct = abs((limit_price - limit_price_before_rounding) / limit_price_before_rounding) * 100
+                if price_change_pct > 10:
+                    self.logger.error(
+                        f"[{exchange_name.upper()}] ⚠️ CRITICAL: round_to_tick changed price by {price_change_pct:.1f}%! "
+                        f"Before: {limit_price_before_rounding}, After: {limit_price}, tick_size: {tick_size}. "
+                        f"This suggests tick_size is incorrect or not set for {symbol}!"
+                    )
+                    # Try to fetch correct tick_size for this symbol
+                    try:
+                        # Try to get tick_size from market_data manager if available
+                        if hasattr(exchange_client, 'market_data') and exchange_client.market_data:
+                            # Use the symbol to fetch contract attributes
+                            contract_id, correct_tick_size = await exchange_client.market_data.get_contract_attributes(symbol)
+                            self.logger.warning(
+                                f"[{exchange_name.upper()}] Fetched correct tick_size={correct_tick_size} for {symbol} "
+                                f"(contract_id={contract_id}). Re-rounding..."
+                            )
+                            # Update config tick_size for future use
+                            exchange_client.config.tick_size = correct_tick_size
+                            # Re-round with correct tick_size
+                            limit_price = limit_price_before_rounding.quantize(
+                                correct_tick_size, 
+                                rounding=ROUND_HALF_UP
+                            )
+                            self.logger.info(
+                                f"[{exchange_name.upper()}] Corrected limit_price={limit_price} "
+                                f"(was {limit_price_before_rounding})"
+                            )
+                        elif hasattr(exchange_client, 'get_contract_attributes'):
+                            # Fallback: try get_contract_attributes (uses config.ticker)
+                            contract_id, correct_tick_size = await exchange_client.get_contract_attributes()
+                            self.logger.warning(
+                                f"[{exchange_name.upper()}] Fetched correct tick_size={correct_tick_size} "
+                                f"(contract_id={contract_id}). Re-rounding..."
+                            )
+                            # Update config tick_size for future use
+                            exchange_client.config.tick_size = correct_tick_size
+                            # Re-round with correct tick_size
+                            limit_price = limit_price_before_rounding.quantize(
+                                correct_tick_size, 
+                                rounding=ROUND_HALF_UP
+                            )
+                            self.logger.info(
+                                f"[{exchange_name.upper()}] Corrected limit_price={limit_price} "
+                                f"(was {limit_price_before_rounding})"
+                            )
+                    except Exception as e:
+                        self.logger.error(
+                            f"[{exchange_name.upper()}] Failed to fetch correct tick_size: {e}"
+                        )
+            
+            # Calculate quantity
+            if quantity is not None:
+                order_quantity = Decimal(str(quantity)).copy_abs()
+            else:
+                if size_usd is None:
+                    raise ValueError("Limit fallback requires size_usd or quantity")
+                order_quantity = (Decimal(str(size_usd)) / limit_price).copy_abs()
+            
+            order_quantity = exchange_client.round_to_step(order_quantity)
+            if order_quantity <= Decimal("0"):
+                raise ValueError("Order quantity rounded to zero")
+            
+            # Execute limit order with short timeout (5-10 seconds)
+            # Since we're pricing at touch, it should fill quickly
+            timeout_seconds = 10.0
+            
+            self.logger.info(
+                f"[{exchange_name.upper()}] Placing aggressive limit {side} {symbol}: "
+                f"{order_quantity} @ ${limit_price} (at touch for immediate fill)"
+            )
+            
+            result = await self._execute_limit(
+                exchange_client=exchange_client,
+                symbol=symbol,
+                side=side,
+                size_usd=None,  # Use quantity instead
+                quantity=order_quantity,
+                timeout_seconds=timeout_seconds,
+                price_offset_pct=Decimal("0"),  # No offset - at touch
+                cancel_event=None,
+                reduce_only=reduce_only
+            )
+            
+            # Update execution mode to indicate this was a slippage fallback
+            if result.filled:
+                result.execution_mode_used = "limit_slippage_fallback"
+                self.logger.info(
+                    f"[{exchange_name.upper()}] Limit order fallback succeeded for {symbol}: "
+                    f"{result.filled_quantity} @ ${result.fill_price}"
+                )
+            else:
+                result.execution_mode_used = "limit_slippage_fallback_failed"
+                result.error_message = (
+                    f"Market order failed ({original_cancel_reason}) and limit fallback also failed: "
+                    f"{result.error_message or 'unknown error'}"
+                )
+                self.logger.error(
+                    f"[{exchange_name.upper()}] Limit order fallback failed for {symbol}: "
+                    f"{result.error_message}"
+                )
+            
+            return result
+            
+        except Exception as e:
+            exchange_name = exchange_client.get_exchange_name()
+            self.logger.error(
+                f"[{exchange_name.upper()}] Limit order fallback error for {symbol}: {e}",
+                exc_info=True
+            )
+            return ExecutionResult(
+                success=False,
+                filled=False,
+                error_message=(
+                    f"Market order failed ({original_cancel_reason}) and limit fallback error: {str(e)}"
+                ),
+                execution_mode_used="limit_slippage_fallback_error"
+            )
     
     async def _fetch_bbo_prices(
         self,

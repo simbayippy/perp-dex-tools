@@ -40,6 +40,8 @@ class OpportunityScanner:
             filters = OpportunityFilter(
                 min_profit_percent=strategy.config.min_profit,
                 max_oi_usd=max_oi_cap,
+                min_volume_24h=strategy.config.min_volume_24h,
+                min_oi_usd=strategy.config.min_oi_usd,
                 whitelist_dexes=available_exchanges if available_exchanges else None,
                 required_dex=mandatory_dex,
                 symbol=None,
@@ -49,6 +51,7 @@ class OpportunityScanner:
             strategy.logger.debug(
                 f"Filters - min_profit: {strategy.config.min_profit}, "
                 f"mandatory_dex: {mandatory_dex}, max_oi_cap: {max_oi_cap}, "
+                f"min_volume_24h: {strategy.config.min_volume_24h}, min_oi_usd: {strategy.config.min_oi_usd}, "
                 f"configured_dexes: {strategy.config.exchanges}, available_dexes: {available_exchanges}"
             )
 

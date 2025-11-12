@@ -594,12 +594,40 @@ class AtomicMultiOrderExecutor:
         """
         Calculate exposure imbalance from contexts.
         
+        For OPENING operations:
+        - BUY orders increase long exposure
+        - SELL orders increase short exposure
+        
+        For CLOSING operations (all orders have reduce_only=True):
+        - BUY orders close SHORT positions (reduce short exposure)
+        - SELL orders close LONG positions (reduce long exposure)
+        - Imbalance check should be skipped or reversed
+        
         Args:
             contexts: List of order contexts to analyze
             
         Returns:
             Tuple of (total_long_usd, total_short_usd, imbalance_usd, imbalance_pct)
         """
+        # Check if this is a closing operation (all orders have reduce_only=True)
+        # For closing operations, all orders should have reduce_only=True
+        is_closing_operation = (
+            len(contexts) > 0 and 
+            all(ctx.spec.reduce_only is True for ctx in contexts)
+        )
+        
+        if is_closing_operation:
+            # For closing operations, we're reducing exposure, not creating it
+            # The imbalance calculation doesn't apply the same way
+            # Instead, we check that both orders filled successfully
+            # Return zeros to indicate no new exposure imbalance
+            self.logger.debug(
+                "Closing operation detected (all orders have reduce_only=True). "
+                "Skipping imbalance check as we're reducing exposure, not creating it."
+            )
+            return Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0")
+        
+        # For opening operations, calculate imbalance normally
         total_long_usd = sum(ctx.filled_usd for ctx in contexts if ctx.spec.side == "buy")
         total_short_usd = sum(ctx.filled_usd for ctx in contexts if ctx.spec.side == "sell")
         imbalance_usd = abs(total_long_usd - total_short_usd)

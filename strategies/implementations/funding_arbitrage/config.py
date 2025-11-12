@@ -156,6 +156,16 @@ class FundingArbConfig(BaseModel):
         description="Max open interest allowed on the mandatory exchange (if set)"
     )
     
+    min_volume_24h: Optional[Decimal] = Field(
+        default=None,
+        description="Minimum 24h volume in USD across both exchanges (filters low-liquidity markets)"
+    )
+    
+    min_oi_usd: Optional[Decimal] = Field(
+        default=None,
+        description="Minimum open interest in USD across both exchanges (filters low-liquidity markets)"
+    )
+    
     # Risk management
     risk_config: RiskManagementConfig = Field(
         default_factory=RiskManagementConfig,

@@ -391,6 +391,13 @@ class FundingArbitrageStrategy(BaseStrategy):
         else:
             max_oi_usd = None
 
+        # Extract volume/OI filter params
+        min_volume_24h_value = strategy_params.get('min_volume_24h')
+        min_volume_24h = Decimal(str(min_volume_24h_value)) if min_volume_24h_value is not None else None
+
+        min_oi_usd_value = strategy_params.get('min_oi_usd')
+        min_oi_usd = Decimal(str(min_oi_usd_value)) if min_oi_usd_value is not None else None
+
         funding_config = FundingArbConfig(
             exchange=trading_config.exchange,
             exchanges=exchanges,
@@ -404,6 +411,8 @@ class FundingArbitrageStrategy(BaseStrategy):
             min_profit=Decimal(str(strategy_params.get('min_profit_rate', DEFAULT_MIN_PROFIT_RATE_PER_INTERVAL))),
             limit_order_offset_pct=limit_order_offset_pct,
             max_oi_usd=max_oi_usd,
+            min_volume_24h=min_volume_24h,
+            min_oi_usd=min_oi_usd,
             max_new_positions_per_cycle=strategy_params.get('max_new_positions_per_cycle', 2),
             # Required database URL from funding_rate_service settings
             database_url=settings.database_url,
