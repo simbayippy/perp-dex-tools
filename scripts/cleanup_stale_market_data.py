@@ -60,6 +60,9 @@ async def find_stale_records(
     try:
         # Build query to find stale records using PostgreSQL INTERVAL syntax
         # This avoids timezone issues by letting PostgreSQL handle the comparison
+        # Find records where:
+        # 1. updated_at is NOT NULL AND older than threshold (has stale data)
+        # 2. OR updated_at is NULL but we have a dex_symbols record (orphaned record to clean)
         query = f"""
             SELECT 
                 d.name as dex_name,
@@ -67,13 +70,19 @@ async def find_stale_records(
                 ds.volume_24h,
                 ds.open_interest_usd,
                 ds.updated_at,
-                EXTRACT(EPOCH FROM (NOW() - ds.updated_at)) / 60 as age_minutes
+                CASE 
+                    WHEN ds.updated_at IS NOT NULL 
+                    THEN EXTRACT(EPOCH FROM (NOW() - ds.updated_at)) / 60
+                    ELSE NULL
+                END as age_minutes
             FROM dex_symbols ds
             JOIN dexes d ON ds.dex_id = d.id
             JOIN symbols s ON ds.symbol_id = s.id
-            WHERE ds.updated_at IS NOT NULL
-            AND ds.updated_at < NOW() - INTERVAL '{age_minutes} minutes'
-            AND d.is_active = TRUE
+            WHERE d.is_active = TRUE
+            AND (
+                (ds.updated_at IS NOT NULL AND ds.updated_at < NOW() - INTERVAL '{age_minutes} minutes')
+                OR (ds.updated_at IS NULL AND (ds.volume_24h IS NOT NULL OR ds.open_interest_usd IS NOT NULL))
+            )
         """
         
         params = {}
@@ -90,8 +99,11 @@ async def find_stale_records(
             query += " AND d.name = :exchange_filter"
             params["exchange_filter"] = exchange_filter.lower()
         
-        query += " ORDER BY d.name, ds.updated_at ASC"
+        query += " ORDER BY d.name, ds.updated_at ASC NULLS LAST"
         
+        # Debug: Log query for troubleshooting Paradex issue
+        # The view script shows age 5052m for Paradex, but cleanup might not find them
+        # if ds.updated_at is NULL (no market data) - age would come from funding rate data
         rows = await database.fetch_all(query, values=params)
         
         # Group by exchange
@@ -139,6 +151,9 @@ async def delete_stale_records(
         # Build delete query using PostgreSQL INTERVAL syntax
         # This avoids timezone issues by letting PostgreSQL handle the comparison
         # Use proper JOIN syntax instead of old-style comma joins
+        # Clean records where:
+        # 1. updated_at is NOT NULL AND older than threshold (has stale data)
+        # 2. OR updated_at is NULL but we have data fields set (orphaned record to clean)
         query = f"""
             UPDATE dex_symbols ds
             SET 
@@ -148,9 +163,11 @@ async def delete_stale_records(
             FROM dexes d
             JOIN symbols s ON ds.symbol_id = s.id
             WHERE ds.dex_id = d.id
-            AND ds.updated_at IS NOT NULL
-            AND ds.updated_at < NOW() - INTERVAL '{age_minutes} minutes'
             AND d.is_active = TRUE
+            AND (
+                (ds.updated_at IS NOT NULL AND ds.updated_at < NOW() - INTERVAL '{age_minutes} minutes')
+                OR (ds.updated_at IS NULL AND (ds.volume_24h IS NOT NULL OR ds.open_interest_usd IS NOT NULL))
+            )
         """
         
         params = {}
