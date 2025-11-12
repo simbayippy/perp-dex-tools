@@ -174,7 +174,7 @@ async def seed_strategy_configs():
                             WHERE config_name = :name AND is_template = TRUE
                             """,
                             {
-                                'config_name': config_name,
+                                'name': config_name,
                                 'config_data': json.dumps(config_data)
                             }
                         )
