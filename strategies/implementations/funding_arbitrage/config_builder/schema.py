@@ -127,6 +127,30 @@ FUNDING_ARB_SCHEMA = StrategySchema(
                 "Use a low cap (e.g., 50000) to focus on point-farming pools; leave blank or set a high number to allow larger markets."
             ),
         ),
+        create_decimal_parameter(
+            key="min_volume_24h",
+            prompt="Minimum 24h volume filter (USD)?",
+            default=None,
+            min_value=Decimal("1000"),
+            max_value=Decimal("999999999"),
+            required=False,
+            help_text=(
+                "Skip opportunities where the minimum 24h volume across both exchanges is below this threshold. "
+                "Helps avoid low-liquidity markets that may have execution issues. Leave blank for no filtering."
+            ),
+        ),
+        create_decimal_parameter(
+            key="min_oi_usd",
+            prompt="Minimum open interest filter (USD)?",
+            default=None,
+            min_value=Decimal("1000"),
+            max_value=Decimal("999999999"),
+            required=False,
+            help_text=(
+                "Skip opportunities where the minimum open interest across both exchanges is below this threshold. "
+                "Helps avoid low-liquidity markets that may have execution issues. Leave blank for no filtering."
+            ),
+        ),
         # ====================================================================
         # Risk Management
         # ====================================================================
@@ -220,7 +244,7 @@ FUNDING_ARB_SCHEMA = StrategySchema(
     categories={
         "Exchanges": ["scan_exchanges", "mandatory_exchange"],
         "Position Sizing": ["target_margin", "max_positions", "max_total_exposure_usd"],
-        "Profitability": ["min_profit_rate", "max_oi_usd"],
+        "Profitability": ["min_profit_rate", "max_oi_usd", "min_volume_24h", "min_oi_usd"],
         "Risk Management": [
             "risk_strategy",
             "profit_erosion_threshold",
