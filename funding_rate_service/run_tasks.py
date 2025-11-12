@@ -144,13 +144,15 @@ class TaskRunner:
         if self.args.collection_only:
             # Pause non-collection jobs
             self.scheduler.pause_job('opportunity_job')
+            self.scheduler.pause_job('stale_market_data_cleanup_job')
             self.scheduler.pause_job('cleanup_job')
-            logger.info("⏸️ Paused opportunity and cleanup jobs (collection-only mode)")
+            logger.info("⏸️ Paused opportunity, stale market data cleanup, and cleanup jobs (collection-only mode)")
         
         if self.args.no_cleanup:
-            # Pause cleanup job
+            # Pause cleanup jobs
+            self.scheduler.pause_job('stale_market_data_cleanup_job')
             self.scheduler.pause_job('cleanup_job')
-            logger.info("⏸️ Paused cleanup job (no-cleanup mode)")
+            logger.info("⏸️ Paused stale market data cleanup and cleanup jobs (no-cleanup mode)")
     
     def _print_schedule_info(self):
         """Print information about the scheduled tasks"""
@@ -159,6 +161,7 @@ class TaskRunner:
         if not self.args.collection_only:
             logger.info("  • Funding Rate Collection: Every 60 seconds")
             logger.info("  • Opportunity Analysis: Every 60 seconds")
+            logger.info("  • Stale Market Data Cleanup: Every 10 minutes")
         else:
             logger.info("  • Funding Rate Collection: Every 60 seconds (ONLY)")
         
@@ -215,6 +218,9 @@ class TaskRunner:
                 
                 logger.info("🔄 Running opportunity task...")
                 await self.scheduler.force_run_job('opportunity_job')
+                
+                logger.info("🔄 Running stale market data cleanup task...")
+                await self.scheduler.force_run_job('stale_market_data_cleanup_job')
             else:
                 logger.info("🔄 Running collection task only...")
                 await self.scheduler.force_run_job('collection_job')

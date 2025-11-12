@@ -18,6 +18,7 @@ from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR, EVENT_JOB_MI
 from funding_rate_service.tasks.collection_task import CollectionTask
 from funding_rate_service.tasks.opportunity_task import OpportunityTask
 from funding_rate_service.tasks.cleanup_task import CleanupTask
+from funding_rate_service.tasks.stale_market_data_cleanup_task import StaleMarketDataCleanupTask
 from funding_rate_service.utils.logger import logger
 
 
@@ -27,7 +28,8 @@ class TaskScheduler:
     
     Manages:
     - Funding rate collection (every 60 seconds)
-    - Opportunity analysis (every 2 minutes)
+    - Opportunity analysis (every 60 seconds)
+    - Stale market data cleanup (every 10 minutes)
     - Database cleanup (daily at 2 AM)
     
     Features:
@@ -52,11 +54,13 @@ class TaskScheduler:
         self.collection_task = CollectionTask()
         self.opportunity_task = OpportunityTask()
         self.cleanup_task = CleanupTask()
+        self.stale_market_data_cleanup_task = StaleMarketDataCleanupTask()
         
         # Job execution tracking
         self.job_stats = {
             'collection_job': {'executions': 0, 'errors': 0, 'last_execution': None, 'last_error': None},
             'opportunity_job': {'executions': 0, 'errors': 0, 'last_execution': None, 'last_error': None},
+            'stale_market_data_cleanup_job': {'executions': 0, 'errors': 0, 'last_execution': None, 'last_error': None},
             'cleanup_job': {'executions': 0, 'errors': 0, 'last_execution': None, 'last_error': None}
         }
         
@@ -95,7 +99,7 @@ class TaskScheduler:
             replace_existing=True
         )
         
-        # 2. Opportunity Analysis Job (every 2 minutes)
+        # 2. Opportunity Analysis Job (every 60 seconds)
         # Offset by 30 seconds to avoid collision with collection
         self.scheduler.add_job(
             func=self._run_opportunity_job,
@@ -105,7 +109,17 @@ class TaskScheduler:
             replace_existing=True
         )
         
-        # 3. Database Cleanup Job (daily at 2:00 AM UTC)
+        # 3. Stale Market Data Cleanup Job (every 10 minutes)
+        # Offset by 5 minutes to avoid collision with other jobs
+        self.scheduler.add_job(
+            func=self._run_stale_market_data_cleanup_job,
+            trigger=IntervalTrigger(minutes=10, start_date=datetime.utcnow() + timedelta(minutes=5)),
+            id='stale_market_data_cleanup_job',
+            name='Stale Market Data Cleanup',
+            replace_existing=True
+        )
+        
+        # 4. Database Cleanup Job (daily at 2:00 AM UTC)
         self.scheduler.add_job(
             func=self._run_cleanup_job,
             trigger=CronTrigger(hour=2, minute=0),
@@ -144,6 +158,24 @@ class TaskScheduler:
                 
         except Exception as e:
             logger.error(f"❌ Opportunity job exception: {e}", exc_info=True)
+    
+    async def _run_stale_market_data_cleanup_job(self) -> None:
+        """Execute stale market data cleanup job"""
+        try:
+            logger.debug("🧹 Running stale market data cleanup job...")
+            result = await self.stale_market_data_cleanup_task.run()
+            
+            if result['status'] == 'success':
+                cleaned = result['result'].get('records_cleaned', 0)
+                if cleaned > 0:
+                    logger.info(f"✅ Stale market data cleanup completed: {cleaned} records cleaned")
+                else:
+                    logger.debug("✅ Stale market data cleanup completed: No stale records found")
+            else:
+                logger.warning(f"⚠️ Stale market data cleanup failed: {result.get('error', 'Unknown error')}")
+                
+        except Exception as e:
+            logger.error(f"❌ Stale market data cleanup job exception: {e}", exc_info=True)
     
     async def _run_cleanup_job(self) -> None:
         """Execute database cleanup job"""
@@ -256,6 +288,11 @@ class TaskScheduler:
                 'metrics': self.cleanup_task.get_metrics(),
                 'is_healthy': self.cleanup_task.is_healthy(),
                 'is_running': self.cleanup_task.is_running()
+            },
+            'stale_market_data_cleanup_task': {
+                'metrics': self.stale_market_data_cleanup_task.get_metrics(),
+                'is_healthy': self.stale_market_data_cleanup_task.is_healthy(),
+                'is_running': self.stale_market_data_cleanup_task.is_running()
             }
         }
     
@@ -275,6 +312,8 @@ class TaskScheduler:
             return await self.collection_task.force_collection()
         elif job_id == 'opportunity_job':
             return await self.opportunity_task.force_analysis()
+        elif job_id == 'stale_market_data_cleanup_job':
+            return await self.stale_market_data_cleanup_task.force_cleanup()
         elif job_id == 'cleanup_job':
             return await self.cleanup_task.force_cleanup()
         else:
