@@ -106,6 +106,10 @@ class MonitoringHandler(BaseHandler):
                         
                         keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
                 
+                # Add refresh button
+                refresh_callback = f"positions_refresh:{account_name}" if account_name else "positions_refresh:"
+                keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data=refresh_callback)])
+                
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await update.message.reply_text(
                     last_message,
@@ -113,8 +117,14 @@ class MonitoringHandler(BaseHandler):
                     reply_markup=reply_markup
                 )
             else:
-                # No positions, just send the message without buttons
-                await update.message.reply_text(last_message, parse_mode='HTML')
+                # No positions, but still add refresh button
+                keyboard = [[InlineKeyboardButton("🔄 Refresh", callback_data="positions_refresh:")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(
+                    last_message,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
                 
         except Exception as e:
             self.logger.error(f"Positions error: {e}")
@@ -226,7 +236,8 @@ class MonitoringHandler(BaseHandler):
                     
                     keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
             
-            # Add back button
+            # Add refresh and back buttons
+            keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data=f"positions_refresh:{account_name}")])
             keyboard.append([InlineKeyboardButton("🔙 Back to All Positions", callback_data="positions_back_to_all")])
             
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -267,6 +278,151 @@ class MonitoringHandler(BaseHandler):
                 # Real error - show it
                 await query.edit_message_text(
                     self.formatter.format_error(f"Failed to get positions: {str(e)}"),
+                    parse_mode='HTML'
+                )
+    
+    async def positions_refresh_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle refresh callback - refreshes positions data in place."""
+        query = update.callback_query
+        await query.answer()
+        
+        # Parse callback data: "positions_refresh:{account_name}" or "positions_refresh:"
+        callback_data = query.data
+        if not callback_data.startswith("positions_refresh:"):
+            await query.edit_message_text(
+                "❌ Invalid selection. Please use /positions again.",
+                parse_mode='HTML'
+            )
+            return
+        
+        parts = callback_data.split(":", 1)
+        account_name = parts[1] if len(parts) > 1 and parts[1] else None
+        
+        # Get user and API key
+        user, api_key = await self.require_auth(update, context)
+        if not user or not api_key:
+            return
+        
+        # Check if there are any running strategies first
+        is_admin = user.get("is_admin", False)
+        user_id = None if is_admin else user["id"]
+        
+        if user_id:
+            running_query = """
+                SELECT COUNT(*) as count
+                FROM strategy_runs
+                WHERE user_id = :user_id AND status IN ('starting', 'running', 'paused')
+            """
+            running_result = await self.database.fetch_one(running_query, {"user_id": user_id})
+        else:
+            running_query = """
+                SELECT COUNT(*) as count
+                FROM strategy_runs
+                WHERE status IN ('starting', 'running', 'paused')
+            """
+            running_result = await self.database.fetch_one(running_query)
+        
+        has_running_strategies = running_result and running_result['count'] > 0
+        
+        try:
+            client = ControlAPIClient(self.config.control_api_base_url, api_key)
+            data = await client.get_positions(account_name=account_name)
+            
+            accounts = data.get('accounts', [])
+            
+            # Collect all positions for button creation
+            all_positions = []
+            accounts_with_positions = []
+            for account in accounts:
+                positions = account.get('positions', [])
+                if positions:
+                    accounts_with_positions.append(account)
+                    for pos in positions:
+                        all_positions.append({
+                            'position': pos,
+                            'account_name': account.get('account_name', 'N/A')
+                        })
+            
+            # Format positions summary
+            message = self.formatter.format_positions(data)
+            
+            # Split if needed
+            messages = self.formatter._split_message(message) if len(message) > self.formatter.MAX_MESSAGE_LENGTH else [message]
+            
+            # Create keyboard
+            keyboard = []
+            if not account_name and len(accounts_with_positions) > 1:
+                for account in accounts_with_positions:
+                    account_name_btn = account.get('account_name', 'N/A')
+                    position_count = len(account.get('positions', []))
+                    button_label = f"📊 {account_name_btn} ({position_count} position{'s' if position_count != 1 else ''})"
+                    callback_data = f"positions_account:{account_name_btn}"
+                    keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
+            
+            # Add direct position selection buttons
+            position_index = 0
+            for account in accounts_with_positions:
+                positions = account.get('positions', [])
+                for pos in positions:
+                    position_index += 1
+                    symbol = pos.get('symbol', 'N/A')
+                    long_dex = pos.get('long_dex', 'N/A').upper()
+                    short_dex = pos.get('short_dex', 'N/A').upper()
+                    position_id = pos.get('id', '')
+                    
+                    button_label = f"❌ Close: {position_index}. {symbol} ({long_dex}/{short_dex})"
+                    callback_data = f"close_pos:{position_id}"
+                    keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
+            
+            # Add refresh button
+            refresh_callback = f"positions_refresh:{account_name}" if account_name else "positions_refresh:"
+            keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data=refresh_callback)])
+            
+            # Add back button if viewing specific account
+            if account_name:
+                keyboard.append([InlineKeyboardButton("🔙 Back to All Positions", callback_data="positions_back_to_all")])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+            
+            # Handle "Message is not modified" error gracefully
+            from telegram.error import BadRequest
+            try:
+                await query.edit_message_text(
+                    messages[0],
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+            except BadRequest as e:
+                if "Message is not modified" in str(e):
+                    await query.answer("✅ Positions are up to date", show_alert=False)
+                    return
+                else:
+                    raise
+            
+            # Send remaining messages if any
+            for msg in messages[1:]:
+                await query.message.reply_text(msg, parse_mode='HTML')
+            
+        except Exception as e:
+            self.logger.error(f"Positions refresh error: {e}")
+            
+            # Handle edge case: no running strategies + connection error = no positions
+            error_str = str(e).lower()
+            is_connection_error = (
+                isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError)) or
+                "connection" in error_str or
+                "all connection attempts failed" in error_str
+            )
+            
+            if not has_running_strategies and is_connection_error:
+                await query.edit_message_text(
+                    "📊 <b>No Active Positions</b>\n\n"
+                    "No positions found. All strategies are currently paused.",
+                    parse_mode='HTML'
+                )
+            else:
+                await query.edit_message_text(
+                    self.formatter.format_error(f"Failed to refresh positions: {str(e)}"),
                     parse_mode='HTML'
                 )
     
@@ -352,6 +508,10 @@ class MonitoringHandler(BaseHandler):
                     callback_data = f"close_pos:{position_id}"
                     
                     keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
+            
+            # Add refresh button
+            if keyboard:
+                keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="positions_refresh:")])
             
             reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
             

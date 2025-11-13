@@ -1321,12 +1321,12 @@ class AtomicMultiOrderExecutor:
                     )
                     continue
 
-                required_with_buffer = required_margin * Decimal("1.10")
+                required_with_buffer = required_margin * Decimal("1.05")
                 if available_balance < required_with_buffer:
                     error_msg = (
                         f"Insufficient balance on {exchange_name}: "
                         f"available=${available_balance:.2f}, required=${required_with_buffer:.2f} "
-                        f"(${required_margin:.2f} + 10% buffer)"
+                        f"(${required_margin:.2f} + 5% buffer)"
                     )
                     self.logger.error(f"❌ {error_msg}")
                     
