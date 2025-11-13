@@ -7,6 +7,7 @@ from pathlib import Path
 import xmlrpc.client
 import json
 import yaml
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
@@ -15,6 +16,35 @@ from telegram_bot_service.handlers.base import BaseHandler
 
 class StrategyHandler(BaseHandler):
     """Handler for strategy execution commands and callbacks"""
+    
+    def _clean_log_line(self, line: str) -> str:
+        """
+        Clean a log line by removing ANSI escape codes, timestamps, log levels, and module info.
+        Returns only the core message content.
+        
+        Example:
+            Input:  "[32m2025-11-12 21:03:57[0m | [1mINFO    [0m | [36munified_logger:_emit:618[0m | [1m=======================================================[0m"
+            Output: "======================================================="
+        """
+        # Remove ANSI escape codes (both \x1b[ and [ formats)
+        # Pattern matches: [32m, [0m, [1m, [36m, etc.
+        line = re.sub(r'\x1b\[[0-9;]*m', '', line)  # \x1b[ format
+        line = re.sub(r'\[[0-9;]+m', '', line)  # [ format
+        
+        # Split by pipe separator and take the last part (the actual message)
+        # Format: timestamp | level | module:line | message
+        parts = line.split('|')
+        if len(parts) > 1:
+            # Take the last part (the message)
+            message = parts[-1].strip()
+        else:
+            # If no pipe separator, use the whole line
+            message = line.strip()
+        
+        # Clean up any remaining extra whitespace
+        message = re.sub(r'\s+', ' ', message).strip()
+        
+        return message
     
     async def list_strategies_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /list_strategies command - shows filter options."""
@@ -2266,8 +2296,81 @@ class StrategyHandler(BaseHandler):
         
         return [dict(row) for row in rows]
     
+    async def _get_log_file_info(self, run_id: str, user: dict) -> tuple:
+        """
+        Helper method to get log file information for a strategy run.
+        Returns (log_file_path, run_id_full, run_id_short, config_name, strategy_type_display) or None if not found.
+        """
+        is_admin = user.get("is_admin", False)
+        if is_admin:
+            verify_query = """
+                SELECT id, supervisor_program_name, log_file_path, config_id
+                FROM strategy_runs
+                WHERE id = :run_id
+            """
+            row = await self.database.fetch_one(
+                verify_query,
+                {"run_id": run_id}
+            )
+        else:
+            verify_query = """
+                SELECT id, supervisor_program_name, log_file_path, config_id
+                FROM strategy_runs
+                WHERE id = :run_id AND user_id = :user_id
+            """
+            row = await self.database.fetch_one(
+                verify_query,
+                {"run_id": run_id, "user_id": user["id"]}
+            )
+        
+        if not row:
+            return None
+        
+        run_id_full = str(row["id"])
+        run_id_short = run_id_full[:8]
+        
+        # Get config name for display
+        config_id = str(row["config_id"])
+        config_row = await self.database.fetch_one(
+            "SELECT config_name, strategy_type FROM strategy_configs WHERE id = :id",
+            {"id": config_id}
+        )
+        if config_row:
+            config_name = config_row['config_name']
+            strategy_type = config_row['strategy_type']
+        else:
+            config_name = 'Unknown'
+            strategy_type = 'unknown'
+        
+        strategy_type_display = {
+            'funding_arbitrage': 'Funding Arbitrage',
+            'grid': 'Grid'
+        }.get(strategy_type, strategy_type.title())
+        
+        # Try to get log file from database first
+        try:
+            log_file = row["log_file_path"]
+        except (KeyError, TypeError):
+            log_file = None
+        
+        # If not in DB or file doesn't exist, try to find it by matching UUID prefix
+        if not log_file or not Path(log_file).exists():
+            logs_dir = self.process_manager.project_root / "logs"
+            if logs_dir.exists():
+                # Find log file matching the UUID (full or partial)
+                matching_logs = list(logs_dir.glob("strategy_*.out.log"))
+                for log_path in matching_logs:
+                    # Extract UUID from filename: strategy_<uuid>.out.log
+                    log_uuid = log_path.stem.replace('strategy_', '').replace('.out', '')
+                    # Match by first 8 characters or full UUID
+                    if log_uuid.startswith(run_id_short) or run_id_full.startswith(log_uuid[:8]):
+                        log_file = str(log_path)
+                        break
+        
+        return (log_file, run_id_full, run_id_short, config_name, strategy_type_display)
+    
     async def view_logs_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle callback for viewing logs."""
+        """Handle callback for viewing logs - shows choice menu."""
         query = update.callback_query
         await query.answer()
         
@@ -2287,89 +2390,18 @@ class StrategyHandler(BaseHandler):
         run_id = callback_data.split(":", 1)[1]
         
         try:
-            # Verify ownership (security check)
-            is_admin = user.get("is_admin", False)
-            if is_admin:
-                # Admins can view any strategy
-                verify_query = """
-                    SELECT id, supervisor_program_name, log_file_path, config_id
-                    FROM strategy_runs
-                    WHERE id = :run_id
-                """
-                row = await self.database.fetch_one(
-                    verify_query,
-                    {"run_id": run_id}
-                )
-            else:
-                # Regular users can only view their own strategies
-                verify_query = """
-                    SELECT id, supervisor_program_name, log_file_path, config_id
-                    FROM strategy_runs
-                    WHERE id = :run_id AND user_id = :user_id
-                """
-                row = await self.database.fetch_one(
-                    verify_query,
-                    {"run_id": run_id, "user_id": user["id"]}
-                )
-            
-            if not row:
+            # Get log file info
+            log_info = await self._get_log_file_info(run_id, user)
+            if not log_info:
                 await query.edit_message_text(
                     "❌ Strategy not found or you don't have permission to view logs",
                     parse_mode='HTML'
                 )
                 return
             
-            run_id_full = str(row["id"])
-            run_id_short = run_id_full[:8]
+            log_file, run_id_full, run_id_short, config_name, strategy_type_display = log_info
             
-            # Get config name for display
-            config_id = str(row["config_id"])
-            config_row = await self.database.fetch_one(
-                "SELECT config_name, strategy_type FROM strategy_configs WHERE id = :id",
-                {"id": config_id}
-            )
-            if config_row:
-                config_name = config_row['config_name']
-                strategy_type = config_row['strategy_type']
-            else:
-                config_name = 'Unknown'
-                strategy_type = 'unknown'
-            
-            strategy_type_display = {
-                'funding_arbitrage': 'Funding Arbitrage',
-                'grid': 'Grid'
-            }.get(strategy_type, strategy_type.title())
-            
-            # Show loading message
-            await query.edit_message_text(
-                f"⏳ <b>Loading logs...</b>\n\n"
-                f"Strategy: {strategy_type_display}\n"
-                f"Config: {config_name}\n"
-                f"Run ID: <code>{run_id_short}</code>",
-                parse_mode='HTML'
-            )
-            
-            # Try to get log file from database first
-            try:
-                log_file = row["log_file_path"]
-            except (KeyError, TypeError):
-                log_file = None
-            
-            # If not in DB or file doesn't exist, try to find it by matching UUID prefix
-            if not log_file or not Path(log_file).exists():
-                logs_dir = self.process_manager.project_root / "logs"
-                if logs_dir.exists():
-                    # Find log file matching the UUID (full or partial)
-                    matching_logs = list(logs_dir.glob("strategy_*.out.log"))
-                    for log_path in matching_logs:
-                        # Extract UUID from filename: strategy_<uuid>.out.log
-                        log_uuid = log_path.stem.replace('strategy_', '').replace('.out', '')
-                        # Match by first 8 characters or full UUID
-                        if log_uuid.startswith(run_id_short) or run_id_full.startswith(log_uuid[:8]):
-                            log_file = str(log_path)
-                            break
-            
-            # If still no log file found, inform user
+            # If log file not found, inform user
             if not log_file or not Path(log_file).exists():
                 await query.edit_message_text(
                     f"📄 <b>Log File Not Found</b>\n\n"
@@ -2378,31 +2410,237 @@ class StrategyHandler(BaseHandler):
                     f"Run ID: <code>{run_id_short}</code>\n\n"
                     f"⚠️ The log file may have been cleaned up or deleted.\n"
                     f"This is expected if logs were manually removed.",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
+                    ])
+                )
+                return
+            
+            # Show choice menu
+            keyboard = [
+                [InlineKeyboardButton("⚡ Quick View (Last 15)", callback_data=f"view_logs_quick:{run_id}")],
+                [InlineKeyboardButton("📄 Full Log File", callback_data=f"view_logs_full:{run_id}")],
+                [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"📄 <b>View Logs</b>\n\n"
+                f"Strategy: {strategy_type_display}\n"
+                f"Config: {config_name}\n"
+                f"Run ID: <code>{run_id_short}</code>\n\n"
+                f"Choose how you want to view the logs:",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+                
+        except Exception as e:
+            self.logger.error(f"View logs error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Error getting logs: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def view_logs_quick_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle quick view callback - shows last 15 log lines formatted in HTML."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        # Parse callback data: "view_logs_quick:{run_id}"
+        callback_data = query.data
+        if not callback_data.startswith("view_logs_quick:"):
+            await query.edit_message_text(
+                "❌ Invalid selection. Please use /logs again.",
+                parse_mode='HTML'
+            )
+            return
+        
+        run_id = callback_data.split(":", 1)[1]
+        
+        try:
+            # Get log file info
+            log_info = await self._get_log_file_info(run_id, user)
+            if not log_info:
+                await query.edit_message_text(
+                    "❌ Strategy not found or you don't have permission to view logs",
                     parse_mode='HTML'
                 )
                 return
             
-            if log_file and Path(log_file).exists():
-                # Send log file as document
-                with open(log_file, 'rb') as f:
-                    await query.message.reply_document(
-                        document=f,
-                        filename=f"strategy_{run_id_short}_{strategy_type_display.lower().replace(' ', '_')}.log",
-                        parse_mode='HTML'
-                    )
-                
-                # Update the message to show success
+            log_file, run_id_full, run_id_short, config_name, strategy_type_display = log_info
+            
+            # If log file not found, inform user
+            if not log_file or not Path(log_file).exists():
                 await query.edit_message_text(
-                    f"✅ <b>Log file sent!</b>\n\n"
+                    f"📄 <b>Log File Not Found</b>\n\n"
                     f"Strategy: {strategy_type_display}\n"
                     f"Config: {config_name}\n"
                     f"Run ID: <code>{run_id_short}</code>\n\n"
-                    f"📄 Check the document below.",
+                    f"⚠️ The log file may have been cleaned up or deleted.",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
+                    ])
+                )
+                return
+            
+            # Read last 15 lines from log file
+            try:
+                with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+                    last_15_lines = lines[-15:] if len(lines) > 15 else lines
+            except Exception as e:
+                self.logger.error(f"Error reading log file: {e}")
+                await query.edit_message_text(
+                    f"❌ Error reading log file: {str(e)}",
                     parse_mode='HTML'
                 )
+                return
+            
+            # Clean and format log lines
+            # Strip ANSI codes, timestamps, log levels, and module info - keep only core messages
+            formatted_lines = []
+            line_number = 1
+            for line in last_15_lines:
+                # Remove trailing newline
+                line = line.rstrip('\n\r')
+                # Clean the log line to extract only the core message
+                cleaned_line = self._clean_log_line(line)
+                # Skip empty lines
+                if not cleaned_line:
+                    continue
+                # Escape HTML special characters
+                cleaned_line = cleaned_line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                # Add line number and separator for better readability
+                formatted_line = f"{line_number}. {cleaned_line}"
+                formatted_lines.append(formatted_line)
+                line_number += 1
+            
+            # Join with double newline for better visual separation
+            log_content = '\n\n'.join(formatted_lines)
+            
+            # Telegram message limit is 4096 characters
+            # Reserve space for header and HTML tags
+            max_content_length = 3500
+            if len(log_content) > max_content_length:
+                # Truncate if too long
+                log_content = log_content[:max_content_length] + "\n... (truncated)"
+            
+            # Wrap entire content in preformatted code block for better display
+            log_content = f"<pre><code>{log_content}</code></pre>"
+            
+            keyboard = [
+                [InlineKeyboardButton("📄 View Full Log File", callback_data=f"view_logs_full:{run_id}")],
+                [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"⚡ <b>Quick View - Last 15 Logs</b>\n\n"
+                f"Strategy: {strategy_type_display}\n"
+                f"Config: {config_name}\n"
+                f"Run ID: <code>{run_id_short}</code>\n\n"
+                f"{log_content}",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
                 
         except Exception as e:
-            self.logger.error(f"View logs error: {e}", exc_info=True)
+            self.logger.error(f"View logs quick error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Error getting logs: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def view_logs_full_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle full logs callback - sends entire log file as document."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        # Parse callback data: "view_logs_full:{run_id}"
+        callback_data = query.data
+        if not callback_data.startswith("view_logs_full:"):
+            await query.edit_message_text(
+                "❌ Invalid selection. Please use /logs again.",
+                parse_mode='HTML'
+            )
+            return
+        
+        run_id = callback_data.split(":", 1)[1]
+        
+        try:
+            # Get log file info
+            log_info = await self._get_log_file_info(run_id, user)
+            if not log_info:
+                await query.edit_message_text(
+                    "❌ Strategy not found or you don't have permission to view logs",
+                    parse_mode='HTML'
+                )
+                return
+            
+            log_file, run_id_full, run_id_short, config_name, strategy_type_display = log_info
+            
+            # If log file not found, inform user
+            if not log_file or not Path(log_file).exists():
+                await query.edit_message_text(
+                    f"📄 <b>Log File Not Found</b>\n\n"
+                    f"Strategy: {strategy_type_display}\n"
+                    f"Config: {config_name}\n"
+                    f"Run ID: <code>{run_id_short}</code>\n\n"
+                    f"⚠️ The log file may have been cleaned up or deleted.\n"
+                    f"This is expected if logs were manually removed.",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
+                    ])
+                )
+                return
+            
+            # Show loading message
+            await query.edit_message_text(
+                f"⏳ <b>Loading log file...</b>\n\n"
+                f"Strategy: {strategy_type_display}\n"
+                f"Config: {config_name}\n"
+                f"Run ID: <code>{run_id_short}</code>",
+                parse_mode='HTML'
+            )
+            
+            # Send log file as document
+            with open(log_file, 'rb') as f:
+                await query.message.reply_document(
+                    document=f,
+                    filename=f"strategy_{run_id_short}_{strategy_type_display.lower().replace(' ', '_')}.log",
+                    parse_mode='HTML'
+                )
+            
+            # Update the message to show success
+            keyboard = [
+                [InlineKeyboardButton("⚡ Quick View (Last 15)", callback_data=f"view_logs_quick:{run_id}")],
+                [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"✅ <b>Log file sent!</b>\n\n"
+                f"Strategy: {strategy_type_display}\n"
+                f"Config: {config_name}\n"
+                f"Run ID: <code>{run_id_short}</code>\n\n"
+                f"📄 Check the document below.",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+                
+        except Exception as e:
+            self.logger.error(f"View logs full error: {e}", exc_info=True)
             await query.edit_message_text(
                 f"❌ Error getting logs: {str(e)}",
                 parse_mode='HTML'
@@ -2925,6 +3163,14 @@ class StrategyHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.view_logs_callback,
             pattern="^view_logs:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.view_logs_quick_callback,
+            pattern="^view_logs_quick:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.view_logs_full_callback,
+            pattern="^view_logs_full:"
         ))
         application.add_handler(CallbackQueryHandler(
             self.filter_strategies_callback,
