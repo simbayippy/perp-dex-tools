@@ -479,11 +479,25 @@ class ParadexMarketData:
         This should be called before placing orders to ensure tick_size and
         order_size_increment are available.
         
+        Also updates config.tick_size so that round_to_tick() works correctly
+        when called before place_limit_order().
+        
         Args:
             contract_id: Contract/symbol identifier
         """
         if contract_id not in self._market_metadata:
             await self.get_market_metadata(contract_id)
+        
+        # Update config.tick_size from cached metadata (similar to get_contract_attributes)
+        # This ensures round_to_tick() works correctly even when called before place_limit_order()
+        metadata = self._market_metadata.get(contract_id)
+        if metadata:
+            tick_size = metadata.get('tick_size')
+            if tick_size:
+                self.config.tick_size = tick_size
+                # Also update contract_id if not set
+                if not getattr(self.config, 'contract_id', None):
+                    self.config.contract_id = contract_id
     
     def get_min_order_notional(self, symbol: str) -> Optional[Decimal]:
         """

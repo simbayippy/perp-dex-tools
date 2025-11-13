@@ -727,10 +727,14 @@ class BaseExchangeClient(ABC):
             price: Price to round
             
         Returns:
-            Price rounded to tick size
+            Price rounded to tick size, or original price if tick_size is None/0
         """
         price = Decimal(price)
-        tick = self.config.tick_size
+        tick = getattr(self.config, 'tick_size', None)
+        if tick is None or tick == 0:
+            # If tick_size is not set, return price as-is
+            # This prevents quantize() from returning 0 when tick_size is invalid
+            return price
         return price.quantize(tick, rounding=ROUND_HALF_UP)
 
     def normalize_symbol(self, symbol: str) -> str:

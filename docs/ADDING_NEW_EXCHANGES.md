@@ -933,6 +933,56 @@ async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
     }
 ```
 
+### Tick Size Initialization Pattern
+
+**Problem**: `round_to_tick()` is called before `place_limit_order()`, but `tick_size` may not be set in `config`, causing price rounding to fail (price becomes 0).
+
+**Solution**: Ensure `ensure_market_metadata()` updates `config.tick_size`, not just caches metadata:
+
+```python
+async def ensure_market_metadata(self, contract_id: str) -> None:
+    """
+    Ensure market metadata is loaded and cached.
+    
+    Also updates config.tick_size so that round_to_tick() works correctly
+    when called before place_limit_order().
+    """
+    if contract_id not in self._market_metadata:
+        await self.get_market_metadata(contract_id)
+    
+    # CRITICAL: Update config.tick_size from cached metadata
+    # This ensures round_to_tick() works correctly even when called before place_limit_order()
+    metadata = self._market_metadata.get(contract_id)
+    if metadata:
+        tick_size = metadata.get('tick_size')
+        if tick_size:
+            self.config.tick_size = tick_size
+            # Also update contract_id if not set
+            if not getattr(self.config, 'contract_id', None):
+                self.config.contract_id = contract_id
+```
+
+**Why This Matters**:
+- `order_executor` calls `round_to_tick()` BEFORE calling `place_limit_order()`
+- If `config.tick_size` is None/0, `round_to_tick()` will return price as-is (safe fallback)
+- But if `tick_size` is explicitly set to `Decimal("0")`, `quantize(Decimal("0"))` returns 0, causing price=0 errors
+- **Reference**: `exchange_clients/paradex/client/managers/market_data.py` (lines 475-500)
+
+**Additional Safety**: Also update `config.tick_size` in `place_limit_order()` as a defensive fallback:
+
+```python
+async def place_limit_order(self, contract_id: str, ...):
+    # Ensure market metadata is loaded
+    if self.market_data:
+        await self.market_data.ensure_market_metadata(contract_id)
+        metadata = self.market_data._market_metadata.get(contract_id, {})
+        
+        # CRITICAL: Update config.tick_size from metadata if not already set
+        tick_size_from_metadata = metadata.get('tick_size')
+        if tick_size_from_metadata and not getattr(self.config, 'tick_size', None):
+            self.config.tick_size = tick_size_from_metadata
+```
+
 ### Error Handling Pattern
 
 **Problem**: Need consistent error handling across methods.
@@ -1103,6 +1153,14 @@ Use this checklist when adding a new exchange:
 - **Solution**: Ensure `ContractIdCache` supports dict-like access (`cache[key] = value`)
 - **Solution**: Cache contract IDs in `get_contract_attributes()`
 - **Reference**: `exchange_clients/paradex/client/utils/caching.py`
+
+**Issue**: Price becomes $0 when placing orders (`round_to_tick()` returns 0)
+- **Root Cause**: `ensure_market_metadata()` caches metadata but doesn't update `config.tick_size`
+- **Solution**: Update `config.tick_size` in `ensure_market_metadata()` (not just cache metadata)
+- **Solution**: Also update `config.tick_size` in `place_limit_order()` as defensive fallback
+- **Why**: `order_executor` calls `round_to_tick()` BEFORE `place_limit_order()`, so `tick_size` must be set early
+- **Reference**: `exchange_clients/paradex/client/managers/market_data.py` (lines 475-500)
+- **Reference**: `exchange_clients/paradex/client/managers/order_manager.py` (lines 115-122)
 
 ---
 

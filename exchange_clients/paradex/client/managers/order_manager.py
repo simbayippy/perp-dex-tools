@@ -106,11 +106,20 @@ class ParadexOrderManager:
         from paradex_py.common.order import Order, OrderType, OrderSide
         
         try:
-            # Ensure market metadata is loaded (for order_size_increment)
+            # Ensure market metadata is loaded (for order_size_increment and tick_size)
             if self.market_data:
                 await self.market_data.ensure_market_metadata(contract_id)
                 metadata = self.market_data._market_metadata.get(contract_id, {})
                 order_size_increment = metadata.get('order_size_increment')
+                
+                # CRITICAL: Update config.tick_size from metadata if not already set
+                # This ensures round_to_tick() in order_executor works correctly
+                tick_size_from_metadata = metadata.get('tick_size')
+                if tick_size_from_metadata and not getattr(self.config, 'tick_size', None):
+                    self.config.tick_size = tick_size_from_metadata
+                    self.logger.debug(
+                        f"[PARADEX] Updated config.tick_size={tick_size_from_metadata} from metadata for {contract_id}"
+                    )
             else:
                 order_size_increment = getattr(self.config, 'order_size_increment', Decimal('0.001'))
             

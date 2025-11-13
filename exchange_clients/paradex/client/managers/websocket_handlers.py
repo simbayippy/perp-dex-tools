@@ -113,6 +113,12 @@ class ParadexWebSocketHandlers:
                     f"[WEBSOCKET] [PARADEX] {status} "
                     f"{order_info.filled_size}/{order_info.size} @ {order_info.price}"
                 )
+            elif status == 'OPEN':
+                # Log OPEN at INFO level (like Lighter) for visibility
+                self.logger.info(
+                    f"[WEBSOCKET] [PARADEX] {status} "
+                    f"{order_info.size} @ {order_info.price}"
+                )
             else:
                 self.logger.debug(
                     f"[WEBSOCKET] [PARADEX] {status} "

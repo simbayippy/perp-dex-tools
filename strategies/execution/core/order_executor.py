@@ -935,6 +935,8 @@ class OrderExecutor:
             best_bid, best_ask = await self._fetch_bbo_prices(exchange_client, symbol)
             
             # Use aggressive pricing: at touch (best bid/ask) or slightly inside to ensure fill
+            # Note: round_to_tick() handles missing tick_size gracefully (returns price as-is)
+            # Exchange-specific metadata loading (if needed) is handled internally by place_limit_order()
             # For buy: use best_ask (at touch) - this ensures immediate fill
             # For sell: use best_bid (at touch) - this ensures immediate fill
             if side == "buy":
