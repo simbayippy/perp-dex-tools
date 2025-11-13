@@ -7,6 +7,7 @@ from pathlib import Path
 import xmlrpc.client
 import json
 import yaml
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
@@ -15,6 +16,35 @@ from telegram_bot_service.handlers.base import BaseHandler
 
 class StrategyHandler(BaseHandler):
     """Handler for strategy execution commands and callbacks"""
+    
+    def _clean_log_line(self, line: str) -> str:
+        """
+        Clean a log line by removing ANSI escape codes, timestamps, log levels, and module info.
+        Returns only the core message content.
+        
+        Example:
+            Input:  "[32m2025-11-12 21:03:57[0m | [1mINFO    [0m | [36munified_logger:_emit:618[0m | [1m=======================================================[0m"
+            Output: "======================================================="
+        """
+        # Remove ANSI escape codes (both \x1b[ and [ formats)
+        # Pattern matches: [32m, [0m, [1m, [36m, etc.
+        line = re.sub(r'\x1b\[[0-9;]*m', '', line)  # \x1b[ format
+        line = re.sub(r'\[[0-9;]+m', '', line)  # [ format
+        
+        # Split by pipe separator and take the last part (the actual message)
+        # Format: timestamp | level | module:line | message
+        parts = line.split('|')
+        if len(parts) > 1:
+            # Take the last part (the message)
+            message = parts[-1].strip()
+        else:
+            # If no pipe separator, use the whole line
+            message = line.strip()
+        
+        # Clean up any remaining extra whitespace
+        message = re.sub(r'\s+', ' ', message).strip()
+        
+        return message
     
     async def list_strategies_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /list_strategies command - shows filter options."""
@@ -2472,17 +2502,27 @@ class StrategyHandler(BaseHandler):
                 )
                 return
             
-            # Format log lines with HTML
-            # Escape HTML special characters and format
+            # Clean and format log lines
+            # Strip ANSI codes, timestamps, log levels, and module info - keep only core messages
             formatted_lines = []
+            line_number = 1
             for line in last_15_lines:
                 # Remove trailing newline
                 line = line.rstrip('\n\r')
+                # Clean the log line to extract only the core message
+                cleaned_line = self._clean_log_line(line)
+                # Skip empty lines
+                if not cleaned_line:
+                    continue
                 # Escape HTML special characters
-                line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                formatted_lines.append(line)
+                cleaned_line = cleaned_line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                # Add line number and separator for better readability
+                formatted_line = f"{line_number}. {cleaned_line}"
+                formatted_lines.append(formatted_line)
+                line_number += 1
             
-            log_content = '\n'.join(formatted_lines)
+            # Join with double newline for better visual separation
+            log_content = '\n\n'.join(formatted_lines)
             
             # Telegram message limit is 4096 characters
             # Reserve space for header and HTML tags
