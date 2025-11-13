@@ -88,6 +88,10 @@ class MonitoringHandler(BaseHandler):
                         callback_data = f"positions_account:{account_name_btn}"
                         keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
                 
+                # Add refresh button (before close buttons)
+                refresh_callback = f"positions_refresh:{account_name}" if account_name else "positions_refresh:"
+                keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data=refresh_callback)])
+                
                 # Add direct position selection buttons
                 position_index = 0
                 for account in accounts_with_positions:
@@ -105,10 +109,6 @@ class MonitoringHandler(BaseHandler):
                         callback_data = f"close_pos:{position_id}"
                         
                         keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
-                
-                # Add refresh button
-                refresh_callback = f"positions_refresh:{account_name}" if account_name else "positions_refresh:"
-                keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data=refresh_callback)])
                 
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await update.message.reply_text(
@@ -220,6 +220,10 @@ class MonitoringHandler(BaseHandler):
             
             # Create keyboard with position buttons
             keyboard = []
+            
+            # Add refresh button (before close buttons)
+            keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data=f"positions_refresh:{account_name}")])
+            
             position_index = 0
             for account in accounts:
                 positions = account.get('positions', [])
@@ -236,8 +240,7 @@ class MonitoringHandler(BaseHandler):
                     
                     keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
             
-            # Add refresh and back buttons
-            keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data=f"positions_refresh:{account_name}")])
+            # Add back button
             keyboard.append([InlineKeyboardButton("🔙 Back to All Positions", callback_data="positions_back_to_all")])
             
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -298,6 +301,8 @@ class MonitoringHandler(BaseHandler):
         parts = callback_data.split(":", 1)
         account_name = parts[1] if len(parts) > 1 and parts[1] else None
         
+        self.logger.info(f"Refreshing positions data (account: {account_name or 'all'})")
+        
         # Get user and API key
         user, api_key = await self.require_auth(update, context)
         if not user or not api_key:
@@ -325,9 +330,11 @@ class MonitoringHandler(BaseHandler):
         has_running_strategies = running_result and running_result['count'] > 0
         
         try:
+            self.logger.debug(f"Fetching fresh positions data from API (account: {account_name or 'all'})")
             client = ControlAPIClient(self.config.control_api_base_url, api_key)
             data = await client.get_positions(account_name=account_name)
             
+            self.logger.debug(f"Received positions data: {len(data.get('accounts', []))} accounts")
             accounts = data.get('accounts', [])
             
             # Collect all positions for button creation
@@ -343,6 +350,7 @@ class MonitoringHandler(BaseHandler):
                             'account_name': account.get('account_name', 'N/A')
                         })
             
+            self.logger.debug(f"Formatting positions: {len(all_positions)} total positions")
             # Format positions summary
             message = self.formatter.format_positions(data)
             
@@ -359,6 +367,10 @@ class MonitoringHandler(BaseHandler):
                     callback_data = f"positions_account:{account_name_btn}"
                     keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
             
+            # Add refresh button (before close buttons)
+            refresh_callback = f"positions_refresh:{account_name}" if account_name else "positions_refresh:"
+            keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data=refresh_callback)])
+            
             # Add direct position selection buttons
             position_index = 0
             for account in accounts_with_positions:
@@ -373,10 +385,6 @@ class MonitoringHandler(BaseHandler):
                     button_label = f"❌ Close: {position_index}. {symbol} ({long_dex}/{short_dex})"
                     callback_data = f"close_pos:{position_id}"
                     keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
-            
-            # Add refresh button
-            refresh_callback = f"positions_refresh:{account_name}" if account_name else "positions_refresh:"
-            keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data=refresh_callback)])
             
             # Add back button if viewing specific account
             if account_name:
@@ -492,6 +500,9 @@ class MonitoringHandler(BaseHandler):
                     callback_data = f"positions_account:{account_name_btn}"
                     keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
             
+            # Add refresh button (before close buttons)
+            keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="positions_refresh:")])
+            
             # Add direct position selection buttons
             position_index = 0
             for account in accounts_with_positions:
@@ -508,10 +519,6 @@ class MonitoringHandler(BaseHandler):
                     callback_data = f"close_pos:{position_id}"
                     
                     keyboard.append([InlineKeyboardButton(button_label, callback_data=callback_data)])
-            
-            # Add refresh button
-            if keyboard:
-                keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data="positions_refresh:")])
             
             reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
             
@@ -833,6 +840,10 @@ class MonitoringHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.positions_account_callback,
             pattern="^positions_account:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.positions_refresh_callback,
+            pattern="^positions_refresh:"
         ))
         application.add_handler(CallbackQueryHandler(
             self.positions_back_to_all_callback,
