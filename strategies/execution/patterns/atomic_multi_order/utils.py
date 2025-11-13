@@ -206,6 +206,8 @@ def context_to_filled_dict(ctx: OrderContext) -> Dict[str, Any]:
         # but preserve other fields from ctx.result (order_id, fill_price, etc.)
         result_dict = ctx.result.copy()
         result_dict["filled_quantity"] = ctx.filled_quantity  # Use accumulated total
+        # Preserve reduce_only flag for rollback logic
+        result_dict["reduce_only"] = getattr(ctx.spec, "reduce_only", False)
         return result_dict
     
     # Fallback if no result dict exists (shouldn't happen, but defensive)
@@ -220,4 +222,5 @@ def context_to_filled_dict(ctx: OrderContext) -> Dict[str, Any]:
         "exchange_client": ctx.spec.exchange_client,
         "symbol": ctx.spec.symbol,
         "side": ctx.spec.side,
+        "reduce_only": getattr(ctx.spec, "reduce_only", False),
     }

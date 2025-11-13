@@ -22,6 +22,7 @@ class HedgeManager:
         trigger_ctx: OrderContext,
         contexts: List[OrderContext],
         logger,
+        reduce_only: bool = False,
     ) -> Tuple[bool, Optional[str]]:
         """
         Attempt to flatten any residual exposure using market orders.
@@ -100,6 +101,7 @@ class HedgeManager:
                     quantity=quantity_arg,
                     mode=ExecutionMode.MARKET_ONLY,
                     timeout_seconds=spec.timeout_seconds,
+                    reduce_only=reduce_only,  # Use reduce_only when hedging close operations
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error(f"Hedge order failed on {exchange_name}: {exc}")

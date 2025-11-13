@@ -87,6 +87,8 @@ class AtomicMultiOrderExecutor:
         skip_preflight_leverage: bool = False,
         stage_prefix: Optional[str] = None,
     ) -> AtomicExecutionResult:
+        # Store stage_prefix for use in rollback logic
+        self._current_stage_prefix = stage_prefix
         start_time = time.time()
         elapsed_ms = lambda: int((time.time() - start_time) * 1000)
 
@@ -314,8 +316,8 @@ class AtomicMultiOrderExecutor:
 
 
             exec_ms = elapsed_ms()
-            total_long_usd, total_short_usd, imbalance, imbalance_pct = self._calculate_imbalance(contexts)
-            imbalance_tolerance = Decimal("0.01")
+            total_long_tokens, total_short_tokens, imbalance_tokens, imbalance_pct = self._calculate_imbalance(contexts)
+            imbalance_tolerance = Decimal("0.01")  # 1% tolerance for quantity imbalance
 
             if rollback_performed:
                 return self._build_execution_result(
@@ -332,18 +334,18 @@ class AtomicMultiOrderExecutor:
             # Check if all orders filled
             filled_orders_count = sum(1 for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal("0"))
             if filled_orders_count == len(orders):
-                # Check if imbalance is within acceptable bounds
-                is_critical, _, _ = self._check_critical_imbalance(total_long_usd, total_short_usd)
+                # Check if quantity imbalance is within acceptable bounds (1% threshold)
+                is_critical, _, _ = self._check_critical_imbalance(total_long_tokens, total_short_tokens)
                 
                 if is_critical:
                     self.logger.error(
-                        f"⚠️ CRITICAL IMBALANCE detected despite all orders filled: "
-                        f"longs=${total_long_usd:.2f}, shorts=${total_short_usd:.2f}, "
-                        f"imbalance=${imbalance:.2f} ({imbalance_pct*100:.1f}%). Triggering emergency rollback."
+                        f"⚠️ CRITICAL QUANTITY IMBALANCE detected despite all orders filled: "
+                        f"longs={total_long_tokens:.6f} tokens, shorts={total_short_tokens:.6f} tokens, "
+                        f"imbalance={imbalance_tokens:.6f} tokens ({imbalance_pct*100:.2f}%). Triggering emergency rollback."
                     )
                     rollback_performed = True
                     rollback_cost = await self._perform_emergency_rollback(
-                        contexts, "all filled imbalance", imbalance, imbalance_pct
+                        contexts, "all filled imbalance", imbalance_tokens, imbalance_pct, stage_prefix=stage_prefix
                     )
                     return self._build_execution_result(
                         contexts=contexts,
@@ -351,15 +353,15 @@ class AtomicMultiOrderExecutor:
                         elapsed_ms=exec_ms,
                         success=False,
                         all_filled=False,
-                        error_message=f"Rolled back due to critical imbalance: ${imbalance:.2f}",
+                        error_message=f"Rolled back due to critical quantity imbalance: {imbalance_tokens:.6f} tokens ({imbalance_pct*100:.2f}%)",
                         rollback_performed=True,
                         rollback_cost=rollback_cost,
                     )
-                elif imbalance > imbalance_tolerance:
+                elif imbalance_pct > imbalance_tolerance:
                     self.logger.warning(
-                        f"Minor imbalance detected after hedge: longs=${total_long_usd:.5f}, "
-                        f"shorts=${total_short_usd:.5f}, imbalance=${imbalance:.5f} "
-                        f"({imbalance_pct*100:.1f}% within 5% tolerance)"
+                        f"Minor quantity imbalance detected after hedge: longs={total_long_tokens:.6f} tokens, "
+                        f"shorts={total_short_tokens:.6f} tokens, imbalance={imbalance_tokens:.6f} tokens "
+                        f"({imbalance_pct*100:.2f}% within 1% tolerance)"
                     )
 
                 post_trade = await self._verify_post_trade_exposure(contexts)
@@ -367,7 +369,9 @@ class AtomicMultiOrderExecutor:
                     net_usd = post_trade.get("net_usd", Decimal("0"))
                     net_pct = post_trade.get("net_pct", Decimal("0"))
                     net_qty = post_trade.get("net_qty", Decimal("0"))
-                    imbalance = max(imbalance, net_usd)
+                    # Note: net_qty from post_trade is already in actual tokens (from exchange snapshots)
+                    # Use net_qty for quantity comparison, net_usd is kept for logging only
+                    imbalance_tokens = max(imbalance_tokens, net_qty)
 
                     if net_usd > Decimal("0"):
                         if net_pct > self._post_trade_max_imbalance_pct:
@@ -392,27 +396,27 @@ class AtomicMultiOrderExecutor:
                     rollback_cost=Decimal("0"),
                 )
 
-            # Critical fix: Check for dangerous imbalance and rollback if needed
+            # Critical fix: Check for dangerous quantity imbalance and rollback if needed
             filled_orders_count = sum(1 for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal("0"))
             error_message = hedge_error or f"Partial fill: {filled_orders_count}/{len(orders)}"
-            if imbalance > imbalance_tolerance:
+            if imbalance_pct > imbalance_tolerance:
                 self.logger.error(
-                    f"Exposure imbalance detected after hedge: longs=${total_long_usd:.5f}, "
-                    f"shorts=${total_short_usd:.5f}"
+                    f"Quantity imbalance detected after hedge: longs={total_long_tokens:.6f} tokens, "
+                    f"shorts={total_short_tokens:.6f} tokens, imbalance={imbalance_tokens:.6f} tokens ({imbalance_pct*100:.2f}%)"
                 )
-                imbalance_msg = f"imbalance {imbalance:.5f} USD"
+                imbalance_msg = f"quantity imbalance {imbalance_tokens:.6f} tokens ({imbalance_pct*100:.2f}%)"
                 error_message = f"{error_message}; {imbalance_msg}" if error_message else imbalance_msg
                 
                 # If we have a significant imbalance and rollback is enabled, close filled positions
                 if rollback_on_partial and filled_orders_count > 0:
-                    is_critical, _, _ = self._check_critical_imbalance(total_long_usd, total_short_usd)
+                    is_critical, _, _ = self._check_critical_imbalance(total_long_tokens, total_short_tokens)
                     if is_critical:
                         self.logger.warning(
-                            f"⚠️ Critical imbalance ${imbalance:.2f} detected after retries exhausted. "
-                            f"Initiating rollback to close {filled_orders_count} filled positions."
+                            f"⚠️ Critical quantity imbalance {imbalance_tokens:.6f} tokens ({imbalance_pct*100:.2f}%) "
+                            f"detected after retries exhausted. Initiating rollback to close {filled_orders_count} filled positions."
                         )
                         rollback_cost = await self._perform_emergency_rollback(
-                            contexts, "retries exhausted", imbalance, imbalance_pct
+                            contexts, "retries exhausted", imbalance_tokens, imbalance_pct, stage_prefix=stage_prefix
                         )
                         return self._build_execution_result(
                             contexts=contexts,
@@ -430,12 +434,18 @@ class AtomicMultiOrderExecutor:
                 net_usd = post_trade.get("net_usd", Decimal("0"))
                 net_pct = post_trade.get("net_pct", Decimal("0"))
                 net_qty = post_trade.get("net_qty", Decimal("0"))
-                imbalance = max(imbalance, net_usd)
-                if net_usd > Decimal("0") and net_pct > self._post_trade_max_imbalance_pct:
-                    self.logger.warning(
-                        "⚠️ Residual exposure detected after partial execution: "
-                        f"net_qty={net_qty:.6f}, net_usd=${net_usd:.4f} ({net_pct*100:.2f}%)."
-                    )
+                # Use net_qty (quantity) for imbalance comparison, not net_usd
+                # net_usd is kept for logging/monitoring purposes only
+                imbalance_tokens = max(imbalance_tokens, net_qty)
+                if net_qty > Decimal("0"):
+                    # Calculate quantity imbalance percentage
+                    max_qty = max(total_long_tokens, total_short_tokens)
+                    net_qty_pct = net_qty / max_qty if max_qty > Decimal("0") else Decimal("0")
+                    if net_qty_pct > self._post_trade_max_imbalance_pct:
+                        self.logger.warning(
+                            "⚠️ Residual quantity exposure detected after partial execution: "
+                            f"net_qty={net_qty:.6f} tokens ({net_qty_pct*100:.2f}%), net_usd=${net_usd:.4f} (for reference)."
+                        )
 
             return self._build_execution_result(
                 contexts=contexts,
@@ -592,25 +602,30 @@ class AtomicMultiOrderExecutor:
         contexts: List[OrderContext]
     ) -> tuple[Decimal, Decimal, Decimal, Decimal]:
         """
-        Calculate exposure imbalance from contexts.
+        Calculate exposure imbalance from contexts using QUANTITY (normalized to actual tokens).
+        
+        CRITICAL: Uses quantity imbalance, not USD imbalance, for true delta-neutrality.
+        Quantities are normalized to actual tokens using exchange multipliers to handle
+        different unit systems (e.g., Lighter kTOSHI = 1000x, Aster TOSHI = 1x).
         
         For OPENING operations:
         - BUY orders increase long exposure
         - SELL orders increase short exposure
+        - Checks if actual token quantities match (delta-neutral)
         
         For CLOSING operations (all orders have reduce_only=True):
         - BUY orders close SHORT positions (reduce short exposure)
         - SELL orders close LONG positions (reduce long exposure)
-        - Imbalance check should be skipped or reversed
+        - Imbalance check is skipped (positions are being closed, not opened)
         
         Args:
             contexts: List of order contexts to analyze
             
         Returns:
-            Tuple of (total_long_usd, total_short_usd, imbalance_usd, imbalance_pct)
+            Tuple of (total_long_tokens, total_short_tokens, imbalance_tokens, imbalance_pct)
+            where tokens are normalized to actual token amounts (accounting for multipliers)
         """
         # Check if this is a closing operation (all orders have reduce_only=True)
-        # For closing operations, all orders should have reduce_only=True
         is_closing_operation = (
             len(contexts) > 0 and 
             all(ctx.spec.reduce_only is True for ctx in contexts)
@@ -618,8 +633,6 @@ class AtomicMultiOrderExecutor:
         
         if is_closing_operation:
             # For closing operations, we're reducing exposure, not creating it
-            # The imbalance calculation doesn't apply the same way
-            # Instead, we check that both orders filled successfully
             # Return zeros to indicate no new exposure imbalance
             self.logger.debug(
                 "Closing operation detected (all orders have reduce_only=True). "
@@ -627,54 +640,81 @@ class AtomicMultiOrderExecutor:
             )
             return Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0")
         
-        # For opening operations, calculate imbalance normally
-        total_long_usd = sum(ctx.filled_usd for ctx in contexts if ctx.spec.side == "buy")
-        total_short_usd = sum(ctx.filled_usd for ctx in contexts if ctx.spec.side == "sell")
-        imbalance_usd = abs(total_long_usd - total_short_usd)
+        # For opening operations, calculate QUANTITY imbalance (normalized to actual tokens)
+        total_long_tokens = Decimal("0")
+        total_short_tokens = Decimal("0")
+        
+        for ctx in contexts:
+            if ctx.filled_quantity <= Decimal("0"):
+                continue
+            
+            # Get multiplier for this exchange/symbol
+            try:
+                multiplier = Decimal(str(ctx.spec.exchange_client.get_quantity_multiplier(ctx.spec.symbol)))
+            except Exception as exc:
+                self.logger.warning(
+                    f"Failed to get multiplier for {ctx.spec.symbol} on "
+                    f"{ctx.spec.exchange_client.get_exchange_name()}: {exc}. Using 1."
+                )
+                multiplier = Decimal("1")
+            
+            # Convert filled quantity to actual tokens
+            actual_tokens = ctx.filled_quantity * multiplier
+            
+            if ctx.spec.side == "buy":
+                total_long_tokens += actual_tokens
+            elif ctx.spec.side == "sell":
+                total_short_tokens += actual_tokens
+        
+        # Calculate quantity imbalance
+        imbalance_tokens = abs(total_long_tokens - total_short_tokens)
         
         # Calculate imbalance as percentage: (max - min) / max
-        min_usd = min(total_long_usd, total_short_usd)
-        max_usd = max(total_long_usd, total_short_usd)
+        min_tokens = min(total_long_tokens, total_short_tokens)
+        max_tokens = max(total_long_tokens, total_short_tokens)
         imbalance_pct = Decimal("0")
-        if max_usd > Decimal("0"):
-            imbalance_pct = (max_usd - min_usd) / max_usd
+        if max_tokens > Decimal("0"):
+            imbalance_pct = (max_tokens - min_tokens) / max_tokens
         
-        return total_long_usd, total_short_usd, imbalance_usd, imbalance_pct
+        return total_long_tokens, total_short_tokens, imbalance_tokens, imbalance_pct
 
     def _check_critical_imbalance(
         self,
-        total_long_usd: Decimal,
-        total_short_usd: Decimal,
-        threshold_pct: Decimal = Decimal("0.05")
+        total_long_tokens: Decimal,
+        total_short_tokens: Decimal,
+        threshold_pct: Decimal = Decimal("0.01")
     ) -> tuple[bool, Decimal, Decimal]:
         """
-        Check if imbalance exceeds critical threshold.
+        Check if quantity imbalance exceeds critical threshold.
+        
+        Uses quantity (normalized to actual tokens) instead of USD for true delta-neutrality.
         
         Args:
-            total_long_usd: Total USD value of long positions
-            total_short_usd: Total USD value of short positions
-            threshold_pct: Critical imbalance threshold (default 5%)
+            total_long_tokens: Total actual tokens for long positions (normalized)
+            total_short_tokens: Total actual tokens for short positions (normalized)
+            threshold_pct: Critical imbalance threshold (default 1%)
             
         Returns:
-            Tuple of (is_critical, imbalance_usd, imbalance_pct)
+            Tuple of (is_critical, imbalance_tokens, imbalance_pct)
         """
-        imbalance_usd = abs(total_long_usd - total_short_usd)
-        min_usd = min(total_long_usd, total_short_usd)
-        max_usd = max(total_long_usd, total_short_usd)
+        imbalance_tokens = abs(total_long_tokens - total_short_tokens)
+        min_tokens = min(total_long_tokens, total_short_tokens)
+        max_tokens = max(total_long_tokens, total_short_tokens)
         
         imbalance_pct = Decimal("0")
-        if max_usd > Decimal("0"):
-            imbalance_pct = (max_usd - min_usd) / max_usd
+        if max_tokens > Decimal("0"):
+            imbalance_pct = (max_tokens - min_tokens) / max_tokens
         
         is_critical = imbalance_pct > threshold_pct
-        return is_critical, imbalance_usd, imbalance_pct
+        return is_critical, imbalance_tokens, imbalance_pct
 
     async def _perform_emergency_rollback(
         self,
         contexts: List[OrderContext],
         reason: str,
-        imbalance_usd: Decimal,
-        imbalance_pct: Decimal
+        imbalance_tokens: Decimal,
+        imbalance_pct: Decimal,
+        stage_prefix: Optional[str] = None,
     ) -> Decimal:
         """
         Perform emergency rollback of all filled orders.
@@ -682,7 +722,7 @@ class AtomicMultiOrderExecutor:
         Args:
             contexts: List of order contexts to rollback
             reason: Reason for rollback (for logging)
-            imbalance_usd: USD imbalance amount
+            imbalance_tokens: Quantity imbalance amount (in actual tokens, normalized)
             imbalance_pct: Percentage imbalance
             
         Returns:
@@ -721,10 +761,12 @@ class AtomicMultiOrderExecutor:
                 
                 rollback_payload.append(context_to_filled_dict(c))
         
-        rollback_cost = await self._rollback_filled_orders(rollback_payload)
+        rollback_cost = await self._rollback_filled_orders(
+            rollback_payload, stage_prefix=stage_prefix
+        )
         self.logger.warning(
             f"🛡️ Emergency rollback completed; cost=${rollback_cost:.4f}. "
-            f"Prevented ${imbalance_usd:.2f} ({imbalance_pct*100:.1f}%) directional exposure."
+            f"Prevented {imbalance_tokens:.6f} tokens ({imbalance_pct*100:.2f}%) quantity imbalance."
         )
         
         # Clear filled quantities to prevent position creation
@@ -900,9 +942,26 @@ class AtomicMultiOrderExecutor:
                 f"{target_qty} (trigger={trigger_qty}, multipliers={trigger_multiplier}×{ctx_multiplier})"
             )
 
-        # Execute hedge
+        # Determine if this is a close operation (all orders have reduce_only=True)
+        is_close_operation = (
+            len(contexts) > 0 and 
+            all(ctx.spec.reduce_only is True for ctx in contexts)
+        )
+        
+        # For close operations, if both orders filled, positions are closed - no hedge needed
+        # (Imbalance check is already skipped in _calculate_imbalance for closing operations)
+        if is_close_operation:
+            filled_count = sum(1 for ctx in contexts if ctx.filled_quantity > Decimal("0"))
+            if filled_count == len(contexts):
+                # Both close orders filled - positions are closed!
+                self.logger.info(
+                    f"✅ Close operation: Both orders filled, positions closed. No hedge needed."
+                )
+                return True, None, False, Decimal("0")
+        
+        # Execute hedge (with reduce_only flag for close operations)
         hedge_success, hedge_error = await self._hedge_manager.hedge(
-            trigger_ctx, contexts, self.logger
+            trigger_ctx, contexts, self.logger, reduce_only=is_close_operation
         )
 
         rollback_performed = False
@@ -954,7 +1013,9 @@ class AtomicMultiOrderExecutor:
                         
                         rollback_payload.append(context_to_filled_dict(c))
                 
-                rollback_cost = await self._rollback_filled_orders(rollback_payload)
+                rollback_cost = await self._rollback_filled_orders(
+                    rollback_payload, stage_prefix=self._current_stage_prefix
+                )
                 self.logger.warning(
                     f"Rollback completed after hedge failure; total cost ${rollback_cost:.4f}"
                 )
@@ -1003,7 +1064,8 @@ class AtomicMultiOrderExecutor:
         total_slippage = sum(
             coerce_decimal(order.get("slippage_usd")) or Decimal("0") for order in filled_orders
         )
-        total_long_usd, total_short_usd, imbalance, _ = self._calculate_imbalance(contexts)
+        # Note: Returns quantity imbalance (tokens), not USD, for true delta-neutrality
+        total_long_tokens, total_short_tokens, imbalance_tokens, _ = self._calculate_imbalance(contexts)
         
         return AtomicExecutionResult(
             success=success,
@@ -1015,7 +1077,9 @@ class AtomicMultiOrderExecutor:
             error_message=error_message,
             rollback_performed=rollback_performed,
             rollback_cost_usd=rollback_cost,
-            residual_imbalance_usd=imbalance if not rollback_performed else Decimal("0"),
+            # Note: residual_imbalance_usd field name kept for backward compatibility,
+            # but value is actually quantity imbalance (tokens), not USD
+            residual_imbalance_usd=imbalance_tokens if not rollback_performed else Decimal("0"),
         )
 
     async def _place_single_order(
@@ -1334,11 +1398,37 @@ class AtomicMultiOrderExecutor:
             self.logger.warning("⚠️ Continuing despite pre-flight check error")
             return True, None
 
-    async def _rollback_filled_orders(self, filled_orders: List[Dict[str, Any]]) -> Decimal:
-        """Rollback helper copied intact from the original implementation."""
-        self.logger.warning(
-            f"🚨 EMERGENCY ROLLBACK: Closing {len(filled_orders)} filled orders"
+    async def _rollback_filled_orders(
+        self, 
+        filled_orders: List[Dict[str, Any]], 
+        stage_prefix: Optional[str] = None
+    ) -> Decimal:
+        """
+        Rollback helper for atomic execution failures.
+        
+        CRITICAL: When rolling back a position CLOSE operation (detected via reduce_only flag or stage_prefix),
+        we query actual open positions instead of trying to "undo" the close orders.
+        This prevents creating new positions when the original positions were already closed.
+        
+        When rolling back a position OPEN operation, we undo the open orders (current behavior).
+        """
+        # Detect close operation using reduce_only flag (more reliable) or stage_prefix (fallback)
+        # Check reduce_only flag from filled orders if available
+        has_reduce_only_flag = any(
+            order.get("reduce_only", False) is True 
+            for order in filled_orders
         )
+        is_close_operation = has_reduce_only_flag or (stage_prefix == "close")
+        
+        if is_close_operation:
+            self.logger.warning(
+                f"🚨 EMERGENCY ROLLBACK (CLOSE OPERATION): Querying actual positions "
+                f"for {len(filled_orders)} exchanges"
+            )
+        else:
+            self.logger.warning(
+                f"🚨 EMERGENCY ROLLBACK (OPEN OPERATION): Closing {len(filled_orders)} filled orders"
+            )
 
         total_rollback_cost = Decimal("0")
 
@@ -1361,75 +1451,169 @@ class AtomicMultiOrderExecutor:
                     self.logger.warning(f"Cancel failed for order {i}: {result}")
             await asyncio.sleep(0.5)
 
-        self.logger.info("Step 2/3: Querying actual filled amounts...")
-        actual_fills = []
-        for order in filled_orders:
-            exchange_client = order["exchange_client"]
-            symbol = order["symbol"]
-            side = order["side"]
-            order_id = order.get("order_id")
-            fallback_quantity = coerce_decimal(order.get("filled_quantity"))
-            fallback_price = coerce_decimal(order.get("fill_price")) or Decimal("0")
-
-            self.logger.debug(
-                f"Rollback order info: {symbol} ({side}), "
-                f"order_id={order_id}, "
-                f"payload_quantity={fallback_quantity}"
-            )
-
-            actual_quantity: Optional[Decimal] = None
-
-            if order_id:
+        if is_close_operation:
+            # For close operations: Query actual open positions instead of using filled quantities
+            self.logger.info("Step 2/3: Querying actual open positions from exchanges...")
+            actual_fills = []
+            for order in filled_orders:
+                exchange_client = order["exchange_client"]
+                symbol = order["symbol"]
+                exchange_config = getattr(exchange_client, "config", None)
+                contract_id = getattr(exchange_config, "contract_id", symbol)
+                
                 try:
-                    order_info = await exchange_client.get_order_info(order_id)
-                except Exception as exc:
-                    self.logger.error(f"Failed to get actual fill for {order_id}: {exc}")
-                    order_info = None
-
-                if order_info is not None:
-                    reported_qty = coerce_decimal(getattr(order_info, "filled_size", None))
-
-                    if reported_qty is not None and reported_qty > Decimal("0"):
-                        actual_quantity = reported_qty
-
-                        if (
-                            fallback_quantity is not None
-                            and abs(reported_qty - fallback_quantity) > Decimal("0.0001")
-                        ):
-                            self.logger.warning(
-                                f"⚠️ Fill amount changed for {symbol}: "
-                                f"{fallback_quantity} → {reported_qty} "
-                                f"(Δ={reported_qty - fallback_quantity})"
+                    # Query position snapshot to get both size and direction
+                    position_snapshot = await exchange_client.get_position_snapshot(symbol)
+                    
+                    if position_snapshot and hasattr(position_snapshot, 'quantity'):
+                        position_qty = coerce_decimal(position_snapshot.quantity) or Decimal("0")
+                        position_size = abs(position_qty)
+                        
+                        if position_size <= Decimal("0.0001"):
+                            self.logger.info(
+                                f"✅ [{exchange_client.get_exchange_name()}] {symbol}: No open position "
+                                f"(already closed or never opened)"
                             )
+                            continue
+                        
+                        # Positive quantity = long, negative = short
+                        is_long = position_qty > Decimal("0")
+                        close_side = "sell" if is_long else "buy"
                     else:
-                        if fallback_quantity is not None and fallback_quantity > Decimal("0"):
-                            self.logger.warning(
-                                f"⚠️ Exchange reported 0 filled size for {symbol} after cancel; "
-                                f"falling back to cached filled quantity {fallback_quantity}"
-                            )
-                            actual_quantity = fallback_quantity
+                        # Fallback: Query absolute position size if snapshot unavailable
+                        try:
+                            # Try with contract_id parameter first
+                            position_size = await exchange_client.get_account_positions(contract_id)
+                        except TypeError:
+                            # Fallback to no-arg version if contract_id not supported
+                            position_size = await exchange_client.get_account_positions()
+                        
+                        if position_size is None:
+                            position_size = Decimal("0")
                         else:
-                            self.logger.warning(
-                                f"⚠️ No filled quantity reported for {symbol} ({order_id}); nothing to close"
+                            position_size = coerce_decimal(position_size) or Decimal("0")
+                        
+                        if position_size <= Decimal("0.0001"):
+                            self.logger.info(
+                                f"✅ [{exchange_client.get_exchange_name()}] {symbol}: No open position "
+                                f"(already closed or never opened)"
                             )
-            if actual_quantity is None:
-                if fallback_quantity is not None and fallback_quantity > Decimal("0"):
-                    actual_quantity = fallback_quantity
-                else:
-                    self.logger.warning(
-                        f"⚠️ Skipping rollback close for {symbol}: unable to determine filled quantity"
+                            continue
+                        
+                        # Without snapshot, we can't determine direction - assume long
+                        self.logger.warning(
+                            f"⚠️ [{exchange_client.get_exchange_name()}] Could not get position snapshot "
+                            f"for {symbol}, assuming long position"
+                        )
+                        close_side = "sell"
+                    
+                    actual_fills.append(
+                        {
+                            "exchange_client": exchange_client,
+                            "symbol": symbol,
+                            "side": close_side,  # Side to close (opposite of position)
+                            "filled_quantity": position_size,  # Actual position size
+                            "fill_price": Decimal("0"),  # Price not relevant for close rollback
+                        }
                     )
-                    continue
+                    self.logger.info(
+                        f"📊 [{exchange_client.get_exchange_name()}] {symbol}: Found open position "
+                        f"{position_size} tokens, will close via {close_side}"
+                    )
+                except Exception as exc:
+                    self.logger.error(
+                        f"❌ [{exchange_client.get_exchange_name()}] Failed to query position for "
+                        f"{symbol}: {exc}"
+                    )
+                    # Fallback to original logic if position query fails
+                    fallback_quantity = coerce_decimal(order.get("filled_quantity"))
+                    if fallback_quantity and fallback_quantity > Decimal("0"):
+                        self.logger.warning(
+                            f"⚠️ Falling back to filled quantity {fallback_quantity} for {symbol}"
+                        )
+                        original_side = order.get("side")
+                        # For close operations, reverse the side to undo the close
+                        close_side = "sell" if original_side == "buy" else "buy"
+                        actual_fills.append(
+                            {
+                                "exchange_client": exchange_client,
+                                "symbol": symbol,
+                                "side": close_side,
+                                "filled_quantity": fallback_quantity,
+                                "fill_price": coerce_decimal(order.get("fill_price")) or Decimal("0"),
+                            }
+                        )
+        else:
+            # For open operations: Use original logic (undo the open orders)
+            self.logger.info("Step 2/3: Querying actual filled amounts...")
+            actual_fills = []
+            for order in filled_orders:
+                exchange_client = order["exchange_client"]
+                symbol = order["symbol"]
+                side = order["side"]
+                order_id = order.get("order_id")
+                fallback_quantity = coerce_decimal(order.get("filled_quantity"))
+                fallback_price = coerce_decimal(order.get("fill_price")) or Decimal("0")
 
-            actual_fills.append(
-                {
-                    "exchange_client": exchange_client,
-                    "symbol": symbol,
-                    "side": side,
-                    "filled_quantity": actual_quantity,
-                    "fill_price": fallback_price,
-                }
-            )
+                self.logger.debug(
+                    f"Rollback order info: {symbol} ({side}), "
+                    f"order_id={order_id}, "
+                    f"payload_quantity={fallback_quantity}"
+                )
+
+                actual_quantity: Optional[Decimal] = None
+
+                if order_id:
+                    try:
+                        order_info = await exchange_client.get_order_info(order_id)
+                    except Exception as exc:
+                        self.logger.error(f"Failed to get actual fill for {order_id}: {exc}")
+                        order_info = None
+
+                    if order_info is not None:
+                        reported_qty = coerce_decimal(getattr(order_info, "filled_size", None))
+
+                        if reported_qty is not None and reported_qty > Decimal("0"):
+                            actual_quantity = reported_qty
+
+                            if (
+                                fallback_quantity is not None
+                                and abs(reported_qty - fallback_quantity) > Decimal("0.0001")
+                            ):
+                                self.logger.warning(
+                                    f"⚠️ Fill amount changed for {symbol}: "
+                                    f"{fallback_quantity} → {reported_qty} "
+                                    f"(Δ={reported_qty - fallback_quantity})"
+                                )
+                        else:
+                            if fallback_quantity is not None and fallback_quantity > Decimal("0"):
+                                self.logger.warning(
+                                    f"⚠️ Exchange reported 0 filled size for {symbol} after cancel; "
+                                    f"falling back to cached filled quantity {fallback_quantity}"
+                                )
+                                actual_quantity = fallback_quantity
+                            else:
+                                self.logger.warning(
+                                    f"⚠️ No filled quantity reported for {symbol} ({order_id}); nothing to close"
+                                )
+                if actual_quantity is None:
+                    if fallback_quantity is not None and fallback_quantity > Decimal("0"):
+                        actual_quantity = fallback_quantity
+                    else:
+                        self.logger.warning(
+                            f"⚠️ Skipping rollback close for {symbol}: unable to determine filled quantity"
+                        )
+                        continue
+
+                actual_fills.append(
+                    {
+                        "exchange_client": exchange_client,
+                        "symbol": symbol,
+                        "side": side,
+                        "filled_quantity": actual_quantity,
+                        "fill_price": fallback_price,
+                    }
+                )
 
         self.logger.info(f"Step 3/3: Closing {len(actual_fills)} filled positions...")
         rollback_tasks = []
@@ -1462,10 +1646,12 @@ class AtomicMultiOrderExecutor:
                     f"Rollback: Using contract_id='{contract_id}' for symbol '{fill['symbol']}'"
                 )
 
+                # Use reduce_only when rolling back close operations to prevent opening new positions
                 close_task = exchange_client.place_market_order(
                     contract_id=contract_id,
                     quantity=float(close_quantity),
                     side=close_side,
+                    reduce_only=is_close_operation,  # Critical: prevent opening new positions when rolling back closes
                 )
                 rollback_tasks.append((close_task, fill))
             except Exception as exc:

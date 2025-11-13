@@ -259,10 +259,21 @@ class PositionOpener:
         exposures = [exposure for exposure in (long_exposure, short_exposure) if exposure > Decimal("0")]
         effective_size = min(exposures) if exposures else adjusted_size
 
-        imbalance_usd = result.residual_imbalance_usd or abs(long_exposure - short_exposure)
-        if imbalance_usd > Decimal("0.01"):
+        # Note: result.residual_imbalance_usd is actually quantity imbalance (tokens), not USD
+        # This is for logging/monitoring only - actual imbalance check happens in executor using quantities
+        imbalance_tokens = result.residual_imbalance_usd or Decimal("0")
+        # Fallback: calculate USD exposure difference for logging (not used for imbalance check)
+        exposure_diff_usd = abs(long_exposure - short_exposure)
+        
+        if imbalance_tokens > Decimal("0.0001"):
             strategy.logger.warning(
-                f"⚠️ {symbol}: residual imbalance ${imbalance_usd:.5f} after execution"
+                f"⚠️ {symbol}: residual quantity imbalance {imbalance_tokens:.6f} tokens after execution "
+                f"(USD exposure diff: ${exposure_diff_usd:.2f} for reference)"
+            )
+        elif exposure_diff_usd > Decimal("0.01"):
+            # Log USD difference if quantity imbalance is zero but USD differs (price differences)
+            strategy.logger.debug(
+                f"ℹ️ {symbol}: USD exposure difference ${exposure_diff_usd:.2f} (quantity balanced, price differences only)"
             )
 
         entry_fees = strategy.fee_calculator.calculate_total_cost(
@@ -286,7 +297,7 @@ class PositionOpener:
             total_slippage=result.total_slippage_usd,
             long_exposure=long_exposure,
             short_exposure=short_exposure,
-            imbalance_usd=imbalance_usd,
+            imbalance_usd=imbalance_tokens,  # Note: Actually quantity imbalance (tokens), kept name for backward compat
             planned_quantity=plan.quantity,
             normalized_leverage=normalized_leverage,
         )
@@ -698,7 +709,9 @@ class PositionOpener:
                 },
                 "total_slippage_usd": total_slippage,
                 "planned_quantity": planned_quantity,
-                "residual_imbalance_usd": imbalance_usd,
+                # Note: residual_imbalance_usd field name kept for backward compatibility,
+                # but value is actually quantity imbalance (tokens), not USD
+                "residual_imbalance_usd": imbalance_usd,  # Actually tokens
                 "normalized_leverage": normalized_leverage,
                 "margin_used": float(margin_used) if margin_used else None,
             }
@@ -723,6 +736,8 @@ class PositionOpener:
         """Emit final log entry summarizing the persistence outcome."""
         logger = self._strategy.logger
 
+        # Note: imbalance_usd parameter is actually quantity imbalance (tokens), not USD
+        imbalance_tokens = imbalance_usd  # Rename for clarity in logging
         if merged and updated_size is not None and additional_size is not None:
             logger.info(
                 f"🔁 Position increased {symbol}: "
@@ -730,7 +745,7 @@ class PositionOpener:
                 f"Long @ ${long_fill['fill_price']}, "
                 f"Short @ ${short_fill['fill_price']}, "
                 f"Fees Δ ${entry_fees:.2f}, Slippage Δ ${total_slippage:.2f}, "
-                f"Imbalance ${imbalance_usd:.5f}"
+                f"Qty imbalance {imbalance_tokens:.6f} tokens"
             )
         else:
             logger.info(
@@ -740,7 +755,7 @@ class PositionOpener:
                 f"Size ${size_usd:.2f}, "
                 f"Slippage: ${total_slippage:.2f}, "
                 f"Fees: ${entry_fees:.2f}, "
-                f"Imbalance ${imbalance_usd:.5f}"
+                f"Qty imbalance {imbalance_tokens:.6f} tokens"
             )
 
     def _merge_existing_position(
