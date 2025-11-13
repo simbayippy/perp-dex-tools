@@ -134,7 +134,7 @@ def stream_logs(run_id: str, project_root: Path):
     stdout_pos = 0
     stderr_pos = 0
     
-    # Read initial content and set position to end
+    # Read initial content and set position to end (skip initial stderr to avoid spam)
     try:
         if stdout_log.exists():
             with open(stdout_log, 'r') as f:
@@ -149,14 +149,9 @@ def stream_logs(run_id: str, project_root: Path):
                         print(content)
                 stdout_pos = stdout_log.stat().st_size
         
+        # Skip initial stderr content - only stream new entries
         if stderr_log and stderr_log.exists():
-            with open(stderr_log, 'r') as f:
-                content = f.read()
-                if content.strip():
-                    print(f"\n📋 STDERR LOG:")
-                    print("-" * 80)
-                    print(content)
-                stderr_pos = stderr_log.stat().st_size
+            stderr_pos = stderr_log.stat().st_size  # Set position to end without printing
     except Exception as e:
         print(f"Error reading initial logs: {e}")
         return
