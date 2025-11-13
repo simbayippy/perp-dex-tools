@@ -2302,72 +2302,72 @@ class StrategyHandler(BaseHandler):
         Helper method to get log file information for a strategy run.
         Returns (log_file_path, run_id_full, run_id_short, config_name, strategy_type_display) or None if not found.
         """
-            is_admin = user.get("is_admin", False)
-            if is_admin:
-                verify_query = """
-                    SELECT id, supervisor_program_name, log_file_path, config_id
-                    FROM strategy_runs
-                    WHERE id = :run_id
-                """
-                row = await self.database.fetch_one(
-                    verify_query,
-                    {"run_id": run_id}
-                )
-            else:
-                verify_query = """
-                    SELECT id, supervisor_program_name, log_file_path, config_id
-                    FROM strategy_runs
-                    WHERE id = :run_id AND user_id = :user_id
-                """
-                row = await self.database.fetch_one(
-                    verify_query,
-                    {"run_id": run_id, "user_id": user["id"]}
-                )
-            
-            if not row:
-            return None
-            
-            run_id_full = str(row["id"])
-            run_id_short = run_id_full[:8]
-            
-            # Get config name for display
-            config_id = str(row["config_id"])
-            config_row = await self.database.fetch_one(
-                "SELECT config_name, strategy_type FROM strategy_configs WHERE id = :id",
-                {"id": config_id}
+        is_admin = user.get("is_admin", False)
+        if is_admin:
+            verify_query = """
+                SELECT id, supervisor_program_name, log_file_path, config_id
+                FROM strategy_runs
+                WHERE id = :run_id
+            """
+            row = await self.database.fetch_one(
+                verify_query,
+                {"run_id": run_id}
             )
-            if config_row:
-                config_name = config_row['config_name']
-                strategy_type = config_row['strategy_type']
-            else:
-                config_name = 'Unknown'
-                strategy_type = 'unknown'
-            
-            strategy_type_display = {
-                'funding_arbitrage': 'Funding Arbitrage',
-                'grid': 'Grid'
-            }.get(strategy_type, strategy_type.title())
-            
-            # Try to get log file from database first
-            try:
-                log_file = row["log_file_path"]
-            except (KeyError, TypeError):
-                log_file = None
-            
-            # If not in DB or file doesn't exist, try to find it by matching UUID prefix
-            if not log_file or not Path(log_file).exists():
-                logs_dir = self.process_manager.project_root / "logs"
-                if logs_dir.exists():
-                    # Find log file matching the UUID (full or partial)
-                    matching_logs = list(logs_dir.glob("strategy_*.out.log"))
-                    for log_path in matching_logs:
-                        # Extract UUID from filename: strategy_<uuid>.out.log
-                        log_uuid = log_path.stem.replace('strategy_', '').replace('.out', '')
-                        # Match by first 8 characters or full UUID
-                        if log_uuid.startswith(run_id_short) or run_id_full.startswith(log_uuid[:8]):
-                            log_file = str(log_path)
-                            break
-            
+        else:
+            verify_query = """
+                SELECT id, supervisor_program_name, log_file_path, config_id
+                FROM strategy_runs
+                WHERE id = :run_id AND user_id = :user_id
+            """
+            row = await self.database.fetch_one(
+                verify_query,
+                {"run_id": run_id, "user_id": user["id"]}
+            )
+        
+        if not row:
+            return None
+        
+        run_id_full = str(row["id"])
+        run_id_short = run_id_full[:8]
+        
+        # Get config name for display
+        config_id = str(row["config_id"])
+        config_row = await self.database.fetch_one(
+            "SELECT config_name, strategy_type FROM strategy_configs WHERE id = :id",
+            {"id": config_id}
+        )
+        if config_row:
+            config_name = config_row['config_name']
+            strategy_type = config_row['strategy_type']
+        else:
+            config_name = 'Unknown'
+            strategy_type = 'unknown'
+        
+        strategy_type_display = {
+            'funding_arbitrage': 'Funding Arbitrage',
+            'grid': 'Grid'
+        }.get(strategy_type, strategy_type.title())
+        
+        # Try to get log file from database first
+        try:
+            log_file = row["log_file_path"]
+        except (KeyError, TypeError):
+            log_file = None
+        
+        # If not in DB or file doesn't exist, try to find it by matching UUID prefix
+        if not log_file or not Path(log_file).exists():
+            logs_dir = self.process_manager.project_root / "logs"
+            if logs_dir.exists():
+                # Find log file matching the UUID (full or partial)
+                matching_logs = list(logs_dir.glob("strategy_*.out.log"))
+                for log_path in matching_logs:
+                    # Extract UUID from filename: strategy_<uuid>.out.log
+                    log_uuid = log_path.stem.replace('strategy_', '').replace('.out', '')
+                    # Match by first 8 characters or full UUID
+                    if log_uuid.startswith(run_id_short) or run_id_full.startswith(log_uuid[:8]):
+                        log_file = str(log_path)
+                        break
+        
         return (log_file, run_id_full, run_id_short, config_name, strategy_type_display)
     
     async def view_logs_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
