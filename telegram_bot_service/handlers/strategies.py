@@ -2535,7 +2535,7 @@ class StrategyHandler(BaseHandler):
             log_content = f"<pre><code>{log_content}</code></pre>"
             
             keyboard = [
-                [InlineKeyboardButton("📄 View Full Log File", callback_data=f"view_logs_full:{run_id}")],
+                [InlineKeyboardButton("🔄 Refresh", callback_data=f"view_logs_quick:{run_id}")],
                 [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
