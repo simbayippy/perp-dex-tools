@@ -399,11 +399,12 @@ class StrategyNotificationService:
             
             user_id = str(run_row["user_id"])
             
-            # Format message
+            # Format message - highlight the exchange that lacks margin
+            exchange_emoji = self._get_exchange_emoji(exchange_name)
             message = (
                 f"⚠️ <b>Insufficient Margin</b>\n\n"
+                f"🔴 <b>Exchange: {exchange_emoji} {exchange_name.upper()}</b>\n"
                 f"Symbol: <b>{symbol}</b>\n"
-                f"Exchange: {exchange_name.upper()}\n"
                 f"Available: ${available_balance:.2f}\n"
                 f"Required: ${required_margin:.2f}"
             )
@@ -411,7 +412,7 @@ class StrategyNotificationService:
             if leverage_info:
                 message += f"\nLeverage: {leverage_info}"
             
-            message += f"\n\nPlease top up margin on {exchange_name.upper()}"
+            message += f"\n\n💡 Please top up margin on <b>{exchange_name.upper()}</b> to continue trading"
             
             # Prepare details
             details: Dict[str, Any] = {

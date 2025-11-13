@@ -81,6 +81,10 @@ class AtomicMultiOrderExecutor:
         # Store normalized leverage per (exchange_name, symbol) for margin calculations
         # This ensures balance checks use the normalized leverage, not the symbol's max leverage
         self._normalized_leverage: Dict[Tuple[str, str], int] = {}
+        # Track margin error state per (exchange_name, symbol) to prevent notification spam
+        # Key: (exchange_name, symbol), Value: True if we've already notified about insufficient margin
+        # Resets to False when margin becomes sufficient again
+        self._margin_error_notified: Dict[Tuple[str, str], bool] = {}
 
     async def execute_atomically(
         self,
@@ -1306,6 +1310,15 @@ class AtomicMultiOrderExecutor:
                 )
                 if not exchange_client:
                     continue
+                
+                # Get orders for this specific exchange to determine symbol(s)
+                exchange_orders = [
+                    order for order in orders
+                    if order.exchange_client.get_exchange_name() == exchange_name
+                ]
+                # Get symbol from exchange orders (use first order's symbol)
+                # For funding arb, all orders for same exchange should have same symbol
+                symbol = exchange_orders[0].symbol if exchange_orders else "UNKNOWN"
 
                 try:
                     available_balance = await exchange_client.get_account_balance()
@@ -1330,16 +1343,42 @@ class AtomicMultiOrderExecutor:
                     )
                     self.logger.error(f"❌ {error_msg}")
                     
-                    # Attempt to send notification
-                    await self._send_insufficient_margin_notification(
-                        exchange_name=exchange_name,
-                        available_balance=available_balance,
-                        required_margin=required_margin,
-                        exchange_leverage_info=exchange_leverage_info.get(exchange_name, {}),
-                        orders=orders
-                    )
+                    # Check if we've already notified for this (exchange, symbol) combination
+                    error_key = (exchange_name.lower(), symbol)
+                    already_notified = self._margin_error_notified.get(error_key, False)
+                    
+                    # Only send notification if we haven't notified for this error yet
+                    if not already_notified:
+                        # Attempt to send notification
+                        await self._send_insufficient_margin_notification(
+                            exchange_name=exchange_name,
+                            available_balance=available_balance,
+                            required_margin=required_margin,
+                            exchange_leverage_info=exchange_leverage_info.get(exchange_name, {}),
+                            orders=exchange_orders  # Pass only orders for this exchange
+                        )
+                        # Mark as notified
+                        self._margin_error_notified[error_key] = True
+                        self.logger.info(
+                            f"📢 Sent insufficient margin notification for {exchange_name.upper()}/{symbol}"
+                        )
+                    else:
+                        self.logger.debug(
+                            f"⏭️ Skipping notification for {exchange_name.upper()}/{symbol} "
+                            f"(already notified, margin still insufficient)"
+                        )
                     
                     return False, error_msg
+                else:
+                    # Margin is sufficient - reset notification state for this (exchange, symbol)
+                    error_key = (exchange_name.lower(), symbol)
+                    if self._margin_error_notified.get(error_key, False):
+                        # Margin was insufficient before, but now it's sufficient - reset state
+                        del self._margin_error_notified[error_key]
+                        self.logger.info(
+                            f"✅ Margin sufficient for {exchange_name.upper()}/{symbol} - "
+                            f"notification state reset"
+                        )
 
                 self.logger.info(
                     f"✅ {exchange_name} balance OK: ${available_balance:.2f} >= ${required_with_buffer:.2f}"
