@@ -2626,30 +2626,30 @@ class StrategyHandler(BaseHandler):
                 parse_mode='HTML'
             )
             
-                # Send log file as document
-                with open(log_file, 'rb') as f:
-                    await query.message.reply_document(
-                        document=f,
-                        filename=f"strategy_{run_id_short}_{strategy_type_display.lower().replace(' ', '_')}.log",
-                        parse_mode='HTML'
-                    )
-                
-                # Update the message to show success
+            # Send log file as document
+            with open(log_file, 'rb') as f:
+                await query.message.reply_document(
+                    document=f,
+                    filename=f"strategy_{run_id_short}_{strategy_type_display.lower().replace(' ', '_')}.log",
+                    parse_mode='HTML'
+                )
+            
+            # Update the message to show success
             keyboard = [
                 [InlineKeyboardButton("⚡ Quick View (Last 15)", callback_data=f"view_logs_quick:{run_id}")],
                 [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-                await query.edit_message_text(
-                    f"✅ <b>Log file sent!</b>\n\n"
-                    f"Strategy: {strategy_type_display}\n"
-                    f"Config: {config_name}\n"
-                    f"Run ID: <code>{run_id_short}</code>\n\n"
-                    f"📄 Check the document below.",
+            await query.edit_message_text(
+                f"✅ <b>Log file sent!</b>\n\n"
+                f"Strategy: {strategy_type_display}\n"
+                f"Config: {config_name}\n"
+                f"Run ID: <code>{run_id_short}</code>\n\n"
+                f"📄 Check the document below.",
                 parse_mode='HTML',
                 reply_markup=reply_markup
-                )
+            )
                 
         except Exception as e:
             self.logger.error(f"View logs full error: {e}", exc_info=True)
