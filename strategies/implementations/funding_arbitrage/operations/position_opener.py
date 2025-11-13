@@ -98,27 +98,71 @@ class PositionOpener:
             
             # Send Telegram notification
             try:
-                # Use entry prices from position metadata (these are the actual entry prices stored)
-                # This ensures we show the same prices that are stored in DB and used by position_monitor
-                position_legs = execution.position.metadata.get("legs", {})
-                long_leg = position_legs.get(execution.position.long_dex, {})
-                short_leg = position_legs.get(execution.position.short_dex, {})
+                # ⭐ Follow same pattern as position_monitor: fetch → update metadata → read from metadata
+                # This ensures consistency - we use the same source (exchange snapshot) and storage pattern
+                symbol = execution.position.symbol
+                long_dex = execution.position.long_dex
+                short_dex = execution.position.short_dex
+                
+                long_client = self._strategy.exchange_clients.get(long_dex)
+                short_client = self._strategy.exchange_clients.get(short_dex)
+                
+                # Step 1: Fetch position snapshots from exchanges (same as position_monitor._fetch_exchange_position_snapshots)
+                long_snapshot = None
+                short_snapshot = None
+                
+                if long_client:
+                    try:
+                        long_snapshot = await long_client.get_position_snapshot(symbol)
+                    except Exception as exc:
+                        self._strategy.logger.debug(f"Could not fetch {long_dex} snapshot for notification: {exc}")
+                
+                if short_client:
+                    try:
+                        short_snapshot = await short_client.get_position_snapshot(symbol)
+                    except Exception as exc:
+                        self._strategy.logger.debug(f"Could not fetch {short_dex} snapshot for notification: {exc}")
+                
+                # Step 2: Update position metadata with snapshot data (same as position_monitor._refresh_position_leg_metrics)
+                position_legs = execution.position.metadata.setdefault("legs", {})
+                
+                if long_snapshot:
+                    long_leg = position_legs.setdefault(long_dex, {})
+                    if long_snapshot.entry_price is not None:
+                        long_leg["entry_price"] = long_snapshot.entry_price
+                    if long_snapshot.quantity is not None:
+                        long_leg["quantity"] = long_snapshot.quantity.copy_abs()
+                    if long_snapshot.exposure_usd is not None:
+                        long_leg["exposure_usd"] = long_snapshot.exposure_usd.copy_abs()
+                
+                if short_snapshot:
+                    short_leg = position_legs.setdefault(short_dex, {})
+                    if short_snapshot.entry_price is not None:
+                        short_leg["entry_price"] = short_snapshot.entry_price
+                    if short_snapshot.quantity is not None:
+                        short_leg["quantity"] = short_snapshot.quantity.copy_abs()
+                    if short_snapshot.exposure_usd is not None:
+                        short_leg["exposure_usd"] = short_snapshot.exposure_usd.copy_abs()
+                
+                # Step 3: Read from metadata (same as position_monitor._log_exchange_metrics)
+                long_leg = position_legs.get(long_dex, {})
+                short_leg = position_legs.get(short_dex, {})
                 
                 long_entry_price = long_leg.get("entry_price")
                 short_entry_price = short_leg.get("entry_price")
-                long_exposure = long_leg.get("exposure_usd")
-                short_exposure = short_leg.get("exposure_usd")
                 long_quantity = long_leg.get("quantity")
                 short_quantity = short_leg.get("quantity")
+                long_exposure = long_leg.get("exposure_usd")
+                short_exposure = short_leg.get("exposure_usd")
                 
                 # Get leverage and margin from position metadata
                 normalized_leverage = execution.position.metadata.get("normalized_leverage")
                 margin_used = execution.position.metadata.get("margin_used")
                 
                 await self._strategy.notification_service.notify_position_opened(
-                    symbol=execution.position.symbol,
-                    long_dex=execution.position.long_dex,
-                    short_dex=execution.position.short_dex,
+                    symbol=symbol,
+                    long_dex=long_dex,
+                    short_dex=short_dex,
                     size_usd=execution.position.size_usd,
                     entry_divergence=execution.position.entry_divergence,
                     long_price=Decimal(str(long_entry_price)) if long_entry_price else None,
