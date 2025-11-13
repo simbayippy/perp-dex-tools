@@ -12,7 +12,7 @@ import asyncio
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from helpers.unified_logger import get_core_logger, log_stage
 
@@ -78,6 +78,9 @@ class AtomicMultiOrderExecutor:
         self._post_trade_base_tolerance = Decimal("0.0001")  # residual quantity tolerance
         self.account_name = account_name
         self.notification_service = notification_service
+        # Store normalized leverage per (exchange_name, symbol) for margin calculations
+        # This ensures balance checks use the normalized leverage, not the symbol's max leverage
+        self._normalized_leverage: Dict[Tuple[str, str], int] = {}
 
     async def execute_atomically(
         self,
@@ -490,7 +493,11 @@ class AtomicMultiOrderExecutor:
         self, order_spec: OrderSpec, leverage_info_cache: Optional[Dict[tuple, Any]] = None
     ) -> Decimal:
         """
-        Estimate required margin based on actual leverage info for the symbol/exchange.
+        Estimate required margin based on normalized leverage (if set) or leverage info for the symbol/exchange.
+        
+        ⭐ CRITICAL: Uses normalized leverage if available (from normalize_and_set_leverage),
+        otherwise falls back to querying get_leverage_info. This ensures balance checks
+        use the correct leverage (e.g., 5x normalized) instead of the symbol's max leverage (e.g., 20x).
         
         Args:
             order_spec: Order specification with exchange_client, symbol, and size_usd
@@ -505,7 +512,17 @@ class AtomicMultiOrderExecutor:
         symbol = order_spec.symbol
         cache_key = (exchange_name, symbol)
         
-        # Try to get leverage info from cache or fetch it
+        # ⭐ PRIORITY 1: Use normalized leverage if available (set during normalize_and_set_leverage)
+        if cache_key in self._normalized_leverage:
+            normalized_leverage = Decimal(str(self._normalized_leverage[cache_key]))
+            estimated_margin = order_spec.size_usd / normalized_leverage
+            self.logger.debug(
+                f"📊 [{exchange_name}] Margin for {symbol}: ${estimated_margin:.2f} "
+                f"(${order_spec.size_usd:.2f} / {normalized_leverage}x normalized leverage)"
+            )
+            return estimated_margin
+        
+        # ⭐ PRIORITY 2: Try to get leverage info from cache or fetch it
         leverage_info = None
         if leverage_info_cache and cache_key in leverage_info_cache:
             leverage_info = leverage_info_cache[cache_key]
@@ -1245,6 +1262,11 @@ class AtomicMultiOrderExecutor:
                             f"✅ [LEVERAGE] {symbol} normalized to {min_leverage}x "
                             f"(limited by {limiting})"
                         )
+                        # Store normalized leverage for each exchange to use in margin calculations
+                        for order in symbol_orders:
+                            exchange_name = order.exchange_client.get_exchange_name()
+                            cache_key = (exchange_name, symbol)
+                            self._normalized_leverage[cache_key] = min_leverage
                     else:
                         self.logger.warning(
                             f"⚠️  [LEVERAGE] Could not normalize leverage for {symbol}. "
