@@ -402,17 +402,16 @@ class TradingBot:
             host = os.getenv("CONTROL_API_HOST", "127.0.0.1")
             port = int(os.getenv("CONTROL_API_PORT", "8766"))
             
-            # Check if port is already in use (e.g., standalone control API is running)
+            # Check if port is already in use (only warn, don't skip)
+            # We'll let uvicorn handle the actual binding error if port is truly in use
             if self._is_port_in_use(host, port):
                 self.logger.warning(
-                    f"⚠️  Control API port {host}:{port} is already in use. "
-                    f"This likely means the standalone control API server (start_control_api.py) is running. "
-                    f"Skipping embedded control server startup. "
-                    f"The standalone server will continue to work in read-only mode."
+                    f"⚠️  Control API port {host}:{port} appears to be in use. "
+                    f"Attempting to start embedded server anyway - uvicorn will handle binding errors. "
+                    f"If port {port} == 8766, the standalone control API server may be running."
                 )
-                return
-            
-            self.logger.info(f"Starting control API server on {host}:{port}")
+            else:
+                self.logger.info(f"Starting control API server on {host}:{port}")
             
             # Run uvicorn in background task
             # IMPORTANT: uvicorn.Server installs its own signal handlers which override ours
@@ -433,7 +432,23 @@ class TradingBot:
             # Start server in background task
             # IMPORTANT: uvicorn.Server.serve() installs its own signal handlers which override ours
             # We need to re-register our signal handlers after uvicorn starts
-            self._control_server_task = asyncio.create_task(server.serve())
+            async def _run_server_with_error_handling():
+                """Run uvicorn server with error handling."""
+                try:
+                    await server.serve()
+                except OSError as e:
+                    if "address already in use" in str(e).lower() or e.errno == 98:
+                        self.logger.error(
+                            f"❌ Failed to start embedded control API server: "
+                            f"Port {host}:{port} is already in use. "
+                            f"Hot-reload and position closing via API will not be available for this strategy."
+                        )
+                    else:
+                        self.logger.error(f"❌ Failed to start embedded control API server: {e}")
+                except Exception as e:
+                    self.logger.error(f"❌ Unexpected error starting embedded control API server: {e}")
+            
+            self._control_server_task = asyncio.create_task(_run_server_with_error_handling())
             
             # Wait a moment for uvicorn to initialize, then re-register signal handlers
             # This ensures our signal handlers take precedence over uvicorn's

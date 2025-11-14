@@ -111,6 +111,22 @@ class ControlAPIClient:
             response.raise_for_status()
             return response.json()
     
+    async def health_check(self) -> bool:
+        """
+        Check if the control API server is running and accessible.
+        
+        Returns:
+            True if server is accessible, False otherwise
+        """
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                # Health endpoint doesn't require auth
+                response = await client.get(f"{self.base_url}/health")
+                response.raise_for_status()
+                return True
+        except Exception:
+            return False
+    
     async def reload_config(self) -> Dict[str, Any]:
         """
         Reload strategy configuration from the config file.

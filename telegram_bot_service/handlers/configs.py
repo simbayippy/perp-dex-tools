@@ -1699,10 +1699,25 @@ class ConfigHandler(BaseHandler):
                 # Create client with strategy-specific port
                 port = strategy_dict['control_api_port']
                 strategy_url = f"http://127.0.0.1:{port}"
-                self.logger.info(f"Attempting hot-reload for strategy {run_id[:8]} via {strategy_url}")
                 strategy_client = ControlAPIClient(strategy_url, api_key)
                 
+                # Check if embedded server is actually running before attempting hot-reload
+                self.logger.info(f"Checking if embedded control API is running for strategy {run_id[:8]} on port {port}")
+                is_running = await strategy_client.health_check()
+                
+                if not is_running:
+                    self.logger.warning(
+                        f"⚠️  Embedded control API server not running for strategy {run_id[:8]} "
+                        f"(port {port}). Hot-reload requires the embedded server to be running. "
+                        f"This may happen if the embedded server failed to start or the strategy "
+                        f"was started without CONTROL_API_ENABLED=true. "
+                        f"Config changes will take effect after strategy restart."
+                    )
+                    reload_results[run_id] = False
+                    continue
+                
                 # Attempt reload
+                self.logger.info(f"Attempting hot-reload for strategy {run_id[:8]} via {strategy_url}")
                 result = await strategy_client.reload_config()
                 if result.get('success'):
                     self.logger.info(f"✅ Hot-reloaded config for strategy {run_id[:8]}")
