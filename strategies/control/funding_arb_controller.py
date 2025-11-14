@@ -638,8 +638,8 @@ class FundingArbStrategyController(BaseStrategyController):
                     })
                     continue
                 
-                # Create a minimal config object for balance queries
-                # Exchange clients expect config object with attributes (not plain dict)
+                # Try to reuse strategy's exchange clients if available (avoids duplicate WebSocket connections)
+                # Otherwise create temporary clients
                 from types import SimpleNamespace
                 
                 # Fetch balances from each exchange
@@ -654,27 +654,48 @@ class FundingArbStrategyController(BaseStrategyController):
                     }
                     
                     try:
-                        # Get credentials for this exchange
-                        exchange_creds = credentials.get(exchange_name)
-                        if not exchange_creds:
-                            balance_result["error"] = "No credentials found"
-                            balances.append(balance_result)
-                            continue
+                        # Try to reuse strategy's exchange client if available (same account/exchange)
+                        client = None
+                        should_disconnect = False
                         
-                        # Create config object with attributes (exchange clients access config.ticker)
-                        exchange_config = SimpleNamespace(
-                            ticker="BTC",  # Dummy ticker - not used for balance queries
-                            exchange=exchange_name
-                        )
+                        if self.strategy and hasattr(self.strategy, 'exchange_clients'):
+                            strategy_clients = self.strategy.exchange_clients
+                            if strategy_clients and exchange_name.lower() in strategy_clients:
+                                # Check if strategy is using the same account
+                                strategy_account = getattr(self.strategy.config, '_account_name', None)
+                                if strategy_account == account_name_val:
+                                    # Reuse existing client (already connected, no need to disconnect)
+                                    client = strategy_clients[exchange_name.lower()]
                         
-                        client = ExchangeFactory.create_exchange(
-                            exchange_name=exchange_name,
-                            config=exchange_config,
-                            credentials=exchange_creds
-                        )
-                        
-                        # Connect to exchange
-                        await client.connect()
+                        # If no reusable client, create a new temporary one
+                        if client is None:
+                            # Get credentials for this exchange
+                            exchange_creds = credentials.get(exchange_name)
+                            if not exchange_creds:
+                                balance_result["error"] = "No credentials found"
+                                balances.append(balance_result)
+                                continue
+                            
+                            # Create config object with attributes (exchange clients access config.ticker, config.contract_id, etc.)
+                            exchange_config = SimpleNamespace(
+                                ticker="BTC",  # Dummy ticker - not used for balance queries
+                                exchange=exchange_name,
+                                contract_id="BTC",  # Dummy contract_id - required by some exchanges during connect()
+                                market_index=None,  # Will be set by connect() if needed
+                                account_index=None,  # Will be set by connect() if needed
+                                lighter_client=None,  # Will be set by connect() if needed
+                                api_client=None,  # Will be set by connect() if needed
+                            )
+                            
+                            client = ExchangeFactory.create_exchange(
+                                exchange_name=exchange_name,
+                                config=exchange_config,
+                                credentials=exchange_creds
+                            )
+                            
+                            # Connect to exchange (only for new clients)
+                            await client.connect()
+                            should_disconnect = True
                         
                         try:
                             # Query balance
@@ -685,11 +706,12 @@ class FundingArbStrategyController(BaseStrategyController):
                             else:
                                 balance_result["error"] = "Balance not available"
                         finally:
-                            # Always disconnect
-                            try:
-                                await client.disconnect()
-                            except Exception:
-                                pass  # Ignore disconnect errors
+                            # Only disconnect if we created a new client
+                            if should_disconnect:
+                                try:
+                                    await client.disconnect()
+                                except Exception:
+                                    pass  # Ignore disconnect errors
                         
                     except Exception as e:
                         # Handle errors gracefully - continue with other exchanges
