@@ -606,71 +606,79 @@ stdout_logfile={stdout_log}
             logger.info(f"Allocated new port {port} for strategy {run_id} (old port {old_port} unavailable)")
             port_changed = True
         
-        # Update Supervisor config if port changed
-        if port_changed:
-            config_file_path = self.supervisor_conf_dir / f"{supervisor_program_name}.conf"
+        # Always update Supervisor config to ensure --control-api-port is present
+        # (even if port didn't change, the config might be missing the argument)
+        config_file_path = self.supervisor_conf_dir / f"{supervisor_program_name}.conf"
+        
+        # Check if config file exists
+        try:
+            check_result = subprocess.run(
+                ["sudo", "test", "-f", str(config_file_path)],
+                capture_output=True
+            )
+            if check_result.returncode != 0:
+                logger.error(f"Supervisor config file not found: {config_file_path}")
+                return False
             
-            # Check if config file exists
-            try:
-                check_result = subprocess.run(
-                    ["sudo", "test", "-f", str(config_file_path)],
-                    capture_output=True
-                )
-                if check_result.returncode != 0:
-                    logger.error(f"Supervisor config file not found: {config_file_path}")
-                    return False
-                
-                # Read current config
-                read_result = subprocess.run(
-                    ["sudo", "cat", str(config_file_path)],
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
-                config_content = read_result.stdout
-                
-                # Update port in command line
-                import re
-                # Replace old port with new port in command line
-                # Pattern: --control-api-port <old_port>
-                old_port_pattern = rf"--control-api-port\s+{old_port}\b"
-                new_port_str = f"--control-api-port {port}"
-                
-                if re.search(old_port_pattern, config_content):
-                    updated_config = re.sub(old_port_pattern, new_port_str, config_content)
-                    logger.info(f"Updated port in Supervisor config: {old_port} -> {port}")
-                else:
-                    # Port might not be in config (shouldn't happen, but handle gracefully)
-                    logger.warning(f"Could not find port {old_port} in config, appending new port")
-                    # Try to find command line and append port
-                    if "--control-api-port" not in config_content:
-                        # Add port to command line
+            # Read current config
+            read_result = subprocess.run(
+                ["sudo", "cat", str(config_file_path)],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            config_content = read_result.stdout
+            
+            # Update port in command line
+            import re
+            # Replace old port with new port in command line, or add if missing
+            # Pattern: --control-api-port <old_port>
+            old_port_pattern = rf"--control-api-port\s+\d+"
+            new_port_str = f"--control-api-port {port}"
+            
+            if re.search(old_port_pattern, config_content):
+                updated_config = re.sub(old_port_pattern, new_port_str, config_content)
+                logger.info(f"Updated port in Supervisor config to {port}")
+            else:
+                # Port argument not in config - add it
+                logger.info(f"Adding --control-api-port {port} to Supervisor config")
+                # Find the command= line and add port argument
+                if "--control-api-port" not in config_content:
+                    # Add port to command line (before --enable-proxy if present, or at end)
+                    if "--enable-proxy" in config_content:
                         updated_config = config_content.replace(
-                            "command=",
-                            f"command={new_port_str} "
+                            "--enable-proxy",
+                            f"{new_port_str} --enable-proxy"
                         )
                     else:
-                        updated_config = config_content
-                
-                # Write updated config
-                subprocess.run(
-                    ["sudo", "tee", str(config_file_path)],
-                    input=updated_config.encode(),
-                    check=True,
-                    capture_output=True
-                )
-                logger.info(f"Updated Supervisor config file: {config_file_path}")
-                
-                # Reload Supervisor config
-                supervisor.supervisor.reloadConfig()
-                logger.info("Reloaded Supervisor configuration")
-                
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to update Supervisor config: {e}")
-                return False
-            except Exception as e:
-                logger.error(f"Error updating Supervisor config: {e}")
-                return False
+                        # Append to command line
+                        updated_config = config_content.replace(
+                            f"--account {account_name}",
+                            f"--account {account_name} {new_port_str}"
+                        )
+                else:
+                    updated_config = config_content
+            
+            # Write updated config
+            subprocess.run(
+                ["sudo", "tee", str(config_file_path)],
+                input=updated_config.encode(),
+                check=True,
+                capture_output=True
+            )
+            logger.info(f"Updated Supervisor config file: {config_file_path}")
+            
+            # Reload Supervisor config
+            supervisor = self._get_supervisor_client()
+            supervisor.supervisor.reloadConfig()
+            logger.info("Reloaded Supervisor configuration")
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to update Supervisor config: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Error updating Supervisor config: {e}")
+            return False
         
         # Start process via Supervisor
         try:

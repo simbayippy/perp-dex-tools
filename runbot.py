@@ -376,6 +376,7 @@ async def main():
         os.environ["CONTROL_API_PORT"] = str(args.control_api_port)
         os.environ["CONTROL_API_HOST"] = args.control_api_host
         print(f"✓ Control API enabled: http://{args.control_api_host}:{args.control_api_port}")
+        print(f"✓ CONTROL_API_PORT environment variable set to: {os.environ.get('CONTROL_API_PORT')}")
         print("")
 
     # Convert to TradingConfig

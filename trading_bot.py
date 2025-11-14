@@ -403,7 +403,10 @@ class TradingBot:
             
             # Get server config
             host = os.getenv("CONTROL_API_HOST", "127.0.0.1")
-            port = int(os.getenv("CONTROL_API_PORT", "8766"))
+            port_env = os.getenv("CONTROL_API_PORT", "8766")
+            port = int(port_env)
+            
+            self.logger.info(f"🔧 Embedded server config: host={host}, port={port} (from CONTROL_API_PORT={port_env})")
             
             # Check if port is already in use (only warn, don't skip)
             # We'll let uvicorn handle the actual binding error if port is truly in use
