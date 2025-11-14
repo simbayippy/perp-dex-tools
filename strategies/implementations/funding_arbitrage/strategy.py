@@ -146,11 +146,18 @@ class FundingArbitrageStrategy(BaseStrategy):
         from .utils.notification_service import StrategyNotificationService
         self.notification_service = StrategyNotificationService(account_name=account_name)
         
+        # ⭐ Leverage Validator (shared instance for caching across all operations)
+        # Create this BEFORE the executor so we can pass it to benefit from caching
+        from strategies.execution.core.leverage_validator import LeverageValidator
+        self.leverage_validator = LeverageValidator()
+        
         # ⭐ Execution Common layer (atomic delta-neutral execution)
+        # Pass shared leverage_validator to executor so it can use cached leverage info
         self.atomic_executor = AtomicMultiOrderExecutor(
             price_provider=self.price_provider,
             account_name=account_name,
-            notification_service=self.notification_service
+            notification_service=self.notification_service,
+            leverage_validator=self.leverage_validator  # ⭐ Share leverage validator for caching
         )
         self.liquidity_analyzer = LiquidityAnalyzer(
             max_slippage_pct=Decimal("0.005"),  # 0.5% max slippage
@@ -158,10 +165,6 @@ class FundingArbitrageStrategy(BaseStrategy):
             min_liquidity_score=0.6,
             price_provider=self.price_provider  # Share the price source
         )
-        
-        # ⭐ Leverage Validator (shared instance for caching across all operations)
-        from strategies.execution.core.leverage_validator import LeverageValidator
-        self.leverage_validator = LeverageValidator()
         
         # ⭐ Position and state management (database-backed)
         # Compose what we need directly - no factory methods

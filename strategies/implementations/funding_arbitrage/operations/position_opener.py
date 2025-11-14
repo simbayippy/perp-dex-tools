@@ -274,6 +274,16 @@ class PositionOpener:
             f"(long≈${plan.long_notional:.2f}, short≈${plan.short_notional:.2f})"
         )
 
+        # Store normalized leverage in executor for margin calculations
+        # When skip_preflight_leverage=True, executor won't normalize leverage itself,
+        # so we populate _normalized_leverage to ensure margin checks use normalized leverage
+        if normalized_leverage is not None:
+            executor = strategy.atomic_executor
+            long_exchange_name = long_client.get_exchange_name()
+            short_exchange_name = short_client.get_exchange_name()
+            executor._normalized_leverage[(long_exchange_name, symbol)] = normalized_leverage
+            executor._normalized_leverage[(short_exchange_name, symbol)] = normalized_leverage
+
         result: AtomicExecutionResult = await strategy.atomic_executor.execute_atomically(
             orders=plan.orders,
             rollback_on_partial=True,
