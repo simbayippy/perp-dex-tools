@@ -710,10 +710,38 @@ stdout_logfile={stdout_log}
                     actual_port = port_match.group(1)
                     logger.error(f"Found --control-api-port {actual_port} instead of {port}")
             
-            # Reload Supervisor config
+            # Reload Supervisor config and remove/re-add process group to ensure new config is used
             supervisor = self._get_supervisor_client()
+            
+            # Remove process group if it exists (this clears Supervisor's cache)
+            try:
+                supervisor.supervisor.removeProcessGroup(supervisor_program_name)
+                logger.info(f"Removed process group '{supervisor_program_name}' to clear Supervisor cache")
+            except xmlrpc.client.Fault as e:
+                fault_code = e.faultCode if hasattr(e, 'faultCode') else 'Unknown'
+                fault_msg = e.faultString if hasattr(e, 'faultString') else str(e)
+                # BAD_NAME or NOT_RUNNING is OK - process group doesn't exist yet
+                if fault_code != 70 and 'BAD_NAME' not in fault_msg and 'NOT_RUNNING' not in fault_msg:
+                    logger.warning(f"Could not remove process group (may not exist): {fault_msg}")
+            except Exception as e:
+                logger.warning(f"Error removing process group: {e}")
+            
+            # Reload Supervisor config to pick up the updated config file
             supervisor.supervisor.reloadConfig()
             logger.info("Reloaded Supervisor configuration")
+            
+            # Add the process group back (Supervisor will read the updated config file)
+            try:
+                supervisor.supervisor.addProcessGroup(supervisor_program_name)
+                logger.info(f"Added process group '{supervisor_program_name}' back with updated config")
+            except xmlrpc.client.Fault as e:
+                fault_code = e.faultCode if hasattr(e, 'faultCode') else 'Unknown'
+                fault_msg = e.faultString if hasattr(e, 'faultString') else str(e)
+                # ALREADY_ADDED is OK - process group already exists
+                if fault_code != 60 and 'ALREADY_ADDED' not in fault_msg:
+                    logger.warning(f"Could not add process group (may already exist): {fault_msg}")
+            except Exception as e:
+                logger.warning(f"Error adding process group: {e}")
             
         except subprocess.CalledProcessError as e:
             logger.error(f"Failed to update Supervisor config: {e}")
@@ -722,26 +750,42 @@ stdout_logfile={stdout_log}
             logger.error(f"Error updating Supervisor config: {e}")
             return False
         
-        # Verify Supervisor has the correct config before starting
+        # Verify Supervisor config file has the correct command before starting
         try:
-            # Get the actual command that Supervisor will use
-            process_info = supervisor.supervisor.getProcessInfo(supervisor_program_name)
-            supervisor_cmd = process_info.get('description', '')
-            logger.info(f"Supervisor will start process with command (from getProcessInfo): {supervisor_cmd[:200]}...")
+            # Read the actual config file to verify the command line
+            verify_result = subprocess.run(
+                ["sudo", "cat", str(config_file_path)],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            final_config = verify_result.stdout
             
-            # Check if the port is in the command
-            if f"--control-api-port {port}" in supervisor_cmd:
-                logger.info(f"✅ Verified Supervisor command contains --control-api-port {port}")
+            # Extract the command= line
+            import re
+            command_match = re.search(r'command=(.+)', final_config, re.MULTILINE)
+            if command_match:
+                command_line = command_match.group(1).strip()
+                logger.info(f"Supervisor command line: {command_line[:300]}...")
+                
+                # Check if the port is in the command
+                if f"--control-api-port {port}" in command_line:
+                    logger.info(f"✅ Verified Supervisor config file command contains --control-api-port {port}")
+                else:
+                    logger.warning(f"⚠️ Supervisor config command does not contain --control-api-port {port}")
+                    # Try to find what port is actually in the command
+                    port_match = re.search(rf"--control-api-port\s+(\d+)", command_line)
+                    if port_match:
+                        actual_port = port_match.group(1)
+                        logger.error(f"❌ Found --control-api-port {actual_port} in Supervisor command instead of {port}")
+                        logger.error(f"Config file may not have been updated correctly. Command: {command_line}")
+                    else:
+                        logger.error(f"❌ --control-api-port argument not found in Supervisor command at all!")
+                        logger.error(f"Command line: {command_line}")
             else:
-                logger.warning(f"⚠️ Supervisor command may not contain --control-api-port {port}")
-                # Try to find what port is actually in the command
-                import re
-                port_match = re.search(rf"--control-api-port\s+(\d+)", supervisor_cmd)
-                if port_match:
-                    actual_port = port_match.group(1)
-                    logger.warning(f"Found --control-api-port {actual_port} in Supervisor command instead of {port}")
+                logger.warning(f"Could not find command= line in Supervisor config file")
         except Exception as e:
-            logger.warning(f"Could not verify Supervisor command: {e}")
+            logger.warning(f"Could not verify Supervisor config file: {e}")
         
         # Start process via Supervisor
         try:
