@@ -354,6 +354,9 @@ class TelegramFormatter:
         if not accounts:
             return "💰 <b>No accounts found</b>"
         
+        # Define consistent exchange order (alphabetical)
+        EXCHANGE_ORDER = ['ASTER', 'BACKPACK', 'EDGEX', 'GRVT', 'LIGHTER', 'PARADEX']
+        
         messages = []
         for account in accounts:
             account_name = account.get('account_name', 'N/A')
@@ -369,11 +372,23 @@ class TelegramFormatter:
                 ""
             ]
             
+            # Sort balances by exchange name (consistent order)
+            def get_exchange_sort_key(balance_info: Dict[str, Any]) -> int:
+                """Get sort key for exchange ordering."""
+                exchange = balance_info.get('exchange', 'N/A').upper()
+                try:
+                    return EXCHANGE_ORDER.index(exchange)
+                except ValueError:
+                    # Exchange not in predefined list, put at end
+                    return len(EXCHANGE_ORDER) + ord(exchange[0]) if exchange else 999
+            
+            sorted_balances = sorted(balances, key=get_exchange_sort_key)
+            
             # Track totals
             total_balance = Decimal("0")
             successful_balances = 0
             
-            for balance_info in balances:
+            for balance_info in sorted_balances:
                 exchange = balance_info.get('exchange', 'N/A').upper()
                 balance_str = balance_info.get('balance')
                 error = balance_info.get('error')

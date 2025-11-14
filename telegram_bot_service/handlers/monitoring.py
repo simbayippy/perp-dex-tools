@@ -485,18 +485,28 @@ class MonitoringHandler(BaseHandler):
         # Optional account filter
         account_name = context.args[0] if context.args and len(context.args) > 0 else None
         
+        # Send initial loading message
+        loading_message = await update.message.reply_text(
+            "💰 <b>Fetching balances...</b>\n\n"
+            "This may take a few seconds as we connect to each exchange.",
+            parse_mode='HTML'
+        )
+        
         try:
             client = ControlAPIClient(self.config.control_api_base_url, api_key)
             data = await client.get_balances(account_name=account_name)
             
-            # Format and send balances
+            # Format balances
             message = self.formatter.format_balances(data)
             
             # Split if needed (TelegramFormatter handles this)
             messages = self.formatter._split_message(message) if len(message) > self.formatter.MAX_MESSAGE_LENGTH else [message]
             
-            # Send all messages
-            for msg in messages:
+            # Replace loading message with first result message
+            await loading_message.edit_text(messages[0], parse_mode='HTML')
+            
+            # Send remaining messages if any
+            for msg in messages[1:]:
                 await update.message.reply_text(msg, parse_mode='HTML')
                 
         except Exception as e:
@@ -511,7 +521,7 @@ class MonitoringHandler(BaseHandler):
             )
             
             if is_connection_error:
-                await update.message.reply_text(
+                await loading_message.edit_text(
                     "💰 <b>Control API Not Available</b>\n\n"
                     "Cannot connect to the control API server.\n\n"
                     "The control API server can run independently of strategies.\n"
@@ -520,7 +530,7 @@ class MonitoringHandler(BaseHandler):
                 )
             else:
                 # Real error - show it
-                await update.message.reply_text(
+                await loading_message.edit_text(
                     self.formatter.format_error(f"Failed to get balances: {str(e)}"),
                     parse_mode='HTML'
                 )
