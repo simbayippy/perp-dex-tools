@@ -638,12 +638,9 @@ class FundingArbStrategyController(BaseStrategyController):
                     })
                     continue
                 
-                # Create a minimal config for balance queries
-                # We don't need ticker/quantity for balance queries, but some exchanges require config
-                config = {
-                    "ticker": "BTC",  # Dummy ticker - not used for balance queries
-                    "exchange": None  # Will be set per exchange
-                }
+                # Create a minimal config object for balance queries
+                # Exchange clients expect config object with attributes (not plain dict)
+                from types import SimpleNamespace
                 
                 # Fetch balances from each exchange
                 balances = []
@@ -664,9 +661,11 @@ class FundingArbStrategyController(BaseStrategyController):
                             balances.append(balance_result)
                             continue
                         
-                        # Create exchange client
-                        exchange_config = config.copy()
-                        exchange_config["exchange"] = exchange_name
+                        # Create config object with attributes (exchange clients access config.ticker)
+                        exchange_config = SimpleNamespace(
+                            ticker="BTC",  # Dummy ticker - not used for balance queries
+                            exchange=exchange_name
+                        )
                         
                         client = ExchangeFactory.create_exchange(
                             exchange_name=exchange_name,
