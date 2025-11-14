@@ -1714,12 +1714,15 @@ class AtomicMultiOrderExecutor:
                     f"Rollback: Using contract_id='{contract_id}' for symbol '{fill['symbol']}'"
                 )
 
-                # Use reduce_only when rolling back close operations to prevent opening new positions
+                # ⭐ CRITICAL: Always use reduce_only=True for rollback orders
+                # This ensures we can ONLY close positions, never open new ones.
+                # For OPEN operations: We're closing a position that was accidentally opened
+                # For CLOSE operations: We're closing a position that was accidentally reopened
                 close_task = exchange_client.place_market_order(
                     contract_id=contract_id,
                     quantity=float(close_quantity),
                     side=close_side,
-                    reduce_only=is_close_operation,  # Critical: prevent opening new positions when rolling back closes
+                    reduce_only=True,  # Always True - rollback should only close, never open
                 )
                 rollback_tasks.append((close_task, fill))
             except Exception as exc:
@@ -1729,19 +1732,122 @@ class AtomicMultiOrderExecutor:
             rollback_results = await asyncio.gather(
                 *(task for task, _ in rollback_tasks), return_exceptions=True
             )
+            
+            # Wait a moment for fills to complete and be reported via WebSocket
+            await asyncio.sleep(1.0)
+            
             for (task, fill), result in zip(rollback_tasks, rollback_results):
                 if isinstance(result, Exception):
                     self.logger.warning(
                         f"Rollback market order failed for {fill['symbol']}: {result}"
                     )
+                    continue
+                
+                # Query actual fill price from order info if available
+                # The initial result.price may be None or a placeholder
+                actual_exit_price = None
+                order_id = getattr(result, "order_id", None)
+                
+                if order_id:
+                    try:
+                        # Try with force_refresh first (Paradex), fall back to no args if not supported
+                        try:
+                            order_info = await fill["exchange_client"].get_order_info(order_id, force_refresh=True)
+                        except TypeError:
+                            # Exchange doesn't support force_refresh parameter
+                            order_info = await fill["exchange_client"].get_order_info(order_id)
+                        
+                        if order_info and hasattr(order_info, "price") and order_info.price:
+                            actual_exit_price = coerce_decimal(order_info.price)
+                            self.logger.debug(
+                                f"📊 [{fill['exchange_client'].get_exchange_name()}] "
+                                f"Rollback order {order_id} actual fill price: ${actual_exit_price}"
+                            )
+                    except Exception as exc:
+                        self.logger.debug(
+                            f"Could not query order info for rollback cost calculation: {exc}"
+                        )
+                
+                # Use actual fill price if available, otherwise fall back to result.price or entry price
+                entry_price = fill["fill_price"] or Decimal("0")
+                if actual_exit_price is not None:
+                    exit_price = actual_exit_price
+                elif getattr(result, "price", None):
+                    exit_price = Decimal(str(result.price))
                 else:
-                    entry_price = fill["fill_price"] or Decimal("0")
-                    exit_price = Decimal(str(result.price)) if getattr(result, "price", None) else entry_price
-                    cost = abs(exit_price - entry_price) * fill["filled_quantity"]
-                    total_rollback_cost += cost
+                    exit_price = entry_price
                     self.logger.warning(
-                        f"Rollback cost for {fill['symbol']}: ${cost:.2f} "
-                        f"(entry: ${entry_price}, exit: ${exit_price})"
+                        f"⚠️ [{fill['exchange_client'].get_exchange_name()}] "
+                        f"Could not determine rollback exit price for {fill['symbol']}, "
+                        f"using entry price (cost may be inaccurate)"
+                    )
+                
+                cost = abs(exit_price - entry_price) * fill["filled_quantity"]
+                total_rollback_cost += cost
+                self.logger.warning(
+                    f"Rollback cost for {fill['symbol']}: ${cost:.2f} "
+                    f"(entry: ${entry_price}, exit: ${exit_price})"
+                )
+            
+            # Step 4: Verify positions are actually closed
+            self.logger.info("Step 4/4: Verifying positions are closed...")
+            for fill in actual_fills:
+                exchange_client = fill["exchange_client"]
+                symbol = fill["symbol"]
+                exchange_name = exchange_client.get_exchange_name()
+                
+                try:
+                    position_snapshot = await exchange_client.get_position_snapshot(symbol)
+                    if position_snapshot and hasattr(position_snapshot, 'quantity'):
+                        position_qty = coerce_decimal(position_snapshot.quantity) or Decimal("0")
+                        position_size = abs(position_qty)
+                        
+                        if position_size > Decimal("0.0001"):
+                            self.logger.error(
+                                f"❌ [{exchange_name}] Rollback FAILED: Position still open for {symbol}: "
+                                f"{position_qty} tokens (expected: 0)"
+                            )
+                            # Attempt emergency close with reduce_only
+                            try:
+                                close_side = "sell" if position_qty > 0 else "buy"
+                                exchange_config = getattr(exchange_client, "config", None)
+                                contract_id = getattr(exchange_config, "contract_id", symbol)
+                                
+                                self.logger.warning(
+                                    f"🔄 [{exchange_name}] Attempting emergency close of residual position: "
+                                    f"{close_side} {position_size} @ market (reduce_only=True)"
+                                )
+                                
+                                emergency_close = await exchange_client.place_market_order(
+                                    contract_id=contract_id,
+                                    quantity=float(position_size),
+                                    side=close_side,
+                                    reduce_only=True,
+                                )
+                                
+                                if isinstance(emergency_close, Exception) or not getattr(emergency_close, "success", False):
+                                    self.logger.error(
+                                        f"❌ [{exchange_name}] Emergency close failed: {emergency_close}"
+                                    )
+                                else:
+                                    self.logger.info(
+                                        f"✅ [{exchange_name}] Emergency close order placed: {emergency_close.order_id}"
+                                    )
+                            except Exception as exc:
+                                self.logger.error(
+                                    f"❌ [{exchange_name}] Failed to place emergency close order: {exc}"
+                                )
+                        else:
+                            self.logger.info(
+                                f"✅ [{exchange_name}] {symbol}: Position verified closed"
+                            )
+                    else:
+                        self.logger.debug(
+                            f"✅ [{exchange_name}] {symbol}: No position snapshot (likely closed)"
+                        )
+                except Exception as exc:
+                    self.logger.warning(
+                        f"⚠️ [{exchange_name}] Could not verify position closure for {symbol}: {exc}"
                     )
 
         self.logger.warning(
