@@ -52,6 +52,7 @@ class HedgeManager:
                 remaining_qty = hedge_target - ctx.filled_quantity
                 if remaining_qty < Decimal("0"):
                     remaining_qty = Decimal("0")
+                
                 logger.debug(
                     f"📊 [HEDGE] {exchange_name} {spec.symbol}: "
                     f"hedge_target={hedge_target}, filled={ctx.filled_quantity}, "
@@ -70,6 +71,21 @@ class HedgeManager:
             remaining_usd = ctx.remaining_usd
             
             if remaining_usd <= Decimal("0") and remaining_qty <= Decimal("0"):
+                # CRITICAL: Detect suspicious scenario where we're skipping hedge after a trigger fill
+                # This can happen if reconciliation incorrectly added a false fill for a canceled order
+                # If trigger filled but remaining_qty=0, something is wrong
+                trigger_filled = trigger_ctx.filled_quantity > Decimal("0")
+                if trigger_filled and ctx.hedge_target_quantity is not None:
+                    hedge_target = Decimal(str(ctx.hedge_target_quantity))
+                    if hedge_target > Decimal("0"):
+                        logger.warning(
+                            f"⚠️ [HEDGE] {exchange_name} {spec.symbol}: Skipping hedge (remaining_qty=0, remaining_usd=0) "
+                            f"but trigger {trigger_ctx.spec.exchange_client.get_exchange_name().upper()} "
+                            f"{trigger_ctx.spec.symbol} filled {trigger_ctx.filled_quantity} and hedge_target={hedge_target}. "
+                            f"ctx.filled_quantity={ctx.filled_quantity}. "
+                            f"This suggests reconciliation may have incorrectly added fills for a canceled order. "
+                            f"Check reconciliation logs for warnings."
+                        )
                 continue
 
             log_parts = []

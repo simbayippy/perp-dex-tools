@@ -105,25 +105,50 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
     # Check order status - if CANCELED with 0 fills, don't reconcile
     order_status = getattr(order_info, "status", "").upper()
     reported_qty = coerce_decimal(getattr(order_info, "filled_size", None))
+    remaining_size = coerce_decimal(getattr(order_info, "remaining_size", None)) or Decimal("0")
+    spec_qty = getattr(ctx.spec, "quantity", None)
+    spec_qty_dec = Decimal(str(spec_qty)) if spec_qty is not None else None
     
-    # Critical check: If order is CANCELED and we have no fills recorded, 
-    # and reported_qty matches the order size, this is likely a bug in the exchange client
-    # (it's calculating filled_size = size - remaining when remaining=0 for canceled orders)
-    # BUT: Allow reconciliation if remaining_size > 0 (partially filled before cancel)
-    if order_status == "CANCELED" and ctx.filled_quantity <= Decimal("0"):
-        remaining_size = coerce_decimal(getattr(order_info, "remaining_size", None)) or Decimal("0")
-        spec_qty = getattr(ctx.spec, "quantity", None)
-        if spec_qty is not None:
-            spec_qty_dec = Decimal(str(spec_qty))
-            # If reported_qty equals spec_qty AND remaining=0 for a canceled order with 0 fills, it's wrong
-            # (If remaining > 0, it was partially filled, so the calculation is correct)
-            if remaining_size <= Decimal("0") and reported_qty is not None and abs(reported_qty - spec_qty_dec) < Decimal("0.01"):
-                logger.warning(
-                    f"⚠️ Reconcile: Detected bug - CANCELED order {order_id} reports filled_size={reported_qty} "
-                    f"which matches spec.quantity={spec_qty_dec}, but websocket showed 0 fills and remaining=0. "
-                    f"This is likely an exchange client bug. Skipping reconciliation."
-                )
-                return
+    # CRITICAL: If order is CANCELED and remaining_size is 0 (nothing remaining),
+    # then filled_size should equal what was actually filled. If we have no fills recorded
+    # in context but REST API reports filled_size close to spec_qty, this is suspicious.
+    # This can happen when exchange clients incorrectly calculate filled_size = size - remaining
+    # for canceled orders with 0 fills (where remaining=0, so filled_size=size, but no actual fills occurred).
+    if order_status == "CANCELED":
+        # If remaining_size is 0 or very small (within 1% of spec_qty), the order had no remaining quantity
+        # If we have no fills recorded but REST reports fills, be very suspicious
+        if ctx.filled_quantity <= Decimal("0") and spec_qty_dec is not None:
+            # Calculate what percentage of spec_qty is remaining
+            remaining_pct = (remaining_size / spec_qty_dec * Decimal("100")) if spec_qty_dec > Decimal("0") else Decimal("100")
+            
+            # If remaining is very small (< 1% of spec) and reported_qty is close to spec_qty (> 90%),
+            # this is likely a bug where filled_size was incorrectly calculated
+            if remaining_pct < Decimal("1") and reported_qty is not None:
+                reported_pct = (reported_qty / spec_qty_dec * Decimal("100")) if spec_qty_dec > Decimal("0") else Decimal("0")
+                if reported_pct > Decimal("90"):
+                    logger.warning(
+                        f"⚠️ Reconcile: CANCELED order {order_id} reports filled_size={reported_qty} "
+                        f"({reported_pct:.2f}% of spec.quantity={spec_qty_dec}), but context shows 0 fills "
+                        f"and remaining_size={remaining_size} ({remaining_pct:.2f}% remaining). "
+                        f"This suggests the exchange client incorrectly calculated filled_size for a canceled order. "
+                        f"Skipping reconciliation to prevent false fills."
+                    )
+                    return
+        
+        # Additional check: If order is CANCELED and remaining_size is exactly 0 or very close to 0,
+        # and reported_qty is close to spec_qty but we have no fills, skip reconciliation
+        # This catches cases where the exact match check above might miss due to rounding
+        if remaining_size <= Decimal("0.0001") and ctx.filled_quantity <= Decimal("0"):
+            if spec_qty_dec is not None and reported_qty is not None:
+                # If reported_qty is within 5% of spec_qty, it's suspicious for a canceled order with 0 fills
+                qty_diff_pct = abs(reported_qty - spec_qty_dec) / spec_qty_dec * Decimal("100") if spec_qty_dec > Decimal("0") else Decimal("100")
+                if qty_diff_pct < Decimal("5"):
+                    logger.warning(
+                        f"⚠️ Reconcile: CANCELED order {order_id} with remaining_size={remaining_size} "
+                        f"reports filled_size={reported_qty} (within {qty_diff_pct:.2f}% of spec.quantity={spec_qty_dec}), "
+                        f"but context shows 0 fills. Likely incorrect REST API data. Skipping reconciliation."
+                    )
+                    return
     
     if reported_qty is None or reported_qty <= Decimal("0"):
         # No fill reported, or zero fill - nothing to reconcile
