@@ -70,7 +70,7 @@ class AtomicExecutionResult:
 class AtomicMultiOrderExecutor:
     """Executes multiple orders atomically—either all succeed or the trade is unwound."""
 
-    def __init__(self, price_provider=None, account_name: Optional[str] = None, notification_service: Optional[Any] = None) -> None:
+    def __init__(self, price_provider=None, account_name: Optional[str] = None, notification_service: Optional[Any] = None, leverage_validator: Optional[Any] = None) -> None:
         self.price_provider = price_provider
         self.logger = get_core_logger("atomic_multi_order")
         self._hedge_manager = HedgeManager(price_provider=price_provider)
@@ -78,6 +78,9 @@ class AtomicMultiOrderExecutor:
         self._post_trade_base_tolerance = Decimal("0.0001")  # residual quantity tolerance
         self.account_name = account_name
         self.notification_service = notification_service
+        # ⭐ Optional shared leverage validator (from strategy) for caching leverage info
+        # If provided, use this instead of creating a new instance to benefit from caching
+        self._leverage_validator = leverage_validator
         # Store normalized leverage per (exchange_name, symbol) for margin calculations
         # This ensures balance checks use the normalized leverage, not the symbol's max leverage
         self._normalized_leverage: Dict[Tuple[str, str], int] = {}
@@ -527,12 +530,15 @@ class AtomicMultiOrderExecutor:
             return estimated_margin
         
         # ⭐ PRIORITY 2: Try to get leverage info from cache or fetch it
+        # NOTE: This should rarely be needed if normalized leverage is properly set.
         leverage_info = None
         if leverage_info_cache and cache_key in leverage_info_cache:
             leverage_info = leverage_info_cache[cache_key]
         else:
+            # Use shared leverage validator if available (benefits from caching),
+            # otherwise create a new instance
+            leverage_validator = self._leverage_validator or LeverageValidator()
             try:
-                leverage_validator = LeverageValidator()
                 leverage_info = await leverage_validator.get_leverage_info(
                     order_spec.exchange_client, symbol
                 )
@@ -1227,7 +1233,8 @@ class AtomicMultiOrderExecutor:
                 log_stage(self.logger, "Leverage Validation", icon="📐", stage_id=compose_stage("1"))
                 from strategies.execution.core.leverage_validator import LeverageValidator
 
-                leverage_validator = LeverageValidator()
+                # Use shared leverage validator if available, otherwise create new instance
+                leverage_validator = self._leverage_validator or LeverageValidator()
 
                 for symbol, symbol_orders in symbols_to_check.items():
                     exchange_clients = [order.exchange_client for order in symbol_orders]
