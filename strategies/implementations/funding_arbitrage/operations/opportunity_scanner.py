@@ -66,7 +66,7 @@ class OpportunityScanner:
                 skipped_symbols.append("CC")
             if any(opp.symbol == "Z" for opp in opportunities):
                 skipped_symbols.append("Z")
-            opportunities = [opp for opp in opportunities if opp.symbol not in ["CC", "Z"]]
+            opportunities = [opp for opp in opportunities if opp.symbol not in ["CC", "Z", "AI16Z"]]
             if len(opportunities) < original_count and skipped_symbols:
                 strategy.logger.info(f"⏭️  Skipped opportunities for symbols: {', '.join(skipped_symbols)} (temporary filter)")
 

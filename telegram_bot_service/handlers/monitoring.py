@@ -558,6 +558,36 @@ class MonitoringHandler(BaseHandler):
                     parse_mode='HTML'
                 )
     
+    async def balances_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /balances command - shows available margin balances across exchanges."""
+        user, api_key = await self.require_auth(update, context)
+        if not user or not api_key:
+            return
+        
+        # Optional account filter
+        account_name = context.args[0] if context.args and len(context.args) > 0 else None
+        
+        try:
+            client = ControlAPIClient(self.config.control_api_base_url, api_key)
+            data = await client.get_balances(account_name=account_name)
+            
+            # Format and send balances
+            message = self.formatter.format_balances(data)
+            
+            # Split if needed (TelegramFormatter handles this)
+            messages = self.formatter._split_message(message) if len(message) > self.formatter.MAX_MESSAGE_LENGTH else [message]
+            
+            # Send all messages
+            for msg in messages:
+                await update.message.reply_text(msg, parse_mode='HTML')
+                
+        except Exception as e:
+            self.logger.error(f"Balances command error: {e}")
+            await update.message.reply_text(
+                self.formatter.format_error(f"Failed to get balances: {str(e)}"),
+                parse_mode='HTML'
+            )
+    
     async def close_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /close command - shows interactive position selection."""
         user, api_key = await self.require_auth(update, context)
@@ -833,6 +863,7 @@ class MonitoringHandler(BaseHandler):
         """Register monitoring command and callback handlers"""
         # Note: /status removed - use /list_strategies instead for strategy status
         application.add_handler(CommandHandler("positions", self.positions_command))
+        application.add_handler(CommandHandler("balances", self.balances_command))
         application.add_handler(CommandHandler("close", self.close_command))
         
         # Callback query handlers for interactive flows

@@ -201,6 +201,49 @@ async def get_positions(
     return result
 
 
+@app.get("/api/v1/balances", response_model=Dict[str, Any])
+async def get_balances(
+    account_name: Optional[str] = Query(None, description="Filter by account name"),
+    user_info: Dict[str, Any] = Depends(get_user_info)
+):
+    """
+    Get available margin balances for accessible accounts across all exchanges.
+    
+    Args:
+        account_name: Optional account name filter
+        
+    Returns:
+        Balances grouped by account and exchange
+    """
+    controller = get_strategy_controller()
+    auth = get_auth()
+    
+    # Validate account access if account_name provided
+    account_id = None
+    if account_name:
+        account_id = await auth.validate_account_access(
+            user_info["user_id"],
+            user_info["is_admin"],
+            account_name
+        )
+    
+    account_ids = await auth.get_accessible_account_ids(
+        user_info["user_id"],
+        user_info["is_admin"]
+    )
+    
+    result = await controller.get_balances(
+        account_ids=account_ids,
+        account_name=account_name
+    )
+    
+    # Add user info to response
+    result["user"] = user_info["username"]
+    result["is_admin"] = user_info["is_admin"]
+    
+    return result
+
+
 @app.post("/api/v1/positions/{position_id}/close", response_model=Dict[str, Any])
 async def close_position(
     position_id: str,

@@ -552,6 +552,162 @@ class FundingArbStrategyController(BaseStrategyController):
                 "message": f"Failed to close position: {e}"
             }
     
+    async def get_balances(
+        self,
+        account_ids: List[str],
+        account_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get available margin balances for specified accounts across all exchanges.
+        
+        Args:
+            account_ids: List of account IDs (UUIDs as strings) that user can access
+            account_name: Optional account name filter
+            
+        Returns:
+            Dict with balances grouped by account and exchange
+        """
+        from database.connection import database
+        from database.credential_loader import DatabaseCredentialLoader
+        from exchange_clients.factory import ExchangeFactory
+        
+        # Ensure database is connected
+        if not database.is_connected:
+            await database.connect()
+        
+        # Get account names for the account IDs
+        if account_name:
+            # Filter by specific account name
+            account_rows = await database.fetch_all("""
+                SELECT id::text as account_id, account_name
+                FROM accounts
+                WHERE id::text = ANY(:account_ids)
+                  AND account_name = :account_name
+                  AND is_active = TRUE
+            """, {
+                "account_ids": account_ids,
+                "account_name": account_name
+            })
+        else:
+            # Get all accessible accounts
+            account_rows = await database.fetch_all("""
+                SELECT id::text as account_id, account_name
+                FROM accounts
+                WHERE id::text = ANY(:account_ids)
+                  AND is_active = TRUE
+            """, {"account_ids": account_ids})
+        
+        if not account_rows:
+            return {
+                "accounts": []
+            }
+        
+        # Load credentials for each account and fetch balances
+        credential_loader = DatabaseCredentialLoader(database)
+        accounts_data = []
+        
+        for account_row in account_rows:
+            account_name_val = account_row['account_name']
+            account_id_val = account_row['account_id']
+            
+            try:
+                # Load credentials for this account
+                credentials = await credential_loader.load_account_credentials(account_name_val)
+                
+                # Get list of exchanges configured for this account
+                exchange_names = list(credentials.keys())
+                
+                if not exchange_names:
+                    # Account has no exchange credentials configured
+                    accounts_data.append({
+                        "account_name": account_name_val,
+                        "account_id": account_id_val,
+                        "balances": []
+                    })
+                    continue
+                
+                # Create a minimal config for balance queries
+                # We don't need ticker/quantity for balance queries, but some exchanges require config
+                config = {
+                    "ticker": "BTC",  # Dummy ticker - not used for balance queries
+                    "exchange": None  # Will be set per exchange
+                }
+                
+                # Fetch balances from each exchange
+                balances = []
+                
+                # Create and query each exchange client
+                for exchange_name in exchange_names:
+                    balance_result = {
+                        "exchange": exchange_name,
+                        "balance": None,
+                        "error": None
+                    }
+                    
+                    try:
+                        # Get credentials for this exchange
+                        exchange_creds = credentials.get(exchange_name)
+                        if not exchange_creds:
+                            balance_result["error"] = "No credentials found"
+                            balances.append(balance_result)
+                            continue
+                        
+                        # Create exchange client
+                        exchange_config = config.copy()
+                        exchange_config["exchange"] = exchange_name
+                        
+                        client = ExchangeFactory.create_exchange(
+                            exchange_name=exchange_name,
+                            config=exchange_config,
+                            credentials=exchange_creds
+                        )
+                        
+                        # Connect to exchange
+                        await client.connect()
+                        
+                        try:
+                            # Query balance
+                            balance = await client.get_account_balance()
+                            
+                            if balance is not None:
+                                balance_result["balance"] = str(balance)
+                            else:
+                                balance_result["error"] = "Balance not available"
+                        finally:
+                            # Always disconnect
+                            try:
+                                await client.disconnect()
+                            except Exception:
+                                pass  # Ignore disconnect errors
+                        
+                    except Exception as e:
+                        # Handle errors gracefully - continue with other exchanges
+                        balance_result["error"] = str(e)[:200]  # Truncate long error messages
+                    
+                    balances.append(balance_result)
+                
+                accounts_data.append({
+                    "account_name": account_name_val,
+                    "account_id": account_id_val,
+                    "balances": balances
+                })
+                
+            except Exception as e:
+                # If account credential loading fails, still include account with error
+                accounts_data.append({
+                    "account_name": account_name_val,
+                    "account_id": account_id_val,
+                    "balances": [{
+                        "exchange": "all",
+                        "balance": None,
+                        "error": f"Failed to load credentials: {str(e)[:200]}"
+                    }]
+                })
+        
+        return {
+            "accounts": accounts_data
+        }
+    
     async def reload_config(self) -> Dict[str, Any]:
         """
         Reload strategy configuration from the config file.
