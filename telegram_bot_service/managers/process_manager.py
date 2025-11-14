@@ -557,7 +557,7 @@ stdout_logfile={stdout_log}
             logger.warning(f"Cannot resume strategy with status '{current_status}': {run_id}")
             return False
         
-        # Check Supervisor state
+        # Check Supervisor state and ensure process is stopped before updating config
         try:
             supervisor = self._get_supervisor_client()
             try:
@@ -565,7 +565,7 @@ stdout_logfile={stdout_log}
                 supervisor_state = info.get('statename', 'UNKNOWN')
                 logger.info(f"Supervisor state for '{supervisor_program_name}': {supervisor_state}")
                 
-                # If already running, that's success
+                # If already running, that's success (but we should still verify config is correct)
                 if supervisor_state in ['RUNNING', 'STARTING']:
                     logger.info(f"Strategy '{supervisor_program_name}' is already {supervisor_state.lower()}")
                     # Update DB to reflect running state
@@ -578,6 +578,14 @@ stdout_logfile={stdout_log}
                         {"run_id": run_id}
                     )
                     return True
+                
+                # Ensure process is stopped before updating config
+                if supervisor_state in ['RUNNING', 'STARTING']:
+                    logger.info(f"Stopping process before updating config...")
+                    supervisor.supervisor.stopProcess(supervisor_program_name)
+                    # Wait a moment for process to stop
+                    await asyncio.sleep(1)
+                    logger.info(f"Process stopped, proceeding with config update")
             except xmlrpc.client.Fault as e:
                 fault_code = e.faultCode if hasattr(e, 'faultCode') else 'Unknown'
                 fault_msg = e.faultString if hasattr(e, 'faultString') else str(e)
@@ -628,36 +636,52 @@ stdout_logfile={stdout_log}
                 check=True
             )
             config_content = read_result.stdout
+            logger.debug(f"Current Supervisor config content:\n{config_content}")
             
             # Update port in command line
             import re
             # Replace old port with new port in command line, or add if missing
-            # Pattern: --control-api-port <old_port>
+            # Pattern: --control-api-port <old_port> (match any port number)
             old_port_pattern = rf"--control-api-port\s+\d+"
             new_port_str = f"--control-api-port {port}"
             
             if re.search(old_port_pattern, config_content):
+                # Find what port is currently in the config
+                match = re.search(old_port_pattern, config_content)
+                old_port_in_config = match.group(0) if match else "unknown"
+                logger.info(f"Found existing port argument in config: {old_port_in_config}, updating to {new_port_str}")
                 updated_config = re.sub(old_port_pattern, new_port_str, config_content)
-                logger.info(f"Updated port in Supervisor config to {port}")
+                logger.info(f"Updated port in Supervisor config: {old_port_in_config} -> {new_port_str}")
             else:
                 # Port argument not in config - add it
-                logger.info(f"Adding --control-api-port {port} to Supervisor config")
+                logger.info(f"Port argument not found in config, adding {new_port_str}")
                 # Find the command= line and add port argument
                 if "--control-api-port" not in config_content:
-                    # Add port to command line (before --enable-proxy if present, or at end)
-                    if "--enable-proxy" in config_content:
+                    # Add port to command line (after --enable-control-api, before --enable-proxy if present)
+                    if "--enable-control-api" in config_content:
+                        # Add right after --enable-control-api
+                        updated_config = config_content.replace(
+                            "--enable-control-api",
+                            f"--enable-control-api {new_port_str}"
+                        )
+                    elif "--enable-proxy" in config_content:
+                        # Add before --enable-proxy
                         updated_config = config_content.replace(
                             "--enable-proxy",
                             f"{new_port_str} --enable-proxy"
                         )
                     else:
-                        # Append to command line
+                        # Append after --account
                         updated_config = config_content.replace(
                             f"--account {account_name}",
                             f"--account {account_name} {new_port_str}"
                         )
+                    logger.info(f"Added {new_port_str} to Supervisor config command line")
                 else:
+                    logger.warning(f"--control-api-port found in config but regex didn't match - config may have unusual format")
                     updated_config = config_content
+            
+            logger.debug(f"Updated Supervisor config content:\n{updated_config}")
             
             # Write updated config
             subprocess.run(
@@ -667,6 +691,24 @@ stdout_logfile={stdout_log}
                 capture_output=True
             )
             logger.info(f"Updated Supervisor config file: {config_file_path}")
+            
+            # Verify the config was written correctly
+            verify_result = subprocess.run(
+                ["sudo", "cat", str(config_file_path)],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            verify_content = verify_result.stdout
+            if f"--control-api-port {port}" in verify_content:
+                logger.info(f"✅ Verified Supervisor config contains --control-api-port {port}")
+            else:
+                logger.error(f"❌ Supervisor config verification failed! Expected --control-api-port {port} but config contains: {verify_content}")
+                # Try to find what port is actually in the config
+                port_match = re.search(rf"--control-api-port\s+(\d+)", verify_content)
+                if port_match:
+                    actual_port = port_match.group(1)
+                    logger.error(f"Found --control-api-port {actual_port} instead of {port}")
             
             # Reload Supervisor config
             supervisor = self._get_supervisor_client()
@@ -679,6 +721,27 @@ stdout_logfile={stdout_log}
         except Exception as e:
             logger.error(f"Error updating Supervisor config: {e}")
             return False
+        
+        # Verify Supervisor has the correct config before starting
+        try:
+            # Get the actual command that Supervisor will use
+            process_info = supervisor.supervisor.getProcessInfo(supervisor_program_name)
+            supervisor_cmd = process_info.get('description', '')
+            logger.info(f"Supervisor will start process with command (from getProcessInfo): {supervisor_cmd[:200]}...")
+            
+            # Check if the port is in the command
+            if f"--control-api-port {port}" in supervisor_cmd:
+                logger.info(f"✅ Verified Supervisor command contains --control-api-port {port}")
+            else:
+                logger.warning(f"⚠️ Supervisor command may not contain --control-api-port {port}")
+                # Try to find what port is actually in the command
+                import re
+                port_match = re.search(rf"--control-api-port\s+(\d+)", supervisor_cmd)
+                if port_match:
+                    actual_port = port_match.group(1)
+                    logger.warning(f"Found --control-api-port {actual_port} in Supervisor command instead of {port}")
+        except Exception as e:
+            logger.warning(f"Could not verify Supervisor command: {e}")
         
         # Start process via Supervisor
         try:
