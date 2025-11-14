@@ -361,6 +361,27 @@ class TradingBot:
         except Exception as e:
             self.logger.error(f"Error during graceful shutdown: {e}")
 
+    def _is_port_in_use(self, host: str, port: int) -> bool:
+        """
+        Check if a port is already in use.
+        
+        Args:
+            host: Host address to check
+            port: Port number to check
+            
+        Returns:
+            True if port is in use, False otherwise
+        """
+        import socket
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(1)
+                result = sock.connect_ex((host, port))
+                return result == 0
+        except Exception:
+            # If we can't check, assume port is available (let uvicorn handle the error)
+            return False
+
     async def _start_control_server(self):
         """Start the control API server."""
         try:
@@ -380,6 +401,16 @@ class TradingBot:
             # Get server config
             host = os.getenv("CONTROL_API_HOST", "127.0.0.1")
             port = int(os.getenv("CONTROL_API_PORT", "8766"))
+            
+            # Check if port is already in use (e.g., standalone control API is running)
+            if self._is_port_in_use(host, port):
+                self.logger.warning(
+                    f"⚠️  Control API port {host}:{port} is already in use. "
+                    f"This likely means the standalone control API server (start_control_api.py) is running. "
+                    f"Skipping embedded control server startup. "
+                    f"The standalone server will continue to work in read-only mode."
+                )
+                return
             
             self.logger.info(f"Starting control API server on {host}:{port}")
             

@@ -1,7 +1,8 @@
 """
 Port Manager for allocating control API ports to strategies
 
-Manages port allocation in the range 8766-8799 (33 ports available).
+Manages port allocation in the range 8767-8799 (32 ports available).
+Port 8766 is reserved for the standalone control API server (start_control_api.py).
 Ports are allocated from the database to ensure no conflicts.
 """
 
@@ -16,7 +17,9 @@ logger = get_logger("core", "port_manager")
 class PortManager:
     """Manages port allocation for strategy control APIs"""
     
-    PORT_RANGE_START = 8766
+    # Port 8766 is reserved for standalone control API server
+    STANDALONE_PORT = 8766
+    PORT_RANGE_START = 8767  # Strategies start from 8767
     PORT_RANGE_END = 8799
     PORT_COUNT = PORT_RANGE_END - PORT_RANGE_START + 1
     
@@ -28,21 +31,28 @@ class PortManager:
             database: Database connection instance
         """
         self.database = database
-        logger.info(f"PortManager initialized: ports {self.PORT_RANGE_START}-{self.PORT_RANGE_END}")
+        logger.info(
+            f"PortManager initialized: "
+            f"standalone port {self.STANDALONE_PORT} (reserved), "
+            f"strategy ports {self.PORT_RANGE_START}-{self.PORT_RANGE_END}"
+        )
     
     async def allocate_port(self) -> Optional[int]:
         """
-        Allocate next available port.
+        Allocate next available port for a strategy.
+        
+        Note: Port 8766 is reserved for the standalone control API server
+        and will never be allocated to strategies.
         
         Returns:
             Port number if available, None if all ports are in use
         """
         used_ports = await self.get_used_ports_from_db()
         
-        # Find first available port
+        # Find first available port (starting from 8767, skipping reserved 8766)
         for port in range(self.PORT_RANGE_START, self.PORT_RANGE_END + 1):
             if port not in used_ports:
-                logger.info(f"Allocated port {port}")
+                logger.info(f"Allocated port {port} for strategy")
                 return port
         
         logger.warning(f"No available ports in range {self.PORT_RANGE_START}-{self.PORT_RANGE_END}")

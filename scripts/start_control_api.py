@@ -9,6 +9,15 @@ The server serves ALL users with valid API keys. Each user can only access
 their own accounts (unless they are admin). Authentication is required via
 X-API-Key header or Authorization: Bearer <key>.
 
+This script is designed to run continuously so that telegram bot commands
+(/positions, /balances) work even when strategies are paused via Supervisor.
+
+Port Conflict Handling:
+- If port 8766 is already in use (by another instance or embedded server),
+  the script will detect this and exit with a helpful error message.
+- Running strategies with CONTROL_API_ENABLED=true will skip starting their
+  embedded server if this standalone server is already running.
+
 Usage:
     # Run in foreground (for testing)
     python scripts/start_control_api.py
@@ -52,6 +61,28 @@ _server: uvicorn.Server = None
 _shutdown_event: asyncio.Event = None
 
 
+def _is_port_in_use(host: str, port: int) -> bool:
+    """
+    Check if a port is already in use.
+    
+    Args:
+        host: Host address to check
+        port: Port number to check
+        
+    Returns:
+        True if port is in use, False otherwise
+    """
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(1)
+            result = sock.connect_ex((host, port))
+            return result == 0
+    except Exception:
+        # If we can't check, assume port is available (let uvicorn handle the error)
+        return False
+
+
 def signal_handler(signum, frame):
     """Handle shutdown signals."""
     logger.info(f"Received signal {signum}, initiating shutdown...")
@@ -84,6 +115,24 @@ async def main():
         help="Port to bind to (default: 8766)"
     )
     args = parser.parse_args()
+    
+    # Check if port is already in use before attempting to start
+    if _is_port_in_use(args.host, args.port):
+        logger.error("="*70)
+        logger.error("Port Already In Use")
+        logger.error("="*70)
+        logger.error(f"Port {args.host}:{args.port} is already in use.")
+        logger.error("")
+        logger.error("Possible causes:")
+        logger.error("  1. Another instance of this standalone control API is running")
+        logger.error("  2. A running strategy has started its embedded control server")
+        logger.error("")
+        logger.error("To resolve:")
+        logger.error("  - Check for other instances: ps aux | grep start_control_api")
+        logger.error("  - Check for running strategies with embedded control servers")
+        logger.error("  - Use a different port: --port <different_port>")
+        logger.error("="*70)
+        sys.exit(1)
     
     try:
         # Ensure database is connected
