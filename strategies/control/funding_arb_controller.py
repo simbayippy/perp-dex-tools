@@ -16,12 +16,14 @@ from strategies.implementations.funding_arbitrage.strategy import FundingArbitra
 class FundingArbStrategyController(BaseStrategyController):
     """Controller for funding arbitrage strategy"""
     
-    def __init__(self, strategy: FundingArbitrageStrategy):
+    def __init__(self, strategy: Optional[FundingArbitrageStrategy] = None):
         """
         Initialize funding arbitrage controller.
         
         Args:
-            strategy: FundingArbitrageStrategy instance
+            strategy: Optional FundingArbitrageStrategy instance. If None, controller works
+                     in read-only mode (can query balances/positions but cannot perform actions
+                     that require strategy state like closing positions or reloading config).
         """
         self.strategy = strategy
     
@@ -206,6 +208,10 @@ class FundingArbStrategyController(BaseStrategyController):
     
     async def _enrich_position_with_live_data(self, position: "FundingArbPosition"):
         """Enrich position with live exchange data (similar to position_monitor)."""
+        # Skip enrichment if no strategy instance (read-only mode)
+        if not self.strategy:
+            return
+        
         try:
             # Fetch exchange snapshots
             exchange_clients = self.strategy.exchange_clients
@@ -423,11 +429,11 @@ class FundingArbStrategyController(BaseStrategyController):
                 "liquidation_price": leg_meta.get("liquidation_price"),
             })
         
-        # Get risk config for min/max hold info
+        # Get risk config for min/max hold info (only if strategy available)
         min_hold_hours = None
         max_position_age_hours = None
         min_erosion_threshold = None
-        if hasattr(self.strategy, 'config') and hasattr(self.strategy.config, 'risk_config'):
+        if self.strategy and hasattr(self.strategy, 'config') and hasattr(self.strategy.config, 'risk_config'):
             risk_cfg = self.strategy.config.risk_config
             min_hold_hours = float(risk_cfg.min_hold_hours) if hasattr(risk_cfg, 'min_hold_hours') else None
             max_position_age_hours = float(risk_cfg.max_position_age_hours) if hasattr(risk_cfg, 'max_position_age_hours') else None
@@ -501,7 +507,13 @@ class FundingArbStrategyController(BaseStrategyController):
             
         Returns:
             Dict with close operation result
+            
+        Raises:
+            ValueError: If strategy not available (read-only mode)
         """
+        if not self.strategy:
+            raise ValueError("Cannot close positions: strategy controller is in read-only mode. Start a strategy to enable position closing.")
+        
         from database.connection import database
         
         # Validate position belongs to accessible account
@@ -552,13 +564,196 @@ class FundingArbStrategyController(BaseStrategyController):
                 "message": f"Failed to close position: {e}"
             }
     
+    async def get_balances(
+        self,
+        account_ids: List[str],
+        account_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get available margin balances for specified accounts across all exchanges.
+        
+        Args:
+            account_ids: List of account IDs (UUIDs as strings) that user can access
+            account_name: Optional account name filter
+            
+        Returns:
+            Dict with balances grouped by account and exchange
+        """
+        from database.connection import database
+        from database.credential_loader import DatabaseCredentialLoader
+        from exchange_clients.factory import ExchangeFactory
+        
+        # Ensure database is connected
+        if not database.is_connected:
+            await database.connect()
+        
+        # Get account names for the account IDs
+        if account_name:
+            # Filter by specific account name
+            account_rows = await database.fetch_all("""
+                SELECT id::text as account_id, account_name
+                FROM accounts
+                WHERE id::text = ANY(:account_ids)
+                  AND account_name = :account_name
+                  AND is_active = TRUE
+            """, {
+                "account_ids": account_ids,
+                "account_name": account_name
+            })
+        else:
+            # Get all accessible accounts
+            account_rows = await database.fetch_all("""
+                SELECT id::text as account_id, account_name
+                FROM accounts
+                WHERE id::text = ANY(:account_ids)
+                  AND is_active = TRUE
+            """, {"account_ids": account_ids})
+        
+        if not account_rows:
+            return {
+                "accounts": []
+            }
+        
+        # Load credentials for each account and fetch balances
+        credential_loader = DatabaseCredentialLoader(database)
+        accounts_data = []
+        
+        for account_row in account_rows:
+            account_name_val = account_row['account_name']
+            account_id_val = account_row['account_id']
+            
+            try:
+                # Load credentials for this account
+                credentials = await credential_loader.load_account_credentials(account_name_val)
+                
+                # Get list of exchanges configured for this account
+                exchange_names = list(credentials.keys())
+                
+                if not exchange_names:
+                    # Account has no exchange credentials configured
+                    accounts_data.append({
+                        "account_name": account_name_val,
+                        "account_id": account_id_val,
+                        "balances": []
+                    })
+                    continue
+                
+                # Try to reuse strategy's exchange clients if available (avoids duplicate WebSocket connections)
+                # Otherwise create temporary clients
+                from types import SimpleNamespace
+                
+                # Fetch balances from each exchange
+                balances = []
+                
+                # Create and query each exchange client
+                for exchange_name in exchange_names:
+                    balance_result = {
+                        "exchange": exchange_name,
+                        "balance": None,
+                        "error": None
+                    }
+                    
+                    try:
+                        # Try to reuse strategy's exchange client if available (same account/exchange)
+                        client = None
+                        should_disconnect = False
+                        
+                        if self.strategy and hasattr(self.strategy, 'exchange_clients'):
+                            strategy_clients = self.strategy.exchange_clients
+                            if strategy_clients and exchange_name.lower() in strategy_clients:
+                                # Check if strategy is using the same account
+                                strategy_account = getattr(self.strategy.config, '_account_name', None)
+                                if strategy_account == account_name_val:
+                                    # Reuse existing client (already connected, no need to disconnect)
+                                    client = strategy_clients[exchange_name.lower()]
+                        
+                        # If no reusable client, create a new temporary one
+                        if client is None:
+                            # Get credentials for this exchange
+                            exchange_creds = credentials.get(exchange_name)
+                            if not exchange_creds:
+                                balance_result["error"] = "No credentials found"
+                                balances.append(balance_result)
+                                continue
+                            
+                            # Create config object with attributes (exchange clients access config.ticker, config.contract_id, etc.)
+                            exchange_config = SimpleNamespace(
+                                ticker="BTC",  # Dummy ticker - not used for balance queries
+                                exchange=exchange_name,
+                                contract_id="BTC",  # Dummy contract_id - required by some exchanges during connect()
+                                market_index=None,  # Will be set by connect() if needed
+                                account_index=None,  # Will be set by connect() if needed
+                                lighter_client=None,  # Will be set by connect() if needed
+                                api_client=None,  # Will be set by connect() if needed
+                            )
+                            
+                            client = ExchangeFactory.create_exchange(
+                                exchange_name=exchange_name,
+                                config=exchange_config,
+                                credentials=exchange_creds
+                            )
+                            
+                            # Connect to exchange (only for new clients)
+                            await client.connect()
+                            should_disconnect = True
+                        
+                        try:
+                            # Query balance
+                            balance = await client.get_account_balance()
+                            
+                            if balance is not None:
+                                balance_result["balance"] = str(balance)
+                            else:
+                                balance_result["error"] = "Balance not available"
+                        finally:
+                            # Only disconnect if we created a new client
+                            if should_disconnect:
+                                try:
+                                    await client.disconnect()
+                                except Exception:
+                                    pass  # Ignore disconnect errors
+                        
+                    except Exception as e:
+                        # Handle errors gracefully - continue with other exchanges
+                        balance_result["error"] = str(e)[:200]  # Truncate long error messages
+                    
+                    balances.append(balance_result)
+                
+                accounts_data.append({
+                    "account_name": account_name_val,
+                    "account_id": account_id_val,
+                    "balances": balances
+                })
+                
+            except Exception as e:
+                # If account credential loading fails, still include account with error
+                accounts_data.append({
+                    "account_name": account_name_val,
+                    "account_id": account_id_val,
+                    "balances": [{
+                        "exchange": "all",
+                        "balance": None,
+                        "error": f"Failed to load credentials: {str(e)[:200]}"
+                    }]
+                })
+        
+        return {
+            "accounts": accounts_data
+        }
+    
     async def reload_config(self) -> Dict[str, Any]:
         """
         Reload strategy configuration from the config file.
         
         Returns:
             Dict with reload operation result
+            
+        Raises:
+            ValueError: If strategy not available (read-only mode)
         """
+        if not self.strategy:
+            raise ValueError("Cannot reload config: strategy controller is in read-only mode. Start a strategy to enable config reloading.")
+        
         try:
             success = await self.strategy.reload_config()
             if success:

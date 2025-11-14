@@ -22,27 +22,6 @@ class MonitoringHandler(BaseHandler):
         # Optional account filter
         account_name = context.args[0] if context.args and len(context.args) > 0 else None
         
-        # Check if there are any running strategies first
-        is_admin = user.get("is_admin", False)
-        user_id = None if is_admin else user["id"]
-        
-        if user_id:
-            running_query = """
-                SELECT COUNT(*) as count
-                FROM strategy_runs
-                WHERE user_id = :user_id AND status IN ('starting', 'running', 'paused')
-            """
-            running_result = await self.database.fetch_one(running_query, {"user_id": user_id})
-        else:
-            running_query = """
-                SELECT COUNT(*) as count
-                FROM strategy_runs
-                WHERE status IN ('starting', 'running', 'paused')
-            """
-            running_result = await self.database.fetch_one(running_query)
-        
-        has_running_strategies = running_result and running_result['count'] > 0
-        
         try:
             client = ControlAPIClient(self.config.control_api_base_url, api_key)
             data = await client.get_positions(account_name=account_name)
@@ -129,7 +108,7 @@ class MonitoringHandler(BaseHandler):
         except Exception as e:
             self.logger.error(f"Positions error: {e}")
             
-            # Handle edge case: no running strategies + connection error = no positions
+            # Handle connection errors with helpful message
             error_str = str(e).lower()
             is_connection_error = (
                 isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError)) or
@@ -137,11 +116,12 @@ class MonitoringHandler(BaseHandler):
                 "all connection attempts failed" in error_str
             )
             
-            if not has_running_strategies and is_connection_error:
-                # No running strategies and connection failed - treat as no positions
+            if is_connection_error:
                 await update.message.reply_text(
-                    "📊 <b>No Active Positions</b>\n\n"
-                    "No positions found. All strategies are currently paused.",
+                    "📊 <b>Control API Not Available</b>\n\n"
+                    "Cannot connect to the control API server.\n\n"
+                    "The control API server can run independently of strategies.\n"
+                    "Start it with: <code>python scripts/start_control_api.py</code>",
                     parse_mode='HTML'
                 )
             else:
@@ -171,27 +151,6 @@ class MonitoringHandler(BaseHandler):
         user, api_key = await self.require_auth(update, context)
         if not user or not api_key:
             return
-        
-        # Check if there are any running strategies first
-        is_admin = user.get("is_admin", False)
-        user_id = None if is_admin else user["id"]
-        
-        if user_id:
-            running_query = """
-                SELECT COUNT(*) as count
-                FROM strategy_runs
-                WHERE user_id = :user_id AND status IN ('starting', 'running', 'paused')
-            """
-            running_result = await self.database.fetch_one(running_query, {"user_id": user_id})
-        else:
-            running_query = """
-                SELECT COUNT(*) as count
-                FROM strategy_runs
-                WHERE status IN ('starting', 'running', 'paused')
-            """
-            running_result = await self.database.fetch_one(running_query)
-        
-        has_running_strategies = running_result and running_result['count'] > 0
         
         try:
             client = ControlAPIClient(self.config.control_api_base_url, api_key)
@@ -270,11 +229,12 @@ class MonitoringHandler(BaseHandler):
                 "all connection attempts failed" in error_str
             )
             
-            if not has_running_strategies and is_connection_error:
-                # No running strategies and connection failed - treat as no positions
+            if is_connection_error:
                 await query.edit_message_text(
-                    f"📊 <b>{account_name}</b>\n\n"
-                    "No active positions. All strategies are currently paused.",
+                    "📊 <b>Control API Not Available</b>\n\n"
+                    "Cannot connect to the control API server.\n\n"
+                    "The control API server can run independently of strategies.\n"
+                    "Start it with: <code>python scripts/start_control_api.py</code>",
                     parse_mode='HTML'
                 )
             else:
@@ -307,27 +267,6 @@ class MonitoringHandler(BaseHandler):
         user, api_key = await self.require_auth(update, context)
         if not user or not api_key:
             return
-        
-        # Check if there are any running strategies first
-        is_admin = user.get("is_admin", False)
-        user_id = None if is_admin else user["id"]
-        
-        if user_id:
-            running_query = """
-                SELECT COUNT(*) as count
-                FROM strategy_runs
-                WHERE user_id = :user_id AND status IN ('starting', 'running', 'paused')
-            """
-            running_result = await self.database.fetch_one(running_query, {"user_id": user_id})
-        else:
-            running_query = """
-                SELECT COUNT(*) as count
-                FROM strategy_runs
-                WHERE status IN ('starting', 'running', 'paused')
-            """
-            running_result = await self.database.fetch_one(running_query)
-        
-        has_running_strategies = running_result and running_result['count'] > 0
         
         try:
             self.logger.debug(f"Fetching fresh positions data from API (account: {account_name or 'all'})")
@@ -444,27 +383,6 @@ class MonitoringHandler(BaseHandler):
         if not user or not api_key:
             return
         
-        # Check if there are any running strategies first
-        is_admin = user.get("is_admin", False)
-        user_id = None if is_admin else user["id"]
-        
-        if user_id:
-            running_query = """
-                SELECT COUNT(*) as count
-                FROM strategy_runs
-                WHERE user_id = :user_id AND status IN ('starting', 'running', 'paused')
-            """
-            running_result = await self.database.fetch_one(running_query, {"user_id": user_id})
-        else:
-            running_query = """
-                SELECT COUNT(*) as count
-                FROM strategy_runs
-                WHERE status IN ('starting', 'running', 'paused')
-            """
-            running_result = await self.database.fetch_one(running_query)
-        
-        has_running_strategies = running_result and running_result['count'] > 0
-        
         try:
             client = ControlAPIClient(self.config.control_api_base_url, api_key)
             data = await client.get_positions(account_name=None)
@@ -555,6 +473,65 @@ class MonitoringHandler(BaseHandler):
                 # Real error - show it
                 await query.edit_message_text(
                     self.formatter.format_error(f"Failed to get positions: {str(e)}"),
+                    parse_mode='HTML'
+                )
+    
+    async def balances_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /balances command - shows available margin balances across exchanges."""
+        user, api_key = await self.require_auth(update, context)
+        if not user or not api_key:
+            return
+        
+        # Optional account filter
+        account_name = context.args[0] if context.args and len(context.args) > 0 else None
+        
+        # Send initial loading message
+        loading_message = await update.message.reply_text(
+            "💰 <b>Fetching balances...</b>\n\n"
+            "This may take a few seconds as we connect to each exchange.",
+            parse_mode='HTML'
+        )
+        
+        try:
+            client = ControlAPIClient(self.config.control_api_base_url, api_key)
+            data = await client.get_balances(account_name=account_name)
+            
+            # Format balances
+            message = self.formatter.format_balances(data)
+            
+            # Split if needed (TelegramFormatter handles this)
+            messages = self.formatter._split_message(message) if len(message) > self.formatter.MAX_MESSAGE_LENGTH else [message]
+            
+            # Replace loading message with first result message
+            await loading_message.edit_text(messages[0], parse_mode='HTML')
+            
+            # Send remaining messages if any
+            for msg in messages[1:]:
+                await update.message.reply_text(msg, parse_mode='HTML')
+                
+        except Exception as e:
+            self.logger.error(f"Balances command error: {e}")
+            
+            # Handle connection errors with helpful message
+            error_str = str(e).lower()
+            is_connection_error = (
+                isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError)) or
+                "connection" in error_str or
+                "all connection attempts failed" in error_str
+            )
+            
+            if is_connection_error:
+                await loading_message.edit_text(
+                    "💰 <b>Control API Not Available</b>\n\n"
+                    "Cannot connect to the control API server.\n\n"
+                    "The control API server can run independently of strategies.\n"
+                    "Start it with: <code>python scripts/start_control_api.py</code>",
+                    parse_mode='HTML'
+                )
+            else:
+                # Real error - show it
+                await loading_message.edit_text(
+                    self.formatter.format_error(f"Failed to get balances: {str(e)}"),
                     parse_mode='HTML'
                 )
     
@@ -833,6 +810,7 @@ class MonitoringHandler(BaseHandler):
         """Register monitoring command and callback handlers"""
         # Note: /status removed - use /list_strategies instead for strategy status
         application.add_handler(CommandHandler("positions", self.positions_command))
+        application.add_handler(CommandHandler("balances", self.balances_command))
         application.add_handler(CommandHandler("close", self.close_command))
         
         # Callback query handlers for interactive flows

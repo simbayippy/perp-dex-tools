@@ -348,6 +348,93 @@ class TelegramFormatter:
             )
     
     @staticmethod
+    def format_balances(data: Dict[str, Any]) -> str:
+        """Format balances response in mobile-friendly layout."""
+        accounts = data.get('accounts', [])
+        if not accounts:
+            return "💰 <b>No accounts found</b>"
+        
+        # Define consistent exchange order (alphabetical)
+        EXCHANGE_ORDER = ['ASTER', 'BACKPACK', 'EDGEX', 'GRVT', 'LIGHTER', 'PARADEX']
+        
+        messages = []
+        for account in accounts:
+            account_name = account.get('account_name', 'N/A')
+            balances = account.get('balances', [])
+            
+            if not balances:
+                messages.append(f"💰 <b>{account_name}</b>\nNo exchange balances configured")
+                continue
+            
+            # Build account balance message
+            lines = [
+                f"💰 <b>{account_name}</b>",
+                ""
+            ]
+            
+            # Sort balances by exchange name (consistent order)
+            def get_exchange_sort_key(balance_info: Dict[str, Any]) -> int:
+                """Get sort key for exchange ordering."""
+                exchange = balance_info.get('exchange', 'N/A').upper()
+                try:
+                    return EXCHANGE_ORDER.index(exchange)
+                except ValueError:
+                    # Exchange not in predefined list, put at end
+                    return len(EXCHANGE_ORDER) + ord(exchange[0]) if exchange else 999
+            
+            sorted_balances = sorted(balances, key=get_exchange_sort_key)
+            
+            # Track totals
+            total_balance = Decimal("0")
+            successful_balances = 0
+            
+            for balance_info in sorted_balances:
+                exchange = balance_info.get('exchange', 'N/A').upper()
+                balance_str = balance_info.get('balance')
+                error = balance_info.get('error')
+                
+                if balance_str is not None:
+                    try:
+                        balance = Decimal(balance_str)
+                        total_balance += balance
+                        successful_balances += 1
+                        
+                        # Format balance with appropriate precision
+                        if balance >= 1000:
+                            balance_display = f"${balance:,.2f}"
+                        elif balance >= 1:
+                            balance_display = f"${balance:.2f}"
+                        else:
+                            balance_display = f"${balance:.4f}"
+                        
+                        lines.append(f"  • {exchange}: <code>{balance_display}</code>")
+                    except (ValueError, TypeError):
+                        # Invalid balance format
+                        lines.append(f"  • {exchange}: ❌ <i>Invalid balance</i>")
+                elif error:
+                    # Show error message
+                    error_msg = error[:50] + "..." if len(error) > 50 else error
+                    lines.append(f"  • {exchange}: ❌ <i>{error_msg}</i>")
+                else:
+                    # Unknown state
+                    lines.append(f"  • {exchange}: ❓ <i>Unknown</i>")
+            
+            # Add total if we have successful balances
+            if successful_balances > 0:
+                lines.append("")
+                if total_balance >= 1000:
+                    total_display = f"${total_balance:,.2f}"
+                elif total_balance >= 1:
+                    total_display = f"${total_balance:.2f}"
+                else:
+                    total_display = f"${total_balance:.4f}"
+                lines.append(f"<b>Total:</b> <code>{total_display}</code>")
+            
+            messages.append("\n".join(lines))
+        
+        return "\n\n".join(messages)
+    
+    @staticmethod
     def format_help() -> str:
         """Format help message."""
         return """🤖 <b>Strategy Control Bot</b>
@@ -360,6 +447,7 @@ class TelegramFormatter:
 
 <b>📊 Monitoring (Existing Strategies):</b>
 /positions [account] - List active positions (optional account filter)
+/balances [account] - List available margin balances across exchanges (optional account filter)
 /close - Close a position 
 
 <b>👤 Account Management:</b>

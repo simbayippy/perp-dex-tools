@@ -65,6 +65,26 @@ class ControlAPIClient:
             response.raise_for_status()
             return response.json()
     
+    async def get_balances(self, account_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get available margin balances across all exchanges.
+        
+        Args:
+            account_name: Optional account name filter
+        """
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            params = {}
+            if account_name:
+                params["account_name"] = account_name
+            
+            response = await client.get(
+                f"{self.base_url}/api/v1/balances",
+                headers=self.headers,
+                params=params
+            )
+            response.raise_for_status()
+            return response.json()
+    
     async def close_position(
         self,
         position_id: str,

@@ -51,12 +51,17 @@ def set_strategy_controller(controller: FundingArbStrategyController):
     _strategy_controller = controller
 
 
-def get_strategy_controller() -> FundingArbStrategyController:
-    """Get the strategy controller."""
+def get_strategy_controller() -> Optional[FundingArbStrategyController]:
+    """Get the strategy controller (may be None in read-only mode)."""
+    return _strategy_controller
+
+
+def require_strategy_controller() -> FundingArbStrategyController:
+    """Get the strategy controller, raising error if not available."""
     if _strategy_controller is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Strategy controller not available"
+            detail="Strategy controller not available. This operation requires a running strategy."
         )
     return _strategy_controller
 
@@ -88,7 +93,12 @@ async def get_status(user_info: Dict[str, Any] = Depends(get_user_info)):
     Returns:
         Strategy status, user info, and accessible accounts
     """
+    # Create controller if not available (read-only mode)
     controller = get_strategy_controller()
+    if controller is None:
+        from strategies.control.funding_arb_controller import FundingArbStrategyController
+        controller = FundingArbStrategyController(strategy=None)
+    
     auth = get_auth()
     
     account_ids = await auth.get_accessible_account_ids(
@@ -172,7 +182,12 @@ async def get_positions(
     Returns:
         Positions grouped by account
     """
+    # Create controller if not available (read-only mode)
     controller = get_strategy_controller()
+    if controller is None:
+        from strategies.control.funding_arb_controller import FundingArbStrategyController
+        controller = FundingArbStrategyController(strategy=None)
+    
     auth = get_auth()
     
     # Validate account access if account_name provided
@@ -201,6 +216,54 @@ async def get_positions(
     return result
 
 
+@app.get("/api/v1/balances", response_model=Dict[str, Any])
+async def get_balances(
+    account_name: Optional[str] = Query(None, description="Filter by account name"),
+    user_info: Dict[str, Any] = Depends(get_user_info)
+):
+    """
+    Get available margin balances for accessible accounts across all exchanges.
+    
+    Args:
+        account_name: Optional account name filter
+        
+    Returns:
+        Balances grouped by account and exchange
+    """
+    # Create controller if not available (read-only mode)
+    controller = get_strategy_controller()
+    if controller is None:
+        from strategies.control.funding_arb_controller import FundingArbStrategyController
+        controller = FundingArbStrategyController(strategy=None)
+    
+    auth = get_auth()
+    
+    # Validate account access if account_name provided
+    account_id = None
+    if account_name:
+        account_id = await auth.validate_account_access(
+            user_info["user_id"],
+            user_info["is_admin"],
+            account_name
+        )
+    
+    account_ids = await auth.get_accessible_account_ids(
+        user_info["user_id"],
+        user_info["is_admin"]
+    )
+    
+    result = await controller.get_balances(
+        account_ids=account_ids,
+        account_name=account_name
+    )
+    
+    # Add user info to response
+    result["user"] = user_info["username"]
+    result["is_admin"] = user_info["is_admin"]
+    
+    return result
+
+
 @app.post("/api/v1/positions/{position_id}/close", response_model=Dict[str, Any])
 async def close_position(
     position_id: str,
@@ -217,7 +280,7 @@ async def close_position(
     Returns:
         Close operation result
     """
-    controller = get_strategy_controller()
+    controller = require_strategy_controller()  # Requires running strategy
     auth = get_auth()
     
     # Validate order_type
@@ -270,7 +333,7 @@ async def reload_config(user_info: Dict[str, Any] = Depends(get_user_info)):
     Returns:
         Reload operation result
     """
-    controller = get_strategy_controller()
+    controller = require_strategy_controller()  # Requires running strategy
     
     try:
         result = await controller.reload_config()
