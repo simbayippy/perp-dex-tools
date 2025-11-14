@@ -185,7 +185,6 @@ class SymbolMapper:
         symbol = symbol.upper()
         self._id_to_symbol[symbol_id] = symbol
         self._symbol_to_id[symbol] = symbol_id
-        logger.info(f"Added new symbol mapping: {symbol} -> {symbol_id}")
     
     def is_loaded(self) -> bool:
         """Check if mapper has been loaded"""

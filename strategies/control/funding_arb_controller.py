@@ -88,14 +88,14 @@ class FundingArbStrategyController(BaseStrategyController):
         if not dex_mapper.is_loaded():
             from database.repositories.dex_repository import DEXRepository
             dex_repo = DEXRepository(database)
-            dexes = await dex_repo.list_all()
+            dexes = await dex_repo.get_all()
             for dex in dexes:
                 dex_mapper.add(dex['id'], dex['name'])
         
         if not symbol_mapper.is_loaded():
             from database.repositories.symbol_repository import SymbolRepository
             symbol_repo = SymbolRepository(database)
-            symbols = await symbol_repo.list_all()
+            symbols = await symbol_repo.get_all()
             for sym in symbols:
                 symbol_mapper.add(sym['id'], sym['symbol'])
         
