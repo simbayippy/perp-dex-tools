@@ -385,13 +385,16 @@ class TradingBot:
     async def _start_control_server(self):
         """Start the control API server."""
         try:
+            # Debug logging
+            self.logger.info(f"🔧 _start_control_server called: strategy={self.config.strategy}, CONTROL_API_ENABLED={os.getenv('CONTROL_API_ENABLED', 'not set')}")
+            
             from strategies.control.server import app, set_strategy_controller
             from strategies.control.funding_arb_controller import FundingArbStrategyController
             import uvicorn
             
             # Only start for funding arbitrage strategy for now
             if self.config.strategy != "funding_arbitrage":
-                self.logger.info("Control API only supports funding_arbitrage strategy (skipping)")
+                self.logger.info(f"Control API only supports funding_arbitrage strategy (skipping, current: {self.config.strategy})")
                 return
             
             # Create controller
@@ -450,9 +453,30 @@ class TradingBot:
             
             self._control_server_task = asyncio.create_task(_run_server_with_error_handling())
             
-            # Wait a moment for uvicorn to initialize, then re-register signal handlers
+            # Wait for uvicorn to initialize and bind to port
+            # Uvicorn needs time to actually start listening, so we check multiple times
+            server_started = False
+            for attempt in range(10):  # Check up to 10 times (5 seconds total)
+                await asyncio.sleep(0.5)
+                if self._is_port_in_use(host, port):
+                    server_started = True
+                    break
+            
+            # Verify server actually started by checking if port is now listening
+            if not server_started:
+                self.logger.error(
+                    f"❌ Embedded control API server failed to start on {host}:{port} after 5 seconds. "
+                    f"Port is not listening. This may indicate: "
+                    f"1) Port {port} is already in use by another process, "
+                    f"2) Uvicorn failed to bind (check for errors above), "
+                    f"3) Firewall/network issue. "
+                    f"Hot-reload and position closing via API will not be available."
+                )
+            else:
+                self.logger.info(f"✅ Verified embedded control API server is listening on {host}:{port}")
+            
+            # Re-register signal handlers after uvicorn starts
             # This ensures our signal handlers take precedence over uvicorn's
-            await asyncio.sleep(0.1)
             
             # Re-register our signal handlers AFTER uvicorn starts
             # Create a signal handler that calls our shutdown logic
@@ -479,12 +503,21 @@ class TradingBot:
                 except Exception as e:
                     self.logger.warning(f"⚠️ Failed to re-register signal handlers: {e}")
             
-            self.logger.info(f"✅ Control API server started on http://{host}:{port}")
-            self.logger.info("   Endpoints:")
-            self.logger.info("   - GET  /api/v1/status")
-            self.logger.info("   - GET  /api/v1/accounts")
-            self.logger.info("   - GET  /api/v1/positions")
-            self.logger.info("   - POST /api/v1/positions/{id}/close")
+            # Only log success message if server is actually listening
+            if self._is_port_in_use(host, port):
+                self.logger.info(f"✅ Control API server started on http://{host}:{port}")
+                self.logger.info("   Endpoints:")
+                self.logger.info("   - GET  /api/v1/status")
+                self.logger.info("   - GET  /api/v1/accounts")
+                self.logger.info("   - GET  /api/v1/positions")
+                self.logger.info("   - POST /api/v1/positions/{id}/close")
+                self.logger.info("   - POST /api/v1/config/reload")
+            else:
+                self.logger.error(
+                    f"❌ Control API server failed to start on {host}:{port}. "
+                    f"Port is not listening. Hot-reload and position closing via API will not be available. "
+                    f"Check logs above for binding errors."
+                )
             
         except Exception as e:
             self.logger.error(f"Failed to start control API server: {e}")
@@ -588,8 +621,11 @@ class TradingBot:
             await self.strategy.initialize()
             
             # Start control API server if enabled
+            self.logger.info(f"🔧 Control API enabled check: {self._control_server_enabled} (CONTROL_API_ENABLED={os.getenv('CONTROL_API_ENABLED', 'not set')})")
             if self._control_server_enabled:
                 await self._start_control_server()
+            else:
+                self.logger.info("Control API disabled (CONTROL_API_ENABLED not set to 'true')")
             
             # Execution phase
             await self._run_trading_loop()
