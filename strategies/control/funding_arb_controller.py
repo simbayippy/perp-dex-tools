@@ -16,12 +16,14 @@ from strategies.implementations.funding_arbitrage.strategy import FundingArbitra
 class FundingArbStrategyController(BaseStrategyController):
     """Controller for funding arbitrage strategy"""
     
-    def __init__(self, strategy: FundingArbitrageStrategy):
+    def __init__(self, strategy: Optional[FundingArbitrageStrategy] = None):
         """
         Initialize funding arbitrage controller.
         
         Args:
-            strategy: FundingArbitrageStrategy instance
+            strategy: Optional FundingArbitrageStrategy instance. If None, controller works
+                     in read-only mode (can query balances/positions but cannot perform actions
+                     that require strategy state like closing positions or reloading config).
         """
         self.strategy = strategy
     
@@ -206,6 +208,10 @@ class FundingArbStrategyController(BaseStrategyController):
     
     async def _enrich_position_with_live_data(self, position: "FundingArbPosition"):
         """Enrich position with live exchange data (similar to position_monitor)."""
+        # Skip enrichment if no strategy instance (read-only mode)
+        if not self.strategy:
+            return
+        
         try:
             # Fetch exchange snapshots
             exchange_clients = self.strategy.exchange_clients
@@ -423,11 +429,11 @@ class FundingArbStrategyController(BaseStrategyController):
                 "liquidation_price": leg_meta.get("liquidation_price"),
             })
         
-        # Get risk config for min/max hold info
+        # Get risk config for min/max hold info (only if strategy available)
         min_hold_hours = None
         max_position_age_hours = None
         min_erosion_threshold = None
-        if hasattr(self.strategy, 'config') and hasattr(self.strategy.config, 'risk_config'):
+        if self.strategy and hasattr(self.strategy, 'config') and hasattr(self.strategy.config, 'risk_config'):
             risk_cfg = self.strategy.config.risk_config
             min_hold_hours = float(risk_cfg.min_hold_hours) if hasattr(risk_cfg, 'min_hold_hours') else None
             max_position_age_hours = float(risk_cfg.max_position_age_hours) if hasattr(risk_cfg, 'max_position_age_hours') else None
@@ -501,7 +507,13 @@ class FundingArbStrategyController(BaseStrategyController):
             
         Returns:
             Dict with close operation result
+            
+        Raises:
+            ValueError: If strategy not available (read-only mode)
         """
+        if not self.strategy:
+            raise ValueError("Cannot close positions: strategy controller is in read-only mode. Start a strategy to enable position closing.")
+        
         from database.connection import database
         
         # Validate position belongs to accessible account
@@ -714,7 +726,13 @@ class FundingArbStrategyController(BaseStrategyController):
         
         Returns:
             Dict with reload operation result
+            
+        Raises:
+            ValueError: If strategy not available (read-only mode)
         """
+        if not self.strategy:
+            raise ValueError("Cannot reload config: strategy controller is in read-only mode. Start a strategy to enable config reloading.")
+        
         try:
             success = await self.strategy.reload_config()
             if success:

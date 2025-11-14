@@ -51,12 +51,17 @@ def set_strategy_controller(controller: FundingArbStrategyController):
     _strategy_controller = controller
 
 
-def get_strategy_controller() -> FundingArbStrategyController:
-    """Get the strategy controller."""
+def get_strategy_controller() -> Optional[FundingArbStrategyController]:
+    """Get the strategy controller (may be None in read-only mode)."""
+    return _strategy_controller
+
+
+def require_strategy_controller() -> FundingArbStrategyController:
+    """Get the strategy controller, raising error if not available."""
     if _strategy_controller is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Strategy controller not available"
+            detail="Strategy controller not available. This operation requires a running strategy."
         )
     return _strategy_controller
 
@@ -88,7 +93,12 @@ async def get_status(user_info: Dict[str, Any] = Depends(get_user_info)):
     Returns:
         Strategy status, user info, and accessible accounts
     """
+    # Create controller if not available (read-only mode)
     controller = get_strategy_controller()
+    if controller is None:
+        from strategies.control.funding_arb_controller import FundingArbStrategyController
+        controller = FundingArbStrategyController(strategy=None)
+    
     auth = get_auth()
     
     account_ids = await auth.get_accessible_account_ids(
@@ -172,7 +182,12 @@ async def get_positions(
     Returns:
         Positions grouped by account
     """
+    # Create controller if not available (read-only mode)
     controller = get_strategy_controller()
+    if controller is None:
+        from strategies.control.funding_arb_controller import FundingArbStrategyController
+        controller = FundingArbStrategyController(strategy=None)
+    
     auth = get_auth()
     
     # Validate account access if account_name provided
@@ -215,7 +230,12 @@ async def get_balances(
     Returns:
         Balances grouped by account and exchange
     """
+    # Create controller if not available (read-only mode)
     controller = get_strategy_controller()
+    if controller is None:
+        from strategies.control.funding_arb_controller import FundingArbStrategyController
+        controller = FundingArbStrategyController(strategy=None)
+    
     auth = get_auth()
     
     # Validate account access if account_name provided
@@ -260,7 +280,7 @@ async def close_position(
     Returns:
         Close operation result
     """
-    controller = get_strategy_controller()
+    controller = require_strategy_controller()  # Requires running strategy
     auth = get_auth()
     
     # Validate order_type
@@ -313,7 +333,7 @@ async def reload_config(user_info: Dict[str, Any] = Depends(get_user_info)):
     Returns:
         Reload operation result
     """
-    controller = get_strategy_controller()
+    controller = require_strategy_controller()  # Requires running strategy
     
     try:
         result = await controller.reload_config()
