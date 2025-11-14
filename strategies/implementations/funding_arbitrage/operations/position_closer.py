@@ -750,10 +750,12 @@ class PositionCloser:
         filters = OpportunityFilter(
             min_profit_percent=strategy.config.min_profit,
             max_oi_usd=max_oi_cap,
+            min_volume_24h=strategy.config.min_volume_24h,
+            min_oi_usd=strategy.config.min_oi_usd,
             whitelist_dexes=whitelist_dexes,
             required_dex=required_dex,
             symbol=None,
-            limit=1,
+            limit=10,  # Fetch multiple opportunities to find first tradable one
         )
 
         try:
@@ -768,17 +770,31 @@ class PositionCloser:
         if not opportunities:
             return False
 
-        best = opportunities[0]
+        # Iterate through opportunities to find the first tradable one
+        best_tradeable = None
+        for opp in opportunities:
+            if await self._is_opportunity_tradeable(opp):
+                best_tradeable = opp
+                break
+        
+        # If no tradable opportunities found, don't skip closing
+        if best_tradeable is None:
+            strategy.logger.debug(
+                f"No tradable opportunities found - proceeding with close for {position.symbol}"
+            )
+            return False
+
         try:
-            net_profit = best.net_profit_percent
+            net_profit = best_tradeable.net_profit_percent
         except AttributeError:
             net_profit = None
 
+        # Compare the tradable opportunity to current position
         if (
-            best
-            and self._symbols_match(position.symbol, best.symbol)
-            and best.long_dex.lower() == position.long_dex.lower()
-            and best.short_dex.lower() == position.short_dex.lower()
+            best_tradeable
+            and self._symbols_match(position.symbol, best_tradeable.symbol)
+            and best_tradeable.long_dex.lower() == position.long_dex.lower()
+            and best_tradeable.short_dex.lower() == position.short_dex.lower()
             and net_profit is not None
             and net_profit >= strategy.config.min_profit
         ):
@@ -1429,6 +1445,106 @@ class PositionCloser:
             
             return resolved_contract
         return None
+
+    async def _is_opportunity_tradeable(
+        self,
+        opportunity: "ArbitrageOpportunity",
+    ) -> bool:
+        """
+        Validate that an opportunity is actually tradeable.
+        
+        Checks:
+        1. Symbol is not marked as untradeable on either DEX
+        2. Volume/OI data exists if required by config
+        3. Leverage info doesn't have MARKET_NOT_FOUND errors
+        
+        Args:
+            opportunity: ArbitrageOpportunity to validate
+            
+        Returns:
+            True if opportunity is tradeable, False otherwise
+        """
+        strategy = self._strategy
+        
+        try:
+            from funding_rate_service.core.opportunity_finder import OpportunityFinder
+        except Exception:
+            # If we can't import, assume tradeable (fail open)
+            return True
+        
+        symbol = opportunity.symbol
+        long_dex = opportunity.long_dex
+        short_dex = opportunity.short_dex
+        
+        # Check 1: Symbol marked as untradeable in cache
+        if not OpportunityFinder.is_symbol_tradeable(long_dex, symbol):
+            strategy.logger.debug(
+                f"⏭️  [{symbol}] Skipping opportunity - {long_dex} marked as untradeable"
+            )
+            return False
+        
+        if not OpportunityFinder.is_symbol_tradeable(short_dex, symbol):
+            strategy.logger.debug(
+                f"⏭️  [{symbol}] Skipping opportunity - {short_dex} marked as untradeable"
+            )
+            return False
+        
+        # Check 2: Volume/OI data availability if required by config
+        min_volume_24h = getattr(strategy.config, "min_volume_24h", None)
+        min_oi_usd = getattr(strategy.config, "min_oi_usd", None)
+        
+        if min_volume_24h is not None:
+            # Check if volume data exists
+            min_volume = opportunity.min_volume_24h
+            if min_volume is None:
+                strategy.logger.debug(
+                    f"⏭️  [{symbol}] Skipping opportunity - missing volume data "
+                    f"(required: ${min_volume_24h:.0f})"
+                )
+                return False
+        
+        if min_oi_usd is not None:
+            # Check if OI data exists
+            min_oi = opportunity.min_oi_usd
+            if min_oi is None:
+                strategy.logger.debug(
+                    f"⏭️  [{symbol}] Skipping opportunity - missing OI data "
+                    f"(required: ${min_oi_usd:.0f})"
+                )
+                return False
+        
+        # Check 3: Leverage info for MARKET_NOT_FOUND errors (lightweight check)
+        # This catches cases where market metadata can't be fetched
+        long_client = strategy.exchange_clients.get(long_dex)
+        short_client = strategy.exchange_clients.get(short_dex)
+        
+        if long_client and short_client:
+            try:
+                leverage_validator = getattr(strategy, "leverage_validator", None)
+                if leverage_validator:
+                    long_leverage_info = await leverage_validator.get_leverage_info(long_client, symbol)
+                    if long_leverage_info.error == "MARKET_NOT_FOUND":
+                        strategy.logger.debug(
+                            f"⏭️  [{symbol}] Skipping opportunity - MARKET_NOT_FOUND on {long_dex}"
+                        )
+                        OpportunityFinder.mark_symbol_untradeable(long_dex, symbol)
+                        return False
+                    
+                    short_leverage_info = await leverage_validator.get_leverage_info(short_client, symbol)
+                    if short_leverage_info.error == "MARKET_NOT_FOUND":
+                        strategy.logger.debug(
+                            f"⏭️  [{symbol}] Skipping opportunity - MARKET_NOT_FOUND on {short_dex}"
+                        )
+                        OpportunityFinder.mark_symbol_untradeable(short_dex, symbol)
+                        return False
+            except Exception as exc:
+                # If leverage check fails, log but don't block (might be transient)
+                strategy.logger.debug(
+                    f"⚠️  [{symbol}] Leverage check failed during tradability validation: {exc}"
+                )
+                # Continue - don't block on leverage check failures
+        
+        return True
 
     @staticmethod
     def _symbols_match(position_symbol: Optional[str], event_symbol: Optional[str]) -> bool:
