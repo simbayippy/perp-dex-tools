@@ -434,6 +434,149 @@ class OpportunitiesHandler(BaseHandler):
         
         return filters
     
+    async def opportunity_refresh_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle refresh button - refresh default unfiltered view."""
+        query = update.callback_query
+        await query.answer("🔄 Refreshing opportunities...")
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        try:
+            # Show loading message
+            await query.edit_message_text(
+                "🔍 <b>Finding opportunities...</b>\n\n"
+                "Scanning funding rates across all exchanges...",
+                parse_mode='HTML'
+            )
+            
+            # Find opportunities with minimal filters (unfiltered)
+            filters = OpportunityFilter(
+                limit=3,
+                min_profit_percent=Decimal("0"),  # No minimum profit filter
+                sort_by="net_profit_percent",
+                sort_desc=True
+            )
+            
+            opportunities = await self.opportunity_finder.find_opportunities(filters)
+            
+            # Format message
+            header = "📊 <b>Top Funding Arbitrage Opportunities</b>"
+            message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
+            
+            # Create keyboard with config button and refresh button
+            keyboard = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data="opportunity_refresh")],
+                [InlineKeyboardButton("⚙️ View My Configs", callback_data="opportunity_configs")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                message,
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Opportunity refresh callback error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Failed to refresh opportunities: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def opportunity_config_refresh_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle refresh button for config-filtered view."""
+        query = update.callback_query
+        await query.answer("🔄 Refreshing opportunities...")
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        # Parse config_id from callback data
+        callback_data = query.data
+        if not callback_data.startswith("opportunity_config_refresh:"):
+            await query.edit_message_text(
+                "❌ Invalid refresh request. Please try again.",
+                parse_mode='HTML'
+            )
+            return
+        
+        config_id = callback_data.split(":", 1)[1]
+        
+        try:
+            # Show loading message
+            await query.edit_message_text(
+                "🔍 <b>Finding opportunities...</b>\n\n"
+                "Applying config filters...",
+                parse_mode='HTML'
+            )
+            
+            # Get config from database
+            config_row = await self.database.fetch_one(
+                """
+                SELECT config_name, config_data, strategy_type, is_template, user_id
+                FROM strategy_configs
+                WHERE id = :id
+                """,
+                {"id": config_id}
+            )
+            
+            if not config_row:
+                await query.edit_message_text(
+                    "❌ Config not found.",
+                    parse_mode='HTML'
+                )
+                return
+            
+            config_dict = dict(config_row) if not isinstance(config_row, dict) else config_row
+            config_name = config_dict['config_name']
+            config_data_raw = config_dict['config_data']
+            
+            # Parse config_data (JSONB might be string or dict)
+            import json
+            if isinstance(config_data_raw, str):
+                try:
+                    config_data = json.loads(config_data_raw)
+                except json.JSONDecodeError:
+                    config_data = {}
+            else:
+                config_data = config_data_raw or {}
+            
+            # Convert config params to OpportunityFilter
+            filters = self._config_to_opportunity_filter(config_data)
+            filters.limit = 3
+            filters.sort_by = "net_profit_percent"
+            filters.sort_desc = True
+            
+            # Find opportunities with config filters
+            opportunities = await self.opportunity_finder.find_opportunities(filters)
+            
+            # Format message with config-specific header
+            header = f"📊 <b>Opportunities for: {config_name}</b>"
+            message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
+            
+            # Create keyboard with refresh and back button
+            keyboard = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data=f"opportunity_config_refresh:{config_id}")],
+                [InlineKeyboardButton("🔙 Back to Configs", callback_data="opportunity_configs")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                message,
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Opportunity config refresh error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Failed to refresh opportunities: {str(e)}",
+                parse_mode='HTML'
+            )
+    
     async def opportunity_back_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle back button - return to default unfiltered view."""
         query = update.callback_query
