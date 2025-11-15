@@ -113,39 +113,6 @@ class StrategyHandler(BaseHandler):
                 parse_mode='HTML'
             )
     
-    async def back_to_logs_filters_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle back button - return to filter selection for logs."""
-        query = update.callback_query
-        await query.answer()
-        
-        user, _ = await self.require_auth(update, context)
-        if not user:
-            return
-        
-        try:
-            # Show filter selection buttons (same as initial command)
-            keyboard = [
-                [InlineKeyboardButton("🟢 Running", callback_data="filter_logs:running")],
-                [InlineKeyboardButton("⚫ Stopped", callback_data="filter_logs:stopped")],
-                [InlineKeyboardButton("📋 All", callback_data="filter_logs:all")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            title = "📄 <b>View Logs</b>"
-            
-            await query.edit_message_text(
-                f"{title}\n\n"
-                "Select a filter to view strategy logs:",
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
-        except Exception as e:
-            self.logger.error(f"Back to logs filters error: {e}")
-            await query.edit_message_text(
-                f"❌ Error: {str(e)}",
-                parse_mode='HTML'
-            )
-    
     async def filter_strategies_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle filter selection for list_strategies."""
         query = update.callback_query
@@ -2104,121 +2071,57 @@ class StrategyHandler(BaseHandler):
             )
     
     async def logs_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /logs command - shows filter options."""
+        """Handle /logs command - shows quick view directly or strategy list."""
         user, _ = await self.require_auth(update, context)
         if not user:
             return
         
         try:
-            # Show filter selection buttons
-            keyboard = [
-                [InlineKeyboardButton("🟢 Running", callback_data="filter_logs:running")],
-                [InlineKeyboardButton("⚫ Stopped", callback_data="filter_logs:stopped")],
-                [InlineKeyboardButton("📋 All", callback_data="filter_logs:all")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            # Get running strategies
+            is_admin = user.get("is_admin", False)
+            user_id = None if is_admin else user["id"]
+            running_strategies = await self._get_logs_strategies_with_filter(user_id, 'running')
             
-            title = "📄 <b>View Logs</b>"
-            
-            await update.message.reply_text(
-                f"{title}\n\n"
-                "Select a filter to view strategy logs:",
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
+            if len(running_strategies) == 1:
+                # Exactly 1 running strategy - show quick view directly
+                run_id = str(running_strategies[0]['id'])
+                await self._show_logs_quick_view(update.message, run_id, user, back_to_list=False)
+            elif len(running_strategies) > 1:
+                # Multiple running strategies - show list
+                await self._show_logs_strategy_list(update.message, running_strategies, user, filter_type='running')
+            else:
+                # No running strategies - check for stopped strategies
+                stopped_strategies = await self._get_logs_strategies_with_filter(user_id, 'stopped')
+                if len(stopped_strategies) == 1:
+                    # Exactly 1 stopped strategy - show quick view directly
+                    run_id = str(stopped_strategies[0]['id'])
+                    await self._show_logs_quick_view(update.message, run_id, user, back_to_list=False)
+                elif len(stopped_strategies) > 1:
+                    # Multiple stopped strategies - show list with option
+                    keyboard = [
+                        [InlineKeyboardButton("⚫ View Stopped Strategies", callback_data="logs_stopped_list")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    await update.message.reply_text(
+                        "📄 <b>View Logs</b>\n\n"
+                        "No running strategies found.\n\n"
+                        "View stopped strategies?",
+                        parse_mode='HTML',
+                        reply_markup=reply_markup
+                    )
+                else:
+                    # No strategies at all
+                    await update.message.reply_text(
+                        "📄 <b>View Logs</b>\n\n"
+                        "No strategies found.\n"
+                        "Start a strategy with /run_strategy",
+                        parse_mode='HTML'
+                    )
             
         except Exception as e:
             self.logger.error(f"Logs command error: {e}", exc_info=True)
             await update.message.reply_text(
                 f"❌ Error: {str(e)}",
-                parse_mode='HTML'
-            )
-    
-    async def filter_logs_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle filter selection for logs."""
-        query = update.callback_query
-        await query.answer()
-        
-        user, _ = await self.require_auth(update, context)
-        if not user:
-            return
-        
-        # Parse filter type from callback data: "filter_logs:{filter_type}"
-        callback_data = query.data
-        filter_type = callback_data.split(":", 1)[1]
-        
-        try:
-            # Get strategies with filter applied
-            is_admin = user.get("is_admin", False)
-            user_id = None if is_admin else user["id"]
-            strategies = await self._get_logs_strategies_with_filter(user_id, filter_type)
-            
-            filter_label = {
-                'running': '🟢 Running',
-                'stopped': '⚫ Stopped',
-                'all': '📋 All'
-            }.get(filter_type, filter_type.title())
-            
-            if not strategies:
-                # Show back button instead of all filters
-                keyboard = [
-                    [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.edit_message_text(
-                    f"📄 <b>View Logs</b> - {filter_label}\n\n"
-                    "No strategies found matching this filter.\n"
-                    "Start a strategy with /run_strategy",
-                    parse_mode='HTML',
-                    reply_markup=reply_markup
-                )
-                return
-            
-            # Create strategy selection keyboard
-            keyboard = []
-            for strat in strategies:
-                run_id = str(strat['id'])
-                run_id_short = run_id[:8]
-                config_name = strat.get('config_name', 'Unknown')
-                strategy_type = strat.get('strategy_type', 'unknown')
-                
-                # Format strategy type for display
-                strategy_type_display = {
-                    'funding_arbitrage': 'Funding Arb',
-                    'grid': 'Grid'
-                }.get(strategy_type, strategy_type.title())
-                
-                status_emoji = {
-                    'running': '🟢',
-                    'starting': '🟡',
-                    'stopped': '⚫',
-                    'error': '🔴',
-                    'paused': '⏸'
-                }.get(strat['status'], '⚪')
-                
-                # Button label: "🟢 e9680e47 - Funding Arb"
-                button_label = f"{status_emoji} {run_id_short} - {strategy_type_display}"
-                keyboard.append([InlineKeyboardButton(
-                    button_label,
-                    callback_data=f"view_logs:{run_id}"
-                )])
-            
-            # Show back button instead of all filter buttons
-            keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                f"📄 <b>View Logs</b> - {filter_label}\n\n"
-                "Select a strategy to view logs:",
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
-            
-        except Exception as e:
-            self.logger.error(f"Filter logs error: {e}")
-            await query.edit_message_text(
-                f"❌ Failed to filter logs: {str(e)}",
                 parse_mode='HTML'
             )
     
@@ -2297,6 +2200,184 @@ class StrategyHandler(BaseHandler):
         
         return [dict(row) for row in rows]
     
+    async def _show_logs_strategy_list(self, message_or_query, strategies: list, user: dict, filter_type: str = 'running'):
+        """Helper method to show strategy list for logs view."""
+        filter_label = {
+            'running': '🟢 Running',
+            'stopped': '⚫ Stopped'
+        }.get(filter_type, filter_type.title())
+        
+        keyboard = []
+        for strat in strategies:
+            run_id = str(strat['id'])
+            run_id_short = run_id[:8]
+            config_name = strat.get('config_name', 'Unknown')
+            strategy_type = strat.get('strategy_type', 'unknown')
+            
+            # Format strategy type for display
+            strategy_type_display = {
+                'funding_arbitrage': 'Funding Arb',
+                'grid': 'Grid'
+            }.get(strategy_type, strategy_type.title())
+            
+            status_emoji = {
+                'running': '🟢',
+                'starting': '🟡',
+                'stopped': '⚫',
+                'error': '🔴',
+                'paused': '⏸'
+            }.get(strat['status'], '⚪')
+            
+            # Button label: "🟢 e9680e47 - Funding Arb"
+            button_label = f"{status_emoji} {run_id_short} - {strategy_type_display}"
+            keyboard.append([InlineKeyboardButton(
+                button_label,
+                callback_data=f"view_logs_quick:{run_id}"
+            )])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        text = f"📄 <b>View Logs</b> - {filter_label}\n\nSelect a strategy to view logs:"
+        
+        if hasattr(message_or_query, 'edit_message_text'):
+            # It's a callback query
+            await message_or_query.edit_message_text(
+                text,
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+        else:
+            # It's a message
+            await message_or_query.reply_text(
+                text,
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+    
+    async def _show_logs_quick_view(self, message_or_query, run_id: str, user: dict, back_to_list: bool = True, back_callback_data: str = None):
+        """Helper method to show quick view of logs."""
+        # Get log file info
+        log_info = await self._get_log_file_info(run_id, user)
+        if not log_info:
+            error_text = "❌ Strategy not found or you don't have permission to view logs"
+            if hasattr(message_or_query, 'edit_message_text'):
+                await message_or_query.edit_message_text(error_text, parse_mode='HTML')
+            else:
+                await message_or_query.reply_text(error_text, parse_mode='HTML')
+            return
+        
+        log_file, run_id_full, run_id_short, config_name, strategy_type_display = log_info
+        
+        # If log file not found, inform user
+        if not log_file or not Path(log_file).exists():
+            keyboard = []
+            if back_to_list and back_callback_data:
+                keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data=back_callback_data)])
+            elif back_to_list:
+                # Default back to logs command
+                keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="logs_back")])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+            
+            error_text = (
+                f"📄 <b>Log File Not Found</b>\n\n"
+                f"Strategy: {strategy_type_display}\n"
+                f"Config: {config_name}\n"
+                f"Run ID: <code>{run_id_short}</code>\n\n"
+                f"⚠️ The log file may have been cleaned up or deleted."
+            )
+            
+            if hasattr(message_or_query, 'edit_message_text'):
+                await message_or_query.edit_message_text(
+                    error_text,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+            else:
+                await message_or_query.reply_text(
+                    error_text,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+            return
+        
+        # Read last 15 lines from log file
+        try:
+            with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+                last_15_lines = lines[-15:] if len(lines) > 15 else lines
+        except Exception as e:
+            self.logger.error(f"Error reading log file: {e}")
+            error_text = f"❌ Error reading log file: {str(e)}"
+            if hasattr(message_or_query, 'edit_message_text'):
+                await message_or_query.edit_message_text(error_text, parse_mode='HTML')
+            else:
+                await message_or_query.reply_text(error_text, parse_mode='HTML')
+            return
+        
+        # Clean and format log lines
+        formatted_lines = []
+        line_number = 1
+        for line in last_15_lines:
+            line = line.rstrip('\n\r')
+            cleaned_line = self._clean_log_line(line)
+            if not cleaned_line:
+                continue
+            cleaned_line = cleaned_line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            formatted_line = f"{line_number}. {cleaned_line}"
+            formatted_lines.append(formatted_line)
+            line_number += 1
+        
+        log_content = '\n\n'.join(formatted_lines)
+        
+        # Telegram message limit is 4096 characters
+        max_content_length = 3500
+        if len(log_content) > max_content_length:
+            log_content = log_content[:max_content_length] + "\n... (truncated)"
+        
+        log_content = f"<pre><code>{log_content}</code></pre>"
+        
+        # Build keyboard
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh", callback_data=f"view_logs_quick:{run_id}")],
+            [InlineKeyboardButton("📄 Full Log File", callback_data=f"view_logs_full:{run_id}")]
+        ]
+        
+        if back_to_list:
+            if back_callback_data:
+                keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data=back_callback_data)])
+            else:
+                keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="logs_back")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        text = (
+            f"⚡ <b>Quick View - Last 15 Logs</b>\n\n"
+            f"Strategy: {strategy_type_display}\n"
+            f"Config: {config_name}\n"
+            f"Run ID: <code>{run_id_short}</code>\n\n"
+            f"{log_content}"
+        )
+        
+        if hasattr(message_or_query, 'edit_message_text'):
+            try:
+                await message_or_query.edit_message_text(
+                    text,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+            except BadRequest as e:
+                if "Message is not modified" in str(e):
+                    await message_or_query.answer("✅ Logs are up to date", show_alert=False)
+                else:
+                    raise
+        else:
+            await message_or_query.reply_text(
+                text,
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+    
     async def _get_log_file_info(self, run_id: str, user: dict) -> tuple:
         """
         Helper method to get log file information for a strategy run.
@@ -2370,79 +2451,6 @@ class StrategyHandler(BaseHandler):
         
         return (log_file, run_id_full, run_id_short, config_name, strategy_type_display)
     
-    async def view_logs_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle callback for viewing logs - shows choice menu."""
-        query = update.callback_query
-        await query.answer()
-        
-        user, _ = await self.require_auth(update, context)
-        if not user:
-            return
-        
-        # Parse callback data: "view_logs:{run_id}"
-        callback_data = query.data
-        if not callback_data.startswith("view_logs:"):
-            await query.edit_message_text(
-                "❌ Invalid selection. Please use /logs again.",
-                parse_mode='HTML'
-            )
-            return
-        
-        run_id = callback_data.split(":", 1)[1]
-        
-        try:
-            # Get log file info
-            log_info = await self._get_log_file_info(run_id, user)
-            if not log_info:
-                await query.edit_message_text(
-                    "❌ Strategy not found or you don't have permission to view logs",
-                    parse_mode='HTML'
-                )
-                return
-            
-            log_file, run_id_full, run_id_short, config_name, strategy_type_display = log_info
-            
-            # If log file not found, inform user
-            if not log_file or not Path(log_file).exists():
-                await query.edit_message_text(
-                    f"📄 <b>Log File Not Found</b>\n\n"
-                    f"Strategy: {strategy_type_display}\n"
-                    f"Config: {config_name}\n"
-                    f"Run ID: <code>{run_id_short}</code>\n\n"
-                    f"⚠️ The log file may have been cleaned up or deleted.\n"
-                    f"This is expected if logs were manually removed.",
-                    parse_mode='HTML',
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
-                    ])
-                )
-                return
-            
-            # Show choice menu
-            keyboard = [
-                [InlineKeyboardButton("⚡ Quick View (Last 15)", callback_data=f"view_logs_quick:{run_id}")],
-                [InlineKeyboardButton("📄 Full Log File", callback_data=f"view_logs_full:{run_id}")],
-                [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                f"📄 <b>View Logs</b>\n\n"
-                f"Strategy: {strategy_type_display}\n"
-                f"Config: {config_name}\n"
-                f"Run ID: <code>{run_id_short}</code>\n\n"
-                f"Choose how you want to view the logs:",
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
-                
-        except Exception as e:
-            self.logger.error(f"View logs error: {e}", exc_info=True)
-            await query.edit_message_text(
-                f"❌ Error getting logs: {str(e)}",
-                    parse_mode='HTML'
-                )
-    
     async def view_logs_quick_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle quick view callback - shows last 15 log lines formatted in HTML."""
         query = update.callback_query
@@ -2450,8 +2458,8 @@ class StrategyHandler(BaseHandler):
         
         user, _ = await self.require_auth(update, context)
         if not user:
-                return
-            
+            return
+        
         # Parse callback data: "view_logs_quick:{run_id}"
         callback_data = query.data
         if not callback_data.startswith("view_logs_quick:"):
@@ -2464,108 +2472,128 @@ class StrategyHandler(BaseHandler):
         run_id = callback_data.split(":", 1)[1]
         
         try:
-            # Get log file info
-            log_info = await self._get_log_file_info(run_id, user)
-            if not log_info:
-                await query.edit_message_text(
-                    "❌ Strategy not found or you don't have permission to view logs",
-                    parse_mode='HTML'
-                )
-                return
+            # Determine if we should show back button and what callback to use
+            # Check if there are multiple running strategies to determine back navigation
+            is_admin = user.get("is_admin", False)
+            user_id = None if is_admin else user["id"]
+            running_strategies = await self._get_logs_strategies_with_filter(user_id, 'running')
             
-            log_file, run_id_full, run_id_short, config_name, strategy_type_display = log_info
+            back_to_list = len(running_strategies) > 1
+            back_callback_data = "logs_back_to_running" if back_to_list else None
             
-            # If log file not found, inform user
-            if not log_file or not Path(log_file).exists():
-                await query.edit_message_text(
-                    f"📄 <b>Log File Not Found</b>\n\n"
-                    f"Strategy: {strategy_type_display}\n"
-                    f"Config: {config_name}\n"
-                    f"Run ID: <code>{run_id_short}</code>\n\n"
-                    f"⚠️ The log file may have been cleaned up or deleted.",
-                    parse_mode='HTML',
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
-                    ])
-                )
-                return
-            
-            # Read last 15 lines from log file
-            try:
-                with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
-                    lines = f.readlines()
-                    last_15_lines = lines[-15:] if len(lines) > 15 else lines
-            except Exception as e:
-                self.logger.error(f"Error reading log file: {e}")
-                await query.edit_message_text(
-                    f"❌ Error reading log file: {str(e)}",
-                    parse_mode='HTML'
-                )
-                return
-            
-            # Clean and format log lines
-            # Strip ANSI codes, timestamps, log levels, and module info - keep only core messages
-            formatted_lines = []
-            line_number = 1
-            for line in last_15_lines:
-                # Remove trailing newline
-                line = line.rstrip('\n\r')
-                # Clean the log line to extract only the core message
-                cleaned_line = self._clean_log_line(line)
-                # Skip empty lines
-                if not cleaned_line:
-                    continue
-                # Escape HTML special characters
-                cleaned_line = cleaned_line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                # Add line number and separator for better readability
-                formatted_line = f"{line_number}. {cleaned_line}"
-                formatted_lines.append(formatted_line)
-                line_number += 1
-            
-            # Join with double newline for better visual separation
-            log_content = '\n\n'.join(formatted_lines)
-            
-            # Telegram message limit is 4096 characters
-            # Reserve space for header and HTML tags
-            max_content_length = 3500
-            if len(log_content) > max_content_length:
-                # Truncate if too long
-                log_content = log_content[:max_content_length] + "\n... (truncated)"
-            
-            # Wrap entire content in preformatted code block for better display
-            log_content = f"<pre><code>{log_content}</code></pre>"
-            
-            keyboard = [
-                [InlineKeyboardButton("🔄 Refresh", callback_data=f"view_logs_quick:{run_id}")],
-                [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            try:
-                await query.edit_message_text(
-                    f"⚡ <b>Quick View - Last 15 Logs</b>\n\n"
-                    f"Strategy: {strategy_type_display}\n"
-                    f"Config: {config_name}\n"
-                    f"Run ID: <code>{run_id_short}</code>\n\n"
-                    f"{log_content}",
-                    parse_mode='HTML',
-                    reply_markup=reply_markup
-                )
-            except BadRequest as e:
-                # Handle "Message is not modified" error gracefully
-                # This happens when logs haven't changed since last refresh
-                if "Message is not modified" in str(e):
-                    # Notify user that logs are up to date
-                    await query.answer("✅ Logs are up to date", show_alert=False)
-                    return
-                else:
-                    # Re-raise other BadRequest errors
-                    raise
-                
+            await self._show_logs_quick_view(query, run_id, user, back_to_list=back_to_list, back_callback_data=back_callback_data)
         except Exception as e:
             self.logger.error(f"View logs quick error: {e}", exc_info=True)
             await query.edit_message_text(
                 f"❌ Error getting logs: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def logs_stopped_list_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle callback to show stopped strategies list."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        try:
+            is_admin = user.get("is_admin", False)
+            user_id = None if is_admin else user["id"]
+            stopped_strategies = await self._get_logs_strategies_with_filter(user_id, 'stopped')
+            
+            if stopped_strategies:
+                await self._show_logs_strategy_list(query, stopped_strategies, user, filter_type='stopped')
+            else:
+                await query.edit_message_text(
+                    "📄 <b>View Logs</b>\n\n"
+                    "No stopped strategies found.",
+                    parse_mode='HTML'
+                )
+        except Exception as e:
+            self.logger.error(f"Logs stopped list error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Error: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def logs_back_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle back button from logs view - returns to strategy list or logs command."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        try:
+            is_admin = user.get("is_admin", False)
+            user_id = None if is_admin else user["id"]
+            running_strategies = await self._get_logs_strategies_with_filter(user_id, 'running')
+            
+            if len(running_strategies) > 1:
+                # Show running strategies list
+                await self._show_logs_strategy_list(query, running_strategies, user, filter_type='running')
+            elif len(running_strategies) == 1:
+                # Show quick view directly
+                run_id = str(running_strategies[0]['id'])
+                await self._show_logs_quick_view(query, run_id, user, back_to_list=False)
+            else:
+                # No running strategies - show message
+                stopped_strategies = await self._get_logs_strategies_with_filter(user_id, 'stopped')
+                if stopped_strategies:
+                    keyboard = [
+                        [InlineKeyboardButton("⚫ View Stopped Strategies", callback_data="logs_stopped_list")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    await query.edit_message_text(
+                        "📄 <b>View Logs</b>\n\n"
+                        "No running strategies found.\n\n"
+                        "View stopped strategies?",
+                        parse_mode='HTML',
+                        reply_markup=reply_markup
+                    )
+                else:
+                    await query.edit_message_text(
+                        "📄 <b>View Logs</b>\n\n"
+                        "No strategies found.\n"
+                        "Start a strategy with /run_strategy",
+                        parse_mode='HTML'
+                    )
+        except Exception as e:
+            self.logger.error(f"Logs back error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Error: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def logs_back_to_running_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle back button to return to running strategies list."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        try:
+            is_admin = user.get("is_admin", False)
+            user_id = None if is_admin else user["id"]
+            running_strategies = await self._get_logs_strategies_with_filter(user_id, 'running')
+            
+            if running_strategies:
+                await self._show_logs_strategy_list(query, running_strategies, user, filter_type='running')
+            else:
+                await query.edit_message_text(
+                    "📄 <b>View Logs</b>\n\n"
+                    "No running strategies found.",
+                    parse_mode='HTML'
+                )
+        except Exception as e:
+            self.logger.error(f"Logs back to running error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ Error: {str(e)}",
                 parse_mode='HTML'
             )
     
@@ -2603,6 +2631,19 @@ class StrategyHandler(BaseHandler):
             
             # If log file not found, inform user
             if not log_file or not Path(log_file).exists():
+                # Determine back navigation
+                is_admin = user.get("is_admin", False)
+                user_id = None if is_admin else user["id"]
+                running_strategies = await self._get_logs_strategies_with_filter(user_id, 'running')
+                
+                keyboard = []
+                if len(running_strategies) > 1:
+                    keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="logs_back_to_running")])
+                elif len(running_strategies) == 1:
+                    keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="logs_back")])
+                
+                reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+                
                 await query.edit_message_text(
                     f"📄 <b>Log File Not Found</b>\n\n"
                     f"Strategy: {strategy_type_display}\n"
@@ -2611,9 +2652,7 @@ class StrategyHandler(BaseHandler):
                     f"⚠️ The log file may have been cleaned up or deleted.\n"
                     f"This is expected if logs were manually removed.",
                     parse_mode='HTML',
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
-                    ])
+                    reply_markup=reply_markup
                 )
                 return
             
@@ -2635,10 +2674,20 @@ class StrategyHandler(BaseHandler):
                 )
             
             # Update the message to show success
+            # Determine back navigation based on running strategies
+            is_admin = user.get("is_admin", False)
+            user_id = None if is_admin else user["id"]
+            running_strategies = await self._get_logs_strategies_with_filter(user_id, 'running')
+            
             keyboard = [
-                [InlineKeyboardButton("⚡ Quick View (Last 15)", callback_data=f"view_logs_quick:{run_id}")],
-                [InlineKeyboardButton("⬅️ Back", callback_data="back_to_logs_filters")]
+                [InlineKeyboardButton("⚡ Quick View (Last 15)", callback_data=f"view_logs_quick:{run_id}")]
             ]
+            
+            if len(running_strategies) > 1:
+                keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="logs_back_to_running")])
+            elif len(running_strategies) == 1:
+                keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="logs_back")])
+            
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
@@ -3173,10 +3222,6 @@ class StrategyHandler(BaseHandler):
             pattern="^run_config:"
         ))
         application.add_handler(CallbackQueryHandler(
-            self.view_logs_callback,
-            pattern="^view_logs:"
-        ))
-        application.add_handler(CallbackQueryHandler(
             self.view_logs_quick_callback,
             pattern="^view_logs_quick:"
         ))
@@ -3185,20 +3230,24 @@ class StrategyHandler(BaseHandler):
             pattern="^view_logs_full:"
         ))
         application.add_handler(CallbackQueryHandler(
+            self.logs_stopped_list_callback,
+            pattern="^logs_stopped_list$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.logs_back_callback,
+            pattern="^logs_back$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.logs_back_to_running_callback,
+            pattern="^logs_back_to_running$"
+        ))
+        application.add_handler(CallbackQueryHandler(
             self.filter_strategies_callback,
             pattern="^filter_strategies:"
         ))
         application.add_handler(CallbackQueryHandler(
-            self.filter_logs_callback,
-            pattern="^filter_logs:"
-        ))
-        application.add_handler(CallbackQueryHandler(
             self.back_to_strategies_filters_callback,
             pattern="^back_to_strategies_filters$"
-        ))
-        application.add_handler(CallbackQueryHandler(
-            self.back_to_logs_filters_callback,
-            pattern="^back_to_logs_filters$"
         ))
         application.add_handler(CallbackQueryHandler(
             self.stop_strategy_callback,
