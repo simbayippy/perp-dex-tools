@@ -47,83 +47,78 @@ async def find_symbol_dex_records(
     Returns:
         Dictionary with found records
     """
-    await database.connect()
+    # Note: Database connection should be managed by caller
+    # Get dex_id and symbol_id
+    dex_query = "SELECT id, name FROM dexes WHERE name = :dex_name"
+    dex_row = await database.fetch_one(dex_query, values={"dex_name": dex_name.lower()})
     
-    try:
-        # Get dex_id and symbol_id
-        dex_query = "SELECT id, name FROM dexes WHERE name = :dex_name"
-        dex_row = await database.fetch_one(dex_query, values={"dex_name": dex_name.lower()})
-        
-        if not dex_row:
-            return {
-                'found': False,
-                'error': f"DEX '{dex_name}' not found",
-                'records': {}
-            }
-        
-        dex_id = dex_row['id']
-        
-        symbol_query = "SELECT id, symbol FROM symbols WHERE symbol = :symbol"
-        symbol_row = await database.fetch_one(symbol_query, values={"symbol": symbol.upper()})
-        
-        if not symbol_row:
-            return {
-                'found': False,
-                'error': f"Symbol '{symbol}' not found",
-                'records': {}
-            }
-        
-        symbol_id = symbol_row['id']
-        
-        # Check latest_funding_rates
-        lfr_query = """
-            SELECT funding_rate, updated_at 
-            FROM latest_funding_rates 
-            WHERE dex_id = :dex_id AND symbol_id = :symbol_id
-        """
-        lfr_row = await database.fetch_one(
-            lfr_query, 
-            values={"dex_id": dex_id, "symbol_id": symbol_id}
-        )
-        
-        # Check dex_symbols
-        ds_query = """
-            SELECT dex_symbol_format, is_active, volume_24h, open_interest_usd, updated_at
-            FROM dex_symbols 
-            WHERE dex_id = :dex_id AND symbol_id = :symbol_id
-        """
-        ds_row = await database.fetch_one(
-            ds_query,
-            values={"dex_id": dex_id, "symbol_id": symbol_id}
-        )
-        
-        # Count funding_rates historical records
-        fr_count_query = """
-            SELECT COUNT(*) as count 
-            FROM funding_rates 
-            WHERE dex_id = :dex_id AND symbol_id = :symbol_id
-        """
-        fr_count_row = await database.fetch_one(
-            fr_count_query,
-            values={"dex_id": dex_id, "symbol_id": symbol_id}
-        )
-        fr_count = fr_count_row['count'] if fr_count_row else 0
-        
+    if not dex_row:
         return {
-            'found': True,
-            'dex_id': dex_id,
-            'symbol_id': symbol_id,
-            'dex_name': dex_row['name'],
-            'symbol': symbol_row['symbol'],
-            'records': {
-                'latest_funding_rate': lfr_row,
-                'dex_symbol': ds_row,
-                'historical_funding_rates_count': fr_count
-            }
+            'found': False,
+            'error': f"DEX '{dex_name}' not found",
+            'records': {}
         }
-        
-    finally:
-        await database.disconnect()
+    
+    dex_id = dex_row['id']
+    
+    symbol_query = "SELECT id, symbol FROM symbols WHERE symbol = :symbol"
+    symbol_row = await database.fetch_one(symbol_query, values={"symbol": symbol.upper()})
+    
+    if not symbol_row:
+        return {
+            'found': False,
+            'error': f"Symbol '{symbol}' not found",
+            'records': {}
+        }
+    
+    symbol_id = symbol_row['id']
+    
+    # Check latest_funding_rates
+    lfr_query = """
+        SELECT funding_rate, updated_at 
+        FROM latest_funding_rates 
+        WHERE dex_id = :dex_id AND symbol_id = :symbol_id
+    """
+    lfr_row = await database.fetch_one(
+        lfr_query, 
+        values={"dex_id": dex_id, "symbol_id": symbol_id}
+    )
+    
+    # Check dex_symbols
+    ds_query = """
+        SELECT dex_symbol_format, is_active, volume_24h, open_interest_usd, updated_at
+        FROM dex_symbols 
+        WHERE dex_id = :dex_id AND symbol_id = :symbol_id
+    """
+    ds_row = await database.fetch_one(
+        ds_query,
+        values={"dex_id": dex_id, "symbol_id": symbol_id}
+    )
+    
+    # Count funding_rates historical records
+    fr_count_query = """
+        SELECT COUNT(*) as count 
+        FROM funding_rates 
+        WHERE dex_id = :dex_id AND symbol_id = :symbol_id
+    """
+    fr_count_row = await database.fetch_one(
+        fr_count_query,
+        values={"dex_id": dex_id, "symbol_id": symbol_id}
+    )
+    fr_count = fr_count_row['count'] if fr_count_row else 0
+    
+    return {
+        'found': True,
+        'dex_id': dex_id,
+        'symbol_id': symbol_id,
+        'dex_name': dex_row['name'],
+        'symbol': symbol_row['symbol'],
+        'records': {
+            'latest_funding_rate': lfr_row,
+            'dex_symbol': ds_row,
+            'historical_funding_rates_count': fr_count
+        }
+    }
 
 
 async def remove_symbol_dex(
@@ -142,72 +137,67 @@ async def remove_symbol_dex(
     Returns:
         Dictionary with removal results
     """
-    await database.connect()
+    # Note: Database connection should be managed by caller
+    # First find the records
+    found = await find_symbol_dex_records(symbol, dex_name)
     
-    try:
-        # First find the records
-        found = await find_symbol_dex_records(symbol, dex_name)
-        
-        if not found['found']:
-            return {
-                'success': False,
-                'error': found.get('error', 'Records not found'),
-                'removed': {}
-            }
-        
-        dex_id = found['dex_id']
-        symbol_id = found['symbol_id']
-        
-        removed = {
-            'latest_funding_rate': False,
-            'dex_symbol': False,
-            'historical_funding_rates': 0
+    if not found['found']:
+        return {
+            'success': False,
+            'error': found.get('error', 'Records not found'),
+            'removed': {}
         }
-        
-        if dry_run:
-            return {
-                'success': True,
-                'dry_run': True,
-                'found': found,
-                'would_remove': removed
-            }
-        
-        # Remove from latest_funding_rates
-        if found['records']['latest_funding_rate']:
-            delete_lfr_query = """
-                DELETE FROM latest_funding_rates 
-                WHERE dex_id = :dex_id AND symbol_id = :symbol_id
-            """
-            await database.execute(
-                delete_lfr_query,
-                values={"dex_id": dex_id, "symbol_id": symbol_id}
-            )
-            removed['latest_funding_rate'] = True
-        
-        # Remove from dex_symbols
-        if found['records']['dex_symbol']:
-            delete_ds_query = """
-                DELETE FROM dex_symbols 
-                WHERE dex_id = :dex_id AND symbol_id = :symbol_id
-            """
-            await database.execute(
-                delete_ds_query,
-                values={"dex_id": dex_id, "symbol_id": symbol_id}
-            )
-            removed['dex_symbol'] = True
-        
-        # Note: We don't delete historical funding_rates as they're part of time-series data
-        # and might be useful for historical analysis. If needed, this can be added.
-        
+    
+    dex_id = found['dex_id']
+    symbol_id = found['symbol_id']
+    
+    removed = {
+        'latest_funding_rate': False,
+        'dex_symbol': False,
+        'historical_funding_rates': 0
+    }
+    
+    if dry_run:
         return {
             'success': True,
-            'dry_run': False,
+            'dry_run': True,
             'found': found,
-            'removed': removed
+            'would_remove': removed
         }
-        
-    finally:
-        await database.disconnect()
+    
+    # Remove from latest_funding_rates
+    if found['records']['latest_funding_rate']:
+        delete_lfr_query = """
+            DELETE FROM latest_funding_rates 
+            WHERE dex_id = :dex_id AND symbol_id = :symbol_id
+        """
+        await database.execute(
+            delete_lfr_query,
+            values={"dex_id": dex_id, "symbol_id": symbol_id}
+        )
+        removed['latest_funding_rate'] = True
+    
+    # Remove from dex_symbols
+    if found['records']['dex_symbol']:
+        delete_ds_query = """
+            DELETE FROM dex_symbols 
+            WHERE dex_id = :dex_id AND symbol_id = :symbol_id
+        """
+        await database.execute(
+            delete_ds_query,
+            values={"dex_id": dex_id, "symbol_id": symbol_id}
+        )
+        removed['dex_symbol'] = True
+    
+    # Note: We don't delete historical funding_rates as they're part of time-series data
+    # and might be useful for historical analysis. If needed, this can be added.
+    
+    return {
+        'success': True,
+        'dry_run': False,
+        'found': found,
+        'removed': removed
+    }
 
 
 def create_preview_table(found: Dict) -> Table:
@@ -294,6 +284,9 @@ Examples:
     
     console.print(f"\n[bold cyan]🔍 Searching for {args.symbol} on {args.dex.upper()}...[/bold cyan]\n")
     
+    # Connect to database once at the start
+    await database.connect()
+    
     try:
         # First, find the records
         found = await find_symbol_dex_records(args.symbol, args.dex)
@@ -355,6 +348,8 @@ Examples:
         import traceback
         traceback.print_exc()
         sys.exit(1)
+    finally:
+        await database.disconnect()
 
 
 if __name__ == "__main__":
