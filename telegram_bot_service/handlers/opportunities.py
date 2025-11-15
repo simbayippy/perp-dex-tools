@@ -55,7 +55,7 @@ class OpportunitiesHandler(BaseHandler):
         short_display = f"{short_emoji} {opp.short_dex.upper()}" if short_emoji else opp.short_dex.upper()
         
         lines = [
-            f"<u>{index}.</u> <b>{opp.symbol}</b>",
+            f"<b><u>{index}. {opp.symbol}</u></b>",
             f"  Long: {long_display} | Short: {short_display}",
             ""
         ]

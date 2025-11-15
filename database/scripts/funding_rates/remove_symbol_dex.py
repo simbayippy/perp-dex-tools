@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional, Dict
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from dotenv import load_dotenv
 load_dotenv()
