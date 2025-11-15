@@ -631,7 +631,7 @@ class OpportunitiesHandler(BaseHandler):
     def register_handlers(self, application):
         """Register opportunity command and callback handlers"""
         # Command handler
-        application.add_handler(CommandHandler("opportunity", self.opportunity_command))
+        application.add_handler(CommandHandler("opportunities", self.opportunity_command))
         
         # Callback query handlers
         application.add_handler(CallbackQueryHandler(

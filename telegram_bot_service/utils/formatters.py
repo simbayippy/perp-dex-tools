@@ -451,7 +451,7 @@ class TelegramFormatter:
 /close - Close a position
 
 <b>💎 Opportunities:</b>
-/opportunity - View top funding arbitrage opportunities across exchanges 
+/opportunities - View top funding arbitrage opportunities across exchanges 
 
 <b>👤 Account Management:</b>
 /create_account - Create new account 
