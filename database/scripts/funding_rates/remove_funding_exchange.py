@@ -154,33 +154,33 @@ async def remove_exchange_data(
     # Delete latest_funding_rates
     delete_lfr_query = "DELETE FROM latest_funding_rates WHERE dex_id = :dex_id"
     result = await database.execute(delete_lfr_query, values={"dex_id": dex_id})
-    removed['latest_funding_rates'] = result
+    removed['latest_funding_rates'] = result or 0
     
     # Delete opportunities where this exchange is long_dex
     delete_opp_long_query = "DELETE FROM opportunities WHERE long_dex_id = :dex_id"
     result = await database.execute(delete_opp_long_query, values={"dex_id": dex_id})
-    removed['opportunities_as_long'] = result
+    removed['opportunities_as_long'] = result or 0
     
     # Delete opportunities where this exchange is short_dex
     delete_opp_short_query = "DELETE FROM opportunities WHERE short_dex_id = :dex_id"
     result = await database.execute(delete_opp_short_query, values={"dex_id": dex_id})
-    removed['opportunities_as_short'] = result
+    removed['opportunities_as_short'] = result or 0
     
     # Delete collection_logs
     delete_logs_query = "DELETE FROM collection_logs WHERE dex_id = :dex_id"
     result = await database.execute(delete_logs_query, values={"dex_id": dex_id})
-    removed['collection_logs'] = result
+    removed['collection_logs'] = result or 0
     
     # Delete historical funding_rates (optional)
     if not keep_historical:
         delete_fr_query = "DELETE FROM funding_rates WHERE dex_id = :dex_id"
         result = await database.execute(delete_fr_query, values={"dex_id": dex_id})
-        removed['historical_funding_rates'] = result
+        removed['historical_funding_rates'] = result or 0
     
     # Delete dex_symbols (will cascade if needed, but explicit is cleaner)
     delete_ds_query = "DELETE FROM dex_symbols WHERE dex_id = :dex_id"
     result = await database.execute(delete_ds_query, values={"dex_id": dex_id})
-    removed['dex_symbols'] = result
+    removed['dex_symbols'] = result or 0
     
     # Finally, delete the dex entry itself
     delete_dex_query = "DELETE FROM dexes WHERE id = :dex_id"
