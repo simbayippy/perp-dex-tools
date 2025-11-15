@@ -13,7 +13,6 @@ from funding_rate_service.core.fee_calculator import FundingArbFeeCalculator
 from funding_rate_service.core.mappers import dex_mapper, symbol_mapper
 from funding_rate_service.models.filters import OpportunityFilter
 from funding_rate_service.models.opportunity import ArbitrageOpportunity
-from database.connection import database
 
 # Exchange emoji mapping (reuse from strategy notification service)
 EXCHANGE_EMOJIS = {
@@ -32,10 +31,10 @@ class OpportunitiesHandler(BaseHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        # Initialize OpportunityFinder (shared database connection)
+        # Initialize OpportunityFinder (use self.database which is connected)
         self.fee_calculator = FundingArbFeeCalculator()
         self.opportunity_finder = OpportunityFinder(
-            database=database,
+            database=self.database,
             fee_calculator=self.fee_calculator,
             dex_mapper=dex_mapper,
             symbol_mapper=symbol_mapper
