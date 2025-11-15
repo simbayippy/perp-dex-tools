@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 """
-Remove Symbol-DEX Combination
+Remove Funding Data for Symbol-DEX Combination
 
-Remove a specific symbol-dex combination from the database.
+Remove funding rate data for a specific symbol-dex combination from the database.
+This removes the data that appears in view_all_exchange_data.py:
+- Latest funding rates (latest_funding_rates table)
+- DEX symbol mappings and market data (dex_symbols table)
+
+This does NOT remove:
+- Opportunities (preserved)
+- Historical funding rates (preserved)
+
 This is useful for removing outdated or problematic symbols that are no longer
 traded on a specific exchange but still have stale data in the database.
 
 Usage:
-    python remove_symbol_dex.py --symbol AI16Z --dex paradex    # Remove AI16Z from PARADEX
-    python remove_symbol_dex.py --symbol AI16Z --dex paradex --dry-run  # Preview what would be removed
+    python remove_funding_symbol_dex.py --symbol AI16Z --dex paradex    # Remove AI16Z funding data from PARADEX
+    python remove_funding_symbol_dex.py --symbol AI16Z --dex paradex --dry-run  # Preview what would be removed
 """
 
 import asyncio
@@ -253,21 +261,21 @@ async def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description="Remove symbol-dex combinations from the database",
+        description="Remove funding rate data for symbol-dex combinations from the database",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Single symbol
-  python remove_symbol_dex.py --symbol AI16Z --dex paradex
+  python remove_funding_symbol_dex.py --symbol AI16Z --dex paradex
   
   # Multiple symbols (comma-separated)
-  python remove_symbol_dex.py --symbols KBONK,KFLOKI,KPEPE,KSHIB --dex paradex
+  python remove_funding_symbol_dex.py --symbols KBONK,KFLOKI,KPEPE,KSHIB --dex paradex
   
   # Multiple symbols (space-separated, use quotes)
-  python remove_symbol_dex.py --symbols "KBONK KFLOKI KPEPE KSHIB" --dex paradex
+  python remove_funding_symbol_dex.py --symbols "KBONK KFLOKI KPEPE KSHIB" --dex paradex
   
   # Dry run to preview
-  python remove_symbol_dex.py --symbols KBONK,KFLOKI --dex paradex --dry-run
+  python remove_funding_symbol_dex.py --symbols KBONK,KFLOKI --dex paradex --dry-run
         """
     )
     
