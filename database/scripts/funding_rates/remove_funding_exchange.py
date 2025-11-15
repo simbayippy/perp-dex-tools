@@ -1,24 +1,10 @@
 #!/usr/bin/env python3
 """
-Remove Exchange Funding Rate Data
+Remove Exchange Data
 
-Remove funding rate data for a specific exchange from the database.
-This removes the data that appears in view_all_exchange_data.py:
-- Latest funding rates (latest_funding_rates table)
-- DEX symbol mappings and market data (dex_symbols table)
-
-This does NOT remove:
-- Opportunities (preserved)
-- Historical funding rates (optional, can remove with --include-historical)
-- Collection logs (preserved)
-
+Remove all data for a specific exchange from the database.
 This is useful for removing outdated exchanges that are no longer being collected.
 
-Usage:
-    python remove_funding_exchange.py --exchange edgex                    # Remove EdgeX funding data
-    python remove_funding_exchange.py --exchange edgex --dry-run          # Preview what would be removed
-    python remove_funding_exchange.py --exchange edgex --include-historical  # Also remove historical funding rates
-    python remove_funding_exchange.py --exchange edgex --inactive-only    # Just mark exchange as inactive
 """
 
 import asyncio
@@ -66,7 +52,7 @@ async def get_exchange_stats(exchange_name: str) -> Dict:
     
     dex_id = dex_row['id']
     
-    # Count records in each table (only what shows in view_all_exchange_data.py)
+    # Count records in each table
     stats = {
         'dex_id': dex_id,
         'dex_name': dex_row['name'],
@@ -74,23 +60,41 @@ async def get_exchange_stats(exchange_name: str) -> Dict:
         'is_active': dex_row['is_active'],
         'latest_funding_rates': 0,
         'dex_symbols': 0,
-        'historical_funding_rates': 0
+        'historical_funding_rates': 0,
+        'opportunities_as_long': 0,
+        'opportunities_as_short': 0,
+        'collection_logs': 0
     }
     
-    # Count latest_funding_rates (shown in view_all_exchange_data.py)
+    # Count latest_funding_rates
     lfr_count_query = "SELECT COUNT(*) as count FROM latest_funding_rates WHERE dex_id = :dex_id"
     lfr_count_row = await database.fetch_one(lfr_count_query, values={"dex_id": dex_id})
     stats['latest_funding_rates'] = lfr_count_row['count'] if lfr_count_row else 0
     
-    # Count dex_symbols (shown in view_all_exchange_data.py)
+    # Count dex_symbols
     ds_count_query = "SELECT COUNT(*) as count FROM dex_symbols WHERE dex_id = :dex_id"
     ds_count_row = await database.fetch_one(ds_count_query, values={"dex_id": dex_id})
     stats['dex_symbols'] = ds_count_row['count'] if ds_count_row else 0
     
-    # Count historical funding_rates (optional - not shown in view_all_exchange_data.py)
+    # Count historical funding_rates
     fr_count_query = "SELECT COUNT(*) as count FROM funding_rates WHERE dex_id = :dex_id"
     fr_count_row = await database.fetch_one(fr_count_query, values={"dex_id": dex_id})
     stats['historical_funding_rates'] = fr_count_row['count'] if fr_count_row else 0
+    
+    # Count opportunities where this exchange is long_dex
+    opp_long_query = "SELECT COUNT(*) as count FROM opportunities WHERE long_dex_id = :dex_id"
+    opp_long_row = await database.fetch_one(opp_long_query, values={"dex_id": dex_id})
+    stats['opportunities_as_long'] = opp_long_row['count'] if opp_long_row else 0
+    
+    # Count opportunities where this exchange is short_dex
+    opp_short_query = "SELECT COUNT(*) as count FROM opportunities WHERE short_dex_id = :dex_id"
+    opp_short_row = await database.fetch_one(opp_short_query, values={"dex_id": dex_id})
+    stats['opportunities_as_short'] = opp_short_row['count'] if opp_short_row else 0
+    
+    # Count collection_logs
+    log_count_query = "SELECT COUNT(*) as count FROM collection_logs WHERE dex_id = :dex_id"
+    log_count_row = await database.fetch_one(log_count_query, values={"dex_id": dex_id})
+    stats['collection_logs'] = log_count_row['count'] if log_count_row else 0
     
     return {
         'found': True,
@@ -100,15 +104,15 @@ async def get_exchange_stats(exchange_name: str) -> Dict:
 
 async def remove_exchange_data(
     exchange_name: str,
-    include_historical: bool = False,
+    keep_historical: bool = False,
     inactive_only: bool = False
 ) -> Dict:
     """
-    Remove funding rate data for an exchange (what shows in view_all_exchange_data.py)
+    Remove all data for an exchange
     
     Args:
         exchange_name: Exchange name (e.g., "edgex")
-        include_historical: If True, also remove historical funding_rates data
+        keep_historical: If True, keep historical funding_rates data
         inactive_only: If True, only mark exchange as inactive, don't delete data
         
     Returns:
@@ -130,6 +134,9 @@ async def remove_exchange_data(
         'latest_funding_rates': 0,
         'dex_symbols': 0,
         'historical_funding_rates': 0,
+        'opportunities_as_long': 0,
+        'opportunities_as_short': 0,
+        'collection_logs': 0,
         'dex_marked_inactive': False,
         'dex_deleted': False
     }
@@ -144,26 +151,41 @@ async def remove_exchange_data(
             'removed': removed
         }
     
-    # Delete latest_funding_rates (what shows in view_all_exchange_data.py)
+    # Delete latest_funding_rates
     delete_lfr_query = "DELETE FROM latest_funding_rates WHERE dex_id = :dex_id"
     result = await database.execute(delete_lfr_query, values={"dex_id": dex_id})
     removed['latest_funding_rates'] = result
     
-    # Delete dex_symbols (market data: volume, OI, spread - what shows in view_all_exchange_data.py)
-    delete_ds_query = "DELETE FROM dex_symbols WHERE dex_id = :dex_id"
-    result = await database.execute(delete_ds_query, values={"dex_id": dex_id})
-    removed['dex_symbols'] = result
+    # Delete opportunities where this exchange is long_dex
+    delete_opp_long_query = "DELETE FROM opportunities WHERE long_dex_id = :dex_id"
+    result = await database.execute(delete_opp_long_query, values={"dex_id": dex_id})
+    removed['opportunities_as_long'] = result
     
-    # Delete historical funding_rates (optional - not shown in view_all_exchange_data.py)
-    if include_historical:
+    # Delete opportunities where this exchange is short_dex
+    delete_opp_short_query = "DELETE FROM opportunities WHERE short_dex_id = :dex_id"
+    result = await database.execute(delete_opp_short_query, values={"dex_id": dex_id})
+    removed['opportunities_as_short'] = result
+    
+    # Delete collection_logs
+    delete_logs_query = "DELETE FROM collection_logs WHERE dex_id = :dex_id"
+    result = await database.execute(delete_logs_query, values={"dex_id": dex_id})
+    removed['collection_logs'] = result
+    
+    # Delete historical funding_rates (optional)
+    if not keep_historical:
         delete_fr_query = "DELETE FROM funding_rates WHERE dex_id = :dex_id"
         result = await database.execute(delete_fr_query, values={"dex_id": dex_id})
         removed['historical_funding_rates'] = result
     
-    # Note: We do NOT delete:
-    # - Opportunities (preserved - they may still be useful)
-    # - Collection logs (preserved - historical record)
-    # - Exchange entry (preserved - can mark inactive instead)
+    # Delete dex_symbols (will cascade if needed, but explicit is cleaner)
+    delete_ds_query = "DELETE FROM dex_symbols WHERE dex_id = :dex_id"
+    result = await database.execute(delete_ds_query, values={"dex_id": dex_id})
+    removed['dex_symbols'] = result
+    
+    # Finally, delete the dex entry itself
+    delete_dex_query = "DELETE FROM dexes WHERE id = :dex_id"
+    await database.execute(delete_dex_query, values={"dex_id": dex_id})
+    removed['dex_deleted'] = True
     
     return {
         'success': True,
@@ -178,13 +200,14 @@ def create_stats_table(stats: Dict) -> Table:
     table.add_column("Count", style="white", justify="right")
     table.add_column("Description", style="dim")
     
-    table.add_row("Latest Funding Rates", str(stats['latest_funding_rates']), "Current funding rate entries (shown in view_all_exchange_data.py)")
-    table.add_row("DEX Symbols", str(stats['dex_symbols']), "Symbol mappings and market data (shown in view_all_exchange_data.py)")
-    table.add_row("Historical Funding Rates", str(stats['historical_funding_rates']), "Time-series funding rate history (optional removal)")
+    table.add_row("Latest Funding Rates", str(stats['latest_funding_rates']), "Current funding rate entries")
+    table.add_row("DEX Symbols", str(stats['dex_symbols']), "Symbol mappings and market data")
+    table.add_row("Historical Funding Rates", str(stats['historical_funding_rates']), "Time-series funding rate history")
+    table.add_row("Opportunities (as Long)", str(stats['opportunities_as_long']), "Arbitrage opportunities where this DEX is long")
+    table.add_row("Opportunities (as Short)", str(stats['opportunities_as_short']), "Arbitrage opportunities where this DEX is short")
+    table.add_row("Collection Logs", str(stats['collection_logs']), "Data collection history logs")
     table.add_row("", "", "")
     table.add_row("Exchange Status", "Active" if stats['is_active'] else "Inactive", f"Current status in database")
-    table.add_row("", "", "")
-    table.add_row("Note", "", "Opportunities and collection logs are preserved")
     
     return table
 
@@ -193,21 +216,21 @@ async def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description="Remove funding rate data for a specific exchange from the database",
+        description="Remove all data for a specific exchange from the database",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Preview what will be removed
-  python remove_funding_exchange.py --exchange edgex --dry-run
+  python remove_exchange.py --exchange edgex --dry-run
   
-  # Remove EdgeX funding data (latest rates + symbol mappings)
-  python remove_funding_exchange.py --exchange edgex
+  # Remove all EdgeX data (including historical)
+  python remove_exchange.py --exchange edgex
   
-  # Remove EdgeX funding data and also remove historical funding rates
-  python remove_funding_exchange.py --exchange edgex --include-historical
+  # Remove EdgeX data but keep historical funding rates
+  python remove_exchange.py --exchange edgex --keep-historical
   
   # Just mark exchange as inactive (don't delete data)
-  python remove_funding_exchange.py --exchange edgex --inactive-only
+  python remove_exchange.py --exchange edgex --inactive-only
         """
     )
     
@@ -224,9 +247,9 @@ Examples:
     )
     
     parser.add_argument(
-        '--include-historical',
+        '--keep-historical',
         action='store_true',
-        help='Also remove historical funding_rates data (by default, only removes current data shown in view_all_exchange_data.py)'
+        help='Keep historical funding_rates data (only remove current data)'
     )
     
     parser.add_argument(
@@ -267,7 +290,10 @@ Examples:
         total_records = (
             stats['latest_funding_rates'] +
             stats['dex_symbols'] +
-            (stats['historical_funding_rates'] if args.include_historical else 0)
+            stats['historical_funding_rates'] +
+            stats['opportunities_as_long'] +
+            stats['opportunities_as_short'] +
+            stats['collection_logs']
         )
         
         if total_records == 0:
@@ -278,7 +304,12 @@ Examples:
                 border_style="yellow"
             ))
             
-            # No data to remove, just show status
+            if not args.inactive_only:
+                if not args.yes:
+                    if Confirm.ask(f"\n[bold]Do you want to delete the exchange entry itself?[/bold]"):
+                        delete_dex_query = "DELETE FROM dexes WHERE name = :dex_name"
+                        await database.execute(delete_dex_query, values={"dex_name": exchange_name})
+                        console.print(f"[green]✅ Deleted {exchange_name.upper()} exchange entry[/green]")
             return
         
         if args.dry_run:
@@ -300,22 +331,25 @@ Examples:
                 border_style="yellow"
             ))
         else:
-            historical_note = f" (will also remove {stats['historical_funding_rates']:,} historical records)" if args.include_historical else " (preserved)"
+            historical_note = " (preserved)" if args.keep_historical else " (deleted)"
             console.print(Panel(
-                f"[yellow]⚠️  WARNING[/yellow]\n\n"
-                f"This will remove funding rate data for {exchange_name.upper()}:\n\n"
+                f"[red]⚠️  WARNING - DESTRUCTIVE OPERATION[/red]\n\n"
+                f"This will permanently remove ALL data for {exchange_name.upper()}:\n\n"
                 f"  • {stats['latest_funding_rates']:,} latest funding rate entries\n"
-                f"  • {stats['dex_symbols']:,} DEX symbol mappings (volume, OI, spread)\n"
-                f"  • Historical funding rates{historical_note}\n\n"
+                f"  • {stats['dex_symbols']:,} DEX symbol mappings\n"
+                f"  • {stats['historical_funding_rates']:,} historical funding rates{historical_note}\n"
+                f"  • {stats['opportunities_as_long']:,} opportunities (as long DEX)\n"
+                f"  • {stats['opportunities_as_short']:,} opportunities (as short DEX)\n"
+                f"  • {stats['collection_logs']:,} collection logs\n"
+                f"  • The exchange entry itself\n\n"
                 f"Total records to delete: {total_records:,}\n\n"
-                f"[dim]Note: Opportunities and collection logs are preserved[/dim]\n\n"
                 f"[bold red]This action cannot be undone![/bold red]",
                 title="Confirm Deletion",
-                border_style="yellow"
+                border_style="red"
             ))
         
         if not args.yes:
-            action = "mark as inactive" if args.inactive_only else "remove funding rate data"
+            action = "mark as inactive" if args.inactive_only else "delete all data"
             if not Confirm.ask(f"\n[bold red]Are you sure you want to {action} for {exchange_name.upper()}?[/bold red]"):
                 console.print("[yellow]👋 Cancelled by user[/yellow]")
                 return
@@ -326,7 +360,7 @@ Examples:
         
         result = await remove_exchange_data(
             exchange_name,
-            include_historical=args.include_historical,
+            keep_historical=args.keep_historical,
             inactive_only=args.inactive_only
         )
         
@@ -344,17 +378,23 @@ Examples:
                 deleted_count = (
                     removed['latest_funding_rates'] +
                     removed['dex_symbols'] +
-                    removed['historical_funding_rates']
+                    removed['historical_funding_rates'] +
+                    removed['opportunities_as_long'] +
+                    removed['opportunities_as_short'] +
+                    removed['collection_logs']
                 )
                 
                 console.print(Panel(
-                    f"[green]✅ Successfully removed {exchange_name.upper()} funding rate data![/green]\n\n"
+                    f"[green]✅ Successfully removed all {exchange_name.upper()} data![/green]\n\n"
                     f"Deleted:\n"
                     f"  • Latest funding rates: {removed['latest_funding_rates']:,}\n"
                     f"  • DEX symbols: {removed['dex_symbols']:,}\n"
-                    f"  • Historical funding rates: {removed['historical_funding_rates']:,}\n\n"
-                    f"Total records deleted: {deleted_count:,}\n\n"
-                    f"[dim]Note: Opportunities and collection logs were preserved[/dim]",
+                    f"  • Historical funding rates: {removed['historical_funding_rates']:,}\n"
+                    f"  • Opportunities (long): {removed['opportunities_as_long']:,}\n"
+                    f"  • Opportunities (short): {removed['opportunities_as_short']:,}\n"
+                    f"  • Collection logs: {removed['collection_logs']:,}\n"
+                    f"  • Exchange entry: {'✅ Deleted' if removed['dex_deleted'] else '❌'}\n\n"
+                    f"Total records deleted: {deleted_count:,}",
                     title="Removal Complete",
                     border_style="green"
                 ))
