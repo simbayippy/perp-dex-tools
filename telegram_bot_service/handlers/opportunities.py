@@ -55,7 +55,7 @@ class OpportunitiesHandler(BaseHandler):
         short_display = f"{short_emoji} {opp.short_dex.upper()}" if short_emoji else opp.short_dex.upper()
         
         lines = [
-            f"<b>{index}. {opp.symbol}</b>",
+            f"<u>{index}.</u> <b>{opp.symbol}</b>",
             f"  Long: {long_display} | Short: {short_display}",
             ""
         ]
@@ -73,7 +73,18 @@ class OpportunitiesHandler(BaseHandler):
         
         # Profitability
         net_profit_pct = opp.net_profit_percent * Decimal("100")
-        apy_pct = opp.annualized_apy * Decimal("100") if opp.annualized_apy else None
+        
+        # Calculate APY correctly: net_profit_percent is per 8-hour period (as decimal, e.g., 0.006108)
+        # The annualized_apy from fee_calculator is already calculated as:
+        # net_rate * payments_per_year * 100 = net_rate * 1095 * 100
+        # So it's already in percentage form (e.g., 668.8116 means 668.8116%)
+        if opp.annualized_apy:
+            # annualized_apy is already a percentage, use it directly
+            apy_pct = opp.annualized_apy
+        else:
+            # Fallback calculation if annualized_apy is not set
+            # net_profit_percent is decimal (0.006108), convert to percentage then annualize
+            apy_pct = opp.net_profit_percent * Decimal("1095") * Decimal("100")
         
         lines.append("<b>💰 Profitability:</b>")
         lines.append(f"  • Net Profit: <code>{net_profit_pct:.4f}%</code>")
@@ -94,10 +105,6 @@ class OpportunitiesHandler(BaseHandler):
             lines.append(f"  • {short_display}: <code>{vol_short}</code>")
         else:
             lines.append(f"  • {short_display}: <code>N/A</code>")
-        
-        if opp.min_volume_24h:
-            vol_min = self._format_currency(opp.min_volume_24h)
-            lines.append(f"  • Min: <code>{vol_min}</code>")
         lines.append("")
         
         # Open Interest
@@ -113,10 +120,6 @@ class OpportunitiesHandler(BaseHandler):
             lines.append(f"  • {short_display}: <code>{oi_short}</code>")
         else:
             lines.append(f"  • {short_display}: <code>N/A</code>")
-        
-        if opp.min_oi_usd:
-            oi_min = self._format_currency(opp.min_oi_usd)
-            lines.append(f"  • Min: <code>{oi_min}</code>")
         
         return "\n".join(lines)
     
@@ -134,7 +137,7 @@ class OpportunitiesHandler(BaseHandler):
         self, 
         opportunities: List[ArbitrageOpportunity], 
         header: str,
-        max_opportunities: int = 5
+        max_opportunities: int = 3
     ) -> str:
         """Format list of opportunities with header."""
         lines = [header, ""]
@@ -170,7 +173,7 @@ class OpportunitiesHandler(BaseHandler):
             
             # Find opportunities with minimal filters (unfiltered)
             filters = OpportunityFilter(
-                limit=5,
+                limit=3,
                 min_profit_percent=Decimal("0"),  # No minimum profit filter
                 sort_by="net_profit_percent",
                 sort_desc=True
@@ -180,14 +183,11 @@ class OpportunitiesHandler(BaseHandler):
             
             # Format message
             header = "📊 <b>Top Funding Arbitrage Opportunities</b>"
-            message = self._format_opportunities_list(opportunities, header, max_opportunities=5)
+            message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
             
-            # Check message length - if too long, reduce to top 3
-            if len(message) > self.formatter.MAX_MESSAGE_LENGTH:
-                message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
-            
-            # Create keyboard with config button
+            # Create keyboard with refresh and config button
             keyboard = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data="opportunity_refresh")],
                 [InlineKeyboardButton("⚙️ View My Configs", callback_data="opportunity_configs")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -365,7 +365,7 @@ class OpportunitiesHandler(BaseHandler):
             
             # Convert config params to OpportunityFilter
             filters = self._config_to_opportunity_filter(config_data)
-            filters.limit = 5
+            filters.limit = 3
             filters.sort_by = "net_profit_percent"
             filters.sort_desc = True
             
@@ -374,14 +374,11 @@ class OpportunitiesHandler(BaseHandler):
             
             # Format message with config-specific header
             header = f"📊 <b>Opportunities for: {config_name}</b>"
-            message = self._format_opportunities_list(opportunities, header, max_opportunities=5)
+            message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
             
-            # Check message length - if too long, reduce to top 3
-            if len(message) > self.formatter.MAX_MESSAGE_LENGTH:
-                message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
-            
-            # Create keyboard with back button
+            # Create keyboard with refresh and back button
             keyboard = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data=f"opportunity_config_refresh:{config_id}")],
                 [InlineKeyboardButton("🔙 Back to Configs", callback_data="opportunity_configs")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -456,7 +453,7 @@ class OpportunitiesHandler(BaseHandler):
             
             # Find opportunities with minimal filters (unfiltered)
             filters = OpportunityFilter(
-                limit=5,
+                limit=3,
                 min_profit_percent=Decimal("0"),  # No minimum profit filter
                 sort_by="net_profit_percent",
                 sort_desc=True
@@ -466,14 +463,11 @@ class OpportunitiesHandler(BaseHandler):
             
             # Format message
             header = "📊 <b>Top Funding Arbitrage Opportunities</b>"
-            message = self._format_opportunities_list(opportunities, header, max_opportunities=5)
+            message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
             
-            # Check message length - if too long, reduce to top 3
-            if len(message) > self.formatter.MAX_MESSAGE_LENGTH:
-                message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
-            
-            # Create keyboard with config button
+            # Create keyboard with config button and refresh button
             keyboard = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data="opportunity_refresh")],
                 [InlineKeyboardButton("⚙️ View My Configs", callback_data="opportunity_configs")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -497,6 +491,14 @@ class OpportunitiesHandler(BaseHandler):
         application.add_handler(CommandHandler("opportunity", self.opportunity_command))
         
         # Callback query handlers
+        application.add_handler(CallbackQueryHandler(
+            self.opportunity_refresh_callback,
+            pattern="^opportunity_refresh$"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.opportunity_config_refresh_callback,
+            pattern="^opportunity_config_refresh:"
+        ))
         application.add_handler(CallbackQueryHandler(
             self.opportunity_configs_callback,
             pattern="^opportunity_configs$"

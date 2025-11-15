@@ -448,7 +448,10 @@ class TelegramFormatter:
 <b>📊 Monitoring (Existing Strategies):</b>
 /positions [account] - List active positions (optional account filter)
 /balances [account] - List available margin balances across exchanges (optional account filter)
-/close - Close a position 
+/close - Close a position
+
+<b>💎 Opportunities:</b>
+/opportunity - View top funding arbitrage opportunities across exchanges 
 
 <b>👤 Account Management:</b>
 /create_account - Create new account 
