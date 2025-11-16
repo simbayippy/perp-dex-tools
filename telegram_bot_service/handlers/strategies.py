@@ -889,11 +889,11 @@ class StrategyHandler(BaseHandler):
         run_id_short = run_id[:8]
         
         try:
-            # Verify ownership and get account info
+            # Verify ownership and get account info (including control_api_port)
             is_admin = user.get("is_admin", False)
             if is_admin:
                 verify_query = """
-                    SELECT sr.id, sr.status, sr.account_id, a.account_name
+                    SELECT sr.id, sr.status, sr.account_id, sr.control_api_port, a.account_name
                     FROM strategy_runs sr
                     LEFT JOIN accounts a ON sr.account_id = a.id
                     WHERE sr.id = :run_id
@@ -904,7 +904,7 @@ class StrategyHandler(BaseHandler):
                 )
             else:
                 verify_query = """
-                    SELECT sr.id, sr.status, sr.account_id, a.account_name
+                    SELECT sr.id, sr.status, sr.account_id, sr.control_api_port, a.account_name
                     FROM strategy_runs sr
                     LEFT JOIN accounts a ON sr.account_id = a.id
                     WHERE sr.id = :run_id AND sr.user_id = :user_id
@@ -949,9 +949,21 @@ class StrategyHandler(BaseHandler):
                 parse_mode='HTML'
             )
             
+            # Get control API port for this strategy
+            control_api_port = row.get('control_api_port')
+            
+            # Construct API URL with correct port
+            if control_api_port:
+                api_url = f"http://{self.config.control_api_host}:{control_api_port}"
+                self.logger.info(f"Using strategy-specific control API: {api_url} for run {run_id_short}")
+            else:
+                # Fall back to default port (standalone control API)
+                api_url = self.config.control_api_base_url
+                self.logger.warning(f"No control_api_port found for run {run_id_short}, using default: {api_url}")
+            
             # Get positions for this account
             from telegram_bot_service.utils.api_client import ControlAPIClient
-            client = ControlAPIClient(self.config.control_api_base_url, api_key)
+            client = ControlAPIClient(api_url, api_key)
             
             try:
                 positions_data = await client.get_positions(account_name=account_name)
@@ -965,7 +977,7 @@ class StrategyHandler(BaseHandler):
                         if pos_id:
                             position_ids.append(pos_id)
                 
-                # Close each position
+                # Close each position (using the same client with correct port)
                 for pos_id in position_ids:
                     try:
                         await client.close_position(

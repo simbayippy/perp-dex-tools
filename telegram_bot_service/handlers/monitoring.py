@@ -3,6 +3,7 @@ Monitoring handlers for Telegram bot (status, positions, close)
 """
 
 import httpx
+from typing import Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
@@ -12,6 +13,55 @@ from telegram_bot_service.utils.api_client import ControlAPIClient
 
 class MonitoringHandler(BaseHandler):
     """Handler for monitoring-related commands (positions, close)"""
+    
+    async def _get_control_api_port_for_position(self, position_id: str) -> Optional[int]:
+        """
+        Get the control API port for the strategy that owns this position.
+        
+        Args:
+            position_id: Position UUID
+            
+        Returns:
+            Control API port number, or None if not found
+        """
+        try:
+            # Get account_id from position
+            position_row = await self.database.fetch_one("""
+                SELECT account_id::text as account_id
+                FROM strategy_positions
+                WHERE id = :position_id
+            """, {"position_id": position_id})
+            
+            if not position_row:
+                self.logger.warning(f"Position {position_id} not found in database")
+                return None
+            
+            account_id = position_row['account_id']
+            
+            # Find running strategy for this account
+            strategy_row = await self.database.fetch_one("""
+                SELECT control_api_port
+                FROM strategy_runs
+                WHERE account_id::text = :account_id
+                  AND status IN ('starting', 'running', 'paused')
+                ORDER BY started_at DESC
+                LIMIT 1
+            """, {"account_id": account_id})
+            
+            if strategy_row:
+                port = strategy_row['control_api_port']
+                self.logger.info(f"Found control API port {port} for position {position_id} (account {account_id})")
+                return port
+            else:
+                self.logger.warning(
+                    f"No running strategy found for account {account_id} (position {position_id}). "
+                    f"Falling back to default port {self.config.control_api_port}"
+                )
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"Error getting control API port for position {position_id}: {e}")
+            return None
     
     async def positions_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /positions command - shows summary with interactive buttons."""
@@ -786,7 +836,30 @@ class MonitoringHandler(BaseHandler):
         )
         
         try:
-            client = ControlAPIClient(self.config.control_api_base_url, api_key)
+            # Get the correct control API port for this position
+            port = await self._get_control_api_port_for_position(position_id)
+            
+            # Construct API URL with correct port
+            if port:
+                api_url = f"http://{self.config.control_api_host}:{port}"
+                self.logger.info(f"Using strategy-specific control API: {api_url}")
+            else:
+                # No running strategy found - cannot close position via standalone API
+                # The standalone control API (port 8766) is read-only and cannot close positions
+                await query.edit_message_text(
+                    "❌ <b>Cannot Close Position</b>\n\n"
+                    "No running strategy found for this position's account.\n\n"
+                    "Positions can only be closed when a strategy is running.\n\n"
+                    "To close this position:\n"
+                    "1. Start a strategy for this account with /run_strategy\n"
+                    "2. Or manually close via exchange interface",
+                    parse_mode='HTML'
+                )
+                # Clear user_data
+                context.user_data.pop('close_position_id', None)
+                return
+            
+            client = ControlAPIClient(api_url, api_key)
             data = await client.close_position(
                 position_id=position_id,
                 order_type=order_type,
@@ -799,12 +872,42 @@ class MonitoringHandler(BaseHandler):
             # Clear user_data
             context.user_data.pop('close_position_id', None)
             
+        except httpx.HTTPStatusError as e:
+            # Handle HTTP errors (e.g., 403, 500 from control API)
+            error_msg = str(e)
+            if e.response.status_code == 403:
+                error_msg = "Permission denied. The position may not belong to your account."
+            elif e.response.status_code == 500:
+                # Try to get more details from response
+                try:
+                    error_data = e.response.json()
+                    error_detail = error_data.get('detail', error_msg)
+                    if 'read-only mode' in error_detail.lower() or 'strategy controller' in error_detail.lower():
+                        error_msg = (
+                            "Cannot close position: No running strategy found.\n\n"
+                            "Start a strategy for this account with /run_strategy to enable position closing."
+                        )
+                    else:
+                        error_msg = f"Server error: {error_detail}"
+                except Exception:
+                    pass
+            
+            self.logger.error(f"Close error: {e}")
+            await query.edit_message_text(
+                self.formatter.format_error(f"Failed to close position: {error_msg}"),
+                parse_mode='HTML'
+            )
+            # Clear user_data
+            context.user_data.pop('close_position_id', None)
+            
         except Exception as e:
             self.logger.error(f"Close error: {e}")
             await query.edit_message_text(
                 self.formatter.format_error(f"Failed to close position: {str(e)}"),
                 parse_mode='HTML'
             )
+            # Clear user_data
+            context.user_data.pop('close_position_id', None)
     
     def register_handlers(self, application):
         """Register monitoring command and callback handlers"""
