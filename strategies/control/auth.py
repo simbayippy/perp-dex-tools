@@ -66,22 +66,17 @@ class APIKeyAuth:
         
         Args:
             user_id: User ID
-            is_admin: Whether user is admin
+            is_admin: Whether user is admin (no longer used - always filters by user_id)
             
         Returns:
             List of account IDs (UUIDs as strings)
         """
-        if is_admin:
-            # Admin can access all accounts (including legacy accounts with user_id = NULL)
-            results = await self.database.fetch_all("""
-                SELECT id::text FROM accounts WHERE is_active = TRUE
-            """)
-        else:
-            # Regular user can only access their own accounts
-            results = await self.database.fetch_all("""
-                SELECT id::text FROM accounts 
-                WHERE user_id = :user_id AND is_active = TRUE
-            """, {"user_id": user_id})
+        # Always filter by user_id, even for admins
+        # Admins can only access their own accounts
+        results = await self.database.fetch_all("""
+            SELECT id::text FROM accounts 
+            WHERE user_id = :user_id AND is_active = TRUE
+        """, {"user_id": user_id})
         
         return [row['id'] for row in results]
     
@@ -96,7 +91,7 @@ class APIKeyAuth:
         
         Args:
             user_id: User ID
-            is_admin: Whether user is admin
+            is_admin: Whether user is admin (no longer used - always filters by user_id)
             account_name: Optional account name to validate
             
         Returns:
@@ -108,36 +103,23 @@ class APIKeyAuth:
         if not account_name:
             return None
         
-        # Build query based on admin status
-        if is_admin:
-            # Admin can access any account
-            account = await self.database.fetch_one("""
-                SELECT id::text FROM accounts 
-                WHERE account_name = :account_name AND is_active = TRUE
-            """, {"account_name": account_name})
-        else:
-            # Regular user can only access their own accounts
-            account = await self.database.fetch_one("""
-                SELECT id::text FROM accounts 
-                WHERE account_name = :account_name 
-                  AND user_id = :user_id 
-                  AND is_active = TRUE
-            """, {
-                "account_name": account_name,
-                "user_id": user_id
-            })
+        # Always filter by user_id, even for admins
+        # Admins can only access their own accounts
+        account = await self.database.fetch_one("""
+            SELECT id::text FROM accounts 
+            WHERE account_name = :account_name 
+              AND user_id = :user_id 
+              AND is_active = TRUE
+        """, {
+            "account_name": account_name,
+            "user_id": user_id
+        })
         
         if not account:
-            if is_admin:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Account '{account_name}' not found"
-                )
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Account '{account_name}' not found or not accessible"
-                )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Account '{account_name}' not found or not accessible"
+            )
         
         return account['id']
 

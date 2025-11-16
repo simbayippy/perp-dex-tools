@@ -62,8 +62,7 @@ class StrategyHandler(BaseHandler):
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            is_admin = user.get("is_admin", False)
-            title = "📊 <b>All Strategies</b>" if is_admin else "📊 <b>Your Strategies</b>"
+            title = "📊 <b>Your Strategies</b>"
             
             await update.message.reply_text(
                 f"{title}\n\n"
@@ -97,8 +96,7 @@ class StrategyHandler(BaseHandler):
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            is_admin = user.get("is_admin", False)
-            title = "📊 <b>All Strategies</b>" if is_admin else "📊 <b>Your Strategies</b>"
+            title = "📊 <b>Your Strategies</b>"
             
             await query.edit_message_text(
                 f"{title}\n\n"
@@ -131,11 +129,11 @@ class StrategyHandler(BaseHandler):
         
         try:
             # Get strategies with filter applied
-            is_admin = user.get("is_admin", False)
-            user_id = None if is_admin else user["id"]
+            # Always filter by user_id, even for admins
+            user_id = user["id"]
             strategies = await self._get_strategies_with_filter(user_id, filter_type)
             
-            title = "📊 <b>All Strategies</b>" if is_admin else "📊 <b>Your Strategies</b>"
+            title = "📊 <b>Your Strategies</b>"
             filter_label = {
                 'running': '🟢 Running',
                 'stopped': '⚫ Stopped',
@@ -256,7 +254,12 @@ class StrategyHandler(BaseHandler):
             )
     
     async def _get_strategies_with_filter(self, user_id, filter_type: str):
-        """Get strategies with filter applied."""
+        """Get strategies with filter applied.
+        
+        Args:
+            user_id: User ID to filter strategies by (required, no admin override)
+            filter_type: Filter type ('running', 'stopped', or 'all')
+        """
         # Build query based on filter
         if filter_type == 'running':
             status_list = ['starting', 'running', 'paused']
@@ -265,61 +268,34 @@ class StrategyHandler(BaseHandler):
         else:  # 'all'
             status_list = None
         
-        if user_id:
-            if status_list:
-                # Use parameterized query with tuple unpacking
-                placeholders = ','.join([':status' + str(i) for i in range(len(status_list))])
-                params = {"user_id": user_id}
-                for i, status in enumerate(status_list):
-                    params[f"status{i}"] = status
-                query = f"""
-                    SELECT sr.id, sr.status, sr.started_at, sr.stopped_at, sr.supervisor_program_name,
-                           sc.config_name, a.account_name
-                    FROM strategy_runs sr
-                    LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
-                    LEFT JOIN accounts a ON sr.account_id = a.id
-                    WHERE sr.user_id = :user_id AND sr.status IN ({placeholders})
-                    ORDER BY sr.started_at DESC
-                """
-                rows = await self.database.fetch_all(query, params)
-            else:
-                query = """
-                    SELECT sr.id, sr.status, sr.started_at, sr.stopped_at, sr.supervisor_program_name,
-                           sc.config_name, a.account_name
-                    FROM strategy_runs sr
-                    LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
-                    LEFT JOIN accounts a ON sr.account_id = a.id
-                    WHERE sr.user_id = :user_id
-                    ORDER BY sr.started_at DESC
-                """
-                rows = await self.database.fetch_all(query, {"user_id": user_id})
+        # Always filter by user_id (admins see only their own strategies)
+        if status_list:
+            # Use parameterized query with tuple unpacking
+            placeholders = ','.join([':status' + str(i) for i in range(len(status_list))])
+            params = {"user_id": user_id}
+            for i, status in enumerate(status_list):
+                params[f"status{i}"] = status
+            query = f"""
+                SELECT sr.id, sr.status, sr.started_at, sr.stopped_at, sr.supervisor_program_name,
+                       sc.config_name, a.account_name
+                FROM strategy_runs sr
+                LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
+                LEFT JOIN accounts a ON sr.account_id = a.id
+                WHERE sr.user_id = :user_id AND sr.status IN ({placeholders})
+                ORDER BY sr.started_at DESC
+            """
+            rows = await self.database.fetch_all(query, params)
         else:
-            # Admin - see all
-            if status_list:
-                placeholders = ','.join([':status' + str(i) for i in range(len(status_list))])
-                params = {}
-                for i, status in enumerate(status_list):
-                    params[f"status{i}"] = status
-                query = f"""
-                    SELECT sr.id, sr.status, sr.started_at, sr.stopped_at, sr.supervisor_program_name,
-                           sc.config_name, a.account_name
-                    FROM strategy_runs sr
-                    LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
-                    LEFT JOIN accounts a ON sr.account_id = a.id
-                    WHERE sr.status IN ({placeholders})
-                    ORDER BY sr.started_at DESC
-                """
-                rows = await self.database.fetch_all(query, params)
-            else:
-                query = """
-                    SELECT sr.id, sr.status, sr.started_at, sr.stopped_at, sr.supervisor_program_name,
-                           sc.config_name, a.account_name
-                    FROM strategy_runs sr
-                    LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
-                    LEFT JOIN accounts a ON sr.account_id = a.id
-                    ORDER BY sr.started_at DESC
-                """
-                rows = await self.database.fetch_all(query)
+            query = """
+                SELECT sr.id, sr.status, sr.started_at, sr.stopped_at, sr.supervisor_program_name,
+                       sc.config_name, a.account_name
+                FROM strategy_runs sr
+                LEFT JOIN strategy_configs sc ON sr.config_id = sc.id
+                LEFT JOIN accounts a ON sr.account_id = a.id
+                WHERE sr.user_id = :user_id
+                ORDER BY sr.started_at DESC
+            """
+            rows = await self.database.fetch_all(query, {"user_id": user_id})
         
         return [dict(row) for row in rows]
     
@@ -403,38 +379,23 @@ class StrategyHandler(BaseHandler):
             return
         
         try:
-            # Get user's running strategies (admins see all)
-            is_admin = user.get("is_admin", False)
-            user_id = None if is_admin else user["id"]
+            # Get user's running strategies (always filter by user_id, even for admins)
+            user_id = user["id"]
             
             # Query strategies with config info
-            if user_id:
-                query = """
-                    SELECT 
-                        sr.id, sr.user_id, sr.account_id, sr.config_id,
-                        sr.supervisor_program_name, sr.status, sr.control_api_port,
-                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
-                        sc.config_name, sc.strategy_type
-                    FROM strategy_runs sr
-                    JOIN strategy_configs sc ON sr.config_id = sc.id
-                    WHERE sr.user_id = :user_id 
-                    AND sr.status IN ('starting', 'running', 'paused')
-                    ORDER BY sr.started_at DESC
-                """
-                strategies = await self.database.fetch_all(query, {"user_id": user_id})
-            else:
-                query = """
-                    SELECT 
-                        sr.id, sr.user_id, sr.account_id, sr.config_id,
-                        sr.supervisor_program_name, sr.status, sr.control_api_port,
-                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
-                        sc.config_name, sc.strategy_type
-                    FROM strategy_runs sr
-                    JOIN strategy_configs sc ON sr.config_id = sc.id
-                    WHERE sr.status IN ('starting', 'running', 'paused')
-                    ORDER BY sr.started_at DESC
-                """
-                strategies = await self.database.fetch_all(query)
+            query = """
+                SELECT 
+                    sr.id, sr.user_id, sr.account_id, sr.config_id,
+                    sr.supervisor_program_name, sr.status, sr.control_api_port,
+                    sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
+                    sc.config_name, sc.strategy_type
+                FROM strategy_runs sr
+                JOIN strategy_configs sc ON sr.config_id = sc.id
+                WHERE sr.user_id = :user_id 
+                AND sr.status IN ('starting', 'running', 'paused')
+                ORDER BY sr.started_at DESC
+            """
+            strategies = await self.database.fetch_all(query, {"user_id": user_id})
             
             strategies = [dict(row) for row in strategies]
             
@@ -1086,38 +1047,23 @@ class StrategyHandler(BaseHandler):
             return
         
         try:
-            # Get user's stopped strategies (admins see all)
-            is_admin = user.get("is_admin", False)
-            user_id = None if is_admin else user["id"]
+            # Get user's stopped strategies (always filter by user_id, even for admins)
+            user_id = user["id"]
             
             # Query strategies with config info - only stopped/error status
-            if user_id:
-                query = """
-                    SELECT 
-                        sr.id, sr.user_id, sr.account_id, sr.config_id,
-                        sr.supervisor_program_name, sr.status, sr.control_api_port,
-                        sr.log_file_path, sr.started_at, sr.stopped_at,
-                        sc.config_name, sc.strategy_type
-                    FROM strategy_runs sr
-                    JOIN strategy_configs sc ON sr.config_id = sc.id
-                    WHERE sr.user_id = :user_id 
-                    AND sr.status IN ('stopped', 'error')
-                    ORDER BY sr.stopped_at DESC NULLS LAST, sr.started_at DESC
-                """
-                strategies = await self.database.fetch_all(query, {"user_id": user_id})
-            else:
-                query = """
-                    SELECT 
-                        sr.id, sr.user_id, sr.account_id, sr.config_id,
-                        sr.supervisor_program_name, sr.status, sr.control_api_port,
-                        sr.log_file_path, sr.started_at, sr.stopped_at,
-                        sc.config_name, sc.strategy_type
-                    FROM strategy_runs sr
-                    JOIN strategy_configs sc ON sr.config_id = sc.id
-                    WHERE sr.status IN ('stopped', 'error')
-                    ORDER BY sr.stopped_at DESC NULLS LAST, sr.started_at DESC
-                """
-                strategies = await self.database.fetch_all(query)
+            query = """
+                SELECT 
+                    sr.id, sr.user_id, sr.account_id, sr.config_id,
+                    sr.supervisor_program_name, sr.status, sr.control_api_port,
+                    sr.log_file_path, sr.started_at, sr.stopped_at,
+                    sc.config_name, sc.strategy_type
+                FROM strategy_runs sr
+                JOIN strategy_configs sc ON sr.config_id = sc.id
+                WHERE sr.user_id = :user_id 
+                AND sr.status IN ('stopped', 'error')
+                ORDER BY sr.stopped_at DESC NULLS LAST, sr.started_at DESC
+            """
+            strategies = await self.database.fetch_all(query, {"user_id": user_id})
             
             strategies = [dict(row) for row in strategies]
             
@@ -2077,9 +2023,8 @@ class StrategyHandler(BaseHandler):
             return
         
         try:
-            # Get running strategies
-            is_admin = user.get("is_admin", False)
-            user_id = None if is_admin else user["id"]
+            # Get running strategies (always filter by user_id, even for admins)
+            user_id = user["id"]
             running_strategies = await self._get_logs_strategies_with_filter(user_id, 'running')
             
             if len(running_strategies) == 1:
@@ -2126,7 +2071,12 @@ class StrategyHandler(BaseHandler):
             )
     
     async def _get_logs_strategies_with_filter(self, user_id, filter_type: str):
-        """Get strategies with filter applied for logs view."""
+        """Get strategies with filter applied for logs view.
+        
+        Args:
+            user_id: User ID to filter strategies by (required, no admin override)
+            filter_type: Filter type ('running', 'stopped', or 'all')
+        """
         # Build query based on filter
         if filter_type == 'running':
             status_list = ['starting', 'running', 'paused']
@@ -2135,68 +2085,37 @@ class StrategyHandler(BaseHandler):
         else:  # 'all'
             status_list = None
         
-        if user_id:
-            if status_list:
-                placeholders = ','.join([':status' + str(i) for i in range(len(status_list))])
-                params = {"user_id": user_id}
-                for i, status in enumerate(status_list):
-                    params[f"status{i}"] = status
-                query = f"""
-                    SELECT 
-                        sr.id, sr.user_id, sr.account_id, sr.config_id,
-                        sr.supervisor_program_name, sr.status, sr.control_api_port,
-                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
-                        sc.config_name, sc.strategy_type
-                    FROM strategy_runs sr
-                    JOIN strategy_configs sc ON sr.config_id = sc.id
-                    WHERE sr.user_id = :user_id AND sr.status IN ({placeholders})
-                    ORDER BY sr.started_at DESC
-                """
-                rows = await self.database.fetch_all(query, params)
-            else:
-                query = """
-                    SELECT 
-                        sr.id, sr.user_id, sr.account_id, sr.config_id,
-                        sr.supervisor_program_name, sr.status, sr.control_api_port,
-                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
-                        sc.config_name, sc.strategy_type
-                    FROM strategy_runs sr
-                    JOIN strategy_configs sc ON sr.config_id = sc.id
-                    WHERE sr.user_id = :user_id
-                    ORDER BY sr.started_at DESC
-                """
-                rows = await self.database.fetch_all(query, {"user_id": user_id})
+        # Always filter by user_id (admins see only their own strategies)
+        if status_list:
+            placeholders = ','.join([':status' + str(i) for i in range(len(status_list))])
+            params = {"user_id": user_id}
+            for i, status in enumerate(status_list):
+                params[f"status{i}"] = status
+            query = f"""
+                SELECT 
+                    sr.id, sr.user_id, sr.account_id, sr.config_id,
+                    sr.supervisor_program_name, sr.status, sr.control_api_port,
+                    sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
+                    sc.config_name, sc.strategy_type
+                FROM strategy_runs sr
+                JOIN strategy_configs sc ON sr.config_id = sc.id
+                WHERE sr.user_id = :user_id AND sr.status IN ({placeholders})
+                ORDER BY sr.started_at DESC
+            """
+            rows = await self.database.fetch_all(query, params)
         else:
-            # Admin - see all
-            if status_list:
-                placeholders = ','.join([':status' + str(i) for i in range(len(status_list))])
-                params = {}
-                for i, status in enumerate(status_list):
-                    params[f"status{i}"] = status
-                query = f"""
-                    SELECT 
-                        sr.id, sr.user_id, sr.account_id, sr.config_id,
-                        sr.supervisor_program_name, sr.status, sr.control_api_port,
-                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
-                        sc.config_name, sc.strategy_type
-                    FROM strategy_runs sr
-                    JOIN strategy_configs sc ON sr.config_id = sc.id
-                    WHERE sr.status IN ({placeholders})
-                    ORDER BY sr.started_at DESC
-                """
-                rows = await self.database.fetch_all(query, params)
-            else:
-                query = """
-                    SELECT 
-                        sr.id, sr.user_id, sr.account_id, sr.config_id,
-                        sr.supervisor_program_name, sr.status, sr.control_api_port,
-                        sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
-                        sc.config_name, sc.strategy_type
-                    FROM strategy_runs sr
-                    JOIN strategy_configs sc ON sr.config_id = sc.id
-                    ORDER BY sr.started_at DESC
-                """
-                rows = await self.database.fetch_all(query)
+            query = """
+                SELECT 
+                    sr.id, sr.user_id, sr.account_id, sr.config_id,
+                    sr.supervisor_program_name, sr.status, sr.control_api_port,
+                    sr.log_file_path, sr.started_at, sr.last_heartbeat, sr.health_status,
+                    sc.config_name, sc.strategy_type
+                FROM strategy_runs sr
+                JOIN strategy_configs sc ON sr.config_id = sc.id
+                WHERE sr.user_id = :user_id
+                ORDER BY sr.started_at DESC
+            """
+            rows = await self.database.fetch_all(query, {"user_id": user_id})
         
         return [dict(row) for row in rows]
     
@@ -2474,8 +2393,8 @@ class StrategyHandler(BaseHandler):
         try:
             # Determine if we should show back button and what callback to use
             # Check if there are multiple running strategies to determine back navigation
-            is_admin = user.get("is_admin", False)
-            user_id = None if is_admin else user["id"]
+            # Always filter by user_id, even for admins
+            user_id = user["id"]
             running_strategies = await self._get_logs_strategies_with_filter(user_id, 'running')
             
             back_to_list = len(running_strategies) > 1
@@ -2499,8 +2418,8 @@ class StrategyHandler(BaseHandler):
             return
         
         try:
-            is_admin = user.get("is_admin", False)
-            user_id = None if is_admin else user["id"]
+            # Always filter by user_id, even for admins
+            user_id = user["id"]
             stopped_strategies = await self._get_logs_strategies_with_filter(user_id, 'stopped')
             
             if stopped_strategies:
@@ -2528,8 +2447,8 @@ class StrategyHandler(BaseHandler):
             return
         
         try:
-            is_admin = user.get("is_admin", False)
-            user_id = None if is_admin else user["id"]
+            # Always filter by user_id, even for admins
+            user_id = user["id"]
             running_strategies = await self._get_logs_strategies_with_filter(user_id, 'running')
             
             if len(running_strategies) > 1:
@@ -2578,8 +2497,8 @@ class StrategyHandler(BaseHandler):
             return
         
         try:
-            is_admin = user.get("is_admin", False)
-            user_id = None if is_admin else user["id"]
+            # Always filter by user_id, even for admins
+            user_id = user["id"]
             running_strategies = await self._get_logs_strategies_with_filter(user_id, 'running')
             
             if running_strategies:
@@ -2632,8 +2551,8 @@ class StrategyHandler(BaseHandler):
             # If log file not found, inform user
             if not log_file or not Path(log_file).exists():
                 # Determine back navigation
-                is_admin = user.get("is_admin", False)
-                user_id = None if is_admin else user["id"]
+                # Always filter by user_id, even for admins
+                user_id = user["id"]
                 running_strategies = await self._get_logs_strategies_with_filter(user_id, 'running')
                 
                 keyboard = []
@@ -2675,8 +2594,8 @@ class StrategyHandler(BaseHandler):
             
             # Update the message to show success
             # Determine back navigation based on running strategies
-            is_admin = user.get("is_admin", False)
-            user_id = None if is_admin else user["id"]
+            # Always filter by user_id, even for admins
+            user_id = user["id"]
             running_strategies = await self._get_logs_strategies_with_filter(user_id, 'running')
             
             keyboard = [
