@@ -9,6 +9,7 @@ import os
 import subprocess
 import tempfile
 import uuid
+import shlex
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -198,24 +199,32 @@ class StrategyProcessManager:
         else:
             python_exe = Path("python3")  # Use system Python
         
-        # Build command
+        # Build command with proper argument quoting
+        # Supervisor expects a single command string that will be parsed by shell
+        # We need to properly quote arguments to handle spaces and special characters
         runbot_path = self.project_root / "runbot.py"
-        command_parts = [
-            f"nice -n 10 {python_exe} {runbot_path}",
-            f"--config {config_file}",
-            f"--account {account_name}",
-            f"--enable-control-api",
-            f"--control-api-port {port}"
+        
+        # Build command as a list of arguments, then join with proper quoting
+        cmd_args = [
+            "nice", "-n", "10",
+            str(python_exe),
+            str(runbot_path),
+            "--config", str(config_file),
+            "--account", account_name,
+            "--enable-control-api",
+            "--control-api-port", str(port)
         ]
         
         # Only add --enable-proxy if not admin (admins can run on VPS IP)
         if not is_admin:
-            command_parts.append("--enable-proxy")
+            cmd_args.append("--enable-proxy")
             logger.info(f"Non-admin user: proxy enabled for account {account_name}")
         else:
             logger.info(f"Admin user: proxy disabled, running on VPS IP for account {account_name}")
         
-        command = " ".join(command_parts)
+        # Join arguments with proper shell quoting
+        # shlex.join() properly quotes arguments that contain spaces or special chars
+        command = shlex.join(cmd_args)
         
         # Log file paths
         logs_dir = self.project_root / "logs"
