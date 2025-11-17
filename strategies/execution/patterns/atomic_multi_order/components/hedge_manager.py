@@ -7,8 +7,8 @@ from typing import List, Optional, Tuple
 
 from strategies.execution.core.order_executor import ExecutionMode, OrderExecutor
 
-from .contexts import OrderContext
-from .utils import apply_result_to_context, execution_result_to_dict
+from ..contexts import OrderContext
+from ..utils import apply_result_to_context, execution_result_to_dict
 
 
 class HedgeManager:
