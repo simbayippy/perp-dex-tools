@@ -413,10 +413,39 @@ class BackpackClient(BaseExchangeClient):
             # Use base implementation first (checks cache and config.contract_id)
             contract_id = self.resolve_contract_id(symbol)
             
-            # If resolve_contract_id returned symbol as-is (cache miss), use normalize_symbol
-            # This matches Aster's pattern: fallback to normalized format if not cached
+            # If resolve_contract_id returned symbol as-is (cache miss), try to resolve from markets
             if contract_id == symbol.upper():
-                contract_id = self.normalize_symbol(symbol)
+                # Try market_symbol_map cache first (populated by get_contract_attributes)
+                if hasattr(self, '_market_symbol_map') and self._market_symbol_map:
+                    cached_symbol = self._market_symbol_map.get(symbol.upper())
+                    if cached_symbol:
+                        contract_id = cached_symbol
+                        self.logger.debug(f"[BACKPACK] Found symbol in market_symbol_map cache: {contract_id}")
+                
+                # If still not found, try to fetch from markets API
+                if contract_id == symbol.upper() and hasattr(self, 'public_client') and self.public_client:
+                    try:
+                        self.logger.debug(f"[BACKPACK] Looking up symbol '{symbol}' in markets API...")
+                        markets = self.public_client.get_markets()
+                        for market in markets or []:
+                            if (
+                                market.get("marketType") == "PERP"
+                                and market.get("baseSymbol", "").upper() == symbol.upper()
+                                and market.get("quoteSymbol") == "USDC"
+                            ):
+                                contract_id = market.get("symbol", "")
+                                self.logger.info(f"[BACKPACK] Found symbol in markets API: {contract_id}")
+                                # Cache it for future use
+                                if hasattr(self, '_market_symbol_map') and self._market_symbol_map:
+                                    self._market_symbol_map.set(symbol.upper(), contract_id)
+                                break
+                    except Exception as e:
+                        self.logger.debug(f"[BACKPACK] Failed to fetch markets for symbol lookup: {e}")
+                
+                # Final fallback: use normalize_symbol (constructs format like "RESOLV_USDC_PERP")
+                if contract_id == symbol.upper():
+                    contract_id = self.normalize_symbol(symbol)
+                    self.logger.debug(f"[BACKPACK] Using normalized symbol format: {contract_id}")
             
             self.logger.info(f"[BACKPACK] Symbol '{symbol}' resolved to contract_id: '{contract_id}'")
             
