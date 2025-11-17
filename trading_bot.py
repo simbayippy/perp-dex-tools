@@ -13,8 +13,6 @@ from typing import Optional, Dict, Any
 
 from exchange_clients.factory import ExchangeFactory
 from helpers.unified_logger import get_logger
-from helpers.lark_bot import LarkBot
-from helpers.telegram_bot import TelegramBot
 from strategies import StrategyFactory
 from networking import ProxySelector, SessionProxyManager
 from helpers.networking import ProxyHealthMonitor, detect_egress_ip
