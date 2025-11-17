@@ -34,7 +34,7 @@ CREATE INDEX IF NOT EXISTS idx_strategy_notifications_created ON strategy_notifi
 
 -- Comments for documentation
 COMMENT ON TABLE strategy_notifications IS 'Queue for notifications from strategies to Telegram users';
-COMMENT ON COLUMN strategy_notifications.notification_type IS 'Type of notification: position_opened, position_closed';
+COMMENT ON COLUMN strategy_notifications.notification_type IS 'Type of notification: position_opened, position_closed, insufficient_margin';
 COMMENT ON COLUMN strategy_notifications.symbol IS 'Trading symbol (e.g., BTC, ETH)';
 COMMENT ON COLUMN strategy_notifications.message IS 'Human-readable notification message';
 COMMENT ON COLUMN strategy_notifications.details IS 'Additional details (JSON): reason, pnl, size_usd, etc.';
