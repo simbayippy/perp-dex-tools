@@ -14,6 +14,7 @@ from exchange_clients.base_models import (
     OrderResult,
     OrderInfo,
     ExchangePositionSnapshot,
+    TradeData,
     validate_credentials,
 )
 from exchange_clients.paradex.common import normalize_symbol, get_paradex_symbol_format
@@ -492,4 +493,173 @@ class ParadexClient(BaseExchangeClient):
     def normalize_symbol(self, symbol: str) -> str:
         """Convert a normalized symbol to Paradex format."""
         return get_paradex_symbol_format(symbol)
+    
+    async def get_user_trade_history(
+        self,
+        symbol: str,
+        start_time: float,
+        end_time: float,
+        order_id: Optional[str] = None,
+    ) -> List[TradeData]:
+        """
+        Get user trade history for Paradex using api_client.fetch_fills().
+        
+        Args:
+            symbol: Trading symbol (normalized format, e.g., "BTC", "TOSHI")
+            start_time: Start timestamp (Unix seconds)
+            end_time: End timestamp (Unix seconds)
+            order_id: Optional order ID to filter fills
+            
+        Returns:
+            List of TradeData objects, or empty list on error
+        """
+        try:
+            from datetime import datetime
+            
+            self.logger.info(
+                f"[PARADEX] Fetching trade history for {symbol} "
+                f"(time_range={start_time:.0f}-{end_time:.0f}, "
+                f"order_id={order_id if order_id else 'None'})"
+            )
+            
+            if not self.paradex or not self.paradex.api_client:
+                self.logger.warning("[PARADEX] API client not available for trade history")
+                return []
+            
+            # Resolve contract_id for the symbol (Paradex format)
+            # Use base implementation first (checks cache and config.contract_id)
+            contract_id = self.resolve_contract_id(symbol)
+            
+            # If resolve_contract_id returned symbol as-is (cache miss), use normalize_symbol
+            # This matches Aster's pattern: fallback to normalized format if not cached
+            if contract_id == symbol.upper():
+                contract_id = self.normalize_symbol(symbol)
+            
+            self.logger.info(f"[PARADEX] Symbol '{symbol}' resolved to contract_id: '{contract_id}'")
+            
+            # Build request parameters
+            start_at_ms = int(start_time * 1000)
+            end_at_ms = int(end_time * 1000)
+            params = {
+                'market': contract_id,
+                'start_at': start_at_ms,
+                'end_at': end_at_ms,
+                'page_size': 100,  # Maximum page size
+            }
+            
+            # Fetch fills from Paradex API
+            fills_response = self.paradex.api_client.fetch_fills(params)
+            
+            # Log raw response details
+            if fills_response:
+                if isinstance(fills_response, dict):
+                    if 'next' in fills_response:
+                        self.logger.debug(f"[PARADEX] Pagination next cursor: {fills_response.get('next')}")
+                    if 'prev' in fills_response:
+                        self.logger.debug(f"[PARADEX] Pagination prev cursor: {fills_response.get('prev')}")
+            if not fills_response:
+                self.logger.warning("[PARADEX] Empty fills_response from API")
+                return []
+            
+            if not isinstance(fills_response, dict):
+                self.logger.warning(f"[PARADEX] Unexpected fills_response type: {type(fills_response)}")
+                return []
+            
+            if 'results' not in fills_response:
+                self.logger.warning(f"[PARADEX] Response has no 'results' key. Available keys: {list(fills_response.keys())}")
+                return []
+            
+            fills = fills_response.get('results', [])
+            if not isinstance(fills, list):
+                self.logger.warning(f"[PARADEX] 'results' is not a list. Type: {type(fills)}")
+                return []
+            
+            # Log first few fills with details for debugging
+            for i, fill in enumerate(fills[:5]):
+                fill_info = {
+                    "index": i,
+                    "id": fill.get('id', 'N/A'),
+                    "market": fill.get('market', 'N/A'),
+                    "side": fill.get('side', 'N/A'),
+                    "size": fill.get('size', 'N/A'),
+                    "price": fill.get('price', 'N/A'),
+                    "fee": fill.get('fee', 'N/A'),
+                    "fee_currency": fill.get('fee_currency', 'N/A'),
+                    "order_id": fill.get('order_id', 'N/A'),
+                    "created_at": fill.get('created_at', 'N/A'),
+                    "realized_pnl": fill.get('realized_pnl', 'N/A'),
+                    "realized_funding": fill.get('realized_funding', 'N/A'),
+                }
+                if fill_info['created_at'] != 'N/A' and fill_info['created_at']:
+                    try:
+                        fill_time_seconds = fill_info['created_at'] / 1000
+                        fill_time_str = datetime.fromtimestamp(fill_time_seconds).strftime('%Y-%m-%d %H:%M:%S')
+                        fill_info['created_at_str'] = fill_time_str
+                        fill_info['created_at_seconds'] = fill_time_seconds
+                    except (ValueError, OSError, TypeError) as e:
+                        fill_info['timestamp_error'] = str(e)
+            
+            # Parse fills into TradeData objects
+            result = []
+            filtered_by_order_id = 0
+            filtered_by_time = 0
+            
+            for fill in fills:
+                # Filter by order_id client-side (Paradex fills have order_id field)
+                if order_id and fill.get('order_id') != order_id:
+                    filtered_by_order_id += 1
+                    continue
+                
+                # Filter by timestamp range (API may not filter precisely)
+                fill_time = fill.get('created_at', 0)
+                if fill_time:
+                    fill_time_seconds = fill_time / 1000  # Convert ms to seconds
+                    if fill_time_seconds < start_time or fill_time_seconds > end_time:
+                        filtered_by_time += 1
+                        continue
+                
+                # Extract fill data
+                # Paradex FillResult includes: fee, realized_pnl, realized_funding, price, size, side, order_id, created_at
+                trade_id = str(fill.get('id', ''))
+                quantity = Decimal(str(fill.get('size', '0')))
+                price = Decimal(str(fill.get('price', '0')))
+                fee = Decimal(str(fill.get('fee', '0')))
+                fee_currency = fill.get('fee_currency', 'USDC')
+                side = fill.get('side', '').lower()  # Convert to lowercase
+                trade_order_id = str(fill.get('order_id', '')) if fill.get('order_id') else None
+                realized_pnl = Decimal(str(fill.get('realized_pnl', '0'))) if fill.get('realized_pnl') else None
+                realized_funding = Decimal(str(fill.get('realized_funding', '0'))) if fill.get('realized_funding') else None
+                
+                # Convert timestamp
+                timestamp = fill_time_seconds if fill_time else float(start_time)
+                
+                result.append(TradeData(
+                    trade_id=trade_id,
+                    timestamp=timestamp,
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    price=price,
+                    fee=fee,
+                    fee_currency=fee_currency,
+                    order_id=trade_order_id,
+                    realized_pnl=realized_pnl,
+                    realized_funding=realized_funding,
+                ))
+            
+            self.logger.info(
+                f"[PARADEX] Filtering results: "
+                f"total_fills={len(fills)}, "
+                f"filtered_by_order_id={filtered_by_order_id}, "
+                f"filtered_by_time={filtered_by_time}, "
+                f"final_count={len(result)}"
+            )
+            
+            return result
+            
+        except Exception as e:
+            self.logger.warning(f"[PARADEX] Failed to get trade history for {symbol}: {e}")
+            import traceback
+            self.logger.debug(f"[PARADEX] Trade history error traceback: {traceback.format_exc()}")
+            return []
 

@@ -4,7 +4,7 @@ Backpack exchange client implementation for trading execution.
 
 import os
 from decimal import Decimal
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from bpx.public import Public
 from bpx.account import Account
@@ -15,6 +15,7 @@ from exchange_clients.base_models import (
     MissingCredentialsError,
     OrderInfo,
     OrderResult,
+    TradeData,
     validate_credentials,
 )
 from exchange_clients.backpack.common import (
@@ -375,4 +376,340 @@ class BackpackClient(BaseExchangeClient):
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
         """Fetch leverage limits for symbol."""
         return await self.account_manager.get_leverage_info(symbol)
+    
+    async def get_user_trade_history(
+        self,
+        symbol: str,
+        start_time: float,
+        end_time: float,
+        order_id: Optional[str] = None,
+    ) -> List[TradeData]:
+        """
+        Get user trade history for Backpack using account_client.get_fill_history().
+        
+        Args:
+            symbol: Trading symbol (normalized format, e.g., "BTC", "TOSHI")
+            start_time: Start timestamp (Unix seconds)
+            end_time: End timestamp (Unix seconds)
+            order_id: Optional order ID to filter fills
+            
+        Returns:
+            List of TradeData objects, or empty list on error
+        """
+        try:
+            from datetime import datetime
+            
+            self.logger.info(
+                f"[BACKPACK] Fetching trade history for {symbol} "
+                f"(time_range={start_time:.0f}-{end_time:.0f}, "
+                f"order_id={order_id if order_id else 'None'})"
+            )
+            
+            if not self.account_client:
+                self.logger.warning("[BACKPACK] Account client not available for trade history")
+                return []
+            
+            # Resolve contract_id for the symbol (Backpack format)
+            # Use base implementation first (checks cache and config.contract_id)
+            contract_id = self.resolve_contract_id(symbol)
+            
+            # If resolve_contract_id returned symbol as-is (cache miss), try to resolve from markets
+            if contract_id == symbol.upper():
+                # Try market_symbol_map cache first (populated by get_contract_attributes)
+                if hasattr(self, '_market_symbol_map') and self._market_symbol_map:
+                    cached_symbol = self._market_symbol_map.get(symbol.upper())
+                    if cached_symbol:
+                        contract_id = cached_symbol
+                        self.logger.debug(f"[BACKPACK] Found symbol in market_symbol_map cache: {contract_id}")
+                
+                # If still not found, try to fetch from markets API
+                if contract_id == symbol.upper() and hasattr(self, 'public_client') and self.public_client:
+                    try:
+                        self.logger.debug(f"[BACKPACK] Looking up symbol '{symbol}' in markets API...")
+                        markets = self.public_client.get_markets()
+                        self.logger.debug(f"[BACKPACK] Found {len(markets) if markets else 0} markets")
+                        
+                        # Look for PERP markets matching the symbol
+                        matching_markets = []
+                        for market in markets or []:
+                            base_symbol = market.get("baseSymbol", "").upper()
+                            market_symbol = market.get("symbol", "")
+                            market_type = market.get("marketType", "")
+                            
+                            if (
+                                market_type == "PERP"
+                                and base_symbol == symbol.upper()
+                                and market.get("quoteSymbol") == "USDC"
+                            ):
+                                matching_markets.append({
+                                    "symbol": market_symbol,
+                                    "baseSymbol": base_symbol,
+                                    "marketType": market_type,
+                                })
+                        
+                        if matching_markets:
+                            # Use the first matching market
+                            contract_id = matching_markets[0]["symbol"]
+                            self.logger.info(f"[BACKPACK] Found {len(matching_markets)} matching market(s), using: {contract_id}")
+                            # Log all matches for debugging
+                            for m in matching_markets:
+                                self.logger.debug(f"[BACKPACK]   - {m['symbol']} (base: {m['baseSymbol']}, type: {m['marketType']})")
+                            # Cache it for future use
+                            if hasattr(self, '_market_symbol_map') and self._market_symbol_map:
+                                self._market_symbol_map.set(symbol.upper(), contract_id)
+                        else:
+                            self.logger.warning(f"[BACKPACK] No PERP market found for symbol '{symbol}' in markets API")
+                            # Log available symbols for debugging
+                            available_symbols = set()
+                            for market in markets or []:
+                                if market.get("marketType") == "PERP" and market.get("quoteSymbol") == "USDC":
+                                    available_symbols.add(market.get("baseSymbol", "").upper())
+                            if available_symbols:
+                                self.logger.debug(f"[BACKPACK] Available PERP symbols: {sorted(list(available_symbols))[:20]}")
+                    except Exception as e:
+                        self.logger.warning(f"[BACKPACK] Failed to fetch markets for symbol lookup: {e}")
+                        import traceback
+                        self.logger.debug(f"[BACKPACK] Markets lookup error: {traceback.format_exc()}")
+                
+                # Final fallback: try both formats
+                # Note: get_fill_history might use {BASE}_USDC format (without _PERP) based on examples
+                if contract_id == symbol.upper():
+                    # Try without _PERP first (as seen in examples: "SOL_USDC")
+                    contract_id_no_perp = f"{symbol.upper()}_USDC"
+                    self.logger.debug(f"[BACKPACK] Trying format without _PERP: {contract_id_no_perp}")
+                    contract_id = contract_id_no_perp
+            
+            self.logger.info(f"[BACKPACK] Symbol '{symbol}' resolved to contract_id: '{contract_id}'")
+            
+            # Build request parameters
+            # Backpack's get_fill_history accepts: symbol, limit, offset, from_, to, fill_type, market_type
+            params = {
+                'symbol': contract_id,
+                'limit': 100,  # Maximum limit (can be up to 1000)
+                'offset': 0,
+                'from': int(start_time * 1000),  # Convert to milliseconds
+                'to': int(end_time * 1000),
+            }
+            
+            self.logger.info(f"[BACKPACK] Using account_client.get_fill_history()")
+            self.logger.debug(f"[BACKPACK] API request parameters: {params}")
+            self.logger.debug(
+                f"[BACKPACK] Time range: "
+                f"{datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S')} "
+                f"to {datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            
+            fills_response = self.account_client.get_fill_history(
+                symbol=contract_id,
+                limit=100,
+                offset=0,
+                from_=int(start_time * 1000),
+                to=int(end_time * 1000),
+            )
+            
+            # Log raw response details
+            # According to bpx-py SDK examples, get_fill_history returns a list directly
+            self.logger.info(f"[BACKPACK] Raw API response type: {type(fills_response)}")
+            if fills_response:
+                if isinstance(fills_response, list):
+                    # Direct list response (as per bpx-py SDK examples)
+                    fills = fills_response
+                    self.logger.debug(f"[BACKPACK] Response is a list with {len(fills)} items")
+                elif isinstance(fills_response, dict):
+                    self.logger.debug(f"[BACKPACK] Raw API response keys: {list(fills_response.keys())}")
+                    self.logger.debug(f"[BACKPACK] Raw API response: {fills_response}")
+                    
+                    # Check for error response (has 'code' and 'message' keys)
+                    if 'code' in fills_response or 'message' in fills_response:
+                        error_code = fills_response.get('code', 'N/A')
+                        error_message = fills_response.get('message', 'N/A')
+                        self.logger.warning(
+                            f"[BACKPACK] API returned error response: code={error_code}, message={error_message}"
+                        )
+                        # Log full response for debugging
+                        self.logger.debug(f"[BACKPACK] Full error response: {fills_response}")
+                        return []
+                    
+                    # Check if response is wrapped in a dict (some SDKs wrap arrays)
+                    if 'results' in fills_response:
+                        fills = fills_response['results']
+                    elif 'data' in fills_response:
+                        fills = fills_response['data']
+                    elif 'fills' in fills_response:
+                        fills = fills_response['fills']
+                    else:
+                        # If it's a dict but not a known wrapper, log and try to extract
+                        self.logger.warning(f"[BACKPACK] Response is dict but no known wrapper key found. Keys: {list(fills_response.keys())}")
+                        fills = []
+                else:
+                    self.logger.warning(f"[BACKPACK] Unexpected fills response format: {type(fills_response)}")
+                    return []
+            else:
+                self.logger.warning("[BACKPACK] Empty fills_response from API")
+                return []
+            
+            if not isinstance(fills, list):
+                self.logger.warning(f"[BACKPACK] Extracted fills is not a list: {type(fills)}")
+                return []
+            
+            self.logger.info(f"[BACKPACK] Received {len(fills)} fills from API (before filtering)")
+            
+            # Log first few fills with details for debugging
+            for i, fill in enumerate(fills[:5]):
+                fill_info = {
+                    "index": i,
+                    "tradeId": fill.get('tradeId', 'N/A'),
+                    "orderId": fill.get('orderId', 'N/A'),
+                    "symbol": fill.get('symbol', 'N/A'),
+                    "side": fill.get('side', 'N/A'),
+                    "quantity": fill.get('quantity', 'N/A'),
+                    "price": fill.get('price', 'N/A'),
+                    "fee": fill.get('fee', 'N/A'),
+                    "feeSymbol": fill.get('feeSymbol', 'N/A'),
+                    "timestamp": fill.get('timestamp', 'N/A'),
+                    "isMaker": fill.get('isMaker', 'N/A'),
+                }
+                if fill_info['timestamp'] != 'N/A' and fill_info['timestamp']:
+                    try:
+                        # Backpack timestamps are ISO 8601 strings (e.g., '2025-10-24T19:02:44.232')
+                        timestamp_val = fill_info['timestamp']
+                        if isinstance(timestamp_val, str):
+                            # Parse ISO 8601 format: '2025-10-24T19:02:44.232'
+                            try:
+                                from dateutil import parser
+                                dt = parser.isoparse(timestamp_val)
+                                fill_time_seconds = dt.timestamp()
+                                fill_info['timestamp_str'] = dt.strftime('%Y-%m-%d %H:%M:%S')
+                                fill_info['timestamp_seconds'] = fill_time_seconds
+                            except ImportError:
+                                # Fallback: manual ISO 8601 parsing
+                                dt_str = timestamp_val.split('+')[0].split('Z')[0]  # Remove timezone
+                                if '.' in dt_str:
+                                    dt_part, fractional = dt_str.split('.')
+                                    dt_obj = datetime.strptime(dt_part, '%Y-%m-%dT%H:%M:%S')
+                                    fractional_seconds = float(f'0.{fractional[:6]}')
+                                    fill_time_seconds = dt_obj.timestamp() + fractional_seconds
+                                else:
+                                    dt_obj = datetime.strptime(dt_str, '%Y-%m-%dT%H:%M:%S')
+                                    fill_time_seconds = dt_obj.timestamp()
+                                fill_info['timestamp_str'] = dt_obj.strftime('%Y-%m-%d %H:%M:%S')
+                                fill_info['timestamp_seconds'] = fill_time_seconds
+                        else:
+                            # Fallback: assume numeric (milliseconds or seconds)
+                            timestamp_val = int(timestamp_val)
+                            fill_time_seconds = timestamp_val / 1000 if timestamp_val > 1e10 else timestamp_val
+                            fill_time_str = datetime.fromtimestamp(fill_time_seconds).strftime('%Y-%m-%d %H:%M:%S')
+                            fill_info['timestamp_str'] = fill_time_str
+                            fill_info['timestamp_seconds'] = fill_time_seconds
+                    except (ValueError, OSError, TypeError, ImportError) as e:
+                        fill_info['timestamp_error'] = str(e)
+                self.logger.info(f"[BACKPACK] Fill {i}: {fill_info}")
+            
+            # Parse fills into TradeData objects
+            result = []
+            filtered_by_order_id = 0
+            filtered_by_time = 0
+            
+            for fill in fills:
+                # Filter by order_id client-side
+                if order_id:
+                    fill_order_id = fill.get('orderId') or fill.get('order_id')
+                    if str(fill_order_id) != order_id:
+                        filtered_by_order_id += 1
+                        continue
+                
+                # Filter by timestamp range (API may not filter precisely)
+                fill_time = fill.get('timestamp') or fill.get('time', 0)
+                fill_time_seconds = None
+                if fill_time:
+                    try:
+                        # Backpack timestamps are ISO 8601 strings (e.g., '2025-10-24T19:02:44.232')
+                        if isinstance(fill_time, str):
+                            # Parse ISO 8601 format: '2025-10-24T19:02:44.232'
+                            try:
+                                from dateutil import parser
+                                dt = parser.isoparse(fill_time)
+                                fill_time_seconds = dt.timestamp()
+                            except ImportError:
+                                # Fallback: manual ISO 8601 parsing using datetime.strptime
+                                # Format: '2025-10-24T19:02:44.232' or '2025-10-24T19:02:44'
+                                dt_str = fill_time.split('+')[0].split('Z')[0]  # Remove timezone
+                                if '.' in dt_str:
+                                    dt_part, fractional = dt_str.split('.')
+                                    # Parse main datetime part
+                                    dt_obj = datetime.strptime(dt_part, '%Y-%m-%dT%H:%M:%S')
+                                    # Add fractional seconds
+                                    fractional_seconds = float(f'0.{fractional[:6]}')  # Limit to microseconds
+                                    fill_time_seconds = dt_obj.timestamp() + fractional_seconds
+                                else:
+                                    dt_obj = datetime.strptime(dt_str, '%Y-%m-%dT%H:%M:%S')
+                                    fill_time_seconds = dt_obj.timestamp()
+                            except Exception as parse_error:
+                                self.logger.debug(f"[BACKPACK] ISO 8601 parse failed, trying numeric: {parse_error}")
+                                # Try parsing as numeric (milliseconds or seconds)
+                                try:
+                                    fill_time = int(fill_time)
+                                    fill_time_seconds = fill_time / 1000 if fill_time > 1e10 else fill_time
+                                except (ValueError, TypeError):
+                                    raise parse_error
+                        else:
+                            # Numeric timestamp (milliseconds or seconds)
+                            fill_time = int(fill_time)
+                            fill_time_seconds = fill_time / 1000 if fill_time > 1e10 else fill_time
+                    except (ValueError, TypeError, OSError) as e:
+                        self.logger.debug(f"[BACKPACK] Failed to parse timestamp '{fill_time}': {e}")
+                        fill_time_seconds = None
+                
+                if fill_time_seconds is None:
+                    fill_time_seconds = float(start_time)
+                elif fill_time_seconds < start_time or fill_time_seconds > end_time:
+                    filtered_by_time += 1
+                    continue
+                
+                # Extract fill data according to Backpack API format:
+                # tradeId, orderId, symbol, side, quantity, price, fee, feeSymbol, timestamp, isMaker
+                trade_id = str(fill.get('tradeId', fill.get('id', fill.get('fillId', ''))))
+                quantity = Decimal(str(fill.get('quantity', fill.get('size', '0'))))
+                price = Decimal(str(fill.get('price', '0')))
+                fee = Decimal(str(fill.get('fee', '0')))
+                fee_currency = fill.get('feeSymbol', fill.get('feeCurrency', fill.get('fee_currency', 'USDC')))
+                
+                # Handle side: Backpack uses "Bid" (buy) or "Ask" (sell)
+                side_raw = fill.get('side', '')
+                if side_raw.upper() == 'BID':
+                    side = 'buy'
+                elif side_raw.upper() == 'ASK':
+                    side = 'sell'
+                else:
+                    side = side_raw.lower()  # Fallback to lowercase
+                
+                trade_order_id = str(fill.get('orderId', fill.get('order_id', ''))) if fill.get('orderId') or fill.get('order_id') else None
+                
+                result.append(TradeData(
+                    trade_id=trade_id,
+                    timestamp=fill_time_seconds,
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    price=price,
+                    fee=fee,
+                    fee_currency=fee_currency,
+                    order_id=trade_order_id,
+                ))
+            
+            self.logger.info(
+                f"[BACKPACK] Filtering results: "
+                f"total_fills={len(fills)}, "
+                f"filtered_by_order_id={filtered_by_order_id}, "
+                f"filtered_by_time={filtered_by_time}, "
+                f"final_count={len(result)}"
+            )
+            
+            return result
+            
+        except Exception as e:
+            self.logger.warning(f"[BACKPACK] Failed to get trade history for {symbol}: {e}")
+            import traceback
+            self.logger.debug(f"[BACKPACK] Trade history error traceback: {traceback.format_exc()}")
+            return []
 

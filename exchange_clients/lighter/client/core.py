@@ -14,6 +14,7 @@ from exchange_clients.base_models import (
     OrderResult,
     OrderInfo,
     ExchangePositionSnapshot,
+    TradeData,
     query_retry,
     MissingCredentialsError,
     validate_credentials,
@@ -594,4 +595,342 @@ class LighterClient(BaseExchangeClient):
     async def get_total_asset_value(self) -> Optional[Decimal]:
         """Get total account asset value using Lighter SDK."""
         return await self.account_manager.get_total_asset_value()
+    
+    async def get_user_trade_history(
+        self,
+        symbol: str,
+        start_time: float,
+        end_time: float,
+        order_id: Optional[str] = None,
+    ) -> List[TradeData]:
+        """
+        Get user trade history for Lighter using OrderApi.trades().
+        
+        Args:
+            symbol: Trading symbol (normalized format, e.g., "BTC", "TOSHI")
+            start_time: Start timestamp (Unix seconds)
+            end_time: End timestamp (Unix seconds)
+            order_id: Optional order ID (client_order_index or server order_index)
+            
+        Returns:
+            List of TradeData objects, or empty list on error
+        """
+        try:
+            if not self.order_api:
+                self.logger.warning("[LIGHTER] OrderApi not available for trade history")
+                return []
+            
+            # Get market_id for the symbol
+            normalized_symbol = self.normalize_symbol(symbol)
+            market_id = None
+            if self.market_data:
+                market_id = await self.market_data.get_market_id_for_symbol(normalized_symbol)
+            
+            if market_id is None:
+                self.logger.warning(f"[LIGHTER] Could not find market_id for {symbol}")
+                return []
+            
+            # Resolve order_id to order_index if needed
+            # Lighter uses order_index (server-side) for filtering trades
+            order_index = None
+            if order_id:
+                # Try to resolve client_order_index to server order_index
+                resolved_order_id = self.order_manager.resolve_client_order_id(order_id)
+                if resolved_order_id:
+                    try:
+                        order_index = int(resolved_order_id)
+                    except (ValueError, TypeError):
+                        # If resolution failed, try using order_id directly as order_index
+                        try:
+                            order_index = int(order_id)
+                        except (ValueError, TypeError):
+                            self.logger.debug(f"[LIGHTER] Could not convert order_id {order_id} to order_index")
+                else:
+                    # No resolution found, try using order_id directly
+                    try:
+                        order_index = int(order_id)
+                    except (ValueError, TypeError):
+                        self.logger.debug(f"[LIGHTER] Could not convert order_id {order_id} to order_index")
+            
+            # Generate auth token for API call
+            auth_token = None
+            if self.lighter_client:
+                auth_token, error = self.lighter_client.create_auth_token_with_expiry()
+                if error:
+                    self.logger.debug(f"[LIGHTER] Error creating auth token for trade history: {error}")
+                    # Continue without auth token - API might still work for some endpoints
+            
+            # Call trades API
+            # Using OrderApi.trades() which calls GET /api/v1/trades (user-specific endpoint)
+            # This is different from /api/v1/recentTrades (public endpoint)
+            # The /api/v1/trades endpoint supports account_index filtering and has max limit of 100
+            # We fetch the most recent 100 trades and filter client-side by time range
+            # Using sort_dir='desc' to get newest trades first, then we'll filter by time range
+            trades_kwargs = {
+                "sort_by": "timestamp",
+                "sort_dir": "desc",  # Newest first
+                "limit": 100,  # Maximum allowed by Lighter API (1-100 range)
+                "market_id": market_id,
+                "account_index": self.account_index,
+            }
+            
+            # Only add order_index if provided (filters server-side when available)
+            if order_index is not None:
+                trades_kwargs["order_index"] = order_index
+            
+            # Add auth token (required for account-specific queries)
+            if auth_token:
+                trades_kwargs["auth"] = auth_token
+                trades_kwargs["authorization"] = auth_token
+            else:
+                self.logger.warning("[LIGHTER] No auth token available for trade history query")
+            
+            self.logger.info(
+                f"[LIGHTER] Fetching trade history for {symbol} (normalized: {normalized_symbol}, market_id={market_id}, "
+                f"account_index={self.account_index}, time_range={start_time:.0f}-{end_time:.0f})"
+            )
+            
+            trades_response = await self.order_api.trades(**trades_kwargs)
+            
+            if not trades_response:
+                self.logger.warning("[LIGHTER] Empty trades_response from API")
+                return []
+            
+            if not hasattr(trades_response, 'trades'):
+                self.logger.warning(f"[LIGHTER] Response has no 'trades' attribute. Response type: {type(trades_response)}, attributes: {dir(trades_response)}")
+                return []
+            
+            if not trades_response.trades:
+                self.logger.warning(f"[LIGHTER] trades_response.trades is empty or None (type: {type(trades_response.trades)})")
+                return []
+            
+            self.logger.info(f"[LIGHTER] Received {len(trades_response.trades)} trades from API (before filtering)")
+            
+            # Log first few trades with details for debugging
+            for i, trade in enumerate(trades_response.trades[:5]):
+                trade_info = {
+                    "index": i,
+                    "trade_id": getattr(trade, 'trade_id', 'N/A'),
+                    "timestamp": getattr(trade, 'timestamp', 'N/A'),
+                    "size": getattr(trade, 'size', 'N/A'),
+                    "price": getattr(trade, 'price', 'N/A'),
+                    "usd_amount": getattr(trade, 'usd_amount', 'N/A'),
+                    "taker_fee": getattr(trade, 'taker_fee', 'N/A'),
+                    "maker_fee": getattr(trade, 'maker_fee', 'N/A'),
+                    "is_maker_ask": getattr(trade, 'is_maker_ask', 'N/A'),
+                    "ask_account_id": getattr(trade, 'ask_account_id', 'N/A'),
+                    "bid_account_id": getattr(trade, 'bid_account_id', 'N/A'),
+                    "ask_id": getattr(trade, 'ask_id', 'N/A'),
+                    "bid_id": getattr(trade, 'bid_id', 'N/A'),
+                }
+                if trade_info['timestamp'] != 'N/A':
+                    try:
+                        # Try to convert timestamp - handle different formats
+                        raw_timestamp = trade_info['timestamp']
+                        # Timestamp format detection:
+                        # - > 1e13 (14+ digits): nanoseconds
+                        # - > 1e10 (11-13 digits): milliseconds  
+                        # - <= 1e10 (<=10 digits): seconds
+                        if raw_timestamp > 1e13:  # Nanoseconds (16 digits for current time)
+                            timestamp_seconds = raw_timestamp / 1e9
+                        elif raw_timestamp > 1e10:  # Milliseconds (13 digits for current time)
+                            timestamp_seconds = raw_timestamp / 1000
+                        else:
+                            timestamp_seconds = raw_timestamp  # Seconds (10 digits for current time)
+                        
+                        from datetime import datetime
+                        trade_time_str = datetime.fromtimestamp(timestamp_seconds).strftime('%Y-%m-%d %H:%M:%S')
+                        trade_info['timestamp_str'] = trade_time_str
+                        trade_info['timestamp_seconds'] = timestamp_seconds
+                    except (ValueError, OSError) as e:
+                        trade_info['timestamp_error'] = str(e)
+                        trade_info['raw_timestamp'] = raw_timestamp
+            
+            # Parse trades into TradeData objects
+            # Note: We filter by timestamp client-side since API doesn't reliably support time filtering
+            result = []
+            filtered_out_count = 0
+            for idx, trade in enumerate(trades_response.trades):
+                # Filter by timestamp range (client-side filtering)
+                raw_timestamp = trade.timestamp
+                
+                # Convert timestamp to seconds (handle nanoseconds/milliseconds)
+                # Lighter API returns timestamps in milliseconds
+                # Timestamp format detection:
+                # - > 1e13 (14+ digits): nanoseconds
+                # - > 1e10 (11-13 digits): milliseconds  
+                # - <= 1e10 (<=10 digits): seconds
+                if raw_timestamp > 1e13:  # Nanoseconds (16 digits for current time)
+                    trade_timestamp = raw_timestamp / 1e9
+                elif raw_timestamp > 1e10:  # Milliseconds (13 digits for current time)
+                    trade_timestamp = raw_timestamp / 1000
+                else:
+                    trade_timestamp = raw_timestamp  # Seconds (10 digits for current time)
+                
+                # Log timestamp comparison for first few trades
+                if idx < 5:
+                    try:
+                        from datetime import datetime
+                        trade_time_str = datetime.fromtimestamp(trade_timestamp).strftime('%Y-%m-%d %H:%M:%S')
+                        start_time_str = datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S')
+                        end_time_str = datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')
+                        self.logger.debug(
+                            f"[LIGHTER] Trade {idx} timestamp check: raw={raw_timestamp:.0f}, "
+                            f"converted={trade_timestamp:.0f} ({trade_time_str}) "
+                            f"vs range [{start_time:.0f} ({start_time_str}) - {end_time:.0f} ({end_time_str})]"
+                        )
+                    except (ValueError, OSError) as e:
+                        self.logger.warning(f"[LIGHTER] Trade {idx} timestamp conversion error: {e}, raw={raw_timestamp}")
+                
+                if trade_timestamp < start_time or trade_timestamp > end_time:
+                    filtered_out_count += 1
+                    if idx < 5:
+                        self.logger.debug(f"[LIGHTER] Trade {idx} filtered out (outside time range)")
+                    continue
+                
+                # Filter by order_id client-side if order_index filtering didn't work
+                if order_id and order_index is None:
+                    # Check if this trade matches the order_id
+                    # Lighter trades have ask_id and bid_id fields
+                    trade_order_id = None
+                    if hasattr(trade, 'ask_id'):
+                        trade_order_id = str(trade.ask_id)
+                    elif hasattr(trade, 'bid_id'):
+                        trade_order_id = str(trade.bid_id)
+                    
+                    if trade_order_id != order_id:
+                        # Also check client_order_index mapping
+                        resolved = self.order_manager.resolve_client_order_id(order_id)
+                        if resolved != str(trade.ask_id) and resolved != str(trade.bid_id):
+                            continue
+                
+                # Determine side from trade type or ask/bid IDs
+                # For Lighter, we need to check if we were the ask (sell) or bid (buy) side
+                # This requires checking account_index against ask_account_id and bid_account_id
+                side = "unknown"
+                if hasattr(trade, 'ask_account_id') and hasattr(trade, 'bid_account_id'):
+                    if trade.ask_account_id == self.account_index:
+                        side = "sell"  # We were the ask side (selling)
+                    elif trade.bid_account_id == self.account_index:
+                        side = "buy"  # We were the bid side (buying)
+                
+                # Calculate fee (taker_fee or maker_fee depending on our role)
+                # Lighter API returns fees as int32, likely in basis points (1 = 0.01%)
+                # We need to calculate actual fee from trade value
+                fee = Decimal("0")
+                trade_value = Decimal(str(trade.usd_amount)) if hasattr(trade, 'usd_amount') else (
+                    Decimal(str(trade.size)) * Decimal(str(trade.price))
+                )
+                
+                if hasattr(trade, 'taker_fee') and trade.taker_fee is not None:
+                    # Determine if we were maker or taker
+                    is_maker = False
+                    fee_basis_points = None
+                    
+                    if hasattr(trade, 'is_maker_ask'):
+                        if trade.is_maker_ask and trade.ask_account_id == self.account_index:
+                            # We were maker on ask side
+                            is_maker = True
+                            fee_basis_points = trade.maker_fee if hasattr(trade, 'maker_fee') and trade.maker_fee is not None else None
+                        elif not trade.is_maker_ask and trade.bid_account_id == self.account_index:
+                            # We were maker on bid side
+                            is_maker = True
+                            fee_basis_points = trade.maker_fee if hasattr(trade, 'maker_fee') and trade.maker_fee is not None else None
+                        else:
+                            # We were taker
+                            is_maker = False
+                            fee_basis_points = trade.taker_fee
+                    else:
+                        # Fallback: assume taker if we can't determine
+                        fee_basis_points = trade.taker_fee
+                    
+                    # Convert fee to actual amount
+                    # Lighter API returns fees as int32 in "hundredths of basis points" format
+                    # Fee structure: Maker = 0.2 bps (0.002%), Taker = 2 bps (0.02%)
+                    # Format: API value represents hundredths of basis points
+                    #   - 1 unit = 0.01 bp = 0.0001%
+                    #   - Maker: 20 units = 0.2 bps = 0.002% (20/1000000 = 0.00002)
+                    #   - Taker: 200 units = 2 bps = 0.02% (200/1000000 = 0.0002)
+                    if fee_basis_points is not None:
+                        fee_bps = Decimal(str(fee_basis_points))
+                        
+                        # Convert: divide by 1,000,000 to get fee rate as decimal
+                        # This converts "hundredths of basis points" to percentage
+                        fee_rate = fee_bps / Decimal("1000000")
+                        fee = trade_value * fee_rate
+                        
+                        # Log fee calculation for first trades
+                        if idx < 1:
+                            fee_bps_calculated = fee_rate * Decimal("10000")  # Convert to basis points for display
+                            expected_maker_fee = trade_value * Decimal("0.000002")  # 0.2 bps
+                            expected_taker_fee = trade_value * Decimal("0.00002")   # 2 bps
+                            self.logger.info(
+                                f"[LIGHTER] Trade {idx} fee calculation: "
+                                f"value=${trade_value:.2f}, "
+                                f"fee_raw={fee_basis_points}, "
+                                f"fee_rate={fee_rate:.6f} ({fee_rate*100:.4f}% = {fee_bps_calculated:.2f} bps), "
+                                f"fee=${fee:.4f}, "
+                                f"role={'maker' if is_maker else 'taker'}, "
+                                f"expected_{'maker' if is_maker else 'taker'}_fee=${expected_maker_fee if is_maker else expected_taker_fee:.4f}"
+                            )
+                
+                # Get order_id from trade (ask_id or bid_id depending on our side)
+                trade_order_id = None
+                if side == "sell" and hasattr(trade, 'ask_id'):
+                    trade_order_id = str(trade.ask_id)
+                elif side == "buy" and hasattr(trade, 'bid_id'):
+                    trade_order_id = str(trade.bid_id)
+                
+                result.append(TradeData(
+                    trade_id=str(trade.trade_id),
+                    timestamp=float(trade_timestamp),  # Use converted timestamp
+                    symbol=symbol,
+                    side=side,
+                    quantity=Decimal(str(trade.size)),
+                    price=Decimal(str(trade.price)),
+                    fee=fee,
+                    fee_currency="USDC",  # Lighter typically uses USDC for fees
+                    order_id=trade_order_id,
+                ))
+            
+            self.logger.info(
+                f"[LIGHTER] Trade history filtering complete: {len(result)} trades in range, "
+                f"{filtered_out_count} filtered out (outside time range)"
+            )
+            
+            # Log summary of what we found
+            if len(result) == 0 and len(trades_response.trades) > 0:
+                # We got trades but they were all filtered out - log why
+                try:
+                    # Convert timestamps properly
+                    def convert_timestamp(ts):
+                        if ts > 1e13:  # Nanoseconds
+                            return ts / 1e9
+                        elif ts > 1e10:  # Milliseconds
+                            return ts / 1000
+                        return ts  # Seconds
+                    
+                    oldest_raw = min(t.timestamp for t in trades_response.trades)
+                    newest_raw = max(t.timestamp for t in trades_response.trades)
+                    oldest_trade = convert_timestamp(oldest_raw)
+                    newest_trade = convert_timestamp(newest_raw)
+                    
+                    from datetime import datetime
+                    self.logger.warning(
+                        f"[LIGHTER] All {len(trades_response.trades)} trades filtered out. "
+                        f"Trade time range: {datetime.fromtimestamp(oldest_trade).strftime('%Y-%m-%d %H:%M:%S')} "
+                        f"to {datetime.fromtimestamp(newest_trade).strftime('%Y-%m-%d %H:%M:%S')}, "
+                        f"Requested range: {datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S')} "
+                        f"to {datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+                except Exception as e:
+                    self.logger.warning(f"[LIGHTER] Could not log trade time range: {e}")
+            
+            return result
+            
+        except Exception as e:
+            self.logger.warning(f"[LIGHTER] Failed to get trade history for {symbol}: {e}")
+            import traceback
+            self.logger.debug(f"[LIGHTER] Trade history error traceback: {traceback.format_exc()}")
+            return []
 

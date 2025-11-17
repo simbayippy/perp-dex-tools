@@ -17,6 +17,7 @@ from exchange_clients.base_models import (
     OrderResult,
     OrderInfo,
     ExchangePositionSnapshot,
+    TradeData,
     validate_credentials,
 )
 from exchange_clients.aster.common import get_aster_symbol_format, get_quantity_multiplier
@@ -437,4 +438,98 @@ class AsterClient(BaseExchangeClient):
     def get_min_order_notional(self, symbol: Optional[str]) -> Optional[Decimal]:
         """Return the minimum notional requirement for the given symbol if known."""
         return self.account_manager.get_min_order_notional(symbol)
+    
+    async def get_user_trade_history(
+        self,
+        symbol: str,
+        start_time: float,
+        end_time: float,
+        order_id: Optional[str] = None,
+    ) -> List[TradeData]:
+        """
+        Get user trade history for Aster using /fapi/v1/userTrades endpoint.
+        
+        Args:
+            symbol: Trading symbol (normalized format, e.g., "BTC", "TOSHI")
+            start_time: Start timestamp (Unix seconds)
+            end_time: End timestamp (Unix seconds)
+            order_id: Optional order ID to filter trades
+            
+        Returns:
+            List of TradeData objects, or empty list on error
+        """
+        try:
+            # Convert normalized symbol to Aster format (e.g., "BTC" -> "BTCUSDT")
+            aster_symbol = self.normalize_symbol(symbol)
+            
+            # Resolve contract_id for the symbol (may use cache, but normalize first)
+            contract_id = self.resolve_contract_id(symbol)
+            
+            # Use Aster-formatted symbol if resolve_contract_id didn't find a cached value
+            # (resolve_contract_id falls back to symbol as-is if not in cache)
+            if contract_id == symbol.upper():
+                contract_id = aster_symbol
+            
+            # Build request parameters
+            params = {
+                'symbol': contract_id,
+                'startTime': int(start_time * 1000),  # Convert to milliseconds
+                'endTime': int(end_time * 1000),
+                'limit': 1000,  # Maximum limit for Aster API
+            }
+            
+            # Try to use orderId parameter if provided (Binance-style API may support it)
+            if order_id:
+                params['orderId'] = order_id
+            
+            # Make authenticated request
+            trades = await self._make_request('GET', '/fapi/v1/userTrades', params)
+            
+            if not isinstance(trades, list):
+                self.logger.warning(f"[ASTER] Unexpected trade history response format: {type(trades)}")
+                return []
+            
+            # Parse trades into TradeData objects
+            result = []
+            for trade in trades:
+                # Filter by order_id client-side if orderId parameter didn't work or wasn't used
+                if order_id and trade.get('orderId') != order_id:
+                    continue
+                
+                # Filter by timestamp range (API may not filter precisely)
+                trade_time = trade.get('time', 0) / 1000  # Convert ms to seconds
+                if trade_time < start_time or trade_time > end_time:
+                    continue
+                
+                # Determine side
+                is_buyer = trade.get('buyer', False)
+                side = "buy" if is_buyer else "sell"
+                
+                # Extract trade data
+                trade_id = str(trade.get('id', ''))
+                quantity = Decimal(str(trade.get('qty', '0')))
+                price = Decimal(str(trade.get('price', '0')))
+                fee = Decimal(str(trade.get('commission', '0')))
+                fee_currency = trade.get('commissionAsset', 'USDT')
+                trade_order_id = str(trade.get('orderId', ''))
+                
+                result.append(TradeData(
+                    trade_id=trade_id,
+                    timestamp=trade_time,
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    price=price,
+                    fee=fee,
+                    fee_currency=fee_currency,
+                    order_id=trade_order_id if trade_order_id else None,
+                ))
+            
+            return result
+            
+        except Exception as e:
+            self.logger.warning(f"[ASTER] Failed to get trade history for {symbol}: {e}")
+            import traceback
+            self.logger.debug(f"[ASTER] Trade history error traceback: {traceback.format_exc()}")
+            return []
 

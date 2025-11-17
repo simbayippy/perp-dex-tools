@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from exchange_clients.events import LiquidationEvent
 from exchange_clients.base_client import BaseExchangeClient
+from exchange_clients.base_models import TradeData
 from ..risk_management import get_risk_manager
 from strategies.execution.core.order_executor import OrderExecutor, ExecutionMode
 from strategies.execution.patterns.atomic_multi_order import OrderSpec
@@ -84,6 +85,214 @@ class PositionCloser:
             )
         
         return total_closing_fees
+    
+    async def _calculate_pnl_from_trade_history(
+        self,
+        position: "FundingArbPosition",
+        close_result: Dict[str, Any],
+        start_time: float,
+        end_time: float,
+    ) -> Optional[Tuple[Decimal, str]]:
+        """
+        Calculate PnL from exchange trade history APIs.
+        
+        Args:
+            position: The closed position
+            close_result: Close execution result with filled_orders and order_ids
+            start_time: Start timestamp (Unix seconds) - position opened_at
+            end_time: End timestamp (Unix seconds) - current time after close
+            
+        Returns:
+            Tuple of (pnl, method_name) if successful, None if trade history unavailable
+        """
+        strategy = self._strategy
+        
+        # Get order_ids from close_result
+        filled_orders = close_result.get("filled_orders", [])
+        if not filled_orders:
+            return None
+        
+        # Try to get trade history for each leg with order_id
+        # Store trades with their associated DEX for proper matching
+        trades_by_dex: Dict[str, List[TradeData]] = {}
+        order_ids_available = True
+        
+        for fill_info in filled_orders:
+            dex = fill_info.get("dex")
+            order_id = fill_info.get("order_id")
+            
+            if not dex:
+                continue
+            
+            client = strategy.exchange_clients.get(dex)
+            if not client:
+                strategy.logger.debug(f"[{dex}] Exchange client not available for trade history")
+                continue
+            
+            trades_for_dex: List[TradeData] = []
+            
+            # Try with order_id first (most accurate)
+            if order_id:
+                try:
+                    trades = await client.get_user_trade_history(
+                        symbol=position.symbol,
+                        start_time=start_time,
+                        end_time=end_time,
+                        order_id=order_id,
+                    )
+                    if trades:
+                        trades_for_dex.extend(trades)
+                        strategy.logger.debug(
+                            f"[{dex}] Found {len(trades)} trades for order_id {order_id}"
+                        )
+                        trades_by_dex[dex] = trades_for_dex
+                        continue
+                except Exception as e:
+                    strategy.logger.debug(
+                        f"[{dex}] Failed to get trade history with order_id {order_id}: {e}"
+                    )
+            
+            # Fallback: Try without order_id (timestamp filtering only)
+            order_ids_available = False
+            try:
+                trades = await client.get_user_trade_history(
+                    symbol=position.symbol,
+                    start_time=start_time,
+                    end_time=end_time,
+                    order_id=None,
+                )
+                if trades:
+                    # Filter by order_id client-side if we have it
+                    if order_id:
+                        trades = [t for t in trades if t.order_id == order_id]
+                    trades_for_dex.extend(trades)
+                    strategy.logger.debug(
+                        f"[{dex}] Found {len(trades)} trades (timestamp-filtered)"
+                    )
+                    trades_by_dex[dex] = trades_for_dex
+            except Exception as e:
+                strategy.logger.debug(
+                    f"[{dex}] Failed to get trade history: {e}"
+                )
+        
+        # Flatten all trades for processing
+        all_trades: List[TradeData] = []
+        for trades in trades_by_dex.values():
+            all_trades.extend(trades)
+        
+        if not all_trades:
+            return None
+        
+        # Calculate PnL from trade data
+        # Aggregate all fills for the close orders
+        total_price_pnl = Decimal("0")
+        total_fees = Decimal("0")
+        total_realized_funding = Decimal("0")
+        
+        # Group trades by DEX to calculate price PnL
+        legs_metadata = position.metadata.get("legs", {})
+        
+        for trade in all_trades:
+            # Sum fees from actual trades
+            total_fees += trade.fee
+            
+            # Sum realized funding if available (Paradex provides this)
+            if trade.realized_funding is not None:
+                total_realized_funding += trade.realized_funding
+            
+            # Calculate price PnL if realized_pnl not available
+            # Otherwise use realized_pnl from trade (Paradex provides this)
+            if trade.realized_pnl is not None:
+                total_price_pnl += trade.realized_pnl
+            else:
+                # Calculate price PnL from trade price vs entry price
+                # Match trade to leg by finding which DEX this trade came from
+                matched_leg = None
+                matched_dex = None
+                
+                # Find which DEX this trade belongs to by checking trades_by_dex
+                for dex, trades_list in trades_by_dex.items():
+                    if trade in trades_list:
+                        matched_dex = dex
+                        leg_meta = legs_metadata.get(dex, {})
+                        matched_leg = (dex, leg_meta)
+                        break
+                
+                # Fallback: Try to match by order_id
+                if not matched_leg:
+                    for fill_info in filled_orders:
+                        dex = fill_info.get("dex")
+                        order_id = fill_info.get("order_id")
+                        
+                        # Match by order_id if available
+                        if order_id and trade.order_id == order_id:
+                            matched_dex = dex
+                            leg_meta = legs_metadata.get(dex, {})
+                            matched_leg = (dex, leg_meta)
+                            break
+                
+                # Final fallback: Use first available leg
+                if not matched_leg:
+                    for dex in [position.long_dex, position.short_dex]:
+                        leg_meta = legs_metadata.get(dex, {})
+                        if leg_meta:
+                            matched_dex = dex
+                            matched_leg = (dex, leg_meta)
+                            break
+                
+                if matched_leg:
+                    dex, leg_meta = matched_leg
+                    entry_price = leg_meta.get("entry_price")
+                    side = leg_meta.get("side", "long")
+                    
+                    if entry_price:
+                        entry_price_decimal = self._to_decimal(entry_price)
+                        # For long: PnL = (exit_price - entry_price) * quantity
+                        # For short: PnL = (entry_price - exit_price) * quantity
+                        if side == "long":
+                            leg_pnl = (trade.price - entry_price_decimal) * trade.quantity
+                        else:  # short
+                            leg_pnl = (entry_price_decimal - trade.price) * trade.quantity
+                        total_price_pnl += leg_pnl
+                        strategy.logger.debug(
+                            f"[{dex}] Price PnL from trade history: ${leg_pnl:.2f} "
+                            f"(entry=${entry_price_decimal:.6f}, exit=${trade.price:.6f}, qty={trade.quantity})"
+                        )
+        
+        # Use realized_funding from trades if available, otherwise use cumulative funding
+        if total_realized_funding != 0:
+            funding_to_add = total_realized_funding
+            funding_source = "trade_history"
+        else:
+            cumulative_funding = await strategy.position_manager.get_cumulative_funding(position.id)
+            funding_to_add = self._to_decimal(cumulative_funding)
+            funding_source = "database"
+        
+        # Calculate closing fees from actual trades (more accurate than estimated)
+        # Note: We already have closing_fees calculated from filled_orders, but trade history
+        # gives us the actual fees paid, which may differ due to partial fills, fee tiers, etc.
+        # For now, we'll use the actual fees from trades if available
+        actual_closing_fees = total_fees
+        
+        # Total PnL = price_pnl + funding - entry fees - closing fees
+        entry_fees_decimal = self._to_decimal(position.total_fees_paid)
+        closing_fees_decimal = actual_closing_fees
+        total_fees_decimal = entry_fees_decimal + closing_fees_decimal
+        pnl = total_price_pnl + funding_to_add - total_fees_decimal
+        
+        method_name = f"trade_history_{'with_order_id' if order_ids_available else 'timestamp_filtered'}"
+        
+        strategy.logger.info(
+            f"PnL calculation ({method_name}): "
+            f"price_pnl=${total_price_pnl:.2f}, "
+            f"funding=${funding_to_add:.2f} (from {funding_source}), "
+            f"entry_fees=${position.total_fees_paid:.2f}, "
+            f"closing_fees=${actual_closing_fees:.2f}, "
+            f"total_fees=${total_fees_decimal:.2f}, "
+            f"net_pnl=${pnl:.2f}"
+        )
+        
+        return (pnl, method_name)
 
     def __init__(self, strategy: "FundingArbitrageStrategy") -> None:
         self._strategy = strategy
@@ -211,29 +420,52 @@ class PositionCloser:
         self._current_close_order_type = order_type
 
         try:
-            # Capture realized PnL BEFORE closing (while positions are still open)
+            # Capture PnL BEFORE closing (while positions are still open)
             # Position snapshots only work for OPEN positions, not closed ones
+            # Use unrealized_pnl (same as position_monitor) - it's accurate for open positions
+            # After closing, unrealized_pnl becomes the price PnL component
             pre_close_snapshots = live_snapshots or await self._fetch_leg_snapshots(position)
             
             # Calculate PnL from exchange snapshots BEFORE closing
-            # Note: Exchange realized_pnl is price PnL only, funding_accrued is separate
-            total_realized_pnl = Decimal("0")
+            # Use unrealized_pnl + funding_accrued (same method as position_monitor)
+            # Note: unrealized_pnl is price PnL, funding_accrued is funding payments
+            total_unrealized_pnl = Decimal("0")
             total_funding_accrued = Decimal("0")
+            missing_snapshot_data = False
+            
             for dex in [position.long_dex, position.short_dex]:
                 snapshot = pre_close_snapshots.get(dex) or pre_close_snapshots.get(dex.lower())
-                if snapshot:
-                    if snapshot.realized_pnl is not None:
-                        realized_pnl_decimal = self._to_decimal(snapshot.realized_pnl)
-                        total_realized_pnl += realized_pnl_decimal
-                        strategy.logger.debug(
-                            f"[{dex}] Pre-close Realized PnL: ${realized_pnl_decimal:.2f}"
-                        )
-                    if snapshot.funding_accrued is not None:
-                        funding_decimal = self._to_decimal(snapshot.funding_accrued)
-                        total_funding_accrued += funding_decimal
-                        strategy.logger.debug(
-                            f"[{dex}] Pre-close Funding Accrued: ${funding_decimal:.2f}"
-                        )
+                if not snapshot:
+                    missing_snapshot_data = True
+                    strategy.logger.debug(
+                        f"[{dex}] Missing snapshot, will use fallback method for PnL"
+                    )
+                    continue
+                
+                # Get unrealized_pnl (price PnL component)
+                if snapshot.unrealized_pnl is not None:
+                    unrealized_pnl_decimal = self._to_decimal(snapshot.unrealized_pnl)
+                    total_unrealized_pnl += unrealized_pnl_decimal
+                    strategy.logger.debug(
+                        f"[{dex}] Pre-close Unrealized PnL: ${unrealized_pnl_decimal:.2f}"
+                    )
+                else:
+                    missing_snapshot_data = True
+                    strategy.logger.debug(
+                        f"[{dex}] Missing unrealized_pnl in snapshot, will use fallback method"
+                    )
+                
+                # Get funding_accrued (funding payments component)
+                if snapshot.funding_accrued is not None:
+                    funding_decimal = self._to_decimal(snapshot.funding_accrued)
+                    total_funding_accrued += funding_decimal
+                    strategy.logger.debug(
+                        f"[{dex}] Pre-close Funding Accrued: ${funding_decimal:.2f}"
+                    )
+                else:
+                    strategy.logger.debug(
+                        f"[{dex}] Missing funding_accrued in snapshot, will use cumulative_funding from DB"
+                    )
             
             # Close positions on exchanges
             await self._close_exchange_positions(
@@ -245,48 +477,82 @@ class PositionCloser:
 
             # Wait a moment for exchanges to process the close
             await asyncio.sleep(1.0)
-
-            # Try to get updated realized PnL after closing (some exchanges update it immediately)
-            # But don't rely on this - we already have it from pre-close snapshots
-            post_close_snapshots = await self._fetch_leg_snapshots(position)
-            post_close_realized_pnl = Decimal("0")
-            post_close_funding_accrued = Decimal("0")
-            for dex in [position.long_dex, position.short_dex]:
-                snapshot = post_close_snapshots.get(dex) or post_close_snapshots.get(dex.lower())
-                if snapshot:
-                    if snapshot.realized_pnl is not None:
-                        realized_pnl_decimal = self._to_decimal(snapshot.realized_pnl)
-                        post_close_realized_pnl += realized_pnl_decimal
-                    if snapshot.funding_accrued is not None:
-                        funding_decimal = self._to_decimal(snapshot.funding_accrued)
-                        post_close_funding_accrued += funding_decimal
             
-            # Use post-close PnL if available and different (exchange updated it), otherwise use pre-close
-            if post_close_realized_pnl != 0 and post_close_realized_pnl != total_realized_pnl:
-                old_pnl = total_realized_pnl
-                total_realized_pnl = post_close_realized_pnl
-                total_funding_accrued = post_close_funding_accrued
+            # Calculate closing fees from filled orders
+            closing_fees = Decimal("0")
+            close_result = position.metadata.get("close_execution_result")
+            if close_result and close_result.get("filled_orders"):
+                closing_fees = self._calculate_closing_fees(
+                    close_result, 
+                    order_type=self._current_close_order_type
+                )
                 strategy.logger.debug(
-                    f"Using post-close realized PnL: ${total_realized_pnl:.2f} "
-                    f"(pre-close was ${old_pnl:.2f})"
+                    f"Closing fees calculated: ${closing_fees:.2f}"
                 )
             
-            # If we couldn't get realized PnL from snapshots, use execution result from websocket fills
-            # Also check if we're missing data from one exchange (snapshot returned None or realized_pnl was None)
-            missing_exchange_data = False
-            for dex in [position.long_dex, position.short_dex]:
-                snapshot = pre_close_snapshots.get(dex) or pre_close_snapshots.get(dex.lower())
-                if not snapshot or snapshot.realized_pnl is None:
-                    missing_exchange_data = True
-                    strategy.logger.debug(
-                        f"[{dex}] Missing realized_pnl in snapshot, will use websocket fills for accurate PnL"
-                    )
-                    break
+            # Calculate PnL using exchange trade history APIs (most accurate)
+            # Fallback chain: trade_history -> snapshots -> websocket_fills -> cumulative_funding
+            pnl = None
+            pnl_method = None
             
-            if total_realized_pnl == 0 or missing_exchange_data:
-                # Check if we have close execution result stored in metadata
-                # This contains fill prices from websocket updates (atomic executor waits for fills)
-                close_result = position.metadata.get("close_execution_result")
+            # Primary method: Try trade history APIs with order_id
+            if close_result:
+                try:
+                    import time
+                    start_time = position.opened_at.timestamp()
+                    end_time = time.time()  # Current time
+                    trade_history_result = await self._calculate_pnl_from_trade_history(
+                        position,
+                        close_result,
+                        start_time,
+                        end_time,
+                    )
+                    if trade_history_result:
+                        pnl, pnl_method = trade_history_result
+                except Exception as e:
+                    strategy.logger.debug(
+                        f"Trade history PnL calculation failed: {e}, falling back to snapshots"
+                    )
+            
+            # Fallback 1: Use unrealized_pnl + funding_accrued from snapshots
+            if pnl is None and not missing_snapshot_data:
+                # Use funding_accrued from snapshots if available (more accurate, includes latest funding payment)
+                # Otherwise fallback to cumulative_funding from database
+                if total_funding_accrued != 0:
+                    funding_to_add = total_funding_accrued
+                    funding_source = "snapshots"
+                    strategy.logger.debug(
+                        f"Using funding_accrued from snapshots: ${total_funding_accrued:.2f}"
+                    )
+                else:
+                    # Fallback to cumulative funding from database
+                    cumulative_funding = await strategy.position_manager.get_cumulative_funding(position.id)
+                    funding_to_add = self._to_decimal(cumulative_funding)
+                    funding_source = "database"
+                    strategy.logger.debug(
+                        f"Using cumulative_funding from database: ${cumulative_funding:.2f}"
+                    )
+                
+                # Total PnL = unrealized_pnl (price PnL) + funding - entry fees - closing fees
+                entry_fees_decimal = self._to_decimal(position.total_fees_paid)
+                closing_fees_decimal = self._to_decimal(closing_fees)
+                total_fees_decimal = entry_fees_decimal + closing_fees_decimal
+                pnl = total_unrealized_pnl + funding_to_add - total_fees_decimal
+                pnl_method = "snapshots"
+                
+                strategy.logger.info(
+                    f"PnL calculation ({pnl_method}): "
+                    f"price_pnl=${total_unrealized_pnl:.2f}, "
+                    f"funding=${funding_to_add:.2f} (from {funding_source}), "
+                    f"entry_fees=${position.total_fees_paid:.2f}, "
+                    f"closing_fees=${closing_fees:.2f}, "
+                    f"total_fees=${total_fees_decimal:.2f}, "
+                    f"net_pnl=${pnl:.2f}"
+                )
+            
+            # Fallback 2: Calculate from websocket fills if snapshots unavailable
+            if pnl is None:
+                # Fallback: Calculate from websocket fills if snapshots unavailable
                 if close_result and close_result.get("filled_orders"):
                     strategy.logger.debug(
                         f"Using close execution result (websocket fills) for PnL: {position.symbol}"
@@ -329,9 +595,6 @@ class PositionCloser:
                                     f"(entry=${entry_price_decimal:.6f}, exit=${fill_price_decimal:.6f}, qty={filled_qty_decimal})"
                                 )
                     
-                    # Calculate closing fees from filled orders
-                    closing_fees = self._calculate_closing_fees(close_result, order_type=order_type)
-                    
                     # Total PnL = price movement + funding - entry fees - closing fees
                     # Ensure all values are Decimal before arithmetic
                     cumulative_funding_decimal = self._to_decimal(cumulative_funding)
@@ -339,58 +602,39 @@ class PositionCloser:
                     closing_fees_decimal = self._to_decimal(closing_fees)
                     total_fees_decimal = entry_fees_decimal + closing_fees_decimal
                     pnl = price_pnl + cumulative_funding_decimal - total_fees_decimal
-                    strategy.logger.debug(
-                        f"Calculated PnL from websocket fills: price=${price_pnl:.2f}, "
-                        f"funding=${cumulative_funding:.2f}, entry_fees=${position.total_fees_paid:.2f}, "
-                        f"closing_fees=${closing_fees:.2f}, total_fees=${total_fees_decimal:.2f}, "
-                        f"total=${pnl:.2f}"
+                    pnl_method = "websocket_fills"
+                    
+                    strategy.logger.info(
+                        f"PnL calculation ({pnl_method}): "
+                        f"price_pnl=${price_pnl:.2f}, "
+                        f"funding=${cumulative_funding:.2f}, "
+                        f"entry_fees=${position.total_fees_paid:.2f}, "
+                        f"closing_fees=${closing_fees:.2f}, "
+                        f"total_fees=${total_fees_decimal:.2f}, "
+                        f"net_pnl=${pnl:.2f}"
                     )
-                else:
-                    # Fall back to cumulative funding method
-                    strategy.logger.warning(
-                        f"Could not get realized PnL from exchanges for {position.symbol}, "
-                        f"falling back to cumulative funding"
-                    )
-                    cumulative_funding = await strategy.position_manager.get_cumulative_funding(position.id)
-                    position.cumulative_funding = cumulative_funding
-                    pnl = position.get_net_pnl()
-            else:
-                # Use exchange realized PnL from snapshots
-                # Note: Exchange realized_pnl is price PnL only, funding_accrued is separate
-                # If we have funding_accrued from snapshots, use it; otherwise use cumulative_funding from DB
-                if total_funding_accrued != 0:
-                    # Use funding from snapshots (more accurate, includes latest funding payment)
-                    funding_to_add = total_funding_accrued
-                    strategy.logger.debug(
-                        f"Using funding_accrued from snapshots: ${total_funding_accrued:.2f}"
-                    )
-                else:
-                    # Fallback to cumulative funding from database
-                    cumulative_funding = await strategy.position_manager.get_cumulative_funding(position.id)
-                    funding_to_add = self._to_decimal(cumulative_funding)
-                    strategy.logger.debug(
-                        f"Using cumulative_funding from database: ${cumulative_funding:.2f}"
-                    )
-                
-                # Calculate closing fees if we have close execution result
-                closing_fees = Decimal("0")
-                close_result = position.metadata.get("close_execution_result")
-                if close_result and close_result.get("filled_orders"):
-                    closing_fees = self._calculate_closing_fees(
-                        close_result, 
-                        order_type=self._current_close_order_type
-                    )
-                
-                # Total PnL = price PnL + funding - entry fees - closing fees
+            
+            # Fallback 3: Use cumulative funding method (least accurate)
+            if pnl is None:
+                strategy.logger.warning(
+                    f"Could not get accurate PnL from exchanges for {position.symbol}, "
+                    f"falling back to cumulative funding method"
+                )
+                cumulative_funding = await strategy.position_manager.get_cumulative_funding(position.id)
+                position.cumulative_funding = cumulative_funding
                 entry_fees_decimal = self._to_decimal(position.total_fees_paid)
                 closing_fees_decimal = self._to_decimal(closing_fees)
                 total_fees_decimal = entry_fees_decimal + closing_fees_decimal
-                pnl = total_realized_pnl + funding_to_add - total_fees_decimal
-                strategy.logger.debug(
-                    f"Using exchange snapshots: price_pnl=${total_realized_pnl:.2f}, "
-                    f"funding=${funding_to_add:.2f}, entry_fees=${position.total_fees_paid:.2f}, "
-                    f"closing_fees=${closing_fees:.2f}, total_fees=${total_fees_decimal:.2f}, "
-                    f"net=${pnl:.2f}"
+                pnl = position.get_net_pnl() - closing_fees_decimal
+                pnl_method = "cumulative_funding"
+                
+                strategy.logger.info(
+                    f"PnL calculation ({pnl_method}): "
+                    f"funding=${cumulative_funding:.2f}, "
+                    f"entry_fees=${position.total_fees_paid:.2f}, "
+                    f"closing_fees=${closing_fees:.2f}, "
+                    f"total_fees=${total_fees_decimal:.2f}, "
+                    f"net_pnl=${pnl:.2f}"
                 )
             
             if position.size_usd and position.size_usd > Decimal("0"):
@@ -983,6 +1227,7 @@ class PositionCloser:
                     "fill_price": order.get("fill_price"),
                     "filled_quantity": order.get("filled_quantity"),
                     "slippage_usd": order.get("slippage_usd", Decimal("0")),
+                    "order_id": order.get("order_id"),  # Store order_id for trade history queries
                 }
                 for leg, order in zip(legs, result.filled_orders)
                 if order.get("filled")

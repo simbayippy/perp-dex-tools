@@ -17,7 +17,7 @@ OrderFillCallback = Optional[Callable[[str, Decimal, Decimal, Optional[int]], Aw
 if TYPE_CHECKING:
     from .base_websocket import BaseWebSocketManager
 
-from .base_models import ExchangePositionSnapshot, OrderInfo, OrderResult
+from .base_models import ExchangePositionSnapshot, OrderInfo, OrderResult, TradeData
 
 
 class BaseExchangeClient(ABC):
@@ -648,6 +648,86 @@ class BaseExchangeClient(ABC):
         TODO: promote to abstract once most clients implement it.
         """
         return None
+    
+    async def get_user_trade_history(
+        self,
+        symbol: str,
+        start_time: float,
+        end_time: float,
+        order_id: Optional[str] = None,
+    ) -> List["TradeData"]:
+        """
+        Get user trade/fill history for a specific symbol and time range.
+        
+        This method queries the exchange's trade history API to retrieve actual executed
+        trades/fills with fees, prices, and quantities. Used for accurate PnL calculation
+        after position closure.
+        
+        Args:
+            symbol: Trading symbol (normalized format, e.g., "BTC", "TOSHI")
+            start_time: Start timestamp (Unix seconds) - filters out entry trades
+            end_time: End timestamp (Unix seconds) - typically current time after close
+            order_id: Optional order ID to filter trades for a specific order.
+                     Some exchanges support this parameter, others require client-side filtering.
+                     
+        Returns:
+            List of TradeData objects representing fills/trades for the specified criteria.
+            Returns empty list if:
+            - Exchange doesn't support trade history queries
+            - No trades found matching criteria
+            - Error occurred (should log warning)
+            
+        Implementation Notes:
+            - Filter by timestamp range (start_time -> end_time) to exclude entry trades
+            - If order_id provided and exchange supports it: use API parameter
+            - If order_id provided but exchange doesn't support it: filter client-side
+            - Handle multiple fills per order (aggregate all fills for the order)
+            - Parse exchange-specific response format into standardized TradeData
+            - Return empty list on errors (don't raise exceptions - fallback to snapshots)
+            
+        Example Implementation:
+            ```python
+            async def get_user_trade_history(
+                self, symbol: str, start_time: float, end_time: float, order_id: Optional[str] = None
+            ) -> List[TradeData]:
+                try:
+                    params = {
+                        'symbol': self.resolve_contract_id(symbol),
+                        'startTime': int(start_time * 1000),  # Convert to ms if needed
+                        'endTime': int(end_time * 1000),
+                    }
+                    if order_id:
+                        params['orderId'] = order_id  # If supported
+                    
+                    trades = await self._make_request('GET', '/api/v1/userTrades', params)
+                    
+                    result = []
+                    for trade in trades:
+                        # Filter by order_id client-side if exchange doesn't support it
+                        if order_id and trade.get('orderId') != order_id:
+                            continue
+                            
+                        result.append(TradeData(
+                            trade_id=str(trade['id']),
+                            timestamp=trade['time'] / 1000,  # Convert ms to seconds
+                            symbol=symbol,
+                            side='buy' if trade['isBuyer'] else 'sell',
+                            quantity=Decimal(str(trade['qty'])),
+                            price=Decimal(str(trade['price'])),
+                            fee=Decimal(str(trade['commission'])),
+                            fee_currency=trade.get('commissionAsset', 'USDT'),
+                            order_id=str(trade.get('orderId', '')),
+                        ))
+                    
+                    return result
+                except Exception as e:
+                    self.logger.warning(f"Failed to get trade history: {e}")
+                    return []
+            ```
+        """
+        # Default implementation returns empty list
+        # Exchanges should override this method
+        return []
     
     async def get_account_pnl(self) -> Optional[Decimal]:
         """
