@@ -527,7 +527,14 @@ class ParadexClient(BaseExchangeClient):
                 return []
             
             # Resolve contract_id for the symbol (Paradex format)
+            # Use base implementation first (checks cache and config.contract_id)
             contract_id = self.resolve_contract_id(symbol)
+            
+            # If resolve_contract_id returned symbol as-is (cache miss), use normalize_symbol
+            # This matches Aster's pattern: fallback to normalized format if not cached
+            if contract_id == symbol.upper():
+                contract_id = self.normalize_symbol(symbol)
+            
             self.logger.info(f"[PARADEX] Symbol '{symbol}' resolved to contract_id: '{contract_id}'")
             
             # Build request parameters
