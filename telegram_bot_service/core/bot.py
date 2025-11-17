@@ -20,6 +20,7 @@ from telegram_bot_service.handlers.strategies import StrategyHandler
 from telegram_bot_service.handlers.wizards import WizardRouter
 from telegram_bot_service.handlers.notifications import NotificationHandler
 from telegram_bot_service.handlers.opportunities import OpportunitiesHandler
+from telegram_bot_service.handlers.trades import TradesHandler
 from telegram_bot_service.utils.auth import TelegramAuth
 from telegram_bot_service.utils.formatters import TelegramFormatter
 from telegram_bot_service.managers.process_manager import StrategyProcessManager
@@ -83,6 +84,7 @@ class StrategyControlBot:
         self.config_handler = ConfigHandler(**handler_kwargs)
         self.strategy_handler = StrategyHandler(**handler_kwargs)
         self.opportunities_handler = OpportunitiesHandler(**handler_kwargs)
+        self.trades_handler = TradesHandler(**handler_kwargs)
         self.wizard_router = WizardRouter(
             account_handler=self.account_handler,
             config_handler=self.config_handler,
@@ -127,6 +129,7 @@ class StrategyControlBot:
         self.config_handler.register_handlers(application)
         self.strategy_handler.register_handlers(application)
         self.opportunities_handler.register_handlers(application)
+        self.trades_handler.register_handlers(application)
         self.wizard_router.register_handlers(application)
         
         # Error handler
