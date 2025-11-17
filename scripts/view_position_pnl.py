@@ -155,8 +155,6 @@ async def get_positions(
         query = """
             SELECT 
                 sp.id,
-                sp.long_dex,
-                sp.short_dex,
                 sp.size_usd,
                 sp.opened_at,
                 sp.closed_at,
@@ -165,11 +163,14 @@ async def get_positions(
                 sp.entry_long_rate,
                 sp.entry_short_rate,
                 sp.entry_divergence,
-                sp.total_fees_paid,
-                sp.cumulative_funding,
-                s.symbol as symbol_name
+                sp.cumulative_funding_usd,
+                s.symbol as symbol_name,
+                d1.name as long_dex,
+                d2.name as short_dex
             FROM strategy_positions sp
             JOIN symbols s ON sp.symbol_id = s.id
+            JOIN dexes d1 ON sp.long_dex_id = d1.id
+            JOIN dexes d2 ON sp.short_dex_id = d2.id
             WHERE sp.account_id = :account_id
         """
         values = {"account_id": account_id}
@@ -265,7 +266,7 @@ def calculate_position_pnl(
         total_funding = funding_from_trades
         funding_source = "trade_history"
     else:
-        cumulative_funding = position.get("cumulative_funding") or Decimal("0")
+        cumulative_funding = position.get("cumulative_funding_usd") or Decimal("0")
         total_funding = Decimal(str(cumulative_funding))
         funding_source = "database"
     
