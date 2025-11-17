@@ -149,7 +149,7 @@ async def get_trades_for_account(
         repository = TradeFillRepository(db)
         
         # Use the repository method that supports filtering
-        trades = await repository.get_trades_for_account(
+        trades = await repository.get_trades_by_account(
             account_id=account_id,
             symbol=symbol,
             trade_type=trade_type,
