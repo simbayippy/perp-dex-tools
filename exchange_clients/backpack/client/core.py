@@ -427,25 +427,57 @@ class BackpackClient(BaseExchangeClient):
                     try:
                         self.logger.debug(f"[BACKPACK] Looking up symbol '{symbol}' in markets API...")
                         markets = self.public_client.get_markets()
+                        self.logger.debug(f"[BACKPACK] Found {len(markets) if markets else 0} markets")
+                        
+                        # Look for PERP markets matching the symbol
+                        matching_markets = []
                         for market in markets or []:
+                            base_symbol = market.get("baseSymbol", "").upper()
+                            market_symbol = market.get("symbol", "")
+                            market_type = market.get("marketType", "")
+                            
                             if (
-                                market.get("marketType") == "PERP"
-                                and market.get("baseSymbol", "").upper() == symbol.upper()
+                                market_type == "PERP"
+                                and base_symbol == symbol.upper()
                                 and market.get("quoteSymbol") == "USDC"
                             ):
-                                contract_id = market.get("symbol", "")
-                                self.logger.info(f"[BACKPACK] Found symbol in markets API: {contract_id}")
-                                # Cache it for future use
-                                if hasattr(self, '_market_symbol_map') and self._market_symbol_map:
-                                    self._market_symbol_map.set(symbol.upper(), contract_id)
-                                break
+                                matching_markets.append({
+                                    "symbol": market_symbol,
+                                    "baseSymbol": base_symbol,
+                                    "marketType": market_type,
+                                })
+                        
+                        if matching_markets:
+                            # Use the first matching market
+                            contract_id = matching_markets[0]["symbol"]
+                            self.logger.info(f"[BACKPACK] Found {len(matching_markets)} matching market(s), using: {contract_id}")
+                            # Log all matches for debugging
+                            for m in matching_markets:
+                                self.logger.debug(f"[BACKPACK]   - {m['symbol']} (base: {m['baseSymbol']}, type: {m['marketType']})")
+                            # Cache it for future use
+                            if hasattr(self, '_market_symbol_map') and self._market_symbol_map:
+                                self._market_symbol_map.set(symbol.upper(), contract_id)
+                        else:
+                            self.logger.warning(f"[BACKPACK] No PERP market found for symbol '{symbol}' in markets API")
+                            # Log available symbols for debugging
+                            available_symbols = set()
+                            for market in markets or []:
+                                if market.get("marketType") == "PERP" and market.get("quoteSymbol") == "USDC":
+                                    available_symbols.add(market.get("baseSymbol", "").upper())
+                            if available_symbols:
+                                self.logger.debug(f"[BACKPACK] Available PERP symbols: {sorted(list(available_symbols))[:20]}")
                     except Exception as e:
-                        self.logger.debug(f"[BACKPACK] Failed to fetch markets for symbol lookup: {e}")
+                        self.logger.warning(f"[BACKPACK] Failed to fetch markets for symbol lookup: {e}")
+                        import traceback
+                        self.logger.debug(f"[BACKPACK] Markets lookup error: {traceback.format_exc()}")
                 
-                # Final fallback: use normalize_symbol (constructs format like "RESOLV_USDC_PERP")
+                # Final fallback: try both formats
+                # Note: get_fill_history might use {BASE}_USDC format (without _PERP) based on examples
                 if contract_id == symbol.upper():
-                    contract_id = self.normalize_symbol(symbol)
-                    self.logger.debug(f"[BACKPACK] Using normalized symbol format: {contract_id}")
+                    # Try without _PERP first (as seen in examples: "SOL_USDC")
+                    contract_id_no_perp = f"{symbol.upper()}_USDC"
+                    self.logger.debug(f"[BACKPACK] Trying format without _PERP: {contract_id_no_perp}")
+                    contract_id = contract_id_no_perp
             
             self.logger.info(f"[BACKPACK] Symbol '{symbol}' resolved to contract_id: '{contract_id}'")
             
@@ -476,9 +508,14 @@ class BackpackClient(BaseExchangeClient):
             )
             
             # Log raw response details
+            # According to bpx-py SDK examples, get_fill_history returns a list directly
             self.logger.info(f"[BACKPACK] Raw API response type: {type(fills_response)}")
             if fills_response:
-                if isinstance(fills_response, dict):
+                if isinstance(fills_response, list):
+                    # Direct list response (as per bpx-py SDK examples)
+                    fills = fills_response
+                    self.logger.debug(f"[BACKPACK] Response is a list with {len(fills)} items")
+                elif isinstance(fills_response, dict):
                     self.logger.debug(f"[BACKPACK] Raw API response keys: {list(fills_response.keys())}")
                     self.logger.debug(f"[BACKPACK] Raw API response: {fills_response}")
                     
@@ -504,8 +541,6 @@ class BackpackClient(BaseExchangeClient):
                         # If it's a dict but not a known wrapper, log and try to extract
                         self.logger.warning(f"[BACKPACK] Response is dict but no known wrapper key found. Keys: {list(fills_response.keys())}")
                         fills = []
-                elif isinstance(fills_response, list):
-                    fills = fills_response
                 else:
                     self.logger.warning(f"[BACKPACK] Unexpected fills response format: {type(fills_response)}")
                     return []
