@@ -859,8 +859,8 @@ class LighterClient(BaseExchangeClient):
                         fee_rate = fee_bps / Decimal("1000000")
                         fee = trade_value * fee_rate
                         
-                        # Log fee calculation for first few trades
-                        if idx < 5:
+                        # Log fee calculation for first trades
+                        if idx < 1:
                             fee_bps_calculated = fee_rate * Decimal("10000")  # Convert to basis points for display
                             expected_maker_fee = trade_value * Decimal("0.000002")  # 0.2 bps
                             expected_taker_fee = trade_value * Decimal("0.00002")   # 2 bps
