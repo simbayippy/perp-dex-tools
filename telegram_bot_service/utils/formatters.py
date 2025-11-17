@@ -482,138 +482,6 @@ class TelegramFormatter:
         return "\n".join(lines)
     
     @staticmethod
-    def format_grouped_trades(account_name: str, grouped_trades: List[Dict[str, Any]]) -> str:
-        """Format grouped trades by position - similar UI to position PnL."""
-        lines = [
-            f"<b>{account_name} - Recent Trades</b>",
-            "",
-        ]
-        
-        for idx, position_data in enumerate(grouped_trades[:20], 1):  # Limit to 20 for mobile
-            symbol = position_data.get("symbol_name", "N/A")
-            long_dex = position_data.get("long_dex", "N/A").upper()
-            short_dex = position_data.get("short_dex", "N/A").upper()
-            is_closed = position_data.get("closed_at") is not None
-            status_text = "CLOSED" if is_closed else "OPEN"
-            
-            # Get exchange emojis for title
-            long_emoji = TelegramFormatter._get_exchange_emoji(long_dex)
-            short_emoji = TelegramFormatter._get_exchange_emoji(short_dex)
-            long_display = f"{long_emoji} {long_dex}" if long_emoji else long_dex
-            short_display = f"{short_emoji} {short_dex}" if short_emoji else short_dex
-            
-            # Get earliest entry timestamp for position
-            entry_trades = position_data.get("entry_trades", [])
-            earliest_timestamp = None
-            if entry_trades:
-                timestamps = []
-                for t in entry_trades:
-                    ts = t.get("timestamp")
-                    if ts:
-                        # Convert to datetime if needed
-                        if isinstance(ts, str):
-                            try:
-                                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                            except:
-                                continue
-                        if isinstance(ts, datetime):
-                            timestamps.append(ts)
-                if timestamps:
-                    earliest_timestamp = min(timestamps)
-            
-            # Format timestamp with timezone
-            time_str = ""
-            if earliest_timestamp:
-                if earliest_timestamp.tzinfo:
-                    # Convert to UTC and format
-                    utc_time = earliest_timestamp.astimezone(timezone.utc)
-                    time_str = utc_time.strftime("%b %d %H:%M UTC")
-                else:
-                    # Assume UTC if naive
-                    time_str = earliest_timestamp.strftime("%b %d %H:%M UTC")
-            
-            # Format position header
-            position_line = f"<b>{idx}. {symbol}</b> {status_text} {long_display}/{short_display}"
-            if time_str:
-                position_line += f" <i>• {time_str}</i>"
-            
-            lines.append(position_line)
-            
-            # Entry trades - format similar to position PnL
-            if entry_trades:
-                # Calculate weighted average prices per DEX
-                entry_by_dex = {}
-                for trade in entry_trades:
-                    dex = trade.get("dex_name", "N/A").upper()
-                    price = trade.get("weighted_avg_price")
-                    qty = trade.get("total_quantity", Decimal("0"))
-                    if price and qty:
-                        if dex not in entry_by_dex:
-                            entry_by_dex[dex] = {"prices": [], "qtys": [], "values": []}
-                        entry_by_dex[dex]["prices"].append(Decimal(str(price)))
-                        entry_by_dex[dex]["qtys"].append(Decimal(str(qty)))
-                        entry_by_dex[dex]["values"].append(Decimal(str(price)) * Decimal(str(qty)))
-                
-                # Format entry trades - show long first, then short
-                if long_dex in entry_by_dex:
-                    dex_data = entry_by_dex[long_dex]
-                    avg_price = sum(dex_data["values"]) / sum(dex_data["qtys"]) if sum(dex_data["qtys"]) > 0 else Decimal("0")
-                    total_value = sum(dex_data["values"])
-                    lines.append(f"  Entry: 📈 <b>{long_dex}</b> <code>${avg_price:.4f}</code> <i>(${total_value:.2f})</i>")
-                
-                if short_dex in entry_by_dex:
-                    dex_data = entry_by_dex[short_dex]
-                    avg_price = sum(dex_data["values"]) / sum(dex_data["qtys"]) if sum(dex_data["qtys"]) > 0 else Decimal("0")
-                    total_value = sum(dex_data["values"])
-                    lines.append(f"         📉 <b>{short_dex}</b> <code>${avg_price:.4f}</code> <i>(${total_value:.2f})</i>")
-            
-            # Exit trades - format similar to position PnL
-            exit_trades = position_data.get("exit_trades", [])
-            if exit_trades:
-                # Calculate weighted average prices per DEX
-                exit_by_dex = {}
-                for trade in exit_trades:
-                    dex = trade.get("dex_name", "N/A").upper()
-                    price = trade.get("weighted_avg_price")
-                    qty = trade.get("total_quantity", Decimal("0"))
-                    if price and qty:
-                        if dex not in exit_by_dex:
-                            exit_by_dex[dex] = {"prices": [], "qtys": [], "values": []}
-                        exit_by_dex[dex]["prices"].append(Decimal(str(price)))
-                        exit_by_dex[dex]["qtys"].append(Decimal(str(qty)))
-                        exit_by_dex[dex]["values"].append(Decimal(str(price)) * Decimal(str(qty)))
-                
-                # Format exit trades - show long first, then short
-                if long_dex in exit_by_dex:
-                    dex_data = exit_by_dex[long_dex]
-                    avg_price = sum(dex_data["values"]) / sum(dex_data["qtys"]) if sum(dex_data["qtys"]) > 0 else Decimal("0")
-                    total_value = sum(dex_data["values"])
-                    lines.append(f"  Exit:  📈 <b>{long_dex}</b> <code>${avg_price:.4f}</code> <i>(${total_value:.2f})</i>")
-                
-                if short_dex in exit_by_dex:
-                    dex_data = exit_by_dex[short_dex]
-                    avg_price = sum(dex_data["values"]) / sum(dex_data["qtys"]) if sum(dex_data["qtys"]) > 0 else Decimal("0")
-                    total_value = sum(dex_data["values"])
-                    lines.append(f"         📉 <b>{short_dex}</b> <code>${avg_price:.4f}</code> <i>(${total_value:.2f})</i>")
-            
-            # PnL if closed - simplified
-            if is_closed:
-                pnl = position_data.get("pnl_usd")
-                if pnl:
-                    pnl_sign = "+" if pnl >= 0 else ""
-                    size = position_data.get("size_usd", Decimal("1"))
-                    pnl_pct = (Decimal(str(pnl)) / size * 100) if size > 0 else Decimal("0")
-                    pct_sign = "+" if pnl_pct >= 0 else ""
-                    lines.append(f"  Net PnL: <code>{pnl_sign}${pnl:.2f}</code> <i>({pct_sign}{pnl_pct:.1f}%)</i>")
-            
-            lines.append("")
-        
-        if len(grouped_trades) > 20:
-            lines.append(f"<i>Showing 20 of {len(grouped_trades)} positions</i>")
-        
-        return "\n".join(lines)
-    
-    @staticmethod
     def _get_exchange_emoji(dex_name: str) -> str:
         """Get emoji for exchange name."""
         return EXCHANGE_EMOJIS.get(dex_name.lower(), "")
@@ -644,10 +512,12 @@ class TelegramFormatter:
             entry_count = len(position.get("entry_trades", []))
             exit_count = len(position.get("exit_trades", []))
             
-            lines.append(f"<b>{idx}. {symbol}</b> {status_text} {long_display}/{short_display}")
+            # Title: symbol on one line, exchanges on next line
+            lines.append(f"<b>{idx}. {symbol}</b> {status_text}")
+            lines.append(f"  {long_display}/{short_display}")
             lines.append(f"  Size: <code>${size_usd:.2f}</code> • {entry_count} entry, {exit_count} exit")
             
-            # Entry trades summary - long on one line, short on next with same indent
+            # Entry trades summary - long on one line, short on next indented
             entry_trades = position.get("entry_trades", [])
             if entry_trades:
                 long_entry_price = position.get("long_entry_price", Decimal("0"))

@@ -105,7 +105,6 @@ class TradesHandler(BaseHandler):
             
             # Create keyboard
             keyboard = [
-                [InlineKeyboardButton("📋 View Recent Trades", callback_data=f"trades_list:{account_id}")],
                 [InlineKeyboardButton("💰 View Position PnL", callback_data=f"trades_pnl:{account_id}")],
                 [InlineKeyboardButton("🔄 Refresh", callback_data=f"trades_summary:{account_id}")],
             ]
@@ -309,7 +308,6 @@ class TradesHandler(BaseHandler):
             
             # Create keyboard
             keyboard = [
-                [InlineKeyboardButton("📋 View Recent Trades", callback_data=f"trades_list:{account_id}")],
                 [InlineKeyboardButton("💰 View Position PnL", callback_data=f"trades_pnl:{account_id}")],
                 [InlineKeyboardButton("🔄 Refresh", callback_data=f"trades_summary:{account_id}")],
             ]
@@ -336,132 +334,6 @@ class TradesHandler(BaseHandler):
                 self.formatter.format_error(f"Failed to refresh: {str(e)}"),
                 parse_mode='HTML'
             )
-    
-    async def trades_list_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle trades list callback - shows grouped trades."""
-        query = update.callback_query
-        await query.answer()
-        
-        user, _ = await self.require_auth(update, context)
-        if not user:
-            return
-        
-        try:
-            account_id_str = query.data.split(":")[1]
-            account_id = UUID(account_id_str)
-            
-            # Get account name
-            account_row = await self.database.fetch_one(
-                "SELECT account_name FROM accounts WHERE id = :id",
-                {"id": account_id}
-            )
-            account_name = account_row["account_name"] if account_row else "Unknown"
-            
-            # Get grouped trades
-            grouped_trades = await self._get_grouped_trades(account_id)
-            
-            if not grouped_trades:
-                keyboard = [[InlineKeyboardButton("⬅️ Back to Summary", callback_data=f"trades_summary:{account_id}")]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.edit_message_text(
-                    f"📋 <b>{account_name} - Recent Trades</b>\n\n"
-                    "No trades found.",
-                    parse_mode='HTML',
-                    reply_markup=reply_markup
-                )
-                return
-            
-            # Format grouped trades
-            trades_msg = self.formatter.format_grouped_trades(account_name, grouped_trades)
-            
-            # Create keyboard
-            keyboard = [
-                [InlineKeyboardButton("💰 View Position PnL", callback_data=f"trades_pnl:{account_id}")],
-                [InlineKeyboardButton("⬅️ Back to Summary", callback_data=f"trades_summary:{account_id}")],
-                [InlineKeyboardButton("🔄 Refresh", callback_data=f"trades_list:{account_id}")],
-            ]
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            # Split message if needed
-            messages = self.formatter._split_message(trades_msg) if len(trades_msg) > self.formatter.MAX_MESSAGE_LENGTH else [trades_msg]
-            
-            # Edit with first message
-            await query.edit_message_text(
-                messages[0],
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
-            
-            # Send remaining messages if any
-            for msg in messages[1:]:
-                await query.message.reply_text(msg, parse_mode='HTML')
-                
-        except Exception as e:
-            self.logger.error(f"Trades list callback error: {e}")
-            await query.edit_message_text(
-                self.formatter.format_error(f"Failed to load trades: {str(e)}"),
-                parse_mode='HTML'
-            )
-    
-    async def _get_grouped_trades(self, account_id: UUID, limit: int = 20) -> List[Dict[str, Any]]:
-        """Get trades grouped by position."""
-        repository = TradeFillRepository(self.database)
-        
-        # Get all trades
-        all_trades = await repository.get_trades_by_account(account_id, limit=1000)
-        
-        # Group by position_id
-        grouped = {}
-        for trade in all_trades:
-            position_id = trade.get("position_id")
-            if not position_id:
-                continue
-            
-            if position_id not in grouped:
-                grouped[position_id] = {
-                    "position_id": position_id,
-                    "entry_trades": [],
-                    "exit_trades": [],
-                }
-            
-            trade_type = trade.get("trade_type")
-            if trade_type == "entry":
-                grouped[position_id]["entry_trades"].append(trade)
-            elif trade_type == "exit":
-                grouped[position_id]["exit_trades"].append(trade)
-        
-        # Get position details
-        result = []
-        for position_id, trades_data in list(grouped.items())[:limit]:
-            # Get position info
-            position_query = """
-                SELECT 
-                    sp.id,
-                    sp.size_usd,
-                    sp.opened_at,
-                    sp.closed_at,
-                    s.symbol as symbol_name,
-                    d1.name as long_dex,
-                    d2.name as short_dex
-                FROM strategy_positions sp
-                JOIN symbols s ON sp.symbol_id = s.id
-                JOIN dexes d1 ON sp.long_dex_id = d1.id
-                JOIN dexes d2 ON sp.short_dex_id = d2.id
-                WHERE sp.id = :position_id
-            """
-            position_row = await self.database.fetch_one(position_query, {"position_id": position_id})
-            
-            if position_row:
-                position_data = dict(position_row)
-                position_data["entry_trades"] = trades_data["entry_trades"]
-                position_data["exit_trades"] = trades_data["exit_trades"]
-                result.append(position_data)
-        
-        # Sort by opened_at DESC
-        result.sort(key=lambda x: x.get("opened_at") or datetime.min, reverse=True)
-        
-        return result
     
     async def trades_pnl_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle position PnL callback."""
@@ -502,7 +374,6 @@ class TradesHandler(BaseHandler):
             
             # Create keyboard
             keyboard = [
-                [InlineKeyboardButton("📋 View Recent Trades", callback_data=f"trades_list:{account_id}")],
                 [InlineKeyboardButton("⬅️ Back to Summary", callback_data=f"trades_summary:{account_id}")],
                 [InlineKeyboardButton("🔄 Refresh", callback_data=f"trades_pnl:{account_id}")],
             ]
@@ -661,10 +532,6 @@ class TradesHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.trades_summary_callback,
             pattern="^trades_summary:"
-        ))
-        application.add_handler(CallbackQueryHandler(
-            self.trades_list_callback,
-            pattern="^trades_list:"
         ))
         application.add_handler(CallbackQueryHandler(
             self.trades_pnl_callback,
