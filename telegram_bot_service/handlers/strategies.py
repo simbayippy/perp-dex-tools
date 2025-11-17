@@ -921,7 +921,10 @@ class StrategyHandler(BaseHandler):
                 )
                 return
             
-            current_status = row['status']
+            # Convert Row to dict for safe access
+            row_dict = dict(row)
+            
+            current_status = row_dict.get('status')
             if current_status in ('stopped', 'error'):
                 await query.edit_message_text(
                     f"ℹ️ Strategy is already stopped (status: {current_status})",
@@ -930,10 +933,7 @@ class StrategyHandler(BaseHandler):
                 return
             
             # Get account_name safely
-            try:
-                account_name = row['account_name']
-            except (KeyError, TypeError):
-                account_name = None
+            account_name = row_dict.get('account_name')
             
             # Initialize counters
             closed_count = 0
@@ -950,7 +950,7 @@ class StrategyHandler(BaseHandler):
             )
             
             # Get control API port for this strategy
-            control_api_port = row.get('control_api_port')
+            control_api_port = row_dict.get('control_api_port')
             
             # Construct API URL with correct port
             if control_api_port:
