@@ -43,3 +43,19 @@ Exception: couldn't get nonce b'<html>\r\n<head><title>503 Service Temporarily U
 Bot execution failed: couldn't get nonce b'<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body>\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n</body>\r\n</html>\r\n'
 2025-11-09 12:07:19.942 - ERROR - Unclosed client session
 client_session: <aiohttp.client.ClientSession object at 0x7f3afeff5a60>
+
+
+
+---
+
+[32m2025-11-16 21:03:21[0m | [31m[1mERROR   [0m | [36m...:fetch_bbo_prices_rest_only:335      [0m | [31m[1m❌ [LIGHTER] Failed to get BBO prices via REST: (503)
+Reason: Service Temporarily Unavailable
+HTTP response headers: <CIMultiDictProxy('Server': 'awselb/2.0', 'Date': 'Sun, 16 Nov 2025 21:03:21 GMT', 'Content-Type': 'text/html', 'Content-Length': '162', 'Connection': 'keep-alive')>
+HTTP response body: <html>
+<head><title>503 Service Temporarily Unavailable</title></head>
+<body>
+<center><h1>503 Service Temporarily Unavailable</h1></center>
+</body>
+</html>
+
+[0m
