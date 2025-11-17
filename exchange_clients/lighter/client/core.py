@@ -689,18 +689,8 @@ class LighterClient(BaseExchangeClient):
                 f"[LIGHTER] Fetching trade history for {symbol} (normalized: {normalized_symbol}, market_id={market_id}, "
                 f"account_index={self.account_index}, time_range={start_time:.0f}-{end_time:.0f})"
             )
-            self.logger.info(f"[LIGHTER] Using OrderApi.trades() -> GET /api/v1/trades (user-specific endpoint)")
-            self.logger.info(f"[LIGHTER] API base URL: {self.base_url}")
-            self.logger.debug(f"[LIGHTER] API request parameters: {trades_kwargs}")
             
             trades_response = await self.order_api.trades(**trades_kwargs)
-            
-            # Log raw response details
-            self.logger.info(f"[LIGHTER] Raw API response type: {type(trades_response)}")
-            if trades_response:
-                self.logger.info(f"[LIGHTER] Raw API response attributes: {dir(trades_response)}")
-                if hasattr(trades_response, '__dict__'):
-                    self.logger.debug(f"[LIGHTER] Raw API response dict: {trades_response.__dict__}")
             
             if not trades_response:
                 self.logger.warning("[LIGHTER] Empty trades_response from API")
@@ -724,6 +714,10 @@ class LighterClient(BaseExchangeClient):
                     "timestamp": getattr(trade, 'timestamp', 'N/A'),
                     "size": getattr(trade, 'size', 'N/A'),
                     "price": getattr(trade, 'price', 'N/A'),
+                    "usd_amount": getattr(trade, 'usd_amount', 'N/A'),
+                    "taker_fee": getattr(trade, 'taker_fee', 'N/A'),
+                    "maker_fee": getattr(trade, 'maker_fee', 'N/A'),
+                    "is_maker_ask": getattr(trade, 'is_maker_ask', 'N/A'),
                     "ask_account_id": getattr(trade, 'ask_account_id', 'N/A'),
                     "bid_account_id": getattr(trade, 'bid_account_id', 'N/A'),
                     "ask_id": getattr(trade, 'ask_id', 'N/A'),
@@ -751,7 +745,6 @@ class LighterClient(BaseExchangeClient):
                     except (ValueError, OSError) as e:
                         trade_info['timestamp_error'] = str(e)
                         trade_info['raw_timestamp'] = raw_timestamp
-                self.logger.info(f"[LIGHTER] Trade {i}: {trade_info}")
             
             # Parse trades into TradeData objects
             # Note: We filter by timestamp client-side since API doesn't reliably support time filtering
@@ -851,21 +844,34 @@ class LighterClient(BaseExchangeClient):
                         # Fallback: assume taker if we can't determine
                         fee_basis_points = trade.taker_fee
                     
-                    # Convert basis points to decimal fee
-                    # Basis points: 1 = 0.01%, so divide by 10000 to get fee rate
+                    # Convert fee to actual amount
+                    # Lighter API returns fees as int32 in "hundredths of basis points" format
+                    # Fee structure: Maker = 0.2 bps (0.002%), Taker = 2 bps (0.02%)
+                    # Format: API value represents hundredths of basis points
+                    #   - 1 unit = 0.01 bp = 0.0001%
+                    #   - Maker: 20 units = 0.2 bps = 0.002% (20/1000000 = 0.00002)
+                    #   - Taker: 200 units = 2 bps = 0.02% (200/1000000 = 0.0002)
                     if fee_basis_points is not None:
-                        fee_rate = Decimal(str(fee_basis_points)) / Decimal("10000")
+                        fee_bps = Decimal(str(fee_basis_points))
+                        
+                        # Convert: divide by 1,000,000 to get fee rate as decimal
+                        # This converts "hundredths of basis points" to percentage
+                        fee_rate = fee_bps / Decimal("1000000")
                         fee = trade_value * fee_rate
                         
                         # Log fee calculation for first few trades
                         if idx < 5:
-                            self.logger.debug(
+                            fee_bps_calculated = fee_rate * Decimal("10000")  # Convert to basis points for display
+                            expected_maker_fee = trade_value * Decimal("0.000002")  # 0.2 bps
+                            expected_taker_fee = trade_value * Decimal("0.00002")   # 2 bps
+                            self.logger.info(
                                 f"[LIGHTER] Trade {idx} fee calculation: "
                                 f"value=${trade_value:.2f}, "
-                                f"fee_bps={fee_basis_points}, "
-                                f"fee_rate={fee_rate:.6f}, "
+                                f"fee_raw={fee_basis_points}, "
+                                f"fee_rate={fee_rate:.6f} ({fee_rate*100:.4f}% = {fee_bps_calculated:.2f} bps), "
                                 f"fee=${fee:.4f}, "
-                                f"role={'maker' if is_maker else 'taker'}"
+                                f"role={'maker' if is_maker else 'taker'}, "
+                                f"expected_{'maker' if is_maker else 'taker'}_fee=${expected_maker_fee if is_maker else expected_taker_fee:.4f}"
                             )
                 
                 # Get order_id from trade (ask_id or bid_id depending on our side)
