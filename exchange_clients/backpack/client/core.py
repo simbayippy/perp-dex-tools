@@ -410,7 +410,14 @@ class BackpackClient(BaseExchangeClient):
                 return []
             
             # Resolve contract_id for the symbol (Backpack format)
+            # Use base implementation first (checks cache and config.contract_id)
             contract_id = self.resolve_contract_id(symbol)
+            
+            # If resolve_contract_id returned symbol as-is (cache miss), use normalize_symbol
+            # This matches Aster's pattern: fallback to normalized format if not cached
+            if contract_id == symbol.upper():
+                contract_id = self.normalize_symbol(symbol)
+            
             self.logger.info(f"[BACKPACK] Symbol '{symbol}' resolved to contract_id: '{contract_id}'")
             
             # Build request parameters
@@ -445,6 +452,18 @@ class BackpackClient(BaseExchangeClient):
                 if isinstance(fills_response, dict):
                     self.logger.debug(f"[BACKPACK] Raw API response keys: {list(fills_response.keys())}")
                     self.logger.debug(f"[BACKPACK] Raw API response: {fills_response}")
+                    
+                    # Check for error response (has 'code' and 'message' keys)
+                    if 'code' in fills_response or 'message' in fills_response:
+                        error_code = fills_response.get('code', 'N/A')
+                        error_message = fills_response.get('message', 'N/A')
+                        self.logger.warning(
+                            f"[BACKPACK] API returned error response: code={error_code}, message={error_message}"
+                        )
+                        # Log full response for debugging
+                        self.logger.debug(f"[BACKPACK] Full error response: {fills_response}")
+                        return []
+                    
                     # Check if response is wrapped in a dict (some SDKs wrap arrays)
                     if 'results' in fills_response:
                         fills = fills_response['results']
