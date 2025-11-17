@@ -148,9 +148,17 @@ class PersistenceHandler:
             short_order_id = short_fill.get("order_id")
             
             entry_trades_by_dex: Dict[str, List[TradeData]] = {}
-            opened_at_timestamp = position.opened_at.timestamp()
-            start_time = opened_at_timestamp - 300
-            end_time = opened_at_timestamp + 300
+            # Handle timezone-aware and naive datetimes
+            opened_at = position.opened_at
+            if opened_at.tzinfo is None:
+                # Naive datetime - assume UTC
+                opened_at_timestamp = opened_at.timestamp()
+            else:
+                # Timezone-aware datetime - convert to UTC timestamp
+                opened_at_timestamp = opened_at.timestamp()
+            # Widen time window to 30 minutes (instead of 10) to account for API indexing delays
+            start_time = opened_at_timestamp - 1800  # 30 minutes before
+            end_time = opened_at_timestamp + 1800   # 30 minutes after
             
             for dex_name in [position.long_dex, position.short_dex]:
                 client = strategy.exchange_clients.get(dex_name)
@@ -190,7 +198,18 @@ class PersistenceHandler:
                 
                 for order_id, agg in aggregated.items():
                     try:
-                        timestamp_dt = datetime.fromtimestamp(agg['timestamp'], tz=timezone.utc)
+                        # Ensure timestamp is timezone-aware UTC
+                        timestamp_seconds = agg['timestamp']
+                        if isinstance(timestamp_seconds, datetime):
+                            # If it's already a datetime, convert to UTC-aware
+                            if timestamp_seconds.tzinfo is None:
+                                timestamp_dt = timestamp_seconds.replace(tzinfo=timezone.utc)
+                            else:
+                                timestamp_dt = timestamp_seconds.astimezone(timezone.utc)
+                        else:
+                            # Convert from Unix timestamp to UTC-aware datetime
+                            # Use time.time() as reference to ensure timezone-aware conversion
+                            timestamp_dt = datetime.fromtimestamp(float(timestamp_seconds), tz=timezone.utc)
                         fill_id = await repository.insert_trade_fill(
                             position_id=position.id,
                             account_id=account_id,

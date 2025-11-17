@@ -129,9 +129,15 @@ class PnLCalculator:
         entry_trades_by_dex: Dict[str, List[TradeData]] = {}
         exit_trades_by_dex: Dict[str, List[TradeData]] = {}
         
-        opened_at_timestamp = position.opened_at.timestamp()
-        entry_window_start = opened_at_timestamp - 300
-        entry_window_end = opened_at_timestamp + 300
+        # Handle timezone-aware and naive datetimes
+        opened_at = position.opened_at
+        if opened_at.tzinfo is None:
+            opened_at_timestamp = opened_at.timestamp()
+        else:
+            opened_at_timestamp = opened_at.timestamp()
+        # Widen time window to 30 minutes to account for API indexing delays
+        entry_window_start = opened_at_timestamp - 1800  # 30 minutes before
+        entry_window_end = opened_at_timestamp + 1800   # 30 minutes after
         exit_window_start = end_time - 300
         exit_window_end = end_time + 300
         
@@ -362,7 +368,15 @@ class PnLCalculator:
                 
                 for order_id, agg in aggregated.items():
                     try:
-                        timestamp_dt = datetime.fromtimestamp(agg['timestamp'], tz=timezone.utc)
+                        # Ensure timestamp is timezone-aware UTC
+                        timestamp_seconds = agg['timestamp']
+                        if isinstance(timestamp_seconds, datetime):
+                            if timestamp_seconds.tzinfo is None:
+                                timestamp_dt = timestamp_seconds.replace(tzinfo=timezone.utc)
+                            else:
+                                timestamp_dt = timestamp_seconds.astimezone(timezone.utc)
+                        else:
+                            timestamp_dt = datetime.fromtimestamp(timestamp_seconds, tz=timezone.utc)
                         fill_id = await repository.insert_trade_fill(
                             position_id=position.id,
                             account_id=account_id,

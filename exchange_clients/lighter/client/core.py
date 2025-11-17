@@ -685,24 +685,51 @@ class LighterClient(BaseExchangeClient):
             else:
                 self.logger.warning("[LIGHTER] No auth token available for trade history query")
             
+            order_filter_info = f"order_index={order_index}" if order_index else "no order filter"
             self.logger.info(
                 f"[LIGHTER] Fetching trade history for {symbol} (normalized: {normalized_symbol}, market_id={market_id}, "
-                f"account_index={self.account_index}, time_range={start_time:.0f}-{end_time:.0f})"
+                f"account_index={self.account_index}, {order_filter_info}, time_range={start_time:.0f}-{end_time:.0f})"
             )
             
             trades_response = await self.order_api.trades(**trades_kwargs)
             
             if not trades_response:
                 self.logger.warning("[LIGHTER] Empty trades_response from API")
-                return []
+                # If order_id was provided but couldn't be resolved, try without order filter
+                if order_id and order_index is None:
+                    self.logger.debug(f"[LIGHTER] Retrying without order_index filter (order_id={order_id} couldn't be resolved)")
+                    trades_kwargs_no_order = {k: v for k, v in trades_kwargs.items() if k != "order_index"}
+                    trades_response = await self.order_api.trades(**trades_kwargs_no_order)
+                    if not trades_response:
+                        return []
             
             if not hasattr(trades_response, 'trades'):
                 self.logger.warning(f"[LIGHTER] Response has no 'trades' attribute. Response type: {type(trades_response)}, attributes: {dir(trades_response)}")
                 return []
             
             if not trades_response.trades:
-                self.logger.warning(f"[LIGHTER] trades_response.trades is empty or None (type: {type(trades_response.trades)})")
-                return []
+                # If we have an order_id but no trades, try fetching without order filter
+                # This handles cases where order_id resolution failed or trades aren't indexed yet
+                if order_id:
+                    if order_index is None:
+                        self.logger.debug(f"[LIGHTER] No trades found with order filter, retrying without order_index (order_id={order_id})")
+                    else:
+                        self.logger.debug(f"[LIGHTER] No trades found with order_index={order_index}, retrying without order filter (order_id={order_id})")
+                    
+                    trades_kwargs_no_order = {k: v for k, v in trades_kwargs.items() if k != "order_index"}
+                    trades_response_retry = await self.order_api.trades(**trades_kwargs_no_order)
+                    if trades_response_retry and hasattr(trades_response_retry, 'trades') and trades_response_retry.trades:
+                        self.logger.info(f"[LIGHTER] Found {len(trades_response_retry.trades)} trades without order filter, will filter client-side by order_id and time")
+                        trades_response = trades_response_retry
+                    else:
+                        self.logger.warning(
+                            f"[LIGHTER] trades_response.trades is empty or None (type: {type(trades_response.trades)}). "
+                            f"This may be due to API indexing delay - trades may appear shortly."
+                        )
+                        return []
+                else:
+                    self.logger.warning(f"[LIGHTER] trades_response.trades is empty or None (type: {type(trades_response.trades)})")
+                    return []
             
             self.logger.info(f"[LIGHTER] Received {len(trades_response.trades)} trades from API (before filtering)")
             
