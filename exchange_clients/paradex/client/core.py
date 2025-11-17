@@ -547,28 +547,16 @@ class ParadexClient(BaseExchangeClient):
                 'page_size': 100,  # Maximum page size
             }
             
-            self.logger.info(f"[PARADEX] Using api_client.fetch_fills() -> GET /fills")
-            self.logger.debug(f"[PARADEX] API request parameters: {params}")
-            self.logger.debug(
-                f"[PARADEX] Time range: "
-                f"{datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S')} "
-                f"to {datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-            
             # Fetch fills from Paradex API
             fills_response = self.paradex.api_client.fetch_fills(params)
             
             # Log raw response details
-            self.logger.info(f"[PARADEX] Raw API response type: {type(fills_response)}")
             if fills_response:
-                self.logger.debug(f"[PARADEX] Raw API response keys: {list(fills_response.keys()) if isinstance(fills_response, dict) else 'N/A'}")
                 if isinstance(fills_response, dict):
-                    self.logger.debug(f"[PARADEX] Raw API response: {fills_response}")
                     if 'next' in fills_response:
                         self.logger.debug(f"[PARADEX] Pagination next cursor: {fills_response.get('next')}")
                     if 'prev' in fills_response:
                         self.logger.debug(f"[PARADEX] Pagination prev cursor: {fills_response.get('prev')}")
-            
             if not fills_response:
                 self.logger.warning("[PARADEX] Empty fills_response from API")
                 return []
@@ -585,8 +573,6 @@ class ParadexClient(BaseExchangeClient):
             if not isinstance(fills, list):
                 self.logger.warning(f"[PARADEX] 'results' is not a list. Type: {type(fills)}")
                 return []
-            
-            self.logger.info(f"[PARADEX] Received {len(fills)} fills from API (before filtering)")
             
             # Log first few fills with details for debugging
             for i, fill in enumerate(fills[:5]):
@@ -612,7 +598,6 @@ class ParadexClient(BaseExchangeClient):
                         fill_info['created_at_seconds'] = fill_time_seconds
                     except (ValueError, OSError, TypeError) as e:
                         fill_info['timestamp_error'] = str(e)
-                self.logger.info(f"[PARADEX] Fill {i}: {fill_info}")
             
             # Parse fills into TradeData objects
             result = []

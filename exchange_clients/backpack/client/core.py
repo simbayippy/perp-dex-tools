@@ -397,59 +397,158 @@ class BackpackClient(BaseExchangeClient):
             List of TradeData objects, or empty list on error
         """
         try:
+            from datetime import datetime
+            
+            self.logger.info(
+                f"[BACKPACK] Fetching trade history for {symbol} "
+                f"(time_range={start_time:.0f}-{end_time:.0f}, "
+                f"order_id={order_id if order_id else 'None'})"
+            )
+            
             if not self.account_client:
                 self.logger.warning("[BACKPACK] Account client not available for trade history")
                 return []
             
             # Resolve contract_id for the symbol (Backpack format)
             contract_id = self.resolve_contract_id(symbol)
+            self.logger.info(f"[BACKPACK] Symbol '{symbol}' resolved to contract_id: '{contract_id}'")
             
             # Build request parameters
             # Backpack's get_fill_history accepts: symbol, limit, offset, from_, to, fill_type, market_type
-            fills = self.account_client.get_fill_history(
+            params = {
+                'symbol': contract_id,
+                'limit': 100,  # Maximum limit (can be up to 1000)
+                'offset': 0,
+                'from': int(start_time * 1000),  # Convert to milliseconds
+                'to': int(end_time * 1000),
+            }
+            
+            self.logger.info(f"[BACKPACK] Using account_client.get_fill_history()")
+            self.logger.debug(f"[BACKPACK] API request parameters: {params}")
+            self.logger.debug(
+                f"[BACKPACK] Time range: "
+                f"{datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S')} "
+                f"to {datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            
+            fills_response = self.account_client.get_fill_history(
                 symbol=contract_id,
-                limit=1000,  # Maximum limit
+                limit=100,
                 offset=0,
-                from_=int(start_time * 1000),  # Convert to milliseconds
+                from_=int(start_time * 1000),
                 to=int(end_time * 1000),
             )
             
-            if not isinstance(fills, list):
-                self.logger.warning(f"[BACKPACK] Unexpected fills response format: {type(fills)}")
+            # Log raw response details
+            self.logger.info(f"[BACKPACK] Raw API response type: {type(fills_response)}")
+            if fills_response:
+                if isinstance(fills_response, dict):
+                    self.logger.debug(f"[BACKPACK] Raw API response keys: {list(fills_response.keys())}")
+                    self.logger.debug(f"[BACKPACK] Raw API response: {fills_response}")
+                    # Check if response is wrapped in a dict (some SDKs wrap arrays)
+                    if 'results' in fills_response:
+                        fills = fills_response['results']
+                    elif 'data' in fills_response:
+                        fills = fills_response['data']
+                    elif 'fills' in fills_response:
+                        fills = fills_response['fills']
+                    else:
+                        # If it's a dict but not a known wrapper, log and try to extract
+                        self.logger.warning(f"[BACKPACK] Response is dict but no known wrapper key found. Keys: {list(fills_response.keys())}")
+                        fills = []
+                elif isinstance(fills_response, list):
+                    fills = fills_response
+                else:
+                    self.logger.warning(f"[BACKPACK] Unexpected fills response format: {type(fills_response)}")
+                    return []
+            else:
+                self.logger.warning("[BACKPACK] Empty fills_response from API")
                 return []
+            
+            if not isinstance(fills, list):
+                self.logger.warning(f"[BACKPACK] Extracted fills is not a list: {type(fills)}")
+                return []
+            
+            self.logger.info(f"[BACKPACK] Received {len(fills)} fills from API (before filtering)")
+            
+            # Log first few fills with details for debugging
+            for i, fill in enumerate(fills[:5]):
+                fill_info = {
+                    "index": i,
+                    "tradeId": fill.get('tradeId', 'N/A'),
+                    "orderId": fill.get('orderId', 'N/A'),
+                    "symbol": fill.get('symbol', 'N/A'),
+                    "side": fill.get('side', 'N/A'),
+                    "quantity": fill.get('quantity', 'N/A'),
+                    "price": fill.get('price', 'N/A'),
+                    "fee": fill.get('fee', 'N/A'),
+                    "feeSymbol": fill.get('feeSymbol', 'N/A'),
+                    "timestamp": fill.get('timestamp', 'N/A'),
+                    "isMaker": fill.get('isMaker', 'N/A'),
+                }
+                if fill_info['timestamp'] != 'N/A' and fill_info['timestamp']:
+                    try:
+                        # Backpack timestamps might be in different formats
+                        timestamp_val = fill_info['timestamp']
+                        if isinstance(timestamp_val, str):
+                            # Try parsing as milliseconds
+                            timestamp_val = int(timestamp_val)
+                        fill_time_seconds = timestamp_val / 1000 if timestamp_val > 1e10 else timestamp_val
+                        fill_time_str = datetime.fromtimestamp(fill_time_seconds).strftime('%Y-%m-%d %H:%M:%S')
+                        fill_info['timestamp_str'] = fill_time_str
+                        fill_info['timestamp_seconds'] = fill_time_seconds
+                    except (ValueError, OSError, TypeError) as e:
+                        fill_info['timestamp_error'] = str(e)
+                self.logger.info(f"[BACKPACK] Fill {i}: {fill_info}")
             
             # Parse fills into TradeData objects
             result = []
+            filtered_by_order_id = 0
+            filtered_by_time = 0
+            
             for fill in fills:
-                # Filter by order_id client-side (Backpack fills may have order_id field)
+                # Filter by order_id client-side
                 if order_id:
                     fill_order_id = fill.get('orderId') or fill.get('order_id')
                     if str(fill_order_id) != order_id:
+                        filtered_by_order_id += 1
                         continue
                 
                 # Filter by timestamp range (API may not filter precisely)
-                fill_time = fill.get('time', 0) or fill.get('timestamp', 0)
+                fill_time = fill.get('timestamp') or fill.get('time', 0)
                 if fill_time:
-                    fill_time_seconds = fill_time / 1000  # Convert ms to seconds
+                    # Handle timestamp conversion (could be string or int, ms or seconds)
+                    if isinstance(fill_time, str):
+                        fill_time = int(fill_time)
+                    fill_time_seconds = fill_time / 1000 if fill_time > 1e10 else fill_time
                     if fill_time_seconds < start_time or fill_time_seconds > end_time:
+                        filtered_by_time += 1
                         continue
+                else:
+                    fill_time_seconds = float(start_time)
                 
-                # Extract fill data
-                # Backpack fill structure may vary, so we'll handle common fields
-                trade_id = str(fill.get('id', fill.get('fillId', '')))
-                quantity = Decimal(str(fill.get('size', fill.get('quantity', '0'))))
+                # Extract fill data according to Backpack API format:
+                # tradeId, orderId, symbol, side, quantity, price, fee, feeSymbol, timestamp, isMaker
+                trade_id = str(fill.get('tradeId', fill.get('id', fill.get('fillId', ''))))
+                quantity = Decimal(str(fill.get('quantity', fill.get('size', '0'))))
                 price = Decimal(str(fill.get('price', '0')))
                 fee = Decimal(str(fill.get('fee', '0')))
-                fee_currency = fill.get('feeCurrency', fill.get('fee_currency', 'USDC'))
-                side = fill.get('side', '').lower()  # Convert to lowercase
-                trade_order_id = str(fill.get('orderId', fill.get('order_id', ''))) if fill.get('orderId') or fill.get('order_id') else None
+                fee_currency = fill.get('feeSymbol', fill.get('feeCurrency', fill.get('fee_currency', 'USDC')))
                 
-                # Convert timestamp
-                timestamp = fill_time_seconds if fill_time else float(start_time)
+                # Handle side: Backpack uses "Bid" (buy) or "Ask" (sell)
+                side_raw = fill.get('side', '')
+                if side_raw.upper() == 'BID':
+                    side = 'buy'
+                elif side_raw.upper() == 'ASK':
+                    side = 'sell'
+                else:
+                    side = side_raw.lower()  # Fallback to lowercase
+                
+                trade_order_id = str(fill.get('orderId', fill.get('order_id', ''))) if fill.get('orderId') or fill.get('order_id') else None
                 
                 result.append(TradeData(
                     trade_id=trade_id,
-                    timestamp=timestamp,
+                    timestamp=fill_time_seconds,
                     symbol=symbol,
                     side=side,
                     quantity=quantity,
@@ -458,6 +557,14 @@ class BackpackClient(BaseExchangeClient):
                     fee_currency=fee_currency,
                     order_id=trade_order_id,
                 ))
+            
+            self.logger.info(
+                f"[BACKPACK] Filtering results: "
+                f"total_fills={len(fills)}, "
+                f"filtered_by_order_id={filtered_by_order_id}, "
+                f"filtered_by_time={filtered_by_time}, "
+                f"final_count={len(result)}"
+            )
             
             return result
             
