@@ -9,8 +9,8 @@ config:
   mandatory_exchange: lighter
   target_margin: !!float '40'
   max_positions: 1
-  max_total_exposure_usd: !!float '200'
-  min_profit_rate: 0.0002283105022831050228310502283
+  max_total_exposure_usd: !!float '2000'
+  min_profit_rate: 0.0001283105022831050228310502283
   risk_strategy: combined
   profit_erosion_threshold: 0.4
   min_hold_hours: 1
