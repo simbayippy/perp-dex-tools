@@ -3,7 +3,7 @@ Trade Fill Repository - handles trade fill database operations
 """
 
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 from databases import Database
@@ -82,6 +82,10 @@ class TradeFillRepository:
         """
         
         try:
+            # Convert timezone-aware datetime to naive UTC for PostgreSQL TIMESTAMP column
+            # PostgreSQL TIMESTAMP columns expect naive datetimes (without timezone)
+            timestamp_naive = self._to_naive_utc(timestamp)
+            
             result = await self.db.fetch_val(
                 query,
                 {
@@ -92,7 +96,7 @@ class TradeFillRepository:
                     "symbol_id": symbol_id,
                     "order_id": order_id,
                     "trade_id": trade_id,
-                    "timestamp": timestamp,
+                    "timestamp": timestamp_naive,
                     "side": side,
                     "total_quantity": total_quantity,
                     "weighted_avg_price": weighted_avg_price,
@@ -107,6 +111,28 @@ class TradeFillRepository:
         except Exception as e:
             logger.error(f"Failed to insert trade fill: {e}")
             return None
+    
+    @staticmethod
+    def _to_naive_utc(dt: datetime) -> datetime:
+        """
+        Convert timezone-aware datetime to naive UTC datetime.
+        
+        PostgreSQL TIMESTAMP columns expect naive datetimes. This helper ensures
+        we always pass naive UTC datetimes to avoid timezone mismatch errors.
+        
+        Args:
+            dt: Datetime (timezone-aware or naive)
+            
+        Returns:
+            Naive UTC datetime
+        """
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            # Already naive, return as-is
+            return dt
+        # Convert to UTC and remove timezone info
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
     
     async def get_trades_by_position(
         self,

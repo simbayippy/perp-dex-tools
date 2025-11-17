@@ -429,7 +429,15 @@ class PnLCalculator:
                             )
                             continue
                         
-                        timestamp_dt = datetime.fromtimestamp(agg['timestamp'], tz=timezone.utc)
+                        # Ensure timestamp is timezone-aware UTC, then repository will convert to naive
+                        timestamp_seconds = agg['timestamp']
+                        if isinstance(timestamp_seconds, datetime):
+                            if timestamp_seconds.tzinfo is None:
+                                timestamp_dt = timestamp_seconds.replace(tzinfo=timezone.utc)
+                            else:
+                                timestamp_dt = timestamp_seconds.astimezone(timezone.utc)
+                        else:
+                            timestamp_dt = datetime.fromtimestamp(float(timestamp_seconds), tz=timezone.utc)
                         fill_id = await repository.insert_trade_fill(
                             position_id=position.id,
                             account_id=account_id,
