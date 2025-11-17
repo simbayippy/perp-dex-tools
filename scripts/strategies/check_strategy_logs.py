@@ -215,7 +215,8 @@ def main():
     
     args = parser.parse_args()
     
-    project_root = Path(__file__).parent.parent
+    # Script is now at scripts/strategies/check_strategy_logs.py, so go up 3 levels to project root
+    project_root = Path(__file__).parent.parent.parent
     
     if args.all:
         fatal_strategies = get_fatal_strategies()
