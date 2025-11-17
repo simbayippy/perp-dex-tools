@@ -155,7 +155,6 @@ async def get_positions(
         query = """
             SELECT 
                 sp.id,
-                sp.symbol,
                 sp.long_dex,
                 sp.short_dex,
                 sp.size_usd,
