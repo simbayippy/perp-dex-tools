@@ -1500,7 +1500,7 @@ class AtomicMultiOrderExecutor:
 
         total_rollback_cost = Decimal("0")
 
-        self.logger.info("Step 1/3: Canceling all orders to prevent further fills...")
+        self.logger.info("Step 1/4: Canceling all orders to prevent further fills...")
         cancel_tasks = []
         for order in filled_orders:
             if order.get("order_id"):
@@ -1521,7 +1521,7 @@ class AtomicMultiOrderExecutor:
 
         if is_close_operation:
             # For close operations: Query actual open positions instead of using filled quantities
-            self.logger.info("Step 2/3: Querying actual open positions from exchanges...")
+            self.logger.info("Step 2/4: Querying actual open positions from exchanges...")
             actual_fills = []
             for order in filled_orders:
                 exchange_client = order["exchange_client"]
@@ -1613,7 +1613,7 @@ class AtomicMultiOrderExecutor:
                         )
         else:
             # For open operations: Use original logic (undo the open orders)
-            self.logger.info("Step 2/3: Querying actual filled amounts...")
+            self.logger.info("Step 2/4: Querying actual filled amounts...")
             actual_fills = []
             for order in filled_orders:
                 exchange_client = order["exchange_client"]
@@ -1682,8 +1682,88 @@ class AtomicMultiOrderExecutor:
                         "fill_price": fallback_price,
                     }
                 )
+            
+            # ⚠️ DEFENSE-IN-DEPTH: For OPEN operations, also query actual positions
+            # This catches any positions that weren't tracked in contexts (e.g., partial fills from cancelled market orders)
+            if not is_close_operation:
+                self.logger.info("Step 2.5/4: Querying actual positions as safety check for OPEN operations...")
+                position_check_fills = []
+                
+                # Get unique exchange-symbol pairs from filled_orders
+                checked_pairs = set()
+                for order in filled_orders:
+                    exchange_client = order["exchange_client"]
+                    symbol = order["symbol"]
+                    exchange_name = exchange_client.get_exchange_name()
+                    pair_key = (exchange_name, symbol)
+                    
+                    if pair_key in checked_pairs:
+                        continue
+                    checked_pairs.add(pair_key)
+                    
+                    exchange_config = getattr(exchange_client, "config", None)
+                    contract_id = getattr(exchange_config, "contract_id", symbol)
+                    
+                    try:
+                        # Query actual position
+                        position_snapshot = await exchange_client.get_position_snapshot(symbol)
+                        
+                        if position_snapshot and hasattr(position_snapshot, 'quantity'):
+                            position_qty = coerce_decimal(position_snapshot.quantity) or Decimal("0")
+                            position_size = abs(position_qty)
+                            
+                            if position_size > Decimal("0.0001"):
+                                # Found an open position
+                                is_long = position_qty > Decimal("0")
+                                close_side = "sell" if is_long else "buy"
+                                
+                                # Check if this position is already in actual_fills
+                                already_tracked = False
+                                for existing_fill in actual_fills:
+                                    if (existing_fill["exchange_client"] == exchange_client and 
+                                        existing_fill["symbol"] == symbol):
+                                        # Position already tracked - verify quantity matches
+                                        tracked_qty = existing_fill["filled_quantity"]
+                                        if abs(position_size - tracked_qty) > Decimal("0.0001"):
+                                            self.logger.warning(
+                                                f"⚠️ [{exchange_name}] Position size mismatch for {symbol}: "
+                                                f"tracked={tracked_qty}, actual={position_size}. "
+                                                f"Using actual position size."
+                                            )
+                                            existing_fill["filled_quantity"] = position_size
+                                        already_tracked = True
+                                        break
+                                
+                                if not already_tracked:
+                                    # Position not tracked - this is a safety catch!
+                                    self.logger.warning(
+                                        f"🚨 [{exchange_name}] SAFETY CATCH: Found untracked position for {symbol}: "
+                                        f"{position_size} tokens ({'long' if is_long else 'short'}). "
+                                        f"This position was not in rollback payload but exists on exchange!"
+                                    )
+                                    position_check_fills.append(
+                                        {
+                                            "exchange_client": exchange_client,
+                                            "symbol": symbol,
+                                            "side": close_side,  # Side to close (opposite of position)
+                                            "filled_quantity": position_size,
+                                            "fill_price": Decimal("0"),  # Price not available from position snapshot
+                                        }
+                                    )
+                    except Exception as exc:
+                        self.logger.debug(
+                            f"⚠️ [{exchange_name}] Could not query position snapshot for {symbol} "
+                            f"during safety check: {exc}"
+                        )
+                
+                # Add any untracked positions to actual_fills
+                if position_check_fills:
+                    self.logger.warning(
+                        f"⚠️ Found {len(position_check_fills)} untracked positions that will be closed during rollback"
+                    )
+                    actual_fills.extend(position_check_fills)
 
-        self.logger.info(f"Step 3/3: Closing {len(actual_fills)} filled positions...")
+        self.logger.info(f"Step 3/4: Closing {len(actual_fills)} filled positions...")
         rollback_tasks = []
         for fill in actual_fills:
             try:

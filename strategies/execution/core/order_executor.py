@@ -23,6 +23,7 @@ import asyncio
 from helpers.unified_logger import get_core_logger
 from exchange_clients import BaseExchangeClient
 from exchange_clients.base_models import CancelReason, is_retryable_cancellation, OrderInfo
+from strategies.execution.patterns.atomic_multi_order.utils import coerce_decimal
 
 logger = get_core_logger("order_executor")
 
@@ -646,6 +647,152 @@ class OrderExecutor:
                 cancel_reason_lower = cancel_reason.lower()
                 exchange_name = exchange_client.get_exchange_name()
                 
+                # ⚠️ CRITICAL FIX: Check for partial fills before cancellation
+                # Some exchanges may cancel orders after partial fills (e.g., slippage protection)
+                # 
+                # IMPORTANT: Behavior differs for OPEN vs CLOSE operations:
+                # - OPEN (reduce_only=False): Partial fill CREATES a position → must be tracked for rollback
+                # - CLOSE (reduce_only=True): Partial fill REDUCES a position → rollback queries actual state
+                # 
+                # In both cases, we track the partial fill so rollback can handle it appropriately.
+                partial_filled_qty = coerce_decimal(getattr(order_info, "filled_size", None)) or Decimal("0")
+                partial_fill_price = coerce_decimal(getattr(order_info, "price", None)) or expected_price
+                
+                if partial_filled_qty > Decimal("0"):
+                    self.logger.warning(
+                        f"[{exchange_name.upper()}] ⚠️ Market order canceled with PARTIAL FILL: "
+                        f"{partial_filled_qty} @ ${partial_fill_price} (order_id={order_id}, reason={cancel_reason})"
+                    )
+                    
+                    # Calculate remaining quantity to fill
+                    remaining_qty = order_quantity - partial_filled_qty
+                    remaining_usd = size_usd - (partial_filled_qty * partial_fill_price) if size_usd else None
+                    
+                    # Check if this is a slippage-related error that we can fallback to limit orders
+                    slippage_related_keywords = [
+                        "exceeds_max_slippage",
+                        "max_slippage",
+                        "slippage",
+                        "insufficient_liquidity",
+                        "price_impact_too_high"
+                    ]
+                    
+                    is_slippage_error = any(keyword in cancel_reason_lower for keyword in slippage_related_keywords)
+                    
+                    if is_slippage_error and remaining_qty > Decimal("0.0001"):
+                        # For CLOSE operations (reduce_only=True), attempting to fill remaining quantity
+                        # might not make sense if the position is already closed. However, we still try
+                        # because the exchange might have only partially closed the position.
+                        operation_type = "CLOSE" if reduce_only else "OPEN"
+                        self.logger.warning(
+                            f"[{exchange_name.upper()}] Market order canceled due to slippage with partial fill "
+                            f"({operation_type} operation). Falling back to aggressive limit order for "
+                            f"remaining {remaining_qty} {symbol}"
+                        )
+                        # Try to fill the remaining quantity with limit order
+                        fallback_result = await self._fallback_to_limit_on_slippage_error(
+                            exchange_client=exchange_client,
+                            symbol=symbol,
+                            side=side,
+                            size_usd=remaining_usd,
+                            quantity=remaining_qty,
+                            reduce_only=reduce_only,
+                            original_cancel_reason=cancel_reason
+                        )
+                        
+                        # Combine partial fill with fallback result
+                        if fallback_result.filled:
+                            # Both partial fill and fallback succeeded
+                            total_filled = partial_filled_qty + fallback_result.filled_quantity
+                            # Weighted average price
+                            total_cost = (partial_filled_qty * partial_fill_price) + (
+                                fallback_result.filled_quantity * fallback_result.fill_price
+                            )
+                            avg_price = total_cost / total_filled if total_filled > 0 else partial_fill_price
+                            
+                            slippage_usd = abs(avg_price - expected_price) * total_filled
+                            slippage_pct = abs(avg_price - expected_price) / expected_price if expected_price > 0 else Decimal('0')
+                            
+                            self.logger.info(
+                                f"[{exchange_name.upper()}] Market order partially filled + limit fallback succeeded: "
+                                f"{total_filled} @ ${avg_price:.6f} (partial: {partial_filled_qty} @ ${partial_fill_price}, "
+                                f"fallback: {fallback_result.filled_quantity} @ ${fallback_result.fill_price})"
+                            )
+                            
+                            return ExecutionResult(
+                                success=True,
+                                filled=True,
+                                fill_price=avg_price,
+                                filled_quantity=total_filled,
+                                expected_price=expected_price,
+                                slippage_usd=slippage_usd,
+                                slippage_pct=slippage_pct,
+                                execution_mode_used="market_partial_limit_fallback",
+                                order_id=order_id
+                            )
+                        else:
+                            # Partial fill succeeded but fallback failed
+                            # Return partial fill result so it can be tracked for rollback
+                            # 
+                            # For OPEN operations: This partial fill created a position that MUST be closed
+                            # For CLOSE operations: Rollback will query actual position state anyway, but
+                            # tracking this helps ensure we don't miss anything
+                            slippage_usd = abs(partial_fill_price - expected_price) * partial_filled_qty
+                            slippage_pct = abs(partial_fill_price - expected_price) / expected_price if expected_price > 0 else Decimal('0')
+                            
+                            operation_type = "CLOSE" if reduce_only else "OPEN"
+                            self.logger.warning(
+                                f"[{exchange_name.upper()}] ⚠️ Market order had partial fill ({partial_filled_qty} @ ${partial_fill_price}) "
+                                f"({operation_type} operation) but limit fallback failed: {fallback_result.error_message}. "
+                                f"This partial fill MUST be tracked for rollback!"
+                            )
+                            
+                            return ExecutionResult(
+                                success=False,  # Overall failed because we didn't fill everything
+                                filled=True,    # But we did have a partial fill
+                                fill_price=partial_fill_price,
+                                filled_quantity=partial_filled_qty,
+                                expected_price=expected_price,
+                                slippage_usd=slippage_usd,
+                                slippage_pct=slippage_pct,
+                                execution_mode_used="market_partial_fallback_failed",
+                                order_id=order_id,
+                                error_message=(
+                                    f"Market order canceled with partial fill ({partial_filled_qty}/{order_quantity}). "
+                                    f"Limit fallback failed: {fallback_result.error_message or 'unknown error'}"
+                                ),
+                                retryable=False
+                            )
+                    else:
+                        # Partial fill but no fallback (either not slippage error or remaining_qty too small)
+                        # 
+                        # For OPEN operations: Partial fill created a position → must be closed
+                        # For CLOSE operations: Partial fill reduced a position → rollback queries actual state
+                        slippage_usd = abs(partial_fill_price - expected_price) * partial_filled_qty
+                        slippage_pct = abs(partial_fill_price - expected_price) / expected_price if expected_price > 0 else Decimal('0')
+                        
+                        operation_type = "CLOSE" if reduce_only else "OPEN"
+                        self.logger.warning(
+                            f"[{exchange_name.upper()}] ⚠️ Market order canceled with partial fill ({partial_filled_qty} @ ${partial_fill_price}) "
+                            f"({operation_type} operation) but cannot fallback (reason: {cancel_reason}, remaining: {remaining_qty}). "
+                            f"This partial fill MUST be tracked for rollback!"
+                        )
+                        
+                        return ExecutionResult(
+                            success=False,  # Overall failed
+                            filled=True,    # But we did have a partial fill
+                            fill_price=partial_fill_price,
+                            filled_quantity=partial_filled_qty,
+                            expected_price=expected_price,
+                            slippage_usd=slippage_usd,
+                            slippage_pct=slippage_pct,
+                            execution_mode_used="market_partial_canceled",
+                            order_id=order_id,
+                            error_message=f"Market order canceled with partial fill: {cancel_reason}",
+                            retryable=False
+                        )
+                
+                # No partial fill - proceed with normal cancellation handling
                 # Check if this is a slippage-related error that we can fallback to limit orders
                 slippage_related_keywords = [
                     "exceeds_max_slippage",
