@@ -521,11 +521,12 @@ class TelegramFormatter:
                 long_entry_value = position.get("long_entry_value", Decimal("0"))
                 short_entry_value = position.get("short_entry_value", Decimal("0"))
                 
+                entry_label = "  Entry: "
+                entry_pad = len(entry_label)
                 if long_entry_price > 0:
-                    lines.append(f"  Entry: 📈 <b>{long_dex}</b> <code>${long_entry_price:.4f}</code> <i>(${long_entry_value:.2f})</i>")
+                    lines.append(f"{entry_label}📈 <b>{long_dex}</b> <code>${long_entry_price:.4f}</code> <i>(${long_entry_value:.2f})</i>")
                 if short_entry_price > 0:
-                    lines.append(f"          📉 <b>{short_dex}</b> <code>${short_entry_price:.4f}</code> <i>(${short_entry_value:.2f})</i>")
-            
+                    lines.append(f"{' ' * entry_pad}📉 <b>{short_dex}</b> <code>${short_entry_price:.4f}</code> <i>(${short_entry_value:.2f})</i>")
             # Exit trades summary - same format
             exit_trades = position.get("exit_trades", [])
             if exit_trades:
@@ -534,10 +535,12 @@ class TelegramFormatter:
                 long_exit_value = position.get("long_exit_value", Decimal("0"))
                 short_exit_value = position.get("short_exit_value", Decimal("0"))
                 
+                exit_label = "  Exit: "
+                exit_pad = len(exit_label)
                 if long_exit_price > 0:
-                    lines.append(f"  Exit:  📈 <b>{long_dex}</b> <code>${long_exit_price:.4f}</code> <i>(${long_exit_value:.2f})</i>")
+                    lines.append(f"{exit_label}📈 <b>{long_dex}</b> <code>${long_exit_price:.4f}</code> <i>(${long_exit_value:.2f})</i>")
                 if short_exit_price > 0:
-                    lines.append(f"          📉 <b>{short_dex}</b> <code>${short_exit_price:.4f}</code> <i>(${short_exit_value:.2f})</i>")
+                    lines.append(f"{' ' * exit_pad}📉 <b>{short_dex}</b> <code>${short_exit_price:.4f}</code> <i>(${short_exit_value:.2f})</i>")
             
             # Per-leg PnL breakdown - simplified
             long_leg_pnl = position.get("long_leg_pnl", Decimal("0"))
