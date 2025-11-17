@@ -473,7 +473,7 @@ class TelegramFormatter:
     
     @staticmethod
     def format_grouped_trades(account_name: str, grouped_trades: List[Dict[str, Any]]) -> str:
-        """Format grouped trades by position."""
+        """Format grouped trades by position - compact inline format with timestamps."""
         lines = [
             f"📋 <b>{account_name} - Recent Trades</b>",
             "",
@@ -485,47 +485,87 @@ class TelegramFormatter:
             short_dex = position_data.get("short_dex", "N/A").upper()
             is_closed = position_data.get("closed_at") is not None
             status_emoji = "✅" if is_closed else "⏳"
-            status_text = "CLOSED" if is_closed else "OPEN"
             
-            lines.append(f"<b>{idx}. {symbol}</b> ({long_dex}/{short_dex})")
-            lines.append(f"  Status: {status_emoji} {status_text}")
-            
-            # Entry trades
+            # Get earliest entry timestamp for position
             entry_trades = position_data.get("entry_trades", [])
+            earliest_timestamp = None
             if entry_trades:
-                entry_lines = []
-                for trade in entry_trades:
-                    dex = trade.get("dex_name", "N/A").upper()
-                    side = trade.get("side", "N/A").upper()
-                    price = trade.get("weighted_avg_price")
-                    qty = trade.get("total_quantity")
-                    if price and qty:
-                        entry_lines.append(f"{side} @ ${price:.6f} ({dex})")
-                if entry_lines:
-                    lines.append(f"  Entry: {' | '.join(entry_lines)}")
+                timestamps = []
+                for t in entry_trades:
+                    ts = t.get("timestamp")
+                    if ts:
+                        # Convert to datetime if needed
+                        if isinstance(ts, str):
+                            try:
+                                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                            except:
+                                continue
+                        if isinstance(ts, datetime):
+                            timestamps.append(ts)
+                if timestamps:
+                    earliest_timestamp = min(timestamps)
             
-            # Exit trades
+            # Format timestamp with timezone
+            time_str = ""
+            if earliest_timestamp:
+                if earliest_timestamp.tzinfo:
+                    # Convert to UTC and format
+                    utc_time = earliest_timestamp.astimezone(timezone.utc)
+                    time_str = utc_time.strftime("%b %d %H:%M UTC")
+                else:
+                    # Assume UTC if naive
+                    time_str = earliest_timestamp.strftime("%b %d %H:%M UTC")
+            
+            # Build compact entry summary (max 2 trades shown, rest collapsed)
+            entry_summary = []
+            for trade in entry_trades[:2]:  # Show max 2 entry trades
+                dex = trade.get("dex_name", "N/A").upper()
+                side = trade.get("side", "N/A").upper()
+                price = trade.get("weighted_avg_price")
+                if price:
+                    side_emoji = "🟢" if side == "BUY" else "🔴"
+                    entry_summary.append(f"{side_emoji}<b>{dex}</b> <code>${price:.4f}</code>")
+            
+            if len(entry_trades) > 2:
+                entry_summary.append(f"<i>+{len(entry_trades) - 2} more</i>")
+            
+            # Build compact exit summary (max 2 trades shown, rest collapsed)
+            exit_summary = []
             exit_trades = position_data.get("exit_trades", [])
-            if exit_trades:
-                exit_lines = []
-                for trade in exit_trades:
-                    dex = trade.get("dex_name", "N/A").upper()
-                    side = trade.get("side", "N/A").upper()
-                    price = trade.get("weighted_avg_price")
-                    qty = trade.get("total_quantity")
-                    if price and qty:
-                        exit_lines.append(f"{side} @ ${price:.6f} ({dex})")
-                if exit_lines:
-                    lines.append(f"  Exit: {' | '.join(exit_lines)}")
+            for trade in exit_trades[:2]:  # Show max 2 exit trades
+                dex = trade.get("dex_name", "N/A").upper()
+                side = trade.get("side", "N/A").upper()
+                price = trade.get("weighted_avg_price")
+                if price:
+                    side_emoji = "🟢" if side == "BUY" else "🔴"
+                    exit_summary.append(f"{side_emoji}<b>{dex}</b> <code>${price:.4f}</code>")
             
-            # PnL if closed
+            if len(exit_trades) > 2:
+                exit_summary.append(f"<i>+{len(exit_trades) - 2} more</i>")
+            
+            # Format as compact single line per position
+            position_line = f"<b>{idx}. {symbol}</b> {status_emoji} <code>{long_dex}/{short_dex}</code>"
+            if time_str:
+                position_line += f" <i>• {time_str}</i>"
+            
+            lines.append(position_line)
+            
+            # Entry trades - compact inline (single line)
+            if entry_summary:
+                lines.append(f"  📥 {' • '.join(entry_summary)}")
+            
+            # Exit trades - compact inline (single line)
+            if exit_summary:
+                lines.append(f"  📤 {' • '.join(exit_summary)}")
+            
+            # PnL if closed - inline
             if is_closed:
                 pnl = position_data.get("pnl_usd")
                 if pnl:
                     pnl_emoji = "🟢" if pnl >= 0 else "🔴"
                     size = position_data.get("size_usd", Decimal("1"))
                     pnl_pct = (Decimal(str(pnl)) / size * 100) if size > 0 else Decimal("0")
-                    lines.append(f"  PnL: {pnl_emoji} <code>${pnl:.2f}</code> ({pnl_pct:.2f}%)")
+                    lines.append(f"  💰 {pnl_emoji} <code>${pnl:.2f}</code> <i>({pnl_pct:.1f}%)</i>")
             
             lines.append("")
         
@@ -536,7 +576,7 @@ class TelegramFormatter:
     
     @staticmethod
     def format_position_pnl(account_name: str, positions: List[Dict[str, Any]]) -> str:
-        """Format position-level PnL."""
+        """Format position-level PnL with per-leg breakdown and trade details."""
         lines = [
             f"💰 <b>{account_name} - Position PnL</b>",
             "",
@@ -555,29 +595,64 @@ class TelegramFormatter:
             entry_count = len(position.get("entry_trades", []))
             exit_count = len(position.get("exit_trades", []))
             
-            lines.append(f"<b>{idx}. {symbol}</b> ({long_dex}/{short_dex})")
-            lines.append(f"  Status: {status_emoji} {status_text}")
-            lines.append(f"  Size: <code>${size_usd:.2f}</code>")
-            lines.append(f"  Trades: {entry_count} entry, {exit_count} exit")
+            lines.append(f"<b>{idx}. {symbol}</b> {status_emoji} <code>{long_dex}/{short_dex}</code>")
+            lines.append(f"  Size: <code>${size_usd:.2f}</code> • {entry_count} entry, {exit_count} exit")
             
-            # Fees
+            # Entry trades summary
+            entry_trades = position.get("entry_trades", [])
+            if entry_trades:
+                long_entry_price = position.get("long_entry_price", Decimal("0"))
+                short_entry_price = position.get("short_entry_price", Decimal("0"))
+                long_entry_value = position.get("long_entry_value", Decimal("0"))
+                short_entry_value = position.get("short_entry_value", Decimal("0"))
+                
+                if long_entry_price > 0:
+                    lines.append(f"  📥 Entry: 🟢<b>{long_dex}</b> <code>${long_entry_price:.4f}</code> <i>(${long_entry_value:.2f})</i>")
+                if short_entry_price > 0:
+                    lines.append(f"         🔴<b>{short_dex}</b> <code>${short_entry_price:.4f}</code> <i>(${short_entry_value:.2f})</i>")
+            
+            # Exit trades summary
+            exit_trades = position.get("exit_trades", [])
+            if exit_trades:
+                long_exit_price = position.get("long_exit_price", Decimal("0"))
+                short_exit_price = position.get("short_exit_price", Decimal("0"))
+                long_exit_value = position.get("long_exit_value", Decimal("0"))
+                short_exit_value = position.get("short_exit_value", Decimal("0"))
+                
+                if long_exit_price > 0:
+                    lines.append(f"  📤 Exit:  🟢<b>{long_dex}</b> <code>${long_exit_price:.4f}</code> <i>(${long_exit_value:.2f})</i>")
+                if short_exit_price > 0:
+                    lines.append(f"        🔴<b>{short_dex}</b> <code>${short_exit_price:.4f}</code> <i>(${short_exit_value:.2f})</i>")
+            
+            # Per-leg PnL breakdown
+            long_leg_pnl = position.get("long_leg_pnl", Decimal("0"))
+            short_leg_pnl = position.get("short_leg_pnl", Decimal("0"))
+            
+            if long_leg_pnl != 0 or short_leg_pnl != 0:
+                long_pnl_emoji = "🟢" if long_leg_pnl >= 0 else "🔴"
+                short_pnl_emoji = "🟢" if short_leg_pnl >= 0 else "🔴"
+                lines.append(f"  📊 Leg PnL: {long_pnl_emoji}<b>{long_dex}</b> <code>${long_leg_pnl:.2f}</code> • {short_pnl_emoji}<b>{short_dex}</b> <code>${short_leg_pnl:.2f}</code>")
+            
+            # Fees breakdown
             entry_fees = position.get("entry_fees", Decimal("0"))
             exit_fees = position.get("exit_fees", Decimal("0"))
             total_fees = position.get("total_fees", Decimal("0"))
-            lines.append(f"  Fees: Entry ${entry_fees:.4f} + Exit ${exit_fees:.4f} = ${total_fees:.4f}")
+            lines.append(f"  💸 Fees: Entry <code>${entry_fees:.4f}</code> + Exit <code>${exit_fees:.4f}</code> = <code>${total_fees:.4f}</code>")
             
             # PnL breakdown
             price_pnl = position.get("price_pnl", Decimal("0"))
             total_funding = position.get("total_funding", Decimal("0"))
             net_pnl = position.get("net_pnl", Decimal("0"))
             
-            lines.append(f"  Price PnL: <code>${price_pnl:.2f}</code>")
-            lines.append(f"  Funding: <code>${total_funding:.2f}</code>")
+            price_pnl_emoji = "🟢" if price_pnl >= 0 else "🔴"
+            funding_emoji = "🟢" if total_funding >= 0 else "🔴"
+            lines.append(f"  💰 Price PnL: {price_pnl_emoji} <code>${price_pnl:.2f}</code>")
+            lines.append(f"  📈 Funding: {funding_emoji} <code>${total_funding:.2f}</code>")
             
             # Net PnL with color
             net_pnl_emoji = "🟢" if net_pnl >= 0 else "🔴"
             pnl_pct = (net_pnl / size_usd * 100) if size_usd > 0 else Decimal("0")
-            lines.append(f"  Net PnL: {net_pnl_emoji} <code>${net_pnl:.2f}</code> ({pnl_pct:.2f}%)")
+            lines.append(f"  🎯 Net PnL: {net_pnl_emoji} <code>${net_pnl:.2f}</code> <i>({pnl_pct:.2f}%)</i>")
             
             # Position age
             opened_at = position.get("opened_at")
@@ -602,7 +677,7 @@ class TelegramFormatter:
                     age = datetime.now(opened_dt.tzinfo) - opened_dt if opened_dt.tzinfo else datetime.now() - opened_dt
                     age_str = f"{age.total_seconds() / 3600:.1f}h"
                 
-                lines.append(f"  Age: <code>{age_str}</code>")
+                lines.append(f"  ⏱️  Age: <code>{age_str}</code>")
             
             lines.append("")
         

@@ -494,31 +494,81 @@ class TradesHandler(BaseHandler):
             )
     
     async def _get_positions_with_pnl(self, account_id: UUID) -> List[Dict[str, Any]]:
-        """Get positions with calculated PnL."""
-        positions = await self._get_positions(account_id)
+        """Get positions with calculated PnL including per-leg breakdown."""
+        # Get cutoff time for filtering
+        cutoff_time = self._get_trades_cutoff_time()
+        
+        positions = await self._get_positions(account_id, cutoff_time=cutoff_time)
         repository = TradeFillRepository(self.database)
         
         result = []
         for position in positions:
             position_id = position["id"]
+            long_dex = position.get("long_dex", "").lower()
+            short_dex = position.get("short_dex", "").lower()
             
             # Get trades for this position
             trades = await repository.get_trades_by_position(position_id)
             entry_trades = [t for t in trades if t.get("trade_type") == "entry"]
             exit_trades = [t for t in trades if t.get("trade_type") == "exit"]
             
-            # Calculate PnL
+            # Separate trades by DEX
+            long_entry_trades = [t for t in entry_trades if t.get("dex_name", "").lower() == long_dex]
+            short_entry_trades = [t for t in entry_trades if t.get("dex_name", "").lower() == short_dex]
+            long_exit_trades = [t for t in exit_trades if t.get("dex_name", "").lower() == long_dex]
+            short_exit_trades = [t for t in exit_trades if t.get("dex_name", "").lower() == short_dex]
+            
+            # Calculate entry/exit values and prices
+            long_entry_value = sum(Decimal(str(t.get("total_quantity", 0))) * Decimal(str(t.get("weighted_avg_price", 0))) for t in long_entry_trades)
+            short_entry_value = sum(Decimal(str(t.get("total_quantity", 0))) * Decimal(str(t.get("weighted_avg_price", 0))) for t in short_entry_trades)
+            long_exit_value = sum(Decimal(str(t.get("total_quantity", 0))) * Decimal(str(t.get("weighted_avg_price", 0))) for t in long_exit_trades)
+            short_exit_value = sum(Decimal(str(t.get("total_quantity", 0))) * Decimal(str(t.get("weighted_avg_price", 0))) for t in short_exit_trades)
+            
+            # Calculate weighted average entry/exit prices
+            long_entry_qty = sum(Decimal(str(t.get("total_quantity", 0))) for t in long_entry_trades)
+            short_entry_qty = sum(Decimal(str(t.get("total_quantity", 0))) for t in short_entry_trades)
+            long_exit_qty = sum(Decimal(str(t.get("total_quantity", 0))) for t in long_exit_trades)
+            short_exit_qty = sum(Decimal(str(t.get("total_quantity", 0))) for t in short_exit_trades)
+            
+            long_entry_price = long_entry_value / long_entry_qty if long_entry_qty > 0 else Decimal("0")
+            short_entry_price = short_entry_value / short_entry_qty if short_entry_qty > 0 else Decimal("0")
+            long_exit_price = long_exit_value / long_exit_qty if long_exit_qty > 0 else Decimal("0")
+            short_exit_price = short_exit_value / short_exit_qty if short_exit_qty > 0 else Decimal("0")
+            
+            # Calculate per-leg PnL
+            # Long leg: profit when exit price > entry price (we bought low, sold high)
+            long_leg_pnl = Decimal("0")
+            if long_exit_qty > 0 and long_entry_qty > 0:
+                # For long: profit = (exit_price - entry_price) * quantity
+                long_leg_pnl = (long_exit_price - long_entry_price) * long_exit_qty
+            elif long_exit_trades:
+                # Use realized_pnl if available
+                for trade in long_exit_trades:
+                    realized_pnl = trade.get("realized_pnl")
+                    if realized_pnl:
+                        long_leg_pnl += Decimal(str(realized_pnl))
+            
+            # Short leg: profit when entry price > exit price (we sold high, bought low)
+            short_leg_pnl = Decimal("0")
+            if short_exit_qty > 0 and short_entry_qty > 0:
+                # For short: profit = (entry_price - exit_price) * quantity
+                short_leg_pnl = (short_entry_price - short_exit_price) * short_exit_qty
+            elif short_exit_trades:
+                # Use realized_pnl if available
+                for trade in short_exit_trades:
+                    realized_pnl = trade.get("realized_pnl")
+                    if realized_pnl:
+                        short_leg_pnl += Decimal(str(realized_pnl))
+            
+            # Calculate fees
             entry_fees = sum(Decimal(str(t.get("total_fee", 0))) for t in entry_trades)
             exit_fees = sum(Decimal(str(t.get("total_fee", 0))) for t in exit_trades)
             total_fees = entry_fees + exit_fees
             
-            # Get price PnL from exit trades or position
-            price_pnl = Decimal("0")
-            for trade in exit_trades:
-                realized_pnl = trade.get("realized_pnl")
-                if realized_pnl:
-                    price_pnl += Decimal(str(realized_pnl))
+            # Get price PnL (sum of both legs)
+            price_pnl = long_leg_pnl + short_leg_pnl
             
+            # If price_pnl is still 0, try from position record
             if price_pnl == 0 and position.get("pnl_usd"):
                 price_pnl = Decimal(str(position["pnl_usd"]))
             
@@ -534,6 +584,7 @@ class TradesHandler(BaseHandler):
             
             net_pnl = price_pnl + total_funding - total_fees
             
+            # Store enhanced data
             position["entry_trades"] = entry_trades
             position["exit_trades"] = exit_trades
             position["entry_fees"] = entry_fees
@@ -542,6 +593,19 @@ class TradesHandler(BaseHandler):
             position["price_pnl"] = price_pnl
             position["total_funding"] = total_funding
             position["net_pnl"] = net_pnl
+            
+            # Per-leg breakdown
+            position["long_entry_price"] = long_entry_price
+            position["long_exit_price"] = long_exit_price
+            position["long_entry_value"] = long_entry_value
+            position["long_exit_value"] = long_exit_value
+            position["long_leg_pnl"] = long_leg_pnl
+            
+            position["short_entry_price"] = short_entry_price
+            position["short_exit_price"] = short_exit_price
+            position["short_entry_value"] = short_entry_value
+            position["short_exit_value"] = short_exit_value
+            position["short_leg_pnl"] = short_leg_pnl
             
             result.append(position)
         
