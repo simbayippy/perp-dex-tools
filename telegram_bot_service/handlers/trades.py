@@ -4,8 +4,9 @@ Trades and PnL handlers for Telegram bot
 
 from typing import Optional, List, Dict, Any, Tuple
 from decimal import Decimal
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
@@ -190,8 +191,37 @@ class TradesHandler(BaseHandler):
             "net_pnl": net_pnl,
         }
     
-    async def _get_positions(self, account_id: UUID) -> List[Dict[str, Any]]:
-        """Get positions for an account."""
+    def _get_trades_cutoff_time(self) -> Optional[datetime]:
+        """Get cutoff time from TRADES_CUTOFF_TIMESTAMP environment variable."""
+        cutoff_str = os.getenv("TRADES_CUTOFF_TIMESTAMP")
+        if not cutoff_str:
+            return None
+        
+        try:
+            # Try parsing as ISO 8601 timestamp
+            if "T" in cutoff_str or "Z" in cutoff_str:
+                cutoff_str = cutoff_str.replace("Z", "+00:00")
+                return datetime.fromisoformat(cutoff_str)
+            
+            # Try parsing as Unix timestamp
+            try:
+                timestamp = float(cutoff_str)
+                return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            except ValueError:
+                pass
+            
+            # Try parsing as "Xh" format (hours ago)
+            if cutoff_str.endswith("h"):
+                hours = float(cutoff_str[:-1])
+                return datetime.now(timezone.utc) - timedelta(hours=hours)
+            
+            return None
+        except Exception as e:
+            self.logger.warning(f"Failed to parse TRADES_CUTOFF_TIMESTAMP: {e}")
+            return None
+    
+    async def _get_positions(self, account_id: UUID, cutoff_time: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        """Get positions for an account, optionally filtered by cutoff_time."""
         query = """
             SELECT 
                 sp.id,
@@ -212,9 +242,16 @@ class TradesHandler(BaseHandler):
             JOIN dexes d1 ON sp.long_dex_id = d1.id
             JOIN dexes d2 ON sp.short_dex_id = d2.id
             WHERE sp.account_id = :account_id
-            ORDER BY sp.opened_at DESC
         """
-        rows = await self.database.fetch_all(query, {"account_id": account_id})
+        values = {"account_id": account_id}
+        
+        if cutoff_time:
+            query += " AND sp.opened_at >= :cutoff_time"
+            values["cutoff_time"] = cutoff_time.replace(tzinfo=None) if cutoff_time.tzinfo else cutoff_time
+        
+        query += " ORDER BY sp.opened_at DESC"
+        
+        rows = await self.database.fetch_all(query, values)
         return [dict(row) for row in rows]
     
     async def trades_account_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):

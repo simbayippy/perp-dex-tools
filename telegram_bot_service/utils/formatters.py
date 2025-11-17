@@ -484,7 +484,12 @@ class TelegramFormatter:
             long_dex = position_data.get("long_dex", "N/A").upper()
             short_dex = position_data.get("short_dex", "N/A").upper()
             is_closed = position_data.get("closed_at") is not None
-            status_emoji = "✅" if is_closed else "⏳"
+            
+            # Explicit status with lock emoji for closed
+            if is_closed:
+                status_text = "🔒 CLOSED"
+            else:
+                status_text = "⏳ OPEN"
             
             # Get earliest entry timestamp for position
             entry_trades = position_data.get("entry_trades", [])
@@ -516,47 +521,67 @@ class TelegramFormatter:
                     # Assume UTC if naive
                     time_str = earliest_timestamp.strftime("%b %d %H:%M UTC")
             
-            # Build compact entry summary (max 2 trades shown, rest collapsed)
-            entry_summary = []
-            for trade in entry_trades[:2]:  # Show max 2 entry trades
-                dex = trade.get("dex_name", "N/A").upper()
-                side = trade.get("side", "N/A").upper()
-                price = trade.get("weighted_avg_price")
-                if price:
-                    side_emoji = "🟢" if side == "BUY" else "🔴"
-                    entry_summary.append(f"{side_emoji}<b>{dex}</b> <code>${price:.4f}</code>")
-            
-            if len(entry_trades) > 2:
-                entry_summary.append(f"<i>+{len(entry_trades) - 2} more</i>")
-            
-            # Build compact exit summary (max 2 trades shown, rest collapsed)
-            exit_summary = []
-            exit_trades = position_data.get("exit_trades", [])
-            for trade in exit_trades[:2]:  # Show max 2 exit trades
-                dex = trade.get("dex_name", "N/A").upper()
-                side = trade.get("side", "N/A").upper()
-                price = trade.get("weighted_avg_price")
-                if price:
-                    side_emoji = "🟢" if side == "BUY" else "🔴"
-                    exit_summary.append(f"{side_emoji}<b>{dex}</b> <code>${price:.4f}</code>")
-            
-            if len(exit_trades) > 2:
-                exit_summary.append(f"<i>+{len(exit_trades) - 2} more</i>")
-            
-            # Format as compact single line per position
-            position_line = f"<b>{idx}. {symbol}</b> {status_emoji} <code>{long_dex}/{short_dex}</code>"
+            # Format as compact single line per position with explicit status
+            position_line = f"<b>{idx}. {symbol}</b> {status_text} <code>{long_dex}/{short_dex}</code>"
             if time_str:
                 position_line += f" <i>• {time_str}</i>"
             
             lines.append(position_line)
             
-            # Entry trades - compact inline (single line)
-            if entry_summary:
-                lines.append(f"  📥 {' • '.join(entry_summary)}")
+            # Entry trades - show all trades, grouped by DEX
+            if entry_trades:
+                # Group entry trades by DEX
+                entry_by_dex = {}
+                for trade in entry_trades:
+                    dex = trade.get("dex_name", "N/A").upper()
+                    side = trade.get("side", "N/A").upper()
+                    price = trade.get("weighted_avg_price")
+                    if price:
+                        if dex not in entry_by_dex:
+                            entry_by_dex[dex] = []
+                        side_emoji = "🟢" if side == "BUY" else "🔴"
+                        entry_by_dex[dex].append(f"{side_emoji}<code>${price:.4f}</code>")
+                
+                # Format entry trades
+                entry_parts = []
+                for dex, prices in entry_by_dex.items():
+                    if len(prices) <= 3:
+                        # Show all prices if 3 or fewer
+                        entry_parts.append(f"<b>{dex}</b> {' • '.join(prices)}")
+                    else:
+                        # Show first 3 and count
+                        entry_parts.append(f"<b>{dex}</b> {' • '.join(prices[:3])} <i>(+{len(prices)-3})</i>")
+                
+                if entry_parts:
+                    lines.append(f"  📥 {' | '.join(entry_parts)}")
             
-            # Exit trades - compact inline (single line)
-            if exit_summary:
-                lines.append(f"  📤 {' • '.join(exit_summary)}")
+            # Exit trades - show all trades, grouped by DEX
+            exit_trades = position_data.get("exit_trades", [])
+            if exit_trades:
+                # Group exit trades by DEX
+                exit_by_dex = {}
+                for trade in exit_trades:
+                    dex = trade.get("dex_name", "N/A").upper()
+                    side = trade.get("side", "N/A").upper()
+                    price = trade.get("weighted_avg_price")
+                    if price:
+                        if dex not in exit_by_dex:
+                            exit_by_dex[dex] = []
+                        side_emoji = "🟢" if side == "BUY" else "🔴"
+                        exit_by_dex[dex].append(f"{side_emoji}<code>${price:.4f}</code>")
+                
+                # Format exit trades
+                exit_parts = []
+                for dex, prices in exit_by_dex.items():
+                    if len(prices) <= 3:
+                        # Show all prices if 3 or fewer
+                        exit_parts.append(f"<b>{dex}</b> {' • '.join(prices)}")
+                    else:
+                        # Show first 3 and count
+                        exit_parts.append(f"<b>{dex}</b> {' • '.join(prices[:3])} <i>(+{len(prices)-3})</i>")
+                
+                if exit_parts:
+                    lines.append(f"  📤 {' | '.join(exit_parts)}")
             
             # PnL if closed - inline
             if is_closed:
