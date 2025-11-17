@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import sys
 import time
 from pathlib import Path
@@ -174,6 +175,16 @@ async def test_exchange_trade_history(
 
 async def main():
     args = parse_args()
+    
+    # Suppress noisy library debug logs
+    logging.getLogger('websockets').setLevel(logging.WARNING)
+    logging.getLogger('httpcore').setLevel(logging.WARNING)
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('requests').setLevel(logging.WARNING)
+    logging.getLogger('aiohttp').setLevel(logging.WARNING)
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
+    
     logger = get_core_logger("test_trade_history")
     
     # Calculate time range

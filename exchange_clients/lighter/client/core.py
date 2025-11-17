@@ -652,17 +652,32 @@ class LighterClient(BaseExchangeClient):
                     except (ValueError, TypeError):
                         self.logger.debug(f"[LIGHTER] Could not convert order_id {order_id} to order_index")
             
+            # Generate auth token for API call
+            auth_token = None
+            if self.lighter_client:
+                auth_token, error = self.lighter_client.create_auth_token_with_expiry()
+                if error:
+                    self.logger.debug(f"[LIGHTER] Error creating auth token for trade history: {error}")
+                    # Continue without auth token - API might still work for some endpoints
+            
             # Call trades API
             # Note: Lighter's trades() requires sort_by and limit parameters
             # We'll use a reasonable limit (100) and sort by timestamp descending
-            trades_response = await self.order_api.trades(
-                sort_by="timestamp",
-                limit=100,
-                market_id=market_id,
-                account_index=self.account_index,
-                order_index=order_index,
-                var_from=int(start_time),  # Unix timestamp in seconds
-            )
+            trades_kwargs = {
+                "sort_by": "timestamp",
+                "limit": 100,
+                "market_id": market_id,
+                "account_index": self.account_index,
+                "order_index": order_index,
+                "var_from": int(start_time),  # Unix timestamp in seconds
+            }
+            
+            # Add auth token if available (required for account-specific queries)
+            if auth_token:
+                trades_kwargs["auth"] = auth_token
+                trades_kwargs["authorization"] = auth_token
+            
+            trades_response = await self.order_api.trades(**trades_kwargs)
             
             if not trades_response or not trades_response.trades:
                 return []

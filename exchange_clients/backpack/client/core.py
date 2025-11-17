@@ -4,7 +4,7 @@ Backpack exchange client implementation for trading execution.
 
 import os
 from decimal import Decimal
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from bpx.public import Public
 from bpx.account import Account

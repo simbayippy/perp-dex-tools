@@ -459,8 +459,16 @@ class AsterClient(BaseExchangeClient):
             List of TradeData objects, or empty list on error
         """
         try:
-            # Resolve contract_id for the symbol
+            # Convert normalized symbol to Aster format (e.g., "BTC" -> "BTCUSDT")
+            aster_symbol = self.normalize_symbol(symbol)
+            
+            # Resolve contract_id for the symbol (may use cache, but normalize first)
             contract_id = self.resolve_contract_id(symbol)
+            
+            # Use Aster-formatted symbol if resolve_contract_id didn't find a cached value
+            # (resolve_contract_id falls back to symbol as-is if not in cache)
+            if contract_id == symbol.upper():
+                contract_id = aster_symbol
             
             # Build request parameters
             params = {
