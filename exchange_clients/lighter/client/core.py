@@ -661,33 +661,54 @@ class LighterClient(BaseExchangeClient):
                     # Continue without auth token - API might still work for some endpoints
             
             # Call trades API
-            # Note: Lighter's trades() requires sort_by and limit parameters
-            # We'll use a reasonable limit (100) and sort by timestamp descending
+            # Note: Lighter's trades() API has a max limit of 100 (per recentTrades endpoint docs)
+            # We fetch the most recent 100 trades and filter client-side by time range
+            # Using sort_dir='desc' to get newest trades first, then we'll filter by time range
             trades_kwargs = {
                 "sort_by": "timestamp",
-                "limit": 100,
+                "sort_dir": "desc",  # Newest first
+                "limit": 100,  # Maximum allowed by Lighter API (1-100 range)
                 "market_id": market_id,
                 "account_index": self.account_index,
-                "order_index": order_index,
-                "var_from": int(start_time),  # Unix timestamp in seconds
             }
             
-            # Add auth token if available (required for account-specific queries)
+            # Only add order_index if provided (filters server-side when available)
+            if order_index is not None:
+                trades_kwargs["order_index"] = order_index
+            
+            # Add auth token (required for account-specific queries)
             if auth_token:
                 trades_kwargs["auth"] = auth_token
                 trades_kwargs["authorization"] = auth_token
+            else:
+                self.logger.warning("[LIGHTER] No auth token available for trade history query")
+            
+            self.logger.debug(
+                f"[LIGHTER] Fetching trade history for {symbol} (market_id={market_id}, "
+                f"account_index={self.account_index}, time_range={start_time:.0f}-{end_time:.0f})"
+            )
             
             trades_response = await self.order_api.trades(**trades_kwargs)
             
-            if not trades_response or not trades_response.trades:
+            if not trades_response:
+                self.logger.debug("[LIGHTER] Empty trades_response from API")
                 return []
             
+            if not hasattr(trades_response, 'trades') or not trades_response.trades:
+                self.logger.debug(f"[LIGHTER] No trades in response (response type: {type(trades_response)})")
+                return []
+            
+            self.logger.debug(f"[LIGHTER] Received {len(trades_response.trades)} trades from API (before filtering)")
+            
             # Parse trades into TradeData objects
+            # Note: We filter by timestamp client-side since API doesn't reliably support time filtering
             result = []
+            filtered_out_count = 0
             for trade in trades_response.trades:
-                # Filter by timestamp range (Lighter may not filter precisely)
+                # Filter by timestamp range (client-side filtering)
                 trade_timestamp = trade.timestamp
                 if trade_timestamp < start_time or trade_timestamp > end_time:
+                    filtered_out_count += 1
                     continue
                 
                 # Filter by order_id client-side if order_index filtering didn't work
@@ -751,6 +772,11 @@ class LighterClient(BaseExchangeClient):
                     fee_currency="USDC",  # Lighter typically uses USDC for fees
                     order_id=trade_order_id,
                 ))
+            
+            self.logger.debug(
+                f"[LIGHTER] Trade history filtering complete: {len(result)} trades in range, "
+                f"{filtered_out_count} filtered out (outside time range)"
+            )
             
             return result
             
