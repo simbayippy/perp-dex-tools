@@ -823,7 +823,9 @@ class AtomicMultiOrderExecutor:
         self, spec: OrderSpec, cancel_event: Optional[asyncio.Event] = None
     ) -> Dict[str, Any]:
         """Place a single order from spec and return a normalised result dictionary."""
-        from strategies.execution.core.order_executor import ExecutionMode, OrderExecutor
+        # Lazy imports to avoid circular dependency
+        from strategies.execution.core.execution_types import ExecutionMode
+        from strategies.execution.core.order_executor import OrderExecutor
 
         executor = OrderExecutor(price_provider=self.price_provider)
 

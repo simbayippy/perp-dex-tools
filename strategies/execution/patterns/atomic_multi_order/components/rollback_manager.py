@@ -13,7 +13,8 @@ from typing import Any, Dict, List, Optional
 from helpers.unified_logger import get_core_logger
 
 from ..contexts import OrderContext
-from ..utils import context_to_filled_dict, coerce_decimal
+from ..utils import context_to_filled_dict
+from strategies.execution.core.utils import coerce_decimal
 
 
 class RollbackManager:

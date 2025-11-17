@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import List, Optional, Tuple
 
-from strategies.execution.core.order_executor import ExecutionMode, OrderExecutor
+from strategies.execution.core.execution_types import ExecutionMode
 
 from ..contexts import OrderContext
 from ..utils import apply_result_to_context, execution_result_to_dict
@@ -30,6 +30,8 @@ class HedgeManager:
         Returns:
             Tuple of (success, error message).
         """
+        # Lazy import to avoid circular dependency
+        from strategies.execution.core.order_executor import OrderExecutor
         hedge_executor = OrderExecutor(price_provider=self._price_provider)
 
         for ctx in contexts:

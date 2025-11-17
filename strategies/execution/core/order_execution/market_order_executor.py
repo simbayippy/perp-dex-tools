@@ -9,9 +9,9 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from exchange_clients import BaseExchangeClient
-from strategies.execution.patterns.atomic_multi_order.utils import coerce_decimal
 
 from .limit_order_executor import LimitOrderExecutor
+from ..utils import coerce_decimal
 from .order_confirmation import OrderConfirmationWaiter
 from ..execution_types import ExecutionResult
 from ..price_provider import PriceProvider
