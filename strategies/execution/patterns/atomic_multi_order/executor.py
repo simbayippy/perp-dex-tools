@@ -685,14 +685,15 @@ class AtomicMultiOrderExecutor:
             all(ctx.spec.reduce_only is True for ctx in contexts)
         )
         
-        # For close operations, if both orders filled, positions are closed - no hedge needed
+        # For close operations, if both orders FULLY filled, positions are closed - no hedge needed
         # (Imbalance check is already skipped in _calculate_imbalance for closing operations)
+        # CRITICAL: Must verify FULL fills, not just partial fills (filled_quantity > 0)
         if is_close_operation:
-            filled_count = sum(1 for ctx in contexts if ctx.filled_quantity > Decimal("0"))
-            if filled_count == len(contexts):
-                # Both close orders filled - positions are closed!
+            fully_filled_count = sum(1 for ctx in contexts if self._is_order_fully_filled(ctx))
+            if fully_filled_count == len(contexts):
+                # Both close orders FULLY filled - positions are closed!
                 self.logger.info(
-                    f"✅ Close operation: Both orders filled, positions closed. No hedge needed."
+                    f"✅ Close operation: Both orders fully filled, positions closed. No hedge needed."
                 )
                 return True, None, False, Decimal("0")
         
