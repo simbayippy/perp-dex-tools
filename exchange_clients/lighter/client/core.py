@@ -14,6 +14,7 @@ from exchange_clients.base_models import (
     OrderResult,
     OrderInfo,
     ExchangePositionSnapshot,
+    TradeData,
     query_retry,
     MissingCredentialsError,
     validate_credentials,
@@ -594,4 +595,153 @@ class LighterClient(BaseExchangeClient):
     async def get_total_asset_value(self) -> Optional[Decimal]:
         """Get total account asset value using Lighter SDK."""
         return await self.account_manager.get_total_asset_value()
+    
+    async def get_user_trade_history(
+        self,
+        symbol: str,
+        start_time: float,
+        end_time: float,
+        order_id: Optional[str] = None,
+    ) -> List[TradeData]:
+        """
+        Get user trade history for Lighter using OrderApi.trades().
+        
+        Args:
+            symbol: Trading symbol (normalized format, e.g., "BTC", "TOSHI")
+            start_time: Start timestamp (Unix seconds)
+            end_time: End timestamp (Unix seconds)
+            order_id: Optional order ID (client_order_index or server order_index)
+            
+        Returns:
+            List of TradeData objects, or empty list on error
+        """
+        try:
+            if not self.order_api:
+                self.logger.warning("[LIGHTER] OrderApi not available for trade history")
+                return []
+            
+            # Get market_id for the symbol
+            normalized_symbol = self.normalize_symbol(symbol)
+            market_id = None
+            if self.market_data:
+                market_id = await self.market_data.get_market_id_for_symbol(normalized_symbol)
+            
+            if market_id is None:
+                self.logger.warning(f"[LIGHTER] Could not find market_id for {symbol}")
+                return []
+            
+            # Resolve order_id to order_index if needed
+            # Lighter uses order_index (server-side) for filtering trades
+            order_index = None
+            if order_id:
+                # Try to resolve client_order_index to server order_index
+                resolved_order_id = self.order_manager.resolve_client_order_id(order_id)
+                if resolved_order_id:
+                    try:
+                        order_index = int(resolved_order_id)
+                    except (ValueError, TypeError):
+                        # If resolution failed, try using order_id directly as order_index
+                        try:
+                            order_index = int(order_id)
+                        except (ValueError, TypeError):
+                            self.logger.debug(f"[LIGHTER] Could not convert order_id {order_id} to order_index")
+                else:
+                    # No resolution found, try using order_id directly
+                    try:
+                        order_index = int(order_id)
+                    except (ValueError, TypeError):
+                        self.logger.debug(f"[LIGHTER] Could not convert order_id {order_id} to order_index")
+            
+            # Call trades API
+            # Note: Lighter's trades() requires sort_by and limit parameters
+            # We'll use a reasonable limit (100) and sort by timestamp descending
+            trades_response = await self.order_api.trades(
+                sort_by="timestamp",
+                limit=100,
+                market_id=market_id,
+                account_index=self.account_index,
+                order_index=order_index,
+                var_from=int(start_time),  # Unix timestamp in seconds
+            )
+            
+            if not trades_response or not trades_response.trades:
+                return []
+            
+            # Parse trades into TradeData objects
+            result = []
+            for trade in trades_response.trades:
+                # Filter by timestamp range (Lighter may not filter precisely)
+                trade_timestamp = trade.timestamp
+                if trade_timestamp < start_time or trade_timestamp > end_time:
+                    continue
+                
+                # Filter by order_id client-side if order_index filtering didn't work
+                if order_id and order_index is None:
+                    # Check if this trade matches the order_id
+                    # Lighter trades have ask_id and bid_id fields
+                    trade_order_id = None
+                    if hasattr(trade, 'ask_id'):
+                        trade_order_id = str(trade.ask_id)
+                    elif hasattr(trade, 'bid_id'):
+                        trade_order_id = str(trade.bid_id)
+                    
+                    if trade_order_id != order_id:
+                        # Also check client_order_index mapping
+                        resolved = self.order_manager.resolve_client_order_id(order_id)
+                        if resolved != str(trade.ask_id) and resolved != str(trade.bid_id):
+                            continue
+                
+                # Determine side from trade type or ask/bid IDs
+                # For Lighter, we need to check if we were the ask (sell) or bid (buy) side
+                # This requires checking account_index against ask_account_id and bid_account_id
+                side = "unknown"
+                if hasattr(trade, 'ask_account_id') and hasattr(trade, 'bid_account_id'):
+                    if trade.ask_account_id == self.account_index:
+                        side = "sell"  # We were the ask side (selling)
+                    elif trade.bid_account_id == self.account_index:
+                        side = "buy"  # We were the bid side (buying)
+                
+                # Calculate fee (taker_fee or maker_fee depending on our role)
+                fee = Decimal("0")
+                if hasattr(trade, 'taker_fee') and trade.taker_fee is not None:
+                    # Check if we were taker (is_maker_ask tells us if ask was maker)
+                    if hasattr(trade, 'is_maker_ask'):
+                        if trade.is_maker_ask and trade.ask_account_id == self.account_index:
+                            # We were maker on ask side
+                            fee = Decimal(str(trade.maker_fee)) if hasattr(trade, 'maker_fee') and trade.maker_fee else Decimal("0")
+                        elif not trade.is_maker_ask and trade.bid_account_id == self.account_index:
+                            # We were maker on bid side
+                            fee = Decimal(str(trade.maker_fee)) if hasattr(trade, 'maker_fee') and trade.maker_fee else Decimal("0")
+                        else:
+                            # We were taker
+                            fee = Decimal(str(trade.taker_fee))
+                    else:
+                        fee = Decimal(str(trade.taker_fee))
+                
+                # Get order_id from trade (ask_id or bid_id depending on our side)
+                trade_order_id = None
+                if side == "sell" and hasattr(trade, 'ask_id'):
+                    trade_order_id = str(trade.ask_id)
+                elif side == "buy" and hasattr(trade, 'bid_id'):
+                    trade_order_id = str(trade.bid_id)
+                
+                result.append(TradeData(
+                    trade_id=str(trade.trade_id),
+                    timestamp=float(trade.timestamp),
+                    symbol=symbol,
+                    side=side,
+                    quantity=Decimal(str(trade.size)),
+                    price=Decimal(str(trade.price)),
+                    fee=fee,
+                    fee_currency="USDC",  # Lighter typically uses USDC for fees
+                    order_id=trade_order_id,
+                ))
+            
+            return result
+            
+        except Exception as e:
+            self.logger.warning(f"[LIGHTER] Failed to get trade history for {symbol}: {e}")
+            import traceback
+            self.logger.debug(f"[LIGHTER] Trade history error traceback: {traceback.format_exc()}")
+            return []
 

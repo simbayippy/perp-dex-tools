@@ -15,6 +15,7 @@ from exchange_clients.base_models import (
     MissingCredentialsError,
     OrderInfo,
     OrderResult,
+    TradeData,
     validate_credentials,
 )
 from exchange_clients.backpack.common import (
@@ -375,4 +376,94 @@ class BackpackClient(BaseExchangeClient):
     async def get_leverage_info(self, symbol: str) -> Dict[str, Any]:
         """Fetch leverage limits for symbol."""
         return await self.account_manager.get_leverage_info(symbol)
+    
+    async def get_user_trade_history(
+        self,
+        symbol: str,
+        start_time: float,
+        end_time: float,
+        order_id: Optional[str] = None,
+    ) -> List[TradeData]:
+        """
+        Get user trade history for Backpack using account_client.get_fill_history().
+        
+        Args:
+            symbol: Trading symbol (normalized format, e.g., "BTC", "TOSHI")
+            start_time: Start timestamp (Unix seconds)
+            end_time: End timestamp (Unix seconds)
+            order_id: Optional order ID to filter fills
+            
+        Returns:
+            List of TradeData objects, or empty list on error
+        """
+        try:
+            if not self.account_client:
+                self.logger.warning("[BACKPACK] Account client not available for trade history")
+                return []
+            
+            # Resolve contract_id for the symbol (Backpack format)
+            contract_id = self.resolve_contract_id(symbol)
+            
+            # Build request parameters
+            # Backpack's get_fill_history accepts: symbol, limit, offset, from_, to, fill_type, market_type
+            fills = self.account_client.get_fill_history(
+                symbol=contract_id,
+                limit=1000,  # Maximum limit
+                offset=0,
+                from_=int(start_time * 1000),  # Convert to milliseconds
+                to=int(end_time * 1000),
+            )
+            
+            if not isinstance(fills, list):
+                self.logger.warning(f"[BACKPACK] Unexpected fills response format: {type(fills)}")
+                return []
+            
+            # Parse fills into TradeData objects
+            result = []
+            for fill in fills:
+                # Filter by order_id client-side (Backpack fills may have order_id field)
+                if order_id:
+                    fill_order_id = fill.get('orderId') or fill.get('order_id')
+                    if str(fill_order_id) != order_id:
+                        continue
+                
+                # Filter by timestamp range (API may not filter precisely)
+                fill_time = fill.get('time', 0) or fill.get('timestamp', 0)
+                if fill_time:
+                    fill_time_seconds = fill_time / 1000  # Convert ms to seconds
+                    if fill_time_seconds < start_time or fill_time_seconds > end_time:
+                        continue
+                
+                # Extract fill data
+                # Backpack fill structure may vary, so we'll handle common fields
+                trade_id = str(fill.get('id', fill.get('fillId', '')))
+                quantity = Decimal(str(fill.get('size', fill.get('quantity', '0'))))
+                price = Decimal(str(fill.get('price', '0')))
+                fee = Decimal(str(fill.get('fee', '0')))
+                fee_currency = fill.get('feeCurrency', fill.get('fee_currency', 'USDC'))
+                side = fill.get('side', '').lower()  # Convert to lowercase
+                trade_order_id = str(fill.get('orderId', fill.get('order_id', ''))) if fill.get('orderId') or fill.get('order_id') else None
+                
+                # Convert timestamp
+                timestamp = fill_time_seconds if fill_time else float(start_time)
+                
+                result.append(TradeData(
+                    trade_id=trade_id,
+                    timestamp=timestamp,
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    price=price,
+                    fee=fee,
+                    fee_currency=fee_currency,
+                    order_id=trade_order_id,
+                ))
+            
+            return result
+            
+        except Exception as e:
+            self.logger.warning(f"[BACKPACK] Failed to get trade history for {symbol}: {e}")
+            import traceback
+            self.logger.debug(f"[BACKPACK] Trade history error traceback: {traceback.format_exc()}")
+            return []
 

@@ -193,6 +193,26 @@ class FundingRateSample:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class TradeData:
+    """
+    Standardized trade/fill data structure for cross-exchange compatibility.
+    
+    Represents a single trade/fill execution with all relevant details for PnL calculation.
+    """
+    trade_id: str  # Exchange-specific trade/fill identifier
+    timestamp: float  # Unix timestamp in seconds
+    symbol: str
+    side: str  # "buy" or "sell"
+    quantity: Decimal
+    price: Decimal
+    fee: Decimal
+    fee_currency: str
+    order_id: Optional[str] = None  # Order that generated this fill/trade
+    realized_pnl: Optional[Decimal] = None  # If exchange provides it (Paradex does)
+    realized_funding: Optional[Decimal] = None  # If exchange provides it (Paradex does)
+
+
 __all__ = [
     "MissingCredentialsError",
     "validate_credentials",
@@ -203,4 +223,5 @@ __all__ = [
     "is_retryable_cancellation",
     "ExchangePositionSnapshot",
     "FundingRateSample",
+    "TradeData",
 ]
