@@ -571,16 +571,37 @@ class BackpackClient(BaseExchangeClient):
                 }
                 if fill_info['timestamp'] != 'N/A' and fill_info['timestamp']:
                     try:
-                        # Backpack timestamps might be in different formats
+                        # Backpack timestamps are ISO 8601 strings (e.g., '2025-10-24T19:02:44.232')
                         timestamp_val = fill_info['timestamp']
                         if isinstance(timestamp_val, str):
-                            # Try parsing as milliseconds
+                            # Parse ISO 8601 format: '2025-10-24T19:02:44.232'
+                            try:
+                                from dateutil import parser
+                                dt = parser.isoparse(timestamp_val)
+                                fill_time_seconds = dt.timestamp()
+                                fill_info['timestamp_str'] = dt.strftime('%Y-%m-%d %H:%M:%S')
+                                fill_info['timestamp_seconds'] = fill_time_seconds
+                            except ImportError:
+                                # Fallback: manual ISO 8601 parsing
+                                dt_str = timestamp_val.split('+')[0].split('Z')[0]  # Remove timezone
+                                if '.' in dt_str:
+                                    dt_part, fractional = dt_str.split('.')
+                                    dt_obj = datetime.strptime(dt_part, '%Y-%m-%dT%H:%M:%S')
+                                    fractional_seconds = float(f'0.{fractional[:6]}')
+                                    fill_time_seconds = dt_obj.timestamp() + fractional_seconds
+                                else:
+                                    dt_obj = datetime.strptime(dt_str, '%Y-%m-%dT%H:%M:%S')
+                                    fill_time_seconds = dt_obj.timestamp()
+                                fill_info['timestamp_str'] = dt_obj.strftime('%Y-%m-%d %H:%M:%S')
+                                fill_info['timestamp_seconds'] = fill_time_seconds
+                        else:
+                            # Fallback: assume numeric (milliseconds or seconds)
                             timestamp_val = int(timestamp_val)
-                        fill_time_seconds = timestamp_val / 1000 if timestamp_val > 1e10 else timestamp_val
-                        fill_time_str = datetime.fromtimestamp(fill_time_seconds).strftime('%Y-%m-%d %H:%M:%S')
-                        fill_info['timestamp_str'] = fill_time_str
-                        fill_info['timestamp_seconds'] = fill_time_seconds
-                    except (ValueError, OSError, TypeError) as e:
+                            fill_time_seconds = timestamp_val / 1000 if timestamp_val > 1e10 else timestamp_val
+                            fill_time_str = datetime.fromtimestamp(fill_time_seconds).strftime('%Y-%m-%d %H:%M:%S')
+                            fill_info['timestamp_str'] = fill_time_str
+                            fill_info['timestamp_seconds'] = fill_time_seconds
+                    except (ValueError, OSError, TypeError, ImportError) as e:
                         fill_info['timestamp_error'] = str(e)
                 self.logger.info(f"[BACKPACK] Fill {i}: {fill_info}")
             
@@ -599,16 +620,51 @@ class BackpackClient(BaseExchangeClient):
                 
                 # Filter by timestamp range (API may not filter precisely)
                 fill_time = fill.get('timestamp') or fill.get('time', 0)
+                fill_time_seconds = None
                 if fill_time:
-                    # Handle timestamp conversion (could be string or int, ms or seconds)
-                    if isinstance(fill_time, str):
-                        fill_time = int(fill_time)
-                    fill_time_seconds = fill_time / 1000 if fill_time > 1e10 else fill_time
-                    if fill_time_seconds < start_time or fill_time_seconds > end_time:
-                        filtered_by_time += 1
-                        continue
-                else:
+                    try:
+                        # Backpack timestamps are ISO 8601 strings (e.g., '2025-10-24T19:02:44.232')
+                        if isinstance(fill_time, str):
+                            # Parse ISO 8601 format: '2025-10-24T19:02:44.232'
+                            try:
+                                from dateutil import parser
+                                dt = parser.isoparse(fill_time)
+                                fill_time_seconds = dt.timestamp()
+                            except ImportError:
+                                # Fallback: manual ISO 8601 parsing using datetime.strptime
+                                # Format: '2025-10-24T19:02:44.232' or '2025-10-24T19:02:44'
+                                dt_str = fill_time.split('+')[0].split('Z')[0]  # Remove timezone
+                                if '.' in dt_str:
+                                    dt_part, fractional = dt_str.split('.')
+                                    # Parse main datetime part
+                                    dt_obj = datetime.strptime(dt_part, '%Y-%m-%dT%H:%M:%S')
+                                    # Add fractional seconds
+                                    fractional_seconds = float(f'0.{fractional[:6]}')  # Limit to microseconds
+                                    fill_time_seconds = dt_obj.timestamp() + fractional_seconds
+                                else:
+                                    dt_obj = datetime.strptime(dt_str, '%Y-%m-%dT%H:%M:%S')
+                                    fill_time_seconds = dt_obj.timestamp()
+                            except Exception as parse_error:
+                                self.logger.debug(f"[BACKPACK] ISO 8601 parse failed, trying numeric: {parse_error}")
+                                # Try parsing as numeric (milliseconds or seconds)
+                                try:
+                                    fill_time = int(fill_time)
+                                    fill_time_seconds = fill_time / 1000 if fill_time > 1e10 else fill_time
+                                except (ValueError, TypeError):
+                                    raise parse_error
+                        else:
+                            # Numeric timestamp (milliseconds or seconds)
+                            fill_time = int(fill_time)
+                            fill_time_seconds = fill_time / 1000 if fill_time > 1e10 else fill_time
+                    except (ValueError, TypeError, OSError) as e:
+                        self.logger.debug(f"[BACKPACK] Failed to parse timestamp '{fill_time}': {e}")
+                        fill_time_seconds = None
+                
+                if fill_time_seconds is None:
                     fill_time_seconds = float(start_time)
+                elif fill_time_seconds < start_time or fill_time_seconds > end_time:
+                    filtered_by_time += 1
+                    continue
                 
                 # Extract fill data according to Backpack API format:
                 # tradeId, orderId, symbol, side, quantity, price, fee, feeSymbol, timestamp, isMaker
