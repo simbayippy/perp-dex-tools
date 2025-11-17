@@ -30,13 +30,16 @@ def _client():
 )
 async def test_execute_limit_respects_configured_offset(offset, best_bid, best_ask):
     executor = OrderExecutor()
-    executor._fetch_bbo_prices_for_limit_order = AsyncMock(return_value=(best_bid, best_ask))
+    executor.price_fetcher.fetch_bbo = AsyncMock(return_value=(best_bid, best_ask))
 
     mock_client = _client()
-    mock_client.place_limit_order.return_value = SimpleNamespace(success=True, order_id="abc123")
-    mock_client.get_order_info.side_effect = [
+    mock_client.place_limit_order = AsyncMock(return_value=SimpleNamespace(success=True, order_id="abc123"))
+    mock_client.get_order_info = AsyncMock(side_effect=[
         SimpleNamespace(status="FILLED", price=str(best_ask), filled_size="0.002"),
-    ]
+    ])
+    mock_client.resolve_contract_id = lambda s: s
+    mock_client.round_to_tick = lambda p: p
+    mock_client.round_to_step = lambda q: q
 
     notional = Decimal("50")
     result = await executor.execute_order(
@@ -58,13 +61,16 @@ async def test_execute_limit_respects_configured_offset(offset, best_bid, best_a
 async def test_execute_limit_uses_executor_default_offset():
     custom_default = Decimal("0.0003")
     executor = OrderExecutor(default_limit_price_offset_pct=custom_default)
-    executor._fetch_bbo_prices_for_limit_order = AsyncMock(return_value=(Decimal("20000"), Decimal("20100")))
+    executor.price_fetcher.fetch_bbo = AsyncMock(return_value=(Decimal("20000"), Decimal("20100")))
 
     mock_client = _client()
-    mock_client.place_limit_order.return_value = SimpleNamespace(success=True, order_id="order-1")
-    mock_client.get_order_info.side_effect = [
+    mock_client.place_limit_order = AsyncMock(return_value=SimpleNamespace(success=True, order_id="order-1"))
+    mock_client.get_order_info = AsyncMock(side_effect=[
         SimpleNamespace(status="FILLED", price="20100", filled_size="0.01"),
-    ]
+    ])
+    mock_client.resolve_contract_id = lambda s: s
+    mock_client.round_to_tick = lambda p: p
+    mock_client.round_to_step = lambda q: q
 
     await executor.execute_order(
         exchange_client=mock_client,
@@ -82,13 +88,17 @@ async def test_execute_limit_uses_executor_default_offset():
 @pytest.mark.asyncio
 async def test_execute_limit_cancellation_event_triggers_cancel_order():
     executor = OrderExecutor()
-    executor._fetch_bbo_prices_for_limit_order = AsyncMock(return_value=(Decimal("20000"), Decimal("20100")))
+    executor.price_fetcher.fetch_bbo = AsyncMock(return_value=(Decimal("20000"), Decimal("20100")))
 
     mock_client = _client()
-    mock_client.place_limit_order.return_value = SimpleNamespace(success=True, order_id="cancel-me")
-    mock_client.get_order_info.side_effect = [
+    mock_client.place_limit_order = AsyncMock(return_value=SimpleNamespace(success=True, order_id="cancel-me"))
+    mock_client.get_order_info = AsyncMock(side_effect=[
         SimpleNamespace(status="OPEN", price="20100", filled_size="0"),
-    ]
+    ])
+    mock_client.resolve_contract_id = lambda s: s
+    mock_client.round_to_tick = lambda p: p
+    mock_client.round_to_step = lambda q: q
+    mock_client.cancel_order = AsyncMock(return_value=None)
 
     cancel_event = asyncio.Event()
 
