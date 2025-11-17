@@ -13,7 +13,7 @@ from exchange_clients.base_models import ExchangePositionSnapshot, OrderInfo, Or
 from exchange_clients.events import LiquidationEvent
 from strategies.implementations.funding_arbitrage.config import RiskManagementConfig
 from strategies.implementations.funding_arbitrage.models import FundingArbPosition
-from strategies.implementations.funding_arbitrage.operations.position_closer import PositionCloser
+from strategies.implementations.funding_arbitrage.operations.closing.position_closer import PositionCloser
 from strategies.execution.patterns.atomic_multi_order import AtomicExecutionResult
 
 

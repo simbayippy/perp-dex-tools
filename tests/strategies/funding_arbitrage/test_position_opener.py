@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from strategies.execution.patterns.atomic_multi_order import AtomicExecutionResult
-from strategies.implementations.funding_arbitrage.operations.position_opener import PositionOpener
+from strategies.implementations.funding_arbitrage.operations.opening.position_opener import PositionOpener
 
 
 class StubLogger:

@@ -22,6 +22,7 @@ python database/scripts/migrations/run_migration.py database/migrations/012_add_
 python database/scripts/migrations/run_migration.py database/migrations/013_add_safety_limits.sql
 python database/scripts/migrations/run_migration.py database/migrations/014_add_audit_log.sql
 python database/scripts/migrations/run_migration.py database/migrations/015_add_strategy_notifications.sql
+python database/scripts/migrations/run_migration.py database/migrations/016_add_trade_fills_table.sql
 
 echo ""
 echo "=================================="
