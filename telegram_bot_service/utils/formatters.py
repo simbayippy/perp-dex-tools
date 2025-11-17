@@ -460,11 +460,6 @@ class TelegramFormatter:
         lines = [
             f"📊 <b>{account_name} - Trading Summary</b>",
             "",
-            "<b>📈 Trades:</b>",
-            f"  Total: <code>{total_trades}</code>",
-            f"  Entry: <code>{entry_trades}</code>",
-            f"  Exit: <code>{exit_trades}</code>",
-            "",
             "<b>💼 Positions:</b>",
             f"  Open: <code>{open_positions}</code>",
             f"  Closed: <code>{closed_positions}</code>",
@@ -500,7 +495,8 @@ class TelegramFormatter:
             short_dex = position.get("short_dex", "N/A").upper()
             size_usd = position.get("size_usd", Decimal("0"))
             is_closed = position.get("closed_at") is not None
-            status_text = "CLOSED" if is_closed else "OPEN"
+            status_emoji = "🔒" if is_closed else "⏳"
+            status_text = f"{status_emoji} CLOSED" if is_closed else f"{status_emoji} OPEN"
             
             # Get exchange emojis for title
             long_emoji = TelegramFormatter._get_exchange_emoji(long_dex)
@@ -513,7 +509,7 @@ class TelegramFormatter:
             exit_count = len(position.get("exit_trades", []))
             
             # Title: symbol on one line, exchanges on next line
-            lines.append(f"<b>{idx}. {symbol}</b> {status_text}")
+            lines.append(f"<u><b>{idx}. {symbol} {status_text}</b></u>")
             lines.append(f"  {long_display}/{short_display}")
             lines.append(f"  Size: <code>${size_usd:.2f}</code> • {entry_count} entry, {exit_count} exit")
             
@@ -528,7 +524,7 @@ class TelegramFormatter:
                 if long_entry_price > 0:
                     lines.append(f"  Entry: 📈 <b>{long_dex}</b> <code>${long_entry_price:.4f}</code> <i>(${long_entry_value:.2f})</i>")
                 if short_entry_price > 0:
-                    lines.append(f"         📉 <b>{short_dex}</b> <code>${short_entry_price:.4f}</code> <i>(${short_entry_value:.2f})</i>")
+                    lines.append(f"          📉 <b>{short_dex}</b> <code>${short_entry_price:.4f}</code> <i>(${short_entry_value:.2f})</i>")
             
             # Exit trades summary - same format
             exit_trades = position.get("exit_trades", [])
@@ -541,7 +537,7 @@ class TelegramFormatter:
                 if long_exit_price > 0:
                     lines.append(f"  Exit:  📈 <b>{long_dex}</b> <code>${long_exit_price:.4f}</code> <i>(${long_exit_value:.2f})</i>")
                 if short_exit_price > 0:
-                    lines.append(f"         📉 <b>{short_dex}</b> <code>${short_exit_price:.4f}</code> <i>(${short_exit_value:.2f})</i>")
+                    lines.append(f"          📉 <b>{short_dex}</b> <code>${short_exit_price:.4f}</code> <i>(${short_exit_value:.2f})</i>")
             
             # Per-leg PnL breakdown - simplified
             long_leg_pnl = position.get("long_leg_pnl", Decimal("0"))

@@ -139,44 +139,36 @@ class TradesHandler(BaseHandler):
         # Get all trades
         all_trades = await repository.get_trades_by_account(account_id, limit=10000)
         
-        # Get positions
-        positions = await self._get_positions(account_id)
+        # Get positions with accurate PnL calculation (same method as position PnL view)
+        positions_with_pnl = await self._get_positions_with_pnl(account_id)
         
         # Calculate stats
         total_trades = len(all_trades)
         entry_trades = [t for t in all_trades if t.get("trade_type") == "entry"]
         exit_trades = [t for t in all_trades if t.get("trade_type") == "exit"]
         
-        open_positions = [p for p in positions if not p.get("closed_at")]
-        closed_positions = [p for p in positions if p.get("closed_at")]
+        open_positions = [p for p in positions_with_pnl if not p.get("closed_at")]
+        closed_positions = [p for p in positions_with_pnl if p.get("closed_at")]
         
-        # Calculate fees
+        # Calculate fees from trades
         total_entry_fees = sum(Decimal(str(t.get("total_fee", 0))) for t in entry_trades)
         total_exit_fees = sum(Decimal(str(t.get("total_fee", 0))) for t in exit_trades)
         total_fees = total_entry_fees + total_exit_fees
         
-        # Calculate PnL from closed positions
-        total_pnl = Decimal("0")
+        # Calculate PnL from positions (using the accurate calculation from _get_positions_with_pnl)
+        total_price_pnl = Decimal("0")
         total_funding = Decimal("0")
+        total_net_pnl = Decimal("0")
         
         for position in closed_positions:
-            pnl = position.get("pnl_usd")
-            if pnl:
-                total_pnl += Decimal(str(pnl))
-            funding = position.get("cumulative_funding_usd")
-            if funding:
-                total_funding += Decimal(str(funding))
-        
-        # Also add realized PnL and funding from exit trades
-        for trade in exit_trades:
-            realized_pnl = trade.get("realized_pnl")
-            if realized_pnl:
-                total_pnl += Decimal(str(realized_pnl))
-            realized_funding = trade.get("realized_funding")
-            if realized_funding:
-                total_funding += Decimal(str(realized_funding))
-        
-        net_pnl = total_pnl + total_funding - total_fees
+            # Use the calculated values from _get_positions_with_pnl
+            price_pnl = position.get("price_pnl", Decimal("0"))
+            funding = position.get("total_funding", Decimal("0"))
+            net_pnl = position.get("net_pnl", Decimal("0"))
+            
+            total_price_pnl += price_pnl
+            total_funding += funding
+            total_net_pnl += net_pnl
         
         return {
             "total_trades": total_trades,
@@ -185,9 +177,9 @@ class TradesHandler(BaseHandler):
             "open_positions": len(open_positions),
             "closed_positions": len(closed_positions),
             "total_fees": total_fees,
-            "total_pnl": total_pnl,
+            "total_pnl": total_price_pnl,
             "total_funding": total_funding,
-            "net_pnl": net_pnl,
+            "net_pnl": total_net_pnl,
         }
     
     def _get_trades_cutoff_time(self) -> Optional[datetime]:
