@@ -13,7 +13,7 @@ from strategies.execution.patterns.atomic_multi_order.utils import coerce_decima
 
 from .limit_order_executor import LimitOrderExecutor
 from .order_confirmation import OrderConfirmationWaiter
-from ..order_executor import ExecutionResult
+from ..execution_types import ExecutionResult
 from ..price_provider import PriceProvider
 from helpers.unified_logger import get_core_logger
 

@@ -16,60 +16,21 @@ Key features:
 
 from typing import Dict, Optional
 from decimal import Decimal
-from enum import Enum
-from dataclasses import dataclass
 import time
+import asyncio
 from helpers.unified_logger import get_core_logger
 from exchange_clients import BaseExchangeClient
 
+from .execution_types import ExecutionMode, ExecutionResult
 from .order_execution.limit_order_executor import LimitOrderExecutor
 from .order_execution.market_order_executor import MarketOrderExecutor
 from .order_execution.order_confirmation import OrderConfirmationWaiter
 from .price_provider import PriceProvider
 
+# Re-export for backward compatibility
+__all__ = ["OrderExecutor", "ExecutionMode", "ExecutionResult"]
+
 logger = get_core_logger("order_executor")
-
-
-class ExecutionMode(Enum):
-    """
-    Execution modes for order placement.
-    
-    """
-    LIMIT_ONLY = "limit_only"
-    LIMIT_WITH_FALLBACK = "limit_with_fallback"
-    MARKET_ONLY = "market_only"
-    ADAPTIVE = "adaptive"
-
-
-@dataclass
-class ExecutionResult:
-    """
-    Result of order execution.
-    
-    Contains all metrics needed for quality analysis.
-    """
-    success: bool
-    filled: bool
-    
-    # Price & quantity
-    fill_price: Optional[Decimal] = None
-    filled_quantity: Optional[Decimal] = None
-    
-    # Quality metrics
-    expected_price: Optional[Decimal] = None
-    slippage_usd: Decimal = Decimal('0')
-    slippage_pct: Decimal = Decimal('0')
-    
-    # Execution details
-    execution_mode_used: str = ""
-    execution_time_ms: int = 0
-    
-    # Error handling
-    error_message: Optional[str] = None
-    order_id: Optional[str] = None
-    
-    # Retry handling
-    retryable: bool = False  # True if order failure is retryable (e.g., post-only violation)
 
 
 class OrderExecutor:

@@ -13,7 +13,7 @@ from typing import Optional
 from exchange_clients import BaseExchangeClient
 from exchange_clients.base_models import CancelReason, is_retryable_cancellation, OrderInfo
 
-from ..order_executor import ExecutionResult
+from ..execution_types import ExecutionResult
 from ..price_provider import PriceProvider
 from helpers.unified_logger import get_core_logger
 
