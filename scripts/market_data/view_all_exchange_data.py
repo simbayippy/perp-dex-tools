@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Optional, Dict, List
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Script is at scripts/market_data/, so go up 3 levels to project root
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dotenv import load_dotenv
 load_dotenv()

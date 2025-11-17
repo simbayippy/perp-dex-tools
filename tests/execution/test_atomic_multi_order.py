@@ -23,7 +23,7 @@ from strategies.execution.patterns.atomic_multi_order import (
     AtomicExecutionResult,
     _OrderContext,
 )
-from strategies.execution.patterns.atomic_multi_order.hedge_manager import HedgeManager
+from strategies.execution.patterns.atomic_multi_order.components.hedge_manager import HedgeManager
 from exchange_clients.base_models import OrderResult, OrderInfo
 
 
@@ -252,7 +252,7 @@ async def test_market_hedge_failure_triggers_rollback(executor):
             error_message='hedge failed'
         )
 
-        executor._rollback_filled_orders = AsyncMock(return_value=Decimal('3.0'))
+        executor._rollback_manager.rollback = AsyncMock(return_value=Decimal('3.0'))
 
         result = await executor.execute_atomically(
             orders=orders,
@@ -261,7 +261,7 @@ async def test_market_hedge_failure_triggers_rollback(executor):
         )
 
     hedge_executor.execute_order.assert_awaited()
-    executor._rollback_filled_orders.assert_awaited_once()
+    executor._rollback_manager.rollback.assert_awaited_once()
     assert result.success is False
     assert result.all_filled is False
     assert result.rollback_performed is True
@@ -413,7 +413,7 @@ async def test_rollback_race_condition_protection():
     }]
     
     # Execute rollback
-    rollback_cost = await executor._rollback_filled_orders(filled_orders)
+    rollback_cost = await executor._rollback_manager.rollback(filled_orders)
     
     # Assertions
     # 1. Order should be canceled
@@ -470,7 +470,11 @@ async def test_preflight_balance_validation_success():
         ]
         
         # Run pre-flight checks
-        passed, error = await executor._run_preflight_checks(orders)
+        passed, error = await executor._preflight_checker.check(
+            orders, skip_leverage_check=False, stage_prefix=None,
+            normalized_leverage=executor._normalized_leverage,
+            margin_error_notified=executor._margin_error_notified
+        )
         
         # Should pass
         assert passed is True
@@ -510,7 +514,11 @@ async def test_preflight_balance_validation_failure():
         ]
         
         # Run pre-flight checks
-        passed, error = await executor._run_preflight_checks(orders)
+        passed, error = await executor._preflight_checker.check(
+            orders, skip_leverage_check=False, stage_prefix=None,
+            normalized_leverage=executor._normalized_leverage,
+            margin_error_notified=executor._margin_error_notified
+        )
         
         # Should FAIL
         assert passed is False
@@ -620,7 +628,7 @@ async def test_rollback_cost_calculation():
         'order_id': 'entry_order'
     }]
     
-    rollback_cost = await executor._rollback_filled_orders(filled_orders)
+    rollback_cost = await executor._rollback_manager.rollback(filled_orders)
     
     # Expected: |50100 - 50000| * 1.0 = $100
     assert rollback_cost == Decimal('100')
@@ -719,7 +727,7 @@ async def test_rollback_handles_missing_order_id():
     }]
     
     # Should not crash
-    rollback_cost = await executor._rollback_filled_orders(filled_orders)
+    rollback_cost = await executor._rollback_manager.rollback(filled_orders)
     
     # Should still attempt to close position
     assert len(mock_client.placed_orders) == 1  # Market close order

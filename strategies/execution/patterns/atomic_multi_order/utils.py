@@ -6,19 +6,9 @@ import inspect
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
+from strategies.execution.core.utils import coerce_decimal
+
 from .contexts import OrderContext
-
-
-def coerce_decimal(value: Any) -> Optional[Decimal]:
-    """Best-effort conversion to Decimal."""
-    if isinstance(value, Decimal):
-        return value
-    if value is None:
-        return None
-    try:
-        return Decimal(str(value))
-    except Exception:  # pragma: no cover - defensive
-        return None
 
 
 def execution_result_to_dict(spec, execution_result, hedge: bool = False) -> Dict[str, Any]:
