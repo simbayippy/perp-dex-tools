@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from exchange_clients import BaseExchangeClient
 from strategies.execution.patterns.atomic_multi_order import AtomicExecutionResult, OrderSpec
+from strategies.execution.core.price_alignment import BreakEvenPriceAligner
 from helpers.unified_logger import log_stage
 
 from ..core.websocket_manager import WebSocketManager
@@ -234,12 +235,46 @@ class ExecutionEngine:
             )
             return None
 
-        long_price = Decimal(str(long_ask))
-        short_price = Decimal(str(short_bid))
+        if long_bid <= 0 or long_ask <= 0 or short_bid <= 0 or short_ask <= 0:
+            strategy.logger.error(
+                f"❌ Invalid BBO for {symbol}: long_bid={long_bid}, long_ask={long_ask}, "
+                f"short_bid={short_bid}, short_ask={short_ask}"
+            )
+            return None
+
+        # Use break-even price alignment if enabled
+        enable_alignment = getattr(strategy.config, "enable_break_even_alignment", True)
+        max_spread_threshold = getattr(strategy.config, "max_spread_threshold_pct", None)
+        
+        if enable_alignment:
+            aligned_prices = BreakEvenPriceAligner.calculate_aligned_prices(
+                long_bid=Decimal(str(long_bid)),
+                long_ask=Decimal(str(long_ask)),
+                short_bid=Decimal(str(short_bid)),
+                short_ask=Decimal(str(short_ask)),
+                limit_offset_pct=limit_offset_pct,
+                max_spread_threshold_pct=max_spread_threshold,
+            )
+            long_price = aligned_prices.long_price
+            short_price = aligned_prices.short_price
+            
+            strategy.logger.info(
+                f"📊 [{symbol}] Price alignment: {aligned_prices.strategy_used} "
+                f"(spread: {aligned_prices.spread_pct*100:.2f}%) - "
+                f"long={long_price:.6f} < short={short_price:.6f}"
+            )
+        else:
+            # Fallback to BBO-based pricing
+            long_price = Decimal(str(long_ask))
+            short_price = Decimal(str(short_bid))
+            strategy.logger.debug(
+                f"📊 [{symbol}] Using BBO-based pricing (alignment disabled): "
+                f"long={long_price:.6f}, short={short_price:.6f}"
+            )
 
         if long_price <= 0 or short_price <= 0:
             strategy.logger.error(
-                f"❌ Invalid BBO for {symbol}: long_price={long_price}, short_price={short_price}"
+                f"❌ Invalid prices after alignment for {symbol}: long_price={long_price}, short_price={short_price}"
             )
             return None
 

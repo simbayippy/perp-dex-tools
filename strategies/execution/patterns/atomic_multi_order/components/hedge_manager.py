@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import List, Optional, Tuple
 
 from strategies.execution.core.execution_types import ExecutionMode
+from strategies.execution.core.price_alignment import BreakEvenPriceAligner
 
 from ..contexts import OrderContext
 from ..utils import apply_result_to_context, execution_result_to_dict
@@ -147,6 +148,7 @@ class HedgeManager:
         retry_backoff_ms: Optional[int] = None,
         total_timeout_seconds: Optional[float] = None,
         inside_tick_retries: Optional[int] = None,
+        max_deviation_pct: Optional[Decimal] = None,
     ) -> Tuple[bool, Optional[str]]:
         """
         Attempt to hedge using aggressive limit orders with adaptive pricing.
@@ -171,6 +173,7 @@ class HedgeManager:
             retry_backoff_ms: Delay between retries in milliseconds (None = auto: 50ms for closing, 75ms for opening)
             total_timeout_seconds: Total timeout before market fallback (None = auto: 2.0s for closing, 4.0s for opening)
             inside_tick_retries: Number of retries using "inside spread" pricing (None = auto: 2 for closing, 3 for opening)
+            max_deviation_pct: Max market movement % to attempt break-even hedge (None = default: 0.5%)
             
         Returns:
             Tuple of (success, error message)
@@ -273,21 +276,72 @@ class HedgeManager:
                     else:
                         tick_size = Decimal(str(tick_size))
                     
-                    # Adaptive pricing strategy
-                    if retry_count < inside_tick_retries:
-                        # Start inside spread (1 tick away from touch)
-                        pricing_strategy = "inside_spread"
-                        if spec.side == "buy":
-                            limit_price = best_ask - tick_size
+                    # Attempt break-even pricing relative to trigger fill price
+                    limit_price = None
+                    pricing_strategy = None
+                    break_even_strategy = None
+                    
+                    # Get trigger fill price if available
+                    trigger_fill_price = None
+                    trigger_side = None
+                    if trigger_ctx and trigger_ctx.result:
+                        trigger_fill_price_raw = trigger_ctx.result.get("fill_price")
+                        if trigger_fill_price_raw:
+                            try:
+                                trigger_fill_price = Decimal(str(trigger_fill_price_raw))
+                                trigger_side = trigger_ctx.spec.side
+                            except (ValueError, TypeError):
+                                pass
+                    
+                    # Try break-even pricing if trigger fill price available
+                    if trigger_fill_price and trigger_side:
+                        # Use provided max_deviation_pct or default (0.5%)
+                        if max_deviation_pct is None:
+                            max_deviation_pct = BreakEvenPriceAligner.DEFAULT_MAX_DEVIATION_PCT
+                        
+                        break_even_price, break_even_strategy = BreakEvenPriceAligner.calculate_break_even_hedge_price(
+                            trigger_fill_price=trigger_fill_price,
+                            trigger_side=trigger_side,
+                            hedge_bid=best_bid,
+                            hedge_ask=best_ask,
+                            hedge_side=spec.side,
+                            tick_size=tick_size,
+                            max_deviation_pct=max_deviation_pct,
+                        )
+                        
+                        if break_even_strategy == "break_even":
+                            # Use break-even price, but still apply adaptive pricing strategy
+                            limit_price = break_even_price
+                            pricing_strategy = "break_even"
+                            logger.info(
+                                f"✅ [{exchange_name}] Using break-even hedge price: {limit_price:.6f} "
+                                f"< trigger {trigger_fill_price:.6f} for {symbol} "
+                                f"(strategy: {break_even_strategy})"
+                            )
                         else:
-                            limit_price = best_bid + tick_size
-                    else:
-                        # Move to touch (at best bid/ask)
-                        pricing_strategy = "touch"
-                        if spec.side == "buy":
-                            limit_price = best_ask
+                            # Break-even not feasible, use BBO-based adaptive pricing
+                            logger.info(
+                                f"ℹ️ [{exchange_name}] Break-even not feasible for {symbol} "
+                                f"(reason: {break_even_strategy}). Using BBO-based adaptive pricing "
+                                f"to prioritize fill probability."
+                            )
+                    
+                    # If break-even not attempted or not feasible, use adaptive pricing strategy
+                    if limit_price is None:
+                        if retry_count < inside_tick_retries:
+                            # Start inside spread (1 tick away from touch)
+                            pricing_strategy = "inside_spread"
+                            if spec.side == "buy":
+                                limit_price = best_ask - tick_size
+                            else:
+                                limit_price = best_bid + tick_size
                         else:
-                            limit_price = best_bid
+                            # Move to touch (at best bid/ask)
+                            pricing_strategy = "touch"
+                            if spec.side == "buy":
+                                limit_price = best_ask
+                            else:
+                                limit_price = best_bid
                     
                     # Round price to tick size
                     limit_price = spec.exchange_client.round_to_tick(limit_price)
@@ -306,9 +360,13 @@ class HedgeManager:
                         )
                         break
                     
+                    strategy_info = f"{pricing_strategy}"
+                    if break_even_strategy and break_even_strategy != pricing_strategy:
+                        strategy_info += f" (break_even: {break_even_strategy})"
+                    
                     logger.debug(
                         f"🔄 [{exchange_name}] Aggressive limit hedge attempt {retry_count + 1}/{max_retries} "
-                        f"for {symbol}: {pricing_strategy} @ ${limit_price} qty={order_quantity} "
+                        f"for {symbol}: {strategy_info} @ ${limit_price} qty={order_quantity} "
                         f"(best_bid=${best_bid}, best_ask=${best_ask}, tick_size={tick_size})"
                     )
                     

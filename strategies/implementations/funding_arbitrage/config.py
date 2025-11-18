@@ -145,6 +145,22 @@ class FundingArbConfig(BaseModel):
         description="Limit order price improvement (decimal pct, negative values cross the spread)"
     )
     
+    # Break-even price alignment
+    enable_break_even_alignment: bool = Field(
+        default=True,
+        description="Enable break-even price alignment for initial entry (ensures long_entry < short_entry)"
+    )
+    
+    max_spread_threshold_pct: Decimal = Field(
+        default=Decimal("0.005"),
+        description="Max spread % between exchanges to use aligned pricing (0.005 = 0.5%)"
+    )
+    
+    hedge_break_even_max_deviation_pct: Decimal = Field(
+        default=Decimal("0.005"),
+        description="Max market movement % to attempt break-even hedge (0.005 = 0.5%)"
+    )
+    
     profitability_horizon_hours: int = Field(
         default=24,
         description="Calculate profitability over N hours"
