@@ -263,7 +263,8 @@ class HedgeManager:
             initial_filled_qty = ctx.filled_quantity  # Store initial state
             accumulated_filled_qty = Decimal("0")  # Track NEW partial fills across retries (sum of all orders)
             accumulated_fill_price: Optional[Decimal] = None
-            current_order_filled_qty = Decimal("0")  # Track fills for current order only
+            last_order_filled_qty = Decimal("0")  # Track fills for last order (for final reconciliation)
+            last_order_id: Optional[str] = None  # Track last order_id for final reconciliation
             
             for retry_count in range(max_retries):
                 # Check total timeout
@@ -277,7 +278,7 @@ class HedgeManager:
 
                 # Reset partial fill detection flag for this retry iteration
                 partial_fill_detected_this_iteration = False
-                # Reset current order fill tracking for new order
+                # Reset current order fill tracking for new order (local to this iteration)
                 current_order_filled_qty = Decimal("0")
 
                 try:
@@ -372,6 +373,9 @@ class HedgeManager:
                         await asyncio.sleep(retry_backoff_ms / 1000.0)
                         continue
                     
+                    # Track last order_id for final reconciliation
+                    last_order_id = order_id
+                    
                     # Wait for fill with timeout per attempt
                     # Give each attempt reasonable fixed time, but respect total timeout
                     remaining_timeout = total_timeout_seconds - elapsed_time
@@ -405,6 +409,9 @@ class HedgeManager:
                         exchange_name=exchange_name,
                         symbol=symbol,
                     )
+                    
+                    # Track last order's filled quantity for final reconciliation
+                    last_order_filled_qty = current_order_filled_qty
                     
                     # Update hedge_error if poll returned an error
                     if poll_hedge_error:
@@ -493,6 +500,31 @@ class HedgeManager:
                     hedge_error = str(exc)
                     # Continue to next retry or fallback
                     await asyncio.sleep(retry_backoff_ms / 1000.0)
+            
+            # Before falling back to market, do final reconciliation check for any orders
+            # that might have partially filled after polling loop exited
+            # This handles cases where order was cancelled with fills after polling timeout
+            if not hedge_success and last_order_id:
+                try:
+                    final_order_info = await spec.exchange_client.get_order_info(last_order_id)
+                    if final_order_info:
+                        final_filled_size = Decimal(str(final_order_info.filled_size)) if hasattr(final_order_info, 'filled_size') and final_order_info.filled_size else Decimal("0")
+                        # final_filled_size is the fills for the LAST order only
+                        # accumulated_filled_qty is the sum of fills from ALL orders
+                        # If final_filled_size > last_order_filled_qty, we missed some fills from the last order
+                        # Add the difference to accumulated_filled_qty
+                        if final_filled_size > last_order_filled_qty:
+                            additional_fills = final_filled_size - last_order_filled_qty
+                            accumulated_filled_qty += additional_fills
+                            if not accumulated_fill_price:
+                                accumulated_fill_price = Decimal(str(final_order_info.price)) if hasattr(final_order_info, 'price') else None
+                            logger.info(
+                                f"📊 [{exchange_name}] Final reconciliation: Found {additional_fills} additional fills "
+                                f"from last order (total accumulated: {accumulated_filled_qty}) for {symbol} "
+                                f"that were missed during polling."
+                            )
+                except Exception as recon_exc:
+                    logger.debug(f"Final reconciliation check failed for order {last_order_id}: {recon_exc}")
             
             # If aggressive limit hedge failed, fallback to market
             if not hedge_success:
