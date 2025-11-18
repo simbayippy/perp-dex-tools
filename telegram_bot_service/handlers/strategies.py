@@ -8,6 +8,7 @@ import xmlrpc.client
 import json
 import yaml
 import re
+import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
@@ -868,7 +869,7 @@ class StrategyHandler(BaseHandler):
             )
     
     async def stop_strategy_close_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle pause with close option - close positions first, then stop strategy."""
+        """Handle pause with close option - show order type selection first."""
         query = update.callback_query
         await query.answer()
         
@@ -878,6 +879,13 @@ class StrategyHandler(BaseHandler):
         
         # Parse callback data: "stop_strategy_close:{run_id}"
         callback_data = query.data
+        if callback_data == "stop_strategy_cancel":
+            await query.edit_message_text(
+                "❌ Stop cancelled.",
+                parse_mode='HTML'
+            )
+            return
+        
         if not callback_data.startswith("stop_strategy_close:"):
             await query.edit_message_text(
                 "❌ Invalid selection. Please use /stop_strategy again.",
@@ -921,7 +929,10 @@ class StrategyHandler(BaseHandler):
                 )
                 return
             
-            current_status = row['status']
+            # Convert Row to dict for safe access
+            row_dict = dict(row)
+            
+            current_status = row_dict.get('status')
             if current_status in ('stopped', 'error'):
                 await query.edit_message_text(
                     f"ℹ️ Strategy is already stopped (status: {current_status})",
@@ -930,125 +941,245 @@ class StrategyHandler(BaseHandler):
                 return
             
             # Get account_name safely
-            try:
-                account_name = row['account_name']
-            except (KeyError, TypeError):
-                account_name = None
+            account_name = row_dict.get('account_name')
             
-            # Initialize counters
-            closed_count = 0
-            failed_count = 0
-            position_ids = []
+            # Store run_id and api_key in context for the next step
+            context.user_data['stop_strategy_run_id'] = run_id
+            context.user_data['stop_strategy_api_key'] = api_key
+            context.user_data['stop_strategy_account_name'] = account_name
+            context.user_data['stop_strategy_control_api_port'] = row_dict.get('control_api_port')
             
-            # Show loading message
+            # Show order type selection
+            keyboard = [
+                [
+                    InlineKeyboardButton("🟢 Market", callback_data=f"stop_close_type:{run_id}:market"),
+                    InlineKeyboardButton("🟡 Limit", callback_data=f"stop_close_type:{run_id}:limit")
+                ],
+                [InlineKeyboardButton("❌ Cancel", callback_data="stop_strategy_cancel")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
             await query.edit_message_text(
-                f"⏳ <b>Closing positions...</b>\n\n"
+                f"📊 <b>Select Order Type for Closing Positions</b>\n\n"
                 f"Run ID: <code>{run_id_short}</code>\n"
                 f"Account: {account_name or 'N/A'}\n\n"
-                f"Please wait...",
-                parse_mode='HTML'
+                f"Choose how to close positions before pausing the strategy:\n\n"
+                f"🟢 <b>Market:</b> Fast execution, may have slippage\n"
+                f"🟡 <b>Limit:</b> Better price, may not fill immediately",
+                parse_mode='HTML',
+                reply_markup=reply_markup
             )
-            
-            # Get control API port for this strategy
-            control_api_port = row.get('control_api_port')
-            
-            # Construct API URL with correct port
-            if control_api_port:
-                api_url = f"http://{self.config.control_api_host}:{control_api_port}"
-                self.logger.info(f"Using strategy-specific control API: {api_url} for run {run_id_short}")
-            else:
-                # Fall back to default port (standalone control API)
-                api_url = self.config.control_api_base_url
-                self.logger.warning(f"No control_api_port found for run {run_id_short}, using default: {api_url}")
-            
-            # Get positions for this account
-            from telegram_bot_service.utils.api_client import ControlAPIClient
-            client = ControlAPIClient(api_url, api_key)
-            
-            try:
-                positions_data = await client.get_positions(account_name=account_name)
-                accounts = positions_data.get('accounts', [])
-                
-                # Collect all position IDs
-                for account in accounts:
-                    positions = account.get('positions', [])
-                    for pos in positions:
-                        pos_id = pos.get('id')
-                        if pos_id:
-                            position_ids.append(pos_id)
-                
-                # Close each position (using the same client with correct port)
-                for pos_id in position_ids:
-                    try:
-                        await client.close_position(
-                            position_id=pos_id,
-                            order_type="market",
-                            reason="telegram_stop_with_close"
-                        )
-                        closed_count += 1
-                    except Exception as e:
-                        failed_count += 1
-                        self.logger.error(f"Failed to close position {pos_id}: {e}")
-                
-                # Update message with close results
-                if closed_count > 0:
-                    close_message = f"✅ Closed {closed_count} position(s)"
-                    if failed_count > 0:
-                        close_message += f"\n⚠️ Failed to close {failed_count} position(s)"
-                else:
-                    close_message = "ℹ️ No positions to close"
-                
-                await query.edit_message_text(
-                    f"{close_message}\n\n"
-                    f"⏳ <b>Pausing strategy...</b>\n\n"
-                    f"Run ID: <code>{run_id_short}</code>",
-                    parse_mode='HTML'
-                )
-                
-            except Exception as e:
-                self.logger.error(f"Error getting/closing positions: {e}")
-                # Continue to stop strategy even if position closing failed
-                await query.edit_message_text(
-                    f"⚠️ <b>Warning:</b> Could not close positions: {str(e)}\n\n"
-                    f"⏳ <b>Pausing strategy anyway...</b>\n\n"
-                    f"Run ID: <code>{run_id_short}</code>",
-                    parse_mode='HTML'
-                )
-            
-            # Stop strategy
-            success = await self.process_manager.stop_strategy(run_id)
-            
-            # Immediately sync status to ensure DB is accurate
-            if success:
-                await self.process_manager.sync_status_with_supervisor()
-            
-            if success:
-                await self.audit_logger.log_strategy_stop(str(user["id"]), run_id)
-                final_message = (
-                    f"✅ <b>Strategy Paused</b>\n\n"
-                    f"Run ID: <code>{run_id_short}</code>\n"
-                    f"Status: stopped\n\n"
-                )
-                if closed_count > 0:
-                    final_message += f"✅ Closed {closed_count} position(s)\n"
-                if failed_count > 0:
-                    final_message += f"⚠️ Failed to close {failed_count} position(s)\n"
-                if not position_ids:
-                    final_message += "ℹ️ No positions were open\n"
-                
-                await query.edit_message_text(final_message, parse_mode='HTML')
-            else:
-                await query.edit_message_text(
-                    f"❌ <b>Failed to Pause Strategy</b>\n\n"
-                    f"Run ID: <code>{run_id_short}</code>\n"
-                    f"Please try again or check logs.",
-                    parse_mode='HTML'
-                )
                 
         except Exception as e:
             self.logger.error(f"Stop strategy close callback error: {e}", exc_info=True)
             await query.edit_message_text(
-                f"❌ Error pausing strategy: {str(e)}",
+                f"❌ Error: {str(e)}",
+                parse_mode='HTML'
+            )
+    
+    async def stop_strategy_close_execute_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle order type selection and execute position closing with chosen order type."""
+        query = update.callback_query
+        await query.answer()
+        
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        
+        # Parse callback data: "stop_close_type:{run_id}:{order_type}"
+        callback_data = query.data
+        if callback_data == "stop_strategy_cancel":
+            await query.edit_message_text(
+                "❌ Stop cancelled.",
+                parse_mode='HTML'
+            )
+            # Clear user_data
+            context.user_data.pop('stop_strategy_run_id', None)
+            context.user_data.pop('stop_strategy_api_key', None)
+            context.user_data.pop('stop_strategy_account_name', None)
+            context.user_data.pop('stop_strategy_control_api_port', None)
+            return
+        
+        if not callback_data.startswith("stop_close_type:"):
+            await query.edit_message_text(
+                "❌ Invalid selection. Please use /stop_strategy again.",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Parse: "stop_close_type:{run_id}:{order_type}"
+        parts = callback_data.split(":", 2)
+        if len(parts) != 3:
+            await query.edit_message_text(
+                "❌ Invalid selection. Please use /stop_strategy again.",
+                parse_mode='HTML'
+            )
+            return
+        
+        run_id = parts[1]
+        order_type = parts[2]
+        run_id_short = run_id[:8]
+        
+        if order_type not in ("market", "limit"):
+            await query.edit_message_text(
+                "❌ Invalid order type. Please use /stop_strategy again.",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Get stored values from context
+        api_key = context.user_data.get('stop_strategy_api_key')
+        account_name = context.user_data.get('stop_strategy_account_name')
+        control_api_port = context.user_data.get('stop_strategy_control_api_port')
+        
+        if not api_key:
+            await query.edit_message_text(
+                "❌ Session expired. Please use /stop_strategy again.",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Initialize counters
+        closed_count = 0
+        failed_count = 0
+        failed_positions = []
+        position_ids = []
+        
+        # Show loading message
+        await query.edit_message_text(
+            f"⏳ <b>Closing positions...</b>\n\n"
+            f"Run ID: <code>{run_id_short}</code>\n"
+            f"Account: {account_name or 'N/A'}\n"
+            f"Order Type: {order_type.upper()}\n\n"
+            f"Please wait...",
+            parse_mode='HTML'
+        )
+        
+        # Construct API URL with correct port
+        if control_api_port:
+            api_url = f"http://{self.config.control_api_host}:{control_api_port}"
+            self.logger.info(f"Using strategy-specific control API: {api_url} for run {run_id_short}")
+        else:
+            # Fall back to default port (standalone control API)
+            api_url = self.config.control_api_base_url
+            self.logger.warning(f"No control_api_port found for run {run_id_short}, using default: {api_url}")
+        
+        # Get positions for this account
+        from telegram_bot_service.utils.api_client import ControlAPIClient
+        
+        client = ControlAPIClient(api_url, api_key)
+        
+        try:
+            positions_data = await client.get_positions(account_name=account_name)
+            accounts = positions_data.get('accounts', [])
+            
+            # Collect all position IDs
+            for account in accounts:
+                positions = account.get('positions', [])
+                for pos in positions:
+                    pos_id = pos.get('id')
+                    symbol = pos.get('symbol', 'N/A')
+                    if pos_id:
+                        position_ids.append((pos_id, symbol))
+            
+            # Close each position (using the same client with correct port)
+            for pos_id, symbol in position_ids:
+                try:
+                    await client.close_position(
+                        position_id=pos_id,
+                        order_type=order_type,
+                        reason="telegram_stop_with_close"
+                    )
+                    closed_count += 1
+                except httpx.HTTPStatusError as e:
+                    failed_count += 1
+                    error_msg = str(e)
+                    # Check if it's a retryable error
+                    if e.response.status_code == 500:
+                        try:
+                            error_detail = e.response.json().get('detail', '')
+                            if 'exceeds_max_slippage' in error_detail or 'post_only_violation' in error_detail:
+                                error_msg = f"{symbol}: {error_detail} (Retryable - try different order type)"
+                        except:
+                            pass
+                    failed_positions.append((symbol, error_msg))
+                    self.logger.error(f"Failed to close position {pos_id} ({symbol}): {e}")
+                except Exception as e:
+                    failed_count += 1
+                    failed_positions.append((symbol, str(e)))
+                    self.logger.error(f"Failed to close position {pos_id} ({symbol}): {e}")
+            
+            # Update message with close results
+            close_message = ""
+            if closed_count > 0:
+                close_message = f"✅ Closed {closed_count} position(s)"
+            if failed_count > 0:
+                close_message += f"\n⚠️ Failed to close {failed_count} position(s)"
+                if failed_positions:
+                    # Show first few failures
+                    for symbol, error in failed_positions[:3]:
+                        close_message += f"\n  • {symbol}: {error[:100]}"
+                    if len(failed_positions) > 3:
+                        close_message += f"\n  ... and {len(failed_positions) - 3} more"
+            if not position_ids:
+                close_message = "ℹ️ No positions to close"
+            
+            await query.edit_message_text(
+                f"{close_message}\n\n"
+                f"⏳ <b>Pausing strategy...</b>\n\n"
+                f"Run ID: <code>{run_id_short}</code>",
+                parse_mode='HTML'
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error getting/closing positions: {e}", exc_info=True)
+            # Continue to stop strategy even if position closing failed
+            await query.edit_message_text(
+                f"⚠️ <b>Warning:</b> Could not close positions: {str(e)}\n\n"
+                f"⏳ <b>Pausing strategy anyway...</b>\n\n"
+                f"Run ID: <code>{run_id_short}</code>",
+                parse_mode='HTML'
+            )
+        
+        # Clear user_data
+        context.user_data.pop('stop_strategy_run_id', None)
+        context.user_data.pop('stop_strategy_api_key', None)
+        context.user_data.pop('stop_strategy_account_name', None)
+        context.user_data.pop('stop_strategy_control_api_port', None)
+        
+        # Stop strategy
+        success = await self.process_manager.stop_strategy(run_id)
+        
+        # Immediately sync status to ensure DB is accurate
+        if success:
+            await self.process_manager.sync_status_with_supervisor()
+        
+        if success:
+            await self.audit_logger.log_strategy_stop(str(user["id"]), run_id)
+            final_message = (
+                f"✅ <b>Strategy Paused</b>\n\n"
+                f"Run ID: <code>{run_id_short}</code>\n"
+                f"Status: stopped\n\n"
+            )
+            if closed_count > 0:
+                final_message += f"✅ Closed {closed_count} position(s)\n"
+            if failed_count > 0:
+                final_message += f"⚠️ Failed to close {failed_count} position(s)\n"
+                if failed_positions:
+                    final_message += "\n<b>Failed positions:</b>\n"
+                    for symbol, error in failed_positions[:5]:
+                        final_message += f"  • {symbol}: {error[:80]}\n"
+                    if len(failed_positions) > 5:
+                        final_message += f"  ... and {len(failed_positions) - 5} more\n"
+            if not position_ids:
+                final_message += "ℹ️ No positions were open\n"
+            
+            await query.edit_message_text(final_message, parse_mode='HTML')
+        else:
+            await query.edit_message_text(
+                f"❌ <b>Failed to Pause Strategy</b>\n\n"
+                f"Run ID: <code>{run_id_short}</code>\n"
+                f"Please try again or check logs.",
                 parse_mode='HTML'
             )
     
@@ -3201,7 +3332,12 @@ class StrategyHandler(BaseHandler):
         # Stop strategy close callback
         application.add_handler(CallbackQueryHandler(
             self.stop_strategy_close_callback,
-            pattern="^stop_strategy_close:"
+            pattern="^stop_strategy_close:|^stop_strategy_cancel$"
+        ))
+        # Stop strategy close execute callback (order type selection)
+        application.add_handler(CallbackQueryHandler(
+            self.stop_strategy_close_execute_callback,
+            pattern="^stop_close_type:|^stop_strategy_cancel$"
         ))
         application.add_handler(CallbackQueryHandler(
             self.resume_strategy_callback,

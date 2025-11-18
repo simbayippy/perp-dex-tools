@@ -9,6 +9,7 @@ from database.repositories.opportunity_repository import OpportunityRepository
 from database.repositories.symbol_repository import SymbolRepository
 from database.repositories.user_repository import UserRepository
 from database.repositories.api_key_repository import APIKeyRepository
+from database.repositories.trade_fill_repository import TradeFillRepository
 
 __all__ = [
     "DashboardRepository",
@@ -18,4 +19,5 @@ __all__ = [
     "OpportunityRepository",
     "UserRepository",
     "APIKeyRepository",
+    "TradeFillRepository",
 ]

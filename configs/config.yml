@@ -9,8 +9,8 @@ config:
   mandatory_exchange: lighter
   target_margin: !!float '40'
   max_positions: 1
-  max_total_exposure_usd: !!float '200'
-  min_profit_rate: 0.0002283105022831050228310502283
+  max_total_exposure_usd: !!float '2000'
+  min_profit_rate: 0.0001283105022831050228310502283
   risk_strategy: combined
   profit_erosion_threshold: 0.4
   min_hold_hours: 1
@@ -19,6 +19,6 @@ config:
   limit_order_offset_pct: 0.0002
   check_interval_seconds: 60
   dry_run: false
-  max_oi_usd: !!float '1500000'
+  max_oi_usd: !!float '5500000'
   min_volume_24h: !!float '350000'
   min_oi_usd: !!float '100000'

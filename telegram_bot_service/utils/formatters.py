@@ -4,7 +4,17 @@ Message formatters for Telegram bot responses
 
 from typing import Dict, Any, List, Optional
 from decimal import Decimal
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+# Exchange emoji mapping
+EXCHANGE_EMOJIS = {
+    "lighter": "⚡",
+    "aster": "✨",
+    "backpack": "🎒",
+    "paradex": "🎪",
+    "grvt": "🔷",
+    "edgex": "🔹",
+}
 
 
 class TelegramFormatter:
@@ -435,6 +445,169 @@ class TelegramFormatter:
         return "\n\n".join(messages)
     
     @staticmethod
+    def format_trades_summary(account_name: str, summary: Dict[str, Any]) -> str:
+        """Format trades summary statistics."""
+        total_trades = summary.get("total_trades", 0)
+        entry_trades = summary.get("entry_trades", 0)
+        exit_trades = summary.get("exit_trades", 0)
+        open_positions = summary.get("open_positions", 0)
+        closed_positions = summary.get("closed_positions", 0)
+        total_fees = summary.get("total_fees", Decimal("0"))
+        total_pnl = summary.get("total_pnl", Decimal("0"))
+        total_funding = summary.get("total_funding", Decimal("0"))
+        net_pnl = summary.get("net_pnl", Decimal("0"))
+        
+        lines = [
+            f"📊 <b>{account_name} - Trading Summary</b>",
+            "",
+            "<b>💼 Positions:</b>",
+            f"  Open: <code>{open_positions}</code>",
+            f"  Closed: <code>{closed_positions}</code>",
+            "",
+            "<b>💰 Financials:</b>",
+            f"  Total Fees: <code>${total_fees:.4f}</code>",
+            f"  Price PnL: <code>${total_pnl:.2f}</code>",
+            f"  Funding: <code>${total_funding:.2f}</code>",
+        ]
+        
+        # Net PnL with color indicator
+        net_pnl_emoji = "🟢" if net_pnl >= 0 else "🔴"
+        lines.append(f"  Net PnL: {net_pnl_emoji} <code>${net_pnl:.2f}</code>")
+        
+        return "\n".join(lines)
+    
+    @staticmethod
+    def _get_exchange_emoji(dex_name: str) -> str:
+        """Get emoji for exchange name."""
+        return EXCHANGE_EMOJIS.get(dex_name.lower(), "")
+    
+    @staticmethod
+    def format_position_pnl(account_name: str, positions: List[Dict[str, Any]]) -> str:
+        """Format position-level PnL with per-leg breakdown and trade details."""
+        lines = [
+            f"<b>{account_name} - Position PnL</b>",
+            "",
+        ]
+        
+        for idx, position in enumerate(positions[:3], 1):  # Limit to 3 most recent
+            symbol = position.get("symbol_name", "N/A")
+            long_dex = position.get("long_dex", "N/A").upper()
+            short_dex = position.get("short_dex", "N/A").upper()
+            size_usd = position.get("size_usd", Decimal("0"))
+            is_closed = position.get("closed_at") is not None
+            status_emoji = "🔒" if is_closed else "⏳"
+            status_text = f"{status_emoji} CLOSED" if is_closed else f"{status_emoji} OPEN"
+            
+            # Get exchange emojis for title
+            long_emoji = TelegramFormatter._get_exchange_emoji(long_dex)
+            short_emoji = TelegramFormatter._get_exchange_emoji(short_dex)
+            long_display = f"{long_emoji} {long_dex}" if long_emoji else long_dex
+            short_display = f"{short_emoji} {short_dex}" if short_emoji else short_dex
+            
+            # Entry/exit trade counts
+            entry_count = len(position.get("entry_trades", []))
+            exit_count = len(position.get("exit_trades", []))
+            
+            # Title: symbol on one line, exchanges on next line
+            lines.append(f"<u><b>{idx}. {symbol} {status_text}</b></u>")
+            lines.append(f"  {long_display}/{short_display}")
+            lines.append(f"  Size: <code>${size_usd:.2f}</code> • {entry_count} entry, {exit_count} exit")
+            
+            # Entry trades summary - long on one line, short on next indented
+            entry_trades = position.get("entry_trades", [])
+            if entry_trades:
+                long_entry_price = position.get("long_entry_price", Decimal("0"))
+                short_entry_price = position.get("short_entry_price", Decimal("0"))
+                long_entry_value = position.get("long_entry_value", Decimal("0"))
+                short_entry_value = position.get("short_entry_value", Decimal("0"))
+                
+                entry_label = "  Entry: "
+                entry_label_width = len(entry_label)
+                if long_entry_price > 0:
+                    lines.append(f"{entry_label}📈 <b>{long_dex}</b> <code>${long_entry_price:.4f}</code> <i>(${long_entry_value:.2f})</i>")
+                if short_entry_price > 0:
+                    # Pad with spaces to match label width - ensures emojis align at same column
+                    lines.append(f"{' ' * entry_label_width}📉 <b>{short_dex}</b> <code>${short_entry_price:.4f}</code> <i>(${short_entry_value:.2f})</i>")
+            # Exit trades summary - same format
+            exit_trades = position.get("exit_trades", [])
+            if exit_trades:
+                long_exit_price = position.get("long_exit_price", Decimal("0"))
+                short_exit_price = position.get("short_exit_price", Decimal("0"))
+                long_exit_value = position.get("long_exit_value", Decimal("0"))
+                short_exit_value = position.get("short_exit_value", Decimal("0"))
+                
+                exit_label = "  Exit: "
+                exit_label_width = len(exit_label)
+                if long_exit_price > 0:
+                    lines.append(f"{exit_label}📈 <b>{long_dex}</b> <code>${long_exit_price:.4f}</code> <i>(${long_exit_value:.2f})</i>")
+                if short_exit_price > 0:
+                    # Pad with spaces to match label width - ensures emojis align at same column
+                    lines.append(f"{' ' * exit_label_width}📉 <b>{short_dex}</b> <code>${short_exit_price:.4f}</code> <i>(${short_exit_value:.2f})</i>")
+            
+            # Per-leg PnL breakdown - simplified
+            long_leg_pnl = position.get("long_leg_pnl", Decimal("0"))
+            short_leg_pnl = position.get("short_leg_pnl", Decimal("0"))
+            
+            if long_leg_pnl != 0 or short_leg_pnl != 0:
+                long_sign = "+" if long_leg_pnl >= 0 else ""
+                short_sign = "+" if short_leg_pnl >= 0 else ""
+                lines.append(f"  Leg PnL: <b>{long_dex}</b> <code>{long_sign}${long_leg_pnl:.2f}</code> • <b>{short_dex}</b> <code>{short_sign}${short_leg_pnl:.2f}</code>")
+            
+            # Fees breakdown - simplified
+            entry_fees = position.get("entry_fees", Decimal("0"))
+            exit_fees = position.get("exit_fees", Decimal("0"))
+            total_fees = position.get("total_fees", Decimal("0"))
+            lines.append(f"  Fees: Entry <code>${entry_fees:.4f}</code> + Exit <code>${exit_fees:.4f}</code> = <code>${total_fees:.4f}</code>")
+            
+            # PnL breakdown - simplified
+            price_pnl = position.get("price_pnl", Decimal("0"))
+            total_funding = position.get("total_funding", Decimal("0"))
+            net_pnl = position.get("net_pnl", Decimal("0"))
+            
+            price_sign = "+" if price_pnl >= 0 else ""
+            funding_sign = "+" if total_funding >= 0 else ""
+            lines.append(f"  Price PnL: <code>{price_sign}${price_pnl:.2f}</code>")
+            lines.append(f"  Funding: <code>{funding_sign}${total_funding:.2f}</code>")
+            
+            # Net PnL - simplified
+            net_sign = "+" if net_pnl >= 0 else ""
+            pnl_pct = (net_pnl / size_usd * 100) if size_usd > 0 else Decimal("0")
+            pct_sign = "+" if pnl_pct >= 0 else ""
+            lines.append(f"  Net PnL: <code>{net_sign}${net_pnl:.2f}</code> <i>({pct_sign}{pnl_pct:.2f}%)</i>")
+            
+            # Position age - simplified
+            opened_at = position.get("opened_at")
+            if opened_at:
+                if isinstance(opened_at, str):
+                    opened_dt = datetime.fromisoformat(opened_at.replace("Z", "+00:00"))
+                else:
+                    opened_dt = opened_at
+                
+                if is_closed:
+                    closed_at = position.get("closed_at")
+                    if closed_at:
+                        if isinstance(closed_at, str):
+                            closed_dt = datetime.fromisoformat(closed_at.replace("Z", "+00:00"))
+                        else:
+                            closed_dt = closed_at
+                        age = closed_dt - opened_dt.replace(tzinfo=None) if opened_dt.tzinfo else closed_dt - opened_dt
+                        age_str = f"{age.total_seconds() / 3600:.1f}h"
+                    else:
+                        age_str = "N/A"
+                else:
+                    age = datetime.now(opened_dt.tzinfo) - opened_dt if opened_dt.tzinfo else datetime.now() - opened_dt
+                    age_str = f"{age.total_seconds() / 3600:.1f}h"
+                
+                lines.append(f"  Age: <code>{age_str}</code>")
+            
+            lines.append("")
+        
+        if len(positions) > 3:
+            lines.append(f"<i>Showing 3 of {len(positions)} positions</i>")
+        
+        return "\n".join(lines)
+    
+    @staticmethod
     def format_help() -> str:
         """Format help message."""
         return """🤖 <b>Strategy Control Bot</b>
@@ -448,6 +621,7 @@ class TelegramFormatter:
 <b>📊 Monitoring (Existing Strategies):</b>
 /positions [account] - List active positions (optional account filter)
 /balances [account] - List available margin balances across exchanges (optional account filter)
+/trades - View trading history and PnL
 /close - Close a position
 
 <b>💎 Opportunities:</b>
