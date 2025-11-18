@@ -135,6 +135,20 @@ class HedgeManager:
 
             hedge_dict = execution_result_to_dict(spec, execution, hedge=True)
             apply_result_to_context(ctx, hedge_dict)
+            
+            # Track taker quantity (market order fills) for mixed execution type display
+            # If we already have maker_qty from aggressive limit hedge, add taker_qty
+            if ctx.result and "maker_qty" in ctx.result:
+                # Market hedge filled the remaining quantity
+                market_filled_qty = execution.filled_quantity or Decimal("0")
+                ctx.result["taker_qty"] = market_filled_qty
+                # Update total filled_quantity to include both maker and taker
+                ctx.result["filled_quantity"] = ctx.filled_quantity
+            elif ctx.result:
+                # Pure market hedge (no aggressive limit hedge before)
+                # All fills are taker
+                ctx.result["maker_qty"] = Decimal("0")
+                ctx.result["taker_qty"] = execution.filled_quantity or Decimal("0")
 
         return True, None
 
@@ -462,6 +476,12 @@ class HedgeManager:
                             )
                             hedge_dict = execution_result_to_dict(spec, execution_result, hedge=True)
                             apply_result_to_context(ctx, hedge_dict)
+                            # Track maker quantity (all fills from aggressive limit hedge are maker)
+                            # Include initial_filled_qty (from initial limit orders) as maker too
+                            if not ctx.result:
+                                ctx.result = {}
+                            ctx.result["maker_qty"] = initial_filled_qty + accumulated_filled_qty
+                            ctx.result["taker_qty"] = Decimal("0")  # Pure limit order fills
                             hedge_success = True
                             break
                         else:
@@ -582,6 +602,10 @@ class HedgeManager:
                             ctx.result = {}
                         ctx.result["fill_price"] = accumulated_fill_price
                         ctx.result["filled_quantity"] = total_filled_qty  # Total fills
+                        # Track maker quantity (limit order fills)
+                        # Include initial_filled_qty (from initial limit orders) as maker too
+                        ctx.result["maker_qty"] = initial_filled_qty + accumulated_filled_qty
+                        ctx.result["taker_qty"] = Decimal("0")  # Will be updated after market fallback
                 else:
                     logger.warning(
                         f"⚠️ [{exchange_name}] Aggressive limit hedge exhausted for {symbol}. "
