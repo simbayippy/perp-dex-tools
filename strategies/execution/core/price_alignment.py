@@ -280,7 +280,7 @@ class BreakEvenPriceAligner:
         elif trigger_side == "sell" and hedge_side == "buy":
             # Short filled, hedging long
             # Need: long_entry < short_entry (break-even)
-            break_even_target = trigger_fill_price * (Decimal('1') + Decimal('0.0001'))
+            break_even_target = trigger_fill_price * (Decimal('1') - Decimal('0.0001'))
             
             # Check feasibility: Is break-even target fillable?
             if break_even_target <= hedge_ask:
@@ -291,7 +291,7 @@ class BreakEvenPriceAligner:
                 if deviation_pct <= max_deviation_pct:
                     # Market stable, use break-even price
                     logger.info(
-                        f"Using break-even hedge price: {break_even_target:.6f} > trigger {trigger_fill_price:.6f} "
+                        f"Using break-even hedge price: {break_even_target:.6f} < trigger {trigger_fill_price:.6f} "
                         f"(deviation: {deviation_pct*100:.2f}%)"
                     )
                     return break_even_target, "break_even"
