@@ -504,14 +504,10 @@ class TelegramFormatter:
             long_display = f"{long_emoji} {long_dex}" if long_emoji else long_dex
             short_display = f"{short_emoji} {short_dex}" if short_emoji else short_dex
             
-            # Entry/exit trade counts
-            entry_count = len(position.get("entry_trades", []))
-            exit_count = len(position.get("exit_trades", []))
-            
             # Title: symbol on one line, exchanges on next line
             lines.append(f"<u><b>{idx}. {symbol} {status_text}</b></u>")
             lines.append(f"  {long_display}/{short_display}")
-            lines.append(f"  Size: <code>${size_usd:.2f}</code> • {entry_count} entry, {exit_count} exit")
+            lines.append(f"  Size: <code>${size_usd:.2f}</code>")
             
             # Entry trades summary - long on one line, short on next indented
             entry_trades = position.get("entry_trades", [])
@@ -524,10 +520,10 @@ class TelegramFormatter:
                 entry_label = "  Entry: "
                 entry_label_width = len(entry_label)
                 if long_entry_price > 0:
-                    lines.append(f"{entry_label}📈 <b>{long_dex}</b> <code>${long_entry_price:.4f}</code> <i>(${long_entry_value:.2f})</i>")
+                    lines.append(f"{entry_label}📈 <b>{long_dex}</b> <code>${long_entry_price:.4f}</code>")
                 if short_entry_price > 0:
                     # Pad with spaces to match label width - ensures emojis align at same column
-                    lines.append(f"{' ' * entry_label_width}📉 <b>{short_dex}</b> <code>${short_entry_price:.4f}</code> <i>(${short_entry_value:.2f})</i>")
+                    lines.append(f"{' ' * entry_label_width}📉 <b>{short_dex}</b> <code>${short_entry_price:.4f}</code>")
             # Exit trades summary - same format
             exit_trades = position.get("exit_trades", [])
             if exit_trades:
@@ -539,10 +535,10 @@ class TelegramFormatter:
                 exit_label = "  Exit: "
                 exit_label_width = len(exit_label)
                 if long_exit_price > 0:
-                    lines.append(f"{exit_label}📈 <b>{long_dex}</b> <code>${long_exit_price:.4f}</code> <i>(${long_exit_value:.2f})</i>")
+                    lines.append(f"{exit_label}📈 <b>{long_dex}</b> <code>${long_exit_price:.4f}</code>")
                 if short_exit_price > 0:
                     # Pad with spaces to match label width - ensures emojis align at same column
-                    lines.append(f"{' ' * exit_label_width}📉 <b>{short_dex}</b> <code>${short_exit_price:.4f}</code> <i>(${short_exit_value:.2f})</i>")
+                    lines.append(f"{' ' * exit_label_width}📉 <b>{short_dex}</b> <code>${short_exit_price:.4f}</code>")
             
             # Per-leg PnL breakdown - simplified
             long_leg_pnl = position.get("long_leg_pnl", Decimal("0"))
