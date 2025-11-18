@@ -131,7 +131,7 @@ class FundingArbConfig(BaseModel):
     
     max_total_exposure_usd: Decimal = Field(
         default=Decimal("50000"),
-        description="Max total exposure across all positions"
+        description="Max total exposure per exchange (not across all exchanges). Each position contributes its size_usd to both the long_dex and short_dex exposure limits."
     )
     
     # Profitability thresholds
