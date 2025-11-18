@@ -103,7 +103,28 @@ class ParadexWebSocketHandlers:
             
             # Log order update
             status = order_info.status.upper()
-            if status in ('FILLED', 'CANCELED', 'CLOSED'):
+            if status == 'CANCELED':
+                # For cancelled orders, show filled amount and remaining (cancelled) amount for clarity
+                filled = order_info.filled_size or Decimal("0")
+                remaining = getattr(order_info, 'remaining_size', None)
+                if remaining is None or remaining == Decimal("0"):
+                    # Calculate remaining if not available
+                    remaining = order_info.size - filled if order_info.size and order_info.size > filled else Decimal("0")
+                
+                if filled > Decimal("0"):
+                    # Had partial fills before cancellation
+                    self.logger.info(
+                        f"[WEBSOCKET] [PARADEX] {status} "
+                        f"(filled: {filled}, cancelled: {remaining}) @ {order_info.price}"
+                    )
+                else:
+                    # No fills, just cancelled
+                    cancelled_qty = order_info.size if order_info.size else remaining
+                    self.logger.info(
+                        f"[WEBSOCKET] [PARADEX] {status} "
+                        f"(cancelled: {cancelled_qty}) @ {order_info.price}"
+                    )
+            elif status in ('FILLED', 'CLOSED'):
                 self.logger.info(
                     f"[WEBSOCKET] [PARADEX] {status} "
                     f"{order_info.filled_size} @ {order_info.price}"

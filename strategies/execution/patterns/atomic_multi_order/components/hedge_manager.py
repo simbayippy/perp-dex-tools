@@ -243,9 +243,11 @@ class HedgeManager:
                 log_parts.append(f"${float(remaining_usd):.2f}")
             descriptor = ", ".join(log_parts) if log_parts else "0"
             
+            logger.info("=" * 80)
             logger.info(
-                f"⚡ Aggressive limit hedging {symbol} on {exchange_name} for remaining {descriptor}"
+                f"⚡ AGGRESSIVE LIMIT HEDGE: {symbol} on {exchange_name} for remaining {descriptor}"
             )
+            logger.info("=" * 80)
 
             size_usd_arg: Optional[Decimal] = None
             quantity_arg: Optional[Decimal] = None
@@ -270,10 +272,12 @@ class HedgeManager:
                 # Check total timeout
                 elapsed_time = time.time() - start_time
                 if elapsed_time >= total_timeout_seconds:
+                    logger.info("-" * 80)
                     logger.warning(
                         f"⏱️ Aggressive limit hedge timeout after {elapsed_time:.2f}s for {exchange_name} {symbol}. "
                         f"Falling back to market order."
                     )
+                    logger.info("-" * 80)
                     break
 
                 # Reset partial fill detection flag for this retry iteration
@@ -380,11 +384,16 @@ class HedgeManager:
                     # Give each attempt reasonable fixed time, but respect total timeout
                     remaining_timeout = total_timeout_seconds - elapsed_time
                     if remaining_timeout <= 0:
-                        # Cancel order before breaking
+                        # Cancel order before breaking (if not already cancelled)
                         try:
-                            await spec.exchange_client.cancel_order(order_id)
-                        except Exception:
-                            pass
+                            order_status_check = await spec.exchange_client.get_order_info(order_id)
+                            if order_status_check and order_status_check.status not in {"CANCELED", "CANCELLED", "FILLED"}:
+                                await spec.exchange_client.cancel_order(order_id)
+                        except Exception as cancel_exc:
+                            # Order might already be cancelled - that's fine
+                            error_str = str(cancel_exc).lower()
+                            if "closed" not in error_str and "cancelled" not in error_str and "canceled" not in error_str:
+                                logger.debug(f"Failed to cancel order {order_id} on timeout: {cancel_exc}")
                         break
                     # Use fixed 1.5s per attempt (or remaining timeout if less)
                     attempt_timeout = min(1.5, remaining_timeout)
@@ -431,11 +440,13 @@ class HedgeManager:
                         # Verify we've filled enough (within tolerance) - check TOTAL fills
                         total_filled_qty = initial_filled_qty + accumulated_filled_qty
                         if total_filled_qty >= hedge_target * Decimal("0.99"):  # 99% threshold for rounding
+                            logger.info("=" * 80)
                             logger.info(
-                                f"✅ [{exchange_name}] Aggressive limit hedge filled for {symbol} "
+                                f"✅ AGGRESSIVE LIMIT HEDGE SUCCESS: [{exchange_name}] {symbol} "
                                 f"@ ${fill_price} qty={filled_qty} new fills (total: {total_filled_qty}/{hedge_target}, "
                                 f"attempt {retry_count + 1})"
                             )
+                            logger.info("=" * 80)
                             # Create execution result dict compatible with execution_result_to_dict
                             # We need to create a dict-like object that matches ExecutionResult structure
                             from types import SimpleNamespace
@@ -482,10 +493,24 @@ class HedgeManager:
                         continue
                     elif not filled:
                         # Order not filled, cancel it and retry
+                        # But first check if it's already cancelled (e.g., post-only violation)
                         try:
-                            await spec.exchange_client.cancel_order(order_id)
-                        except Exception:
-                            pass
+                            order_status_check = await spec.exchange_client.get_order_info(order_id)
+                            if order_status_check and order_status_check.status in {"CANCELED", "CANCELLED"}:
+                                logger.debug(
+                                    f"🔄 [{exchange_name}] Order {order_id} already cancelled, skipping cancel call"
+                                )
+                            else:
+                                await spec.exchange_client.cancel_order(order_id)
+                        except Exception as cancel_exc:
+                            # Order might already be cancelled (e.g., post-only violation)
+                            error_str = str(cancel_exc).lower()
+                            if "closed" in error_str or "cancelled" in error_str or "canceled" in error_str:
+                                logger.debug(
+                                    f"🔄 [{exchange_name}] Order {order_id} already closed/cancelled: {cancel_exc}"
+                                )
+                            else:
+                                logger.debug(f"Failed to cancel order {order_id}: {cancel_exc}")
                         # Check if we should continue retrying
                         if hedge_error:
                             break
@@ -504,6 +529,11 @@ class HedgeManager:
             # Before falling back to market, do final reconciliation check for any orders
             # that might have partially filled after polling loop exited
             # This handles cases where order was cancelled with fills after polling timeout
+            if not hedge_success:
+                logger.info("-" * 80)
+                logger.info(f"📋 Final Reconciliation Check: {symbol} on {exchange_name}")
+                logger.info("-" * 80)
+            
             if not hedge_success and last_order_id:
                 try:
                     final_order_info = await spec.exchange_client.get_order_info(last_order_id)
@@ -528,6 +558,10 @@ class HedgeManager:
             
             # If aggressive limit hedge failed, fallback to market
             if not hedge_success:
+                logger.info("=" * 80)
+                logger.info(f"⚠️ AGGRESSIVE LIMIT HEDGE FAILED: Falling back to market order")
+                logger.info("=" * 80)
+                
                 # Calculate remaining quantity after accumulated partial fills
                 # Total filled = initial fills + new fills from aggressive limit hedge
                 total_filled_qty = initial_filled_qty + accumulated_filled_qty
@@ -565,6 +599,10 @@ class HedgeManager:
                 )
                 if not market_success:
                     return False, market_error or f"Market hedge fallback failed for {exchange_name} {symbol}"
+                else:
+                    logger.info("=" * 80)
+                    logger.info(f"✅ MARKET HEDGE FALLBACK COMPLETE: {symbol} on {exchange_name}")
+                    logger.info("=" * 80)
             
         return True, None
 
@@ -649,14 +687,12 @@ class HedgeManager:
                 logger.info(
                     f"✅ [{exchange_name}] Using break-even hedge price: {limit_price:.6f} "
                     f"{comparison} trigger {trigger_fill_price:.6f} for {symbol} "
-                    f"(strategy: {break_even_strategy})"
                 )
             else:
                 # Break-even not feasible, use BBO-based adaptive pricing
-                logger.info(
-                    f"ℹ️ [{exchange_name}] Break-even not feasible for {symbol} "
-                    f"(reason: {break_even_strategy}). Using BBO-based adaptive pricing "
-                    f"to prioritize fill probability."
+                logger.debug(
+                    f"ℹ️ [{exchange_name}] Break-even not feasible for {symbol}. "
+                    f"Using BBO-based pricing to prioritize fill probability"
                 )
         
         # If break-even not attempted or not feasible, use adaptive pricing strategy
