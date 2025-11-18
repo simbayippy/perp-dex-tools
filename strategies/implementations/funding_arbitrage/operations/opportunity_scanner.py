@@ -124,13 +124,26 @@ class OpportunityScanner:
             )
             return False
 
-        current_exposure = await self.calculate_total_exposure()
-        if current_exposure + size_usd > strategy.config.max_total_exposure_usd:
+        # Check exposure limits per exchange (not across all exchanges)
+        # Each position contributes size_usd to both long_dex and short_dex
+        long_exposure = await self.calculate_total_exposure(long_dex)
+        short_exposure = await self.calculate_total_exposure(short_dex)
+        
+        if long_exposure + size_usd > strategy.config.max_total_exposure_usd:
             strategy.logger.warning(
                 f"⛔ SAFEGUARD: Skipping {opportunity.symbol} opportunity - "
-                f"Total exposure would exceed limit: "
-                f"current=${current_exposure:.2f} + new=${size_usd:.2f} = ${current_exposure + size_usd:.2f} "
-                f"> max_total_exposure_usd=${strategy.config.max_total_exposure_usd:.2f}"
+                f"Total exposure on {long_dex.upper()} would exceed limit: "
+                f"current=${long_exposure:.2f} + new=${size_usd:.2f} = ${long_exposure + size_usd:.2f} "
+                f"> max_total_exposure_usd=${strategy.config.max_total_exposure_usd:.2f} (per exchange)"
+            )
+            return False
+        
+        if short_exposure + size_usd > strategy.config.max_total_exposure_usd:
+            strategy.logger.warning(
+                f"⛔ SAFEGUARD: Skipping {opportunity.symbol} opportunity - "
+                f"Total exposure on {short_dex.upper()} would exceed limit: "
+                f"current=${short_exposure:.2f} + new=${size_usd:.2f} = ${short_exposure + size_usd:.2f} "
+                f"> max_total_exposure_usd=${strategy.config.max_total_exposure_usd:.2f} (per exchange)"
             )
             return False
 
@@ -266,7 +279,30 @@ class OpportunityScanner:
 
         return True
 
-    async def calculate_total_exposure(self) -> Decimal:
+    async def calculate_total_exposure(self, exchange: Optional[str] = None) -> Decimal:
+        """
+        Calculate total exposure for open positions.
+        
+        Args:
+            exchange: If provided, calculate exposure only for this exchange.
+                     If None, calculate total exposure across all exchanges (legacy behavior).
+        
+        Returns:
+            Total exposure in USD. For per-exchange calculation, sums positions where
+            the exchange is either long_dex or short_dex.
+        """
         strategy = self._strategy
         positions = await strategy.position_manager.get_open_positions()
-        return sum(p.size_usd for p in positions if p.status == "open")
+        
+        if exchange is None:
+            # Legacy behavior: sum all positions
+            return sum(p.size_usd for p in positions if p.status == "open")
+        
+        # Per-exchange calculation: sum positions where exchange is long_dex or short_dex
+        exchange_lower = exchange.lower()
+        return sum(
+            p.size_usd 
+            for p in positions 
+            if p.status == "open" 
+            and (p.long_dex.lower() == exchange_lower or p.short_dex.lower() == exchange_lower)
+        )

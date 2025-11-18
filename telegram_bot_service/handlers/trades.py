@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
 from telegram_bot_service.handlers.base import BaseHandler
@@ -309,12 +310,19 @@ class TradesHandler(BaseHandler):
             # Split message if needed
             messages = self.formatter._split_message(summary_msg) if len(summary_msg) > self.formatter.MAX_MESSAGE_LENGTH else [summary_msg]
             
-            # Edit with first message
-            await query.edit_message_text(
-                messages[0],
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
+            # Handle "Message is not modified" error gracefully
+            try:
+                await query.edit_message_text(
+                    messages[0],
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+            except BadRequest as e:
+                if "Message is not modified" in str(e):
+                    await query.answer("✅ Trades summary is up to date", show_alert=False)
+                    return
+                else:
+                    raise
             
             # Send remaining messages if any
             for msg in messages[1:]:
@@ -375,12 +383,19 @@ class TradesHandler(BaseHandler):
             # Split message if needed
             messages = self.formatter._split_message(pnl_msg) if len(pnl_msg) > self.formatter.MAX_MESSAGE_LENGTH else [pnl_msg]
             
-            # Edit with first message
-            await query.edit_message_text(
-                messages[0],
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
+            # Handle "Message is not modified" error gracefully
+            try:
+                await query.edit_message_text(
+                    messages[0],
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+            except BadRequest as e:
+                if "Message is not modified" in str(e):
+                    await query.answer("✅ Position PnL is up to date", show_alert=False)
+                    return
+                else:
+                    raise
             
             # Send remaining messages if any
             for msg in messages[1:]:

@@ -92,12 +92,12 @@ FUNDING_ARB_SCHEMA = StrategySchema(
         ),
         create_decimal_parameter(
             key="max_total_exposure_usd",
-            prompt="Maximum total exposure across all positions (USD)?",
+            prompt="Maximum total exposure per exchange (USD)?",
             default=Decimal("1000"),
             min_value=Decimal("1.00"),
             max_value=Decimal("1000000"),
             required=False,
-            help_text="Total notional value limit. Example: 5 positions × $200 each = $1000",
+            help_text="Total notional value limit per exchange (not across all exchanges). Each position contributes its size_usd to both the long_dex and short_dex exposure limits. Example: With $2000 limit, you can have $2000 exposure on LIGHTER and $2000 exposure on PARADEX simultaneously.",
         ),
         # ====================================================================
         # Profitability Thresholds
