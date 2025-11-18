@@ -295,8 +295,8 @@ class AtomicMultiOrderExecutor:
                             target_qty = Decimal("0")
                         other_ctx.hedge_target_quantity = target_qty
                     
-                    # Hedge immediately
-                    hedge_success, hedge_error = await self._hedge_manager.hedge(
+                    # Hedge immediately with aggressive limit orders
+                    hedge_success, hedge_error = await self._hedge_manager.aggressive_limit_hedge(
                         partial_ctx, contexts, self.logger
                     )
                     
@@ -343,6 +343,13 @@ class AtomicMultiOrderExecutor:
 
 
             exec_ms = elapsed_ms()
+            
+            # Determine if this is a close operation (for skipping imbalance checks)
+            is_close_operation = (
+                len(contexts) > 0 and 
+                all(ctx.spec.reduce_only is True for ctx in contexts)
+            )
+            
             total_long_tokens, total_short_tokens, imbalance_tokens, imbalance_pct = self._imbalance_analyzer.calculate_imbalance(contexts)
             imbalance_tolerance = Decimal("0.01")  # 1% tolerance for quantity imbalance
 
@@ -361,8 +368,12 @@ class AtomicMultiOrderExecutor:
             # Check if all orders filled
             filled_orders_count = sum(1 for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal("0"))
             if filled_orders_count == len(orders):
-                # Check if quantity imbalance is within acceptable bounds (1% threshold)
-                is_critical, _, _ = self._imbalance_analyzer.check_critical_imbalance(total_long_tokens, total_short_tokens)
+                # For close operations, imbalance doesn't matter - goal is qty = 0, not matching quantities
+                # Skip imbalance checks for close operations
+                is_critical = False
+                if not is_close_operation:
+                    # Check if quantity imbalance is within acceptable bounds (1% threshold)
+                    is_critical, _, _ = self._imbalance_analyzer.check_critical_imbalance(total_long_tokens, total_short_tokens)
                 
                 if is_critical:
                     self.logger.error(
@@ -424,9 +435,10 @@ class AtomicMultiOrderExecutor:
                 )
 
             # Critical fix: Check for dangerous quantity imbalance and rollback if needed
+            # Skip imbalance checks for close operations (goal is qty = 0, not matching quantities)
             filled_orders_count = sum(1 for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal("0"))
             error_message = hedge_error or f"Partial fill: {filled_orders_count}/{len(orders)}"
-            if imbalance_pct > imbalance_tolerance:
+            if not is_close_operation and imbalance_pct > imbalance_tolerance:
                 self.logger.error(
                     f"Quantity imbalance detected after hedge: longs={total_long_tokens:.6f} tokens, "
                     f"shorts={total_short_tokens:.6f} tokens, imbalance={imbalance_tokens:.6f} tokens ({imbalance_pct*100:.2f}%)"
@@ -697,8 +709,8 @@ class AtomicMultiOrderExecutor:
                 )
                 return True, None, False, Decimal("0")
         
-        # Execute hedge (with reduce_only flag for close operations)
-        hedge_success, hedge_error = await self._hedge_manager.hedge(
+        # Execute aggressive limit hedge (with reduce_only flag for close operations)
+        hedge_success, hedge_error = await self._hedge_manager.aggressive_limit_hedge(
             trigger_ctx, contexts, self.logger, reduce_only=is_close_operation
         )
 
