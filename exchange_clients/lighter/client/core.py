@@ -719,7 +719,6 @@ class LighterClient(BaseExchangeClient):
                     trades_kwargs_no_order = {k: v for k, v in trades_kwargs.items() if k != "order_index"}
                     trades_response_retry = await self.order_api.trades(**trades_kwargs_no_order)
                     if trades_response_retry and hasattr(trades_response_retry, 'trades') and trades_response_retry.trades:
-                        self.logger.info(f"[LIGHTER] Found {len(trades_response_retry.trades)} trades without order filter, will filter client-side by order_id and time")
                         trades_response = trades_response_retry
                     else:
                         self.logger.warning(
@@ -731,7 +730,6 @@ class LighterClient(BaseExchangeClient):
                     self.logger.warning(f"[LIGHTER] trades_response.trades is empty or None (type: {type(trades_response.trades)})")
                     return []
             
-            self.logger.info(f"[LIGHTER] Received {len(trades_response.trades)} trades from API (before filtering)")
             
             # Log first few trades with details for debugging
             for i, trade in enumerate(trades_response.trades[:5]):
@@ -891,7 +889,7 @@ class LighterClient(BaseExchangeClient):
                             fee_bps_calculated = fee_rate * Decimal("10000")  # Convert to basis points for display
                             expected_maker_fee = trade_value * Decimal("0.000002")  # 0.2 bps
                             expected_taker_fee = trade_value * Decimal("0.00002")   # 2 bps
-                            self.logger.info(
+                            self.logger.debug(
                                 f"[LIGHTER] Trade {idx} fee calculation: "
                                 f"value=${trade_value:.2f}, "
                                 f"fee_raw={fee_basis_points}, "
@@ -920,7 +918,7 @@ class LighterClient(BaseExchangeClient):
                     order_id=trade_order_id,
                 ))
             
-            self.logger.info(
+            self.logger.debug(
                 f"[LIGHTER] Trade history filtering complete: {len(result)} trades in range, "
                 f"{filtered_out_count} filtered out (outside time range)"
             )
