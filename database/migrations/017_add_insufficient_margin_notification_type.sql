@@ -14,11 +14,18 @@ DECLARE
     constraint_name TEXT;
 BEGIN
     -- Find the existing constraint on notification_type
+    -- PostgreSQL stores IN (...) as = ANY ((ARRAY[...])::text[]), so we search for both patterns
     SELECT conname INTO constraint_name
     FROM pg_constraint
     WHERE conrelid = 'strategy_notifications'::regclass
     AND contype = 'c'
-    AND pg_get_constraintdef(oid) LIKE '%notification_type IN%'
+    AND (
+        pg_get_constraintdef(oid) LIKE '%notification_type%'
+        AND (
+            pg_get_constraintdef(oid) LIKE '%position_opened%'
+            OR pg_get_constraintdef(oid) LIKE '%position_closed%'
+        )
+    )
     LIMIT 1;
     
     -- Drop the existing constraint if it exists
@@ -31,7 +38,8 @@ BEGIN
     -- Check if constraint already exists to avoid errors
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint
-        WHERE conname = 'strategy_notifications_notification_type_check'
+        WHERE conrelid = 'strategy_notifications'::regclass
+        AND conname = 'strategy_notifications_notification_type_check'
     ) THEN
         ALTER TABLE strategy_notifications 
         ADD CONSTRAINT strategy_notifications_notification_type_check 
