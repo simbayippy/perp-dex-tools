@@ -147,6 +147,14 @@ class PositionOpener:
                 normalized_leverage = execution.position.metadata.get("normalized_leverage")
                 margin_used = execution.position.metadata.get("margin_used")
                 
+                # Extract execution types from fills
+                long_execution_mode = execution.long_fill.get("execution_mode_used")
+                short_execution_mode = execution.short_fill.get("execution_mode_used")
+                
+                # Convert execution_mode_used to display format (maker/taker)
+                long_execution_type = self._strategy.notification_service._format_execution_type(long_execution_mode)
+                short_execution_type = self._strategy.notification_service._format_execution_type(short_execution_mode)
+                
                 await self._strategy.notification_service.notify_position_opened(
                     symbol=symbol,
                     long_dex=long_dex,
@@ -161,6 +169,8 @@ class PositionOpener:
                     short_quantity=Decimal(str(short_quantity)) if short_quantity else None,
                     normalized_leverage=normalized_leverage,
                     margin_used=Decimal(str(margin_used)) if margin_used else None,
+                    long_execution_type=long_execution_type,
+                    short_execution_type=short_execution_type,
                 )
             except Exception as exc:
                 self._strategy.logger.warning(f"Failed to send position opened notification: {exc}")
