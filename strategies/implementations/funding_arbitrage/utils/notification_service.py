@@ -52,6 +52,37 @@ class StrategyNotificationService:
         dex_lower = dex_name.lower()
         return EXCHANGE_EMOJIS.get(dex_lower, "")
     
+    @staticmethod
+    def _format_execution_type(execution_mode_used: Optional[str]) -> Optional[str]:
+        """
+        Convert execution_mode_used to user-friendly display format.
+        
+        Args:
+            execution_mode_used: Execution mode string (e.g., "limit", "market", "aggressive_limit_inside_spread")
+            
+        Returns:
+            Formatted string like "maker", "taker", or None if unknown
+        """
+        if not execution_mode_used:
+            return None
+        
+        mode_lower = execution_mode_used.lower()
+        
+        # Limit orders = maker
+        if "limit" in mode_lower or mode_lower == "limit":
+            return "maker"
+        
+        # Market orders = taker
+        if "market" in mode_lower or mode_lower == "market":
+            return "taker"
+        
+        # Aggressive limit orders = maker (they're limit orders)
+        if "aggressive_limit" in mode_lower:
+            return "maker"
+        
+        # Default fallback
+        return None
+    
     async def _get_strategy_run_id(self) -> Optional[str]:
         """
         Get strategy run ID from database using account_name.
@@ -110,6 +141,8 @@ class StrategyNotificationService:
         short_quantity: Optional[Decimal] = None,
         normalized_leverage: Optional[int] = None,
         margin_used: Optional[Decimal] = None,
+        long_execution_type: Optional[str] = None,
+        short_execution_type: Optional[str] = None,
     ) -> bool:
         """
         Send notification when a position is opened.
@@ -128,6 +161,8 @@ class StrategyNotificationService:
             short_quantity: Optional quantity for short leg
             normalized_leverage: Optional normalized leverage used
             margin_used: Optional margin used (size / leverage)
+            long_execution_type: Optional execution type for long leg (e.g., "maker", "taker")
+            short_execution_type: Optional execution type for short leg (e.g., "maker", "taker")
             
         Returns:
             True if notification queued successfully, False otherwise
@@ -183,10 +218,16 @@ class StrategyNotificationService:
             message += f"<b>🚀 Long:</b> {long_display}"
             if long_price:
                 message += f" @ ${long_price:.6f}"
+            message += "\n"
             if long_quantity:
-                message += f"\n  Qty: {long_quantity:.4f}"
+                message += f"  Qty: {long_quantity:.4f}"
             if long_exposure:
-                message += f" | Size: ${long_exposure:.2f}"
+                if long_quantity:
+                    message += f" | Size: ${long_exposure:.2f}"
+                else:
+                    message += f"  Size: ${long_exposure:.2f}"
+            if long_execution_type:
+                message += f"\n  Type: <b>{long_execution_type}</b>"
             
             message += "\n"
             
@@ -195,10 +236,16 @@ class StrategyNotificationService:
             message += f"<b>⬇️ Short:</b> {short_display}"
             if short_price:
                 message += f" @ ${short_price:.6f}"
+            message += "\n"
             if short_quantity:
-                message += f"\n  Qty: {short_quantity:.4f}"
+                message += f"  Qty: {short_quantity:.4f}"
             if short_exposure:
-                message += f" | Size: ${short_exposure:.2f}"
+                if short_quantity:
+                    message += f" | Size: ${short_exposure:.2f}"
+                else:
+                    message += f"  Size: ${short_exposure:.2f}"
+            if short_execution_type:
+                message += f"\n  Type: <b>{short_execution_type}</b>"
             
             message += f"\n\n⚡ Divergence: {divergence_pct:.4f}%"
             message += f"\n💸 Entry APY: <b>{entry_apy:.2f}%</b>"
@@ -228,6 +275,10 @@ class StrategyNotificationService:
                 details["normalized_leverage"] = normalized_leverage
             if margin_used:
                 details["margin_used"] = float(margin_used)
+            if long_execution_type:
+                details["long_execution_type"] = long_execution_type
+            if short_execution_type:
+                details["short_execution_type"] = short_execution_type
             
             # Insert notification
             await database.execute(
