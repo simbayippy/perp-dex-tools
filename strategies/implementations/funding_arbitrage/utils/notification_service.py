@@ -247,7 +247,14 @@ class StrategyNotificationService:
             if short_execution_type:
                 message += f"\n  Type: <b>{short_execution_type}</b>"
             
-            message += f"\n\n⚡ Divergence: {divergence_pct:.4f}%"
+            # Calculate price divergence from actual entry prices (fill prices)
+            price_divergence_pct = None
+            if long_price and short_price and long_price > 0 and short_price > 0:
+                min_price = min(long_price, short_price)
+                max_price = max(long_price, short_price)
+                price_divergence_pct = ((max_price - min_price) / min_price) * Decimal("100")
+                message += f"\n\n⚡ Price Divergence: {price_divergence_pct:.4f}%"
+            
             message += f"\n💸 Entry APY: <b>{entry_apy:.2f}%</b>"
             
             # Prepare details
@@ -263,6 +270,8 @@ class StrategyNotificationService:
                 details["long_price"] = float(long_price)
             if short_price:
                 details["short_price"] = float(short_price)
+            if price_divergence_pct is not None:
+                details["price_divergence_pct"] = float(price_divergence_pct)
             if long_exposure:
                 details["long_exposure"] = float(long_exposure)
             if short_exposure:
