@@ -535,8 +535,6 @@ class ParadexClient(BaseExchangeClient):
             if contract_id == symbol.upper():
                 contract_id = self.normalize_symbol(symbol)
             
-            self.logger.info(f"[PARADEX] Symbol '{symbol}' resolved to contract_id: '{contract_id}'")
-            
             # Build request parameters
             start_at_ms = int(start_time * 1000)
             end_at_ms = int(end_time * 1000)

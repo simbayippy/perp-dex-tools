@@ -5,6 +5,8 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
+from strategies.execution.core.utils import coerce_decimal
+
 from ..core.contract_preparer import ContractPreparer
 from .execution_engine import ExecutionEngine
 from .leverage_validator import LeverageValidator
@@ -151,9 +153,52 @@ class PositionOpener:
                 long_execution_mode = execution.long_fill.get("execution_mode_used")
                 short_execution_mode = execution.short_fill.get("execution_mode_used")
                 
-                # Convert execution_mode_used to display format (maker/taker)
-                long_execution_type = self._strategy.notification_service._format_execution_type(long_execution_mode)
-                short_execution_type = self._strategy.notification_service._format_execution_type(short_execution_mode)
+                # Extract maker/taker quantities for mixed execution type display
+                long_maker_qty = coerce_decimal(execution.long_fill.get("maker_qty")) or Decimal("0")
+                long_taker_qty = coerce_decimal(execution.long_fill.get("taker_qty")) or Decimal("0")
+                short_maker_qty = coerce_decimal(execution.short_fill.get("maker_qty")) or Decimal("0")
+                short_taker_qty = coerce_decimal(execution.short_fill.get("taker_qty")) or Decimal("0")
+                
+                # Calculate percentages if we have mixed fills
+                long_total_qty = long_maker_qty + long_taker_qty
+                short_total_qty = short_maker_qty + short_taker_qty
+                
+                long_execution_type = None
+                short_execution_type = None
+                
+                if long_total_qty > Decimal("0"):
+                    if long_maker_qty > Decimal("0") and long_taker_qty > Decimal("0"):
+                        # Mixed: show percentage breakdown
+                        maker_pct = (long_maker_qty / long_total_qty * Decimal("100")).quantize(Decimal("0.01"))
+                        taker_pct = (long_taker_qty / long_total_qty * Decimal("100")).quantize(Decimal("0.01"))
+                        long_execution_type = f"{maker_pct}% maker, {taker_pct}% taker"
+                    elif long_maker_qty > Decimal("0"):
+                        long_execution_type = "maker"
+                    elif long_taker_qty > Decimal("0"):
+                        long_execution_type = "taker"
+                    else:
+                        # Fallback to execution_mode_used if no maker/taker qty tracked
+                        long_execution_type = self._strategy.notification_service._format_execution_type(long_execution_mode)
+                else:
+                    # Fallback to execution_mode_used if no quantities available
+                    long_execution_type = self._strategy.notification_service._format_execution_type(long_execution_mode)
+                
+                if short_total_qty > Decimal("0"):
+                    if short_maker_qty > Decimal("0") and short_taker_qty > Decimal("0"):
+                        # Mixed: show percentage breakdown
+                        maker_pct = (short_maker_qty / short_total_qty * Decimal("100")).quantize(Decimal("0.01"))
+                        taker_pct = (short_taker_qty / short_total_qty * Decimal("100")).quantize(Decimal("0.01"))
+                        short_execution_type = f"{maker_pct}% maker, {taker_pct}% taker"
+                    elif short_maker_qty > Decimal("0"):
+                        short_execution_type = "maker"
+                    elif short_taker_qty > Decimal("0"):
+                        short_execution_type = "taker"
+                    else:
+                        # Fallback to execution_mode_used if no maker/taker qty tracked
+                        short_execution_type = self._strategy.notification_service._format_execution_type(short_execution_mode)
+                else:
+                    # Fallback to execution_mode_used if no quantities available
+                    short_execution_type = self._strategy.notification_service._format_execution_type(short_execution_mode)
                 
                 await self._strategy.notification_service.notify_position_opened(
                     symbol=symbol,

@@ -370,12 +370,30 @@ class ParadexOrderManager:
             )
             
         except Exception as e:
-            self.logger.error(f"Failed to cancel order {order_id}: {e}")
-            return OrderResult(
-                success=False,
-                order_id=order_id,
-                error_message=str(e)
-            )
+            error_str = str(e).lower()
+            error_msg = str(e)
+            
+            # Handle expected cases gracefully (order already closed/cancelled)
+            if "order_is_closed" in error_str or "closed" in error_str or "cancelled" in error_str or "canceled" in error_str:
+                # Order was already cancelled (e.g., by exchange due to post-only violation)
+                # This is expected and not an error - return success with current filled_size
+                self.logger.debug(
+                    f"Order {order_id} already closed/cancelled (likely post-only violation). "
+                    f"Filled size: {filled_size}"
+                )
+                return OrderResult(
+                    success=True,  # Consider this success - order is cancelled as intended
+                    order_id=order_id,
+                    filled_size=filled_size,
+                )
+            else:
+                # Actual error - log as error
+                self.logger.error(f"Failed to cancel order {order_id}: {e}")
+                return OrderResult(
+                    success=False,
+                    order_id=order_id,
+                    error_message=error_msg
+                )
     
     @query_retry(default_return=None)
     async def get_order_info(self, order_id: str, *, force_refresh: bool = False) -> Optional[OrderInfo]:
