@@ -49,6 +49,9 @@ class PreFlightChecker:
         stage_prefix: Optional[str],
         normalized_leverage: Dict[Tuple[str, str], int],  # In/out parameter
         margin_error_notified: Dict[Tuple[str, str], bool],  # In/out parameter
+        liquidation_risk_notified: Optional[Dict[Tuple[str, str], bool]] = None,  # In/out parameter
+        enable_liquidation_prevention: bool = True,  # Config parameter
+        min_liquidation_distance_pct: Optional[Decimal] = None,  # Config parameter (e.g., 0.10 = 10%)
     ) -> tuple[bool, Optional[str]]:
         """
         Run all pre-flight checks.
@@ -235,6 +238,100 @@ class PreFlightChecker:
                 self.logger.info(
                     f"✅ {exchange_name} balance OK: ${available_balance:.2f} >= ${required_with_buffer:.2f}"
                 )
+
+            # Liquidation Risk Check (after margin checks, before liquidity checks)
+            if enable_liquidation_prevention and min_liquidation_distance_pct is not None:
+                log_stage(self.logger, "Liquidation Risk Check", icon="⚠️", stage_id=compose_stage("2.5"))
+                self.logger.info("Checking liquidation risk for existing positions...")
+                
+                if liquidation_risk_notified is None:
+                    liquidation_risk_notified = {}
+                
+                for exchange_name, required_margin in exchange_margin_required.items():
+                    exchange_client = next(
+                        (
+                            order.exchange_client
+                            for order in orders
+                            if order.exchange_client.get_exchange_name() == exchange_name
+                        ),
+                        None,
+                    )
+                    if not exchange_client:
+                        continue
+                    
+                    # Get orders for this specific exchange to determine symbol
+                    exchange_orders = [
+                        order for order in orders
+                        if order.exchange_client.get_exchange_name() == exchange_name
+                    ]
+                    symbol = exchange_orders[0].symbol if exchange_orders else "UNKNOWN"
+                    
+                    try:
+                        # Check if there's an existing position for this symbol
+                        snapshot = await exchange_client.get_position_snapshot(symbol)
+                        if snapshot and snapshot.liquidation_price is not None and snapshot.mark_price is not None:
+                            # Determine side
+                            side = snapshot.side
+                            if side is None:
+                                if snapshot.quantity is not None:
+                                    side = "long" if snapshot.quantity > 0 else "short"
+                                else:
+                                    # Can't determine side, skip check
+                                    continue
+                            
+                            # Calculate liquidation distance
+                            distance_pct = self._calculate_liquidation_distance(
+                                snapshot.mark_price, snapshot.liquidation_price, side
+                            )
+                            
+                            if distance_pct is not None and distance_pct < min_liquidation_distance_pct:
+                                error_msg = (
+                                    f"Liquidation risk on {exchange_name} for {symbol}: "
+                                    f"distance={distance_pct*100:.2f}% < threshold={min_liquidation_distance_pct*100:.2f}% "
+                                    f"(mark=${snapshot.mark_price:.6f}, liquidation=${snapshot.liquidation_price:.6f})"
+                                )
+                                self.logger.error(f"❌ {error_msg}")
+                                
+                                # Check if we've already notified for this (exchange, symbol) combination
+                                error_key = (exchange_name.lower(), symbol)
+                                already_notified = liquidation_risk_notified.get(error_key, False)
+                                
+                                # Only send notification if we haven't notified for this error yet
+                                if not already_notified:
+                                    await self._send_liquidation_risk_notification(
+                                        exchange_name=exchange_name,
+                                        symbol=symbol,
+                                        distance_pct=distance_pct,
+                                        threshold_pct=min_liquidation_distance_pct,
+                                        mark_price=snapshot.mark_price,
+                                        liquidation_price=snapshot.liquidation_price,
+                                    )
+                                    liquidation_risk_notified[error_key] = True
+                                    self.logger.info(
+                                        f"📢 Sent liquidation risk notification for {exchange_name.upper()}/{symbol}"
+                                    )
+                                else:
+                                    self.logger.debug(
+                                        f"⏭️ Skipping notification for {exchange_name.upper()}/{symbol} "
+                                        f"(already notified, liquidation risk still present)"
+                                    )
+                                
+                                return False, error_msg
+                            else:
+                                # Liquidation risk is acceptable - reset notification state
+                                error_key = (exchange_name.lower(), symbol)
+                                if liquidation_risk_notified.get(error_key, False):
+                                    del liquidation_risk_notified[error_key]
+                                    self.logger.info(
+                                        f"✅ Liquidation risk acceptable for {exchange_name.upper()}/{symbol} - "
+                                        f"notification state reset"
+                                    )
+                    except Exception as exc:
+                        # Don't fail pre-flight if liquidation check fails
+                        self.logger.debug(
+                            f"⚠️ Liquidation risk check failed for {exchange_name}/{symbol}: {exc}"
+                        )
+                        continue
 
             log_stage(self.logger, "Order Book Liquidity", icon="🌊", stage_id=compose_stage("3"))
             self.logger.info("Running liquidity checks...")
@@ -442,4 +539,80 @@ class PreFlightChecker:
         except Exception as exc:
             # Don't fail the preflight check if notification fails
             self.logger.debug(f"Could not send insufficient margin notification: {exc}")
+
+    def _calculate_liquidation_distance(
+        self,
+        mark_price: Decimal,
+        liquidation_price: Decimal,
+        side: str,
+    ) -> Optional[Decimal]:
+        """
+        Calculate distance to liquidation as a percentage.
+        
+        Args:
+            mark_price: Current mark price
+            liquidation_price: Liquidation price
+            side: Position side ("long" or "short")
+            
+        Returns:
+            Distance percentage (0.05 = 5%), or None if calculation fails
+        """
+        if mark_price <= 0 or liquidation_price <= 0:
+            return None
+        
+        try:
+            if side == "long":
+                # Long: liquidation_price < mark_price
+                # Distance = (mark_price - liquidation_price) / mark_price
+                if mark_price <= liquidation_price:
+                    # Already at or past liquidation
+                    return Decimal("0")
+                distance = (mark_price - liquidation_price) / mark_price
+            else:  # short
+                # Short: liquidation_price > mark_price
+                # Distance = (liquidation_price - mark_price) / mark_price
+                if liquidation_price <= mark_price:
+                    # Already at or past liquidation
+                    return Decimal("0")
+                distance = (liquidation_price - mark_price) / mark_price
+            
+            return distance
+        except Exception:
+            return None
+
+    async def _send_liquidation_risk_notification(
+        self,
+        exchange_name: str,
+        symbol: str,
+        distance_pct: Decimal,
+        threshold_pct: Decimal,
+        mark_price: Decimal,
+        liquidation_price: Decimal,
+    ) -> None:
+        """
+        Attempt to send liquidation risk notification via notification service.
+
+        Args:
+            exchange_name: Name of the exchange with liquidation risk
+            symbol: Trading symbol
+            distance_pct: Current distance to liquidation (e.g., 0.0796 = 7.96%)
+            threshold_pct: Liquidation risk threshold (e.g., 0.10 = 10%)
+            mark_price: Current mark price
+            liquidation_price: Liquidation price
+        """
+        if not self.notification_service:
+            return
+
+        try:
+            await self.notification_service.notify_liquidation_risk(
+                symbol=symbol,
+                exchange_name=exchange_name,
+                distance_pct=distance_pct,
+                threshold_pct=threshold_pct,
+                mark_price=mark_price,
+                liquidation_price=liquidation_price,
+            )
+        except Exception as exc:
+            # Don't fail the preflight check if notification fails
+            self.logger.debug(f"Could not send liquidation risk notification: {exc}")
 

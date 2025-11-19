@@ -128,12 +128,19 @@ class ExecutionEngine:
             executor._normalized_leverage[(long_exchange_name, symbol)] = normalized_leverage
             executor._normalized_leverage[(short_exchange_name, symbol)] = normalized_leverage
 
+        # Get liquidation prevention config
+        risk_config = strategy.config.risk_config
+        enable_liquidation_prevention = getattr(risk_config, "enable_liquidation_prevention", True)
+        min_liquidation_distance_pct = getattr(risk_config, "min_liquidation_distance_pct", None)
+        
         result: AtomicExecutionResult = await strategy.atomic_executor.execute_atomically(
             orders=plan.orders,
             rollback_on_partial=True,
             pre_flight_check=True,
             skip_preflight_leverage=True,
             stage_prefix="3",
+            enable_liquidation_prevention=enable_liquidation_prevention,
+            min_liquidation_distance_pct=min_liquidation_distance_pct,
         )
 
         if not result.all_filled:

@@ -103,6 +103,10 @@ class AtomicMultiOrderExecutor:
         # Key: (exchange_name, symbol), Value: True if we've already notified about insufficient margin
         # Resets to False when margin becomes sufficient again
         self._margin_error_notified: Dict[Tuple[str, str], bool] = {}
+        # Track liquidation risk notification state per (exchange_name, symbol) to prevent notification spam
+        # Key: (exchange_name, symbol), Value: True if we've already notified about liquidation risk
+        # Resets to False when liquidation risk becomes acceptable again
+        self._liquidation_risk_notified: Dict[Tuple[str, str], bool] = {}
 
     async def execute_atomically(
         self,
@@ -111,6 +115,8 @@ class AtomicMultiOrderExecutor:
         pre_flight_check: bool = True,
         skip_preflight_leverage: bool = False,
         stage_prefix: Optional[str] = None,
+        enable_liquidation_prevention: Optional[bool] = None,  # Config parameter
+        min_liquidation_distance_pct: Optional[Decimal] = None,  # Config parameter
     ) -> AtomicExecutionResult:
         # Store stage_prefix for use in rollback logic
         self._current_stage_prefix = stage_prefix
@@ -142,12 +148,19 @@ class AtomicMultiOrderExecutor:
 
             if pre_flight_check:
                 log_stage(self.logger, "Pre-flight Checks", icon="🔍", stage_id=compose_stage("1"))
+                # Use provided config or default to None (disabled)
+                liquidation_prevention_enabled = enable_liquidation_prevention if enable_liquidation_prevention is not None else False
+                liquidation_distance_threshold = min_liquidation_distance_pct
+                
                 preflight_ok, preflight_error = await self._preflight_checker.check(
                     orders,
                     skip_leverage_check=skip_preflight_leverage,
                     stage_prefix=compose_stage("1"),
                     normalized_leverage=self._normalized_leverage,
                     margin_error_notified=self._margin_error_notified,
+                    liquidation_risk_notified=self._liquidation_risk_notified,
+                    enable_liquidation_prevention=liquidation_prevention_enabled,
+                    min_liquidation_distance_pct=liquidation_distance_threshold,
                 )
                 if not preflight_ok:
                     # Create empty contexts list for result building
