@@ -46,6 +46,18 @@ class PositionCloser:
         for position in positions:
             snapshots = await self._fetch_leg_snapshots(position)
 
+            # Check liquidation risk FIRST (highest priority - proactive prevention)
+            liquidation_risk_reason = self._exit_evaluator.check_liquidation_risk(position, snapshots)
+            if liquidation_risk_reason is not None:
+                # Use limit orders to prevent slippage (speed is less critical than avoiding slippage)
+                await self.close(position, liquidation_risk_reason, live_snapshots=snapshots, order_type="limit")
+                strategy.logger.warning(
+                    f"Closed {position.symbol}: {liquidation_risk_reason}"
+                )
+                actions.append(f"Closed {position.symbol}: {liquidation_risk_reason}")
+                continue
+
+            # Check if already liquidated (reactive detection)
             liquidation_reason = self._exit_evaluator.detect_liquidation(position, snapshots)
             if liquidation_reason is not None:
                 await self.close(position, liquidation_reason, live_snapshots=snapshots)

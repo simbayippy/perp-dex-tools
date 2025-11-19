@@ -64,6 +64,14 @@ class OrderBuilder:
             "LIQUIDATION_PARADEX",
         }
         
+        # Liquidation risk reasons (for future reference - currently uses explicit order_type="limit")
+        liquidation_risk_reasons = {
+            "LIQUIDATION_RISK_ASTER",
+            "LIQUIDATION_RISK_LIGHTER",
+            "LIQUIDATION_RISK_BACKPACK",
+            "LIQUIDATION_RISK_PARADEX",
+        }
+        
         if order_type:
             use_market = order_type.lower() == "market"
         else:

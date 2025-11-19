@@ -11,6 +11,7 @@ from helpers.unified_logger import log_stage
 from ..core.websocket_manager import WebSocketManager
 from ..core.decimal_utils import to_decimal
 from ..models.execution_models import TradeExecutionResult, OrderPlan
+from .entry_validator import EntryValidator
 
 if TYPE_CHECKING:
     from ...strategy import FundingArbitrageStrategy
@@ -242,6 +243,32 @@ class ExecutionEngine:
             )
             return None
 
+        # Validate price divergence before proceeding
+        max_divergence_pct = getattr(strategy.config, "max_entry_price_divergence_pct", None)
+        if max_divergence_pct is not None:
+            is_valid, divergence_pct, reason = EntryValidator.validate_price_divergence(
+                long_bid=Decimal(str(long_bid)),
+                long_ask=Decimal(str(long_ask)),
+                short_bid=Decimal(str(short_bid)),
+                short_ask=Decimal(str(short_ask)),
+                max_divergence_pct=Decimal(str(max_divergence_pct)),
+            )
+            
+            if not is_valid:
+                strategy.logger.warning(
+                    f"⛔ [SKIP] {symbol}: Entry validation failed - {reason}"
+                )
+                # Mark cooldown if cooldown manager exists (for Issue 2)
+                if hasattr(strategy, "cooldown_manager"):
+                    strategy.cooldown_manager.mark_cooldown(symbol)
+                strategy.failed_symbols.add(symbol)
+                return None
+            
+            strategy.logger.debug(
+                f"✅ [{symbol}] Price divergence validation passed: {divergence_pct*100:.2f}% "
+                f"(threshold: {max_divergence_pct*100:.2f}%)"
+            )
+
         # Use break-even price alignment if enabled
         enable_alignment = getattr(strategy.config, "enable_break_even_alignment", True)
         max_spread_threshold = getattr(strategy.config, "max_spread_threshold_pct", None)
@@ -263,6 +290,19 @@ class ExecutionEngine:
                 f"(spread: {aligned_prices.spread_pct*100:.2f}%) - "
                 f"long={long_price:.6f} < short={short_price:.6f}"
             )
+            
+            # Check for wide spread (BBO fallback or spread exceeds threshold)
+            if aligned_prices.strategy_used == "bbo_fallback" or (
+                max_spread_threshold is not None and 
+                aligned_prices.spread_pct > max_spread_threshold
+            ):
+                # Mark cooldown for wide spread
+                if hasattr(strategy, "cooldown_manager"):
+                    strategy.cooldown_manager.mark_cooldown(symbol)
+                    strategy.logger.debug(
+                        f"⏸️  [{symbol}] Marked for cooldown due to wide spread "
+                        f"({aligned_prices.spread_pct*100:.2f}%)"
+                    )
         else:
             # Fallback to BBO-based pricing
             long_price = Decimal(str(long_ask))

@@ -76,6 +76,113 @@ class ExitEvaluator:
 
         return False, None
     
+    def check_liquidation_risk(
+        self,
+        position: "FundingArbPosition",
+        snapshots: Dict[str, Optional["ExchangePositionSnapshot"]],
+    ) -> Optional[str]:
+        """
+        Check if position is at risk of liquidation and should be closed proactively.
+        
+        Args:
+            position: Position to check
+            snapshots: Exchange snapshots
+            
+        Returns:
+            Liquidation risk reason string if risk detected, None otherwise
+        """
+        strategy = self._strategy
+        risk_config = strategy.config.risk_config
+        
+        # Check if liquidation prevention is enabled
+        if not getattr(risk_config, "enable_liquidation_prevention", True):
+            return None
+        
+        min_distance_pct = getattr(risk_config, "min_liquidation_distance_pct", Decimal("0.05"))
+        
+        for dex in [position.long_dex, position.short_dex]:
+            snapshot = snapshots.get(dex) or snapshots.get(dex.lower())
+            if not snapshot:
+                continue
+            
+            liquidation_price = snapshot.liquidation_price
+            mark_price = snapshot.mark_price
+            
+            # Skip if missing required data
+            if liquidation_price is None or mark_price is None:
+                continue
+            
+            # Determine side
+            side = snapshot.side
+            if side is None:
+                if snapshot.quantity is not None:
+                    side = "long" if snapshot.quantity > 0 else "short"
+                else:
+                    # Fallback: use position metadata
+                    if dex == position.long_dex:
+                        side = "long"
+                    else:
+                        side = "short"
+            
+            # Calculate distance to liquidation
+            distance_pct = self._calculate_liquidation_distance(
+                mark_price, liquidation_price, side
+            )
+            
+            if distance_pct is None:
+                continue
+            
+            # Check if too close to liquidation
+            if distance_pct < min_distance_pct:
+                self._strategy.logger.warning(
+                    f"⚠️ Liquidation risk detected for {position.symbol} on {dex.upper()}: "
+                    f"distance={distance_pct*100:.2f}% < threshold={min_distance_pct*100:.2f}% "
+                    f"(mark=${mark_price:.6f}, liquidation=${liquidation_price:.6f})"
+                )
+                return f"LIQUIDATION_RISK_{dex.upper()}"
+        
+        return None
+    
+    def _calculate_liquidation_distance(
+        self,
+        mark_price: Decimal,
+        liquidation_price: Decimal,
+        side: str,
+    ) -> Optional[Decimal]:
+        """
+        Calculate distance to liquidation as a percentage.
+        
+        Args:
+            mark_price: Current mark price
+            liquidation_price: Liquidation price
+            side: Position side ("long" or "short")
+            
+        Returns:
+            Distance percentage (0.05 = 5%), or None if calculation fails
+        """
+        if mark_price <= 0 or liquidation_price <= 0:
+            return None
+        
+        try:
+            if side == "long":
+                # Long: liquidation_price < mark_price
+                # Distance = (mark_price - liquidation_price) / mark_price
+                if mark_price <= liquidation_price:
+                    # Already at or past liquidation
+                    return Decimal("0")
+                distance = (mark_price - liquidation_price) / mark_price
+            else:  # short
+                # Short: liquidation_price > mark_price
+                # Distance = (liquidation_price - mark_price) / mark_price
+                if mark_price >= liquidation_price:
+                    # Already at or past liquidation
+                    return Decimal("0")
+                distance = (liquidation_price - mark_price) / mark_price
+            
+            return distance if distance >= 0 else None
+        except Exception:
+            return None
+    
     def detect_liquidation(
         self,
         position: "FundingArbPosition",

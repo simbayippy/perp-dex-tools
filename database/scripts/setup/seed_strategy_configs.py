@@ -54,7 +54,11 @@ TEMPLATES = [
             'dry_run': False,
             'max_oi_usd': 1500000.0,
             'min_volume_24h': 350000.0,
-            'min_oi_usd': 100000.0
+            'min_oi_usd': 100000.0,
+            'max_entry_price_divergence_pct': 0.01,
+            'wide_spread_cooldown_minutes': 60,
+            'enable_liquidation_prevention': True,
+            'min_liquidation_distance_pct': 0.10,
         }
     },
     {
@@ -163,6 +167,21 @@ async def seed_strategy_configs():
                             logger.info(f"  Found min_oi_usd: existing={existing_min_oi}, expected={expected_min_oi}")
                             needs_update = True
                             update_reason.append("add/update min_oi_usd default")
+                        
+                        # Check new entry validation fields
+                        new_fields = [
+                            ('max_entry_price_divergence_pct', 0.01),
+                            ('wide_spread_cooldown_minutes', 60),
+                            ('enable_liquidation_prevention', True),
+                            ('min_liquidation_distance_pct', 0.10),
+                        ]
+                        
+                        for field_name, expected_value in new_fields:
+                            existing_value = existing_dict.get(field_name)
+                            if existing_value is None or existing_value != expected_value:
+                                logger.info(f"  Found {field_name}: existing={existing_value}, expected={expected_value}")
+                                needs_update = True
+                                update_reason.append(f"add/update {field_name} default")
                     
                     if needs_update:
                         logger.info(f"Updating template '{config_name}': {', '.join(update_reason)}")

@@ -65,6 +65,17 @@ class RiskManagementConfig(BaseModel):
         description="Minimum hours to hold a position before risk exits are considered (supports fractional hours, e.g., 1.5 = 1 hour 30 minutes)"
     )
     
+    # Liquidation prevention
+    enable_liquidation_prevention: bool = Field(
+        default=True,
+        description="Enable proactive liquidation prevention"
+    )
+    
+    min_liquidation_distance_pct: Decimal = Field(
+        default=Decimal("0.10"),  # 10%
+        description="Minimum distance to liquidation before forced close"
+    )
+    
     class Config:
         use_enum_values = True
         validate_assignment = True
@@ -180,6 +191,18 @@ class FundingArbConfig(BaseModel):
     min_oi_usd: Optional[Decimal] = Field(
         default=None,
         description="Minimum open interest in USD across both exchanges (filters low-liquidity markets)"
+    )
+    
+    # Entry validation
+    max_entry_price_divergence_pct: Decimal = Field(
+        default=Decimal("0.01"),  # 1%
+        description="Maximum price divergence between exchanges to allow entry"
+    )
+    
+    # Cooldown
+    wide_spread_cooldown_minutes: int = Field(
+        default=60,
+        description="Cooldown period for symbols with wide spreads"
     )
     
     # Risk management

@@ -6,7 +6,7 @@ Multiple improvements to price validation and exit logic to improve profitabilit
 
 ## Issues
 
-### 1. Price Divergence Validation on Entry
+### 1. Price Divergence Validation on Entry (in progress)
 
 **Problem**: Currently, the system uses `max_spread_threshold_pct` (default 0.5%) to decide whether to use break-even price alignment, but it still allows positions to open even if prices diverge significantly between exchanges.
 
@@ -18,7 +18,7 @@ Multiple improvements to price validation and exit logic to improve profitabilit
 
 **Impact**: Prevents entering positions where price divergence could lead to immediate unrealized losses
 
-### 2. Wide Spread Cooldown Mechanism
+### 2. Wide Spread Cooldown Mechanism (in progress)
 
 **Problem**: If a coin consistently has wide spreads, the system keeps trying to trade it on every scan, wasting resources.
 
@@ -29,7 +29,7 @@ Multiple improvements to price validation and exit logic to improve profitabilit
 
 **Use Case**: Some coins may have temporary wide spreads due to low liquidity or exchange issues, but should be retried later
 
-### 3. Delayed Exit Until Profitable
+### 3. Delayed Exit Until Profitable (TODO)
 
 **Problem**: When exit conditions are met (e.g., min_hold satisfied, erosion threshold), positions are immediately closed with market orders, which can lead to slippage and losses.
 
@@ -46,7 +46,7 @@ Multiple improvements to price validation and exit logic to improve profitabilit
 - Limit orders reduce slippage
 - Waiting for profitability improves overall PnL
 
-### 4. Take Profit on Price Divergence Opportunities
+### 4. Take Profit on Price Divergence Opportunities (TODO)
 
 **Problem**: When price movements create profitable opportunities (one leg profitable, other leg less losing), the system doesn't take advantage.
 
@@ -284,7 +284,7 @@ These improvements can be expanded upon, and new improvements should be added wh
 - **Slippage prediction**: Use historical data to predict slippage and adjust order types accordingly
 - **Market condition awareness**: Adapt exit strategies based on overall market conditions (volatile vs stable)
 
-## Liquidation Prevention
+## Liquidation Prevention (in progress)
 
 ### Problem
 
