@@ -175,9 +175,11 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             max_value=Decimal("0.9"),
             required=False,
             help_text=(
-                "Guard the *ongoing* funding edge. Example: 0.5 exits if the current funding "
-                "spread is half of the entry spread. Lower values lock in profits sooner but "
-                "can cut trades early. Works alongside min_profit_rate (entry guard)."
+                "Guard the *ongoing* funding edge. This threshold is based on the 'remaining ratio' "
+                "(current divergence / entry divergence). Example: 0.4 means exit when profit has "
+                "eroded to 40% of entry (i.e., 60% erosion has occurred, 40% remains). Lower values "
+                "(e.g., 0.3) lock in profits sooner but can cut trades early. Works alongside "
+                "min_profit_rate (entry guard)."
             ),
         ),
         ParameterSchema(

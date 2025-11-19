@@ -336,7 +336,10 @@ class PositionMonitor:
         current_rate_display = self._format_rate(position.current_divergence)
 
         erosion_ratio = position.get_profit_erosion()
-        erosion_display = self._format_percent(erosion_ratio)
+        # Convert remaining ratio to erosion percentage for display
+        # erosion_ratio = 0.4 means 40% remains, so 60% erosion
+        erosion_percentage = (Decimal("1") - erosion_ratio) * Decimal("100") if erosion_ratio <= Decimal("1") else Decimal("0")
+        erosion_display = self._format_percent(erosion_percentage / Decimal("100"))
 
         threshold = None
         min_profit = None
@@ -345,7 +348,13 @@ class PositionMonitor:
             if risk_cfg:
                 threshold = getattr(risk_cfg, "min_erosion_threshold", None)
 
-        threshold_display = self._format_percent(threshold) if threshold is not None else "n/a"
+        # Convert threshold (remaining ratio) to erosion percentage for display
+        # threshold = 0.4 means exit when 40% remains, so 60% erosion
+        if threshold is not None:
+            threshold_erosion_pct = (Decimal("1") - Decimal(str(threshold))) * Decimal("100")
+            threshold_display = self._format_percent(threshold_erosion_pct / Decimal("100"))
+        else:
+            threshold_display = "n/a"
 
         return (
             "Yield (annualised) | "

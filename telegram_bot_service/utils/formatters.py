@@ -90,8 +90,12 @@ class TelegramFormatter:
         min_erosion_threshold = pos.get('min_erosion_threshold')
         
         if entry_apy is not None and current_apy is not None:
+            # Convert remaining ratio to erosion percentage for display
+            # erosion_ratio = 0.4 means 40% remains, so 60% erosion
             erosion_pct = (1.0 - erosion_ratio) * 100 if erosion_ratio <= 1.0 else 0.0
-            threshold_pct = min_erosion_threshold * 100 if min_erosion_threshold else None
+            # Convert threshold (remaining ratio) to erosion percentage for display
+            # threshold = 0.5 means exit when 50% remains, so 50% erosion
+            threshold_pct = (1.0 - min_erosion_threshold) * 100 if min_erosion_threshold else None
             
             lines.append("<b>📈 Yield (Annualized)</b>")
             lines.append(f"  • Entry: <code>{entry_apy:.2f}%</code>")
