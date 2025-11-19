@@ -28,7 +28,7 @@ class RiskManagementConfig(BaseModel):
     # Profit erosion
     min_erosion_threshold: Decimal = Field(
         default=Decimal("0.5"),
-        description="Exit when divergence drops to X% of entry (0.5 = 50% erosion)"
+        description="Exit when divergence drops to X% of entry (0.4 = 40% remains = 60% erosion)"
     )
     
     # Time limits

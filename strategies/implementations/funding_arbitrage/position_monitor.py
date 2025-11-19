@@ -234,6 +234,34 @@ class PositionMonitor:
             rate_map[position.long_dex] = long_rate
         if short_rate is not None:
             rate_map[position.short_dex] = short_rate
+        
+        # Calculate and store funding APY for each leg
+        # This should happen whenever rates are available, even if no snapshot updates occurred
+        apy_updated = False
+        for dex, leg_meta in legs_metadata.items():
+            # Get the funding rate for this DEX from rate_map
+            # Try exact match first, then case-insensitive match
+            funding_rate = rate_map.get(dex)
+            if funding_rate is None:
+                # Try case-insensitive lookup
+                dex_lower = dex.lower()
+                for rate_dex, rate in rate_map.items():
+                    if rate_dex.lower() == dex_lower:
+                        funding_rate = rate
+                        break
+            
+            if funding_rate is not None:
+                # Calculate APY: rate * 3 (fundings per day) * 365 (days) * 100 (percentage)
+                funding_apy = float(funding_rate * Decimal("3") * Decimal("365") * Decimal("100"))
+                leg_meta["funding_apy"] = funding_apy
+                apy_updated = True
+            # If rate not available, ensure funding_apy is None (don't overwrite existing value)
+            elif "funding_apy" not in leg_meta:
+                leg_meta["funding_apy"] = None
+        
+        # Update legs metadata with APY values if we calculated APY or had other updates
+        if has_updates or apy_updated:
+            position.metadata["legs"] = legs_metadata
 
     def _log_exchange_metrics(self, position: FundingArbPosition) -> None:
         """
@@ -336,7 +364,10 @@ class PositionMonitor:
         current_rate_display = self._format_rate(position.current_divergence)
 
         erosion_ratio = position.get_profit_erosion()
-        erosion_display = self._format_percent(erosion_ratio)
+        # Convert remaining ratio to erosion percentage for display
+        # erosion_ratio = 0.4 means 40% remains, so 60% erosion
+        erosion_percentage = (Decimal("1") - erosion_ratio) * Decimal("100") if erosion_ratio <= Decimal("1") else Decimal("0")
+        erosion_display = self._format_percent(erosion_percentage / Decimal("100"))
 
         threshold = None
         min_profit = None
@@ -345,7 +376,13 @@ class PositionMonitor:
             if risk_cfg:
                 threshold = getattr(risk_cfg, "min_erosion_threshold", None)
 
-        threshold_display = self._format_percent(threshold) if threshold is not None else "n/a"
+        # Convert threshold (remaining ratio) to erosion percentage for display
+        # threshold = 0.4 means exit when 40% remains, so 60% erosion
+        if threshold is not None:
+            threshold_erosion_pct = (Decimal("1") - Decimal(str(threshold))) * Decimal("100")
+            threshold_display = self._format_percent(threshold_erosion_pct / Decimal("100"))
+        else:
+            threshold_display = "n/a"
 
         return (
             "Yield (annualised) | "

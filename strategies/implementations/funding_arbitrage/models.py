@@ -83,7 +83,10 @@ class FundingArbPosition:
         Calculate how much profit has eroded.
         
         Returns:
-            Ratio of current to entry divergence (1.0 = no erosion, 0.5 = 50% erosion)
+            Ratio of current to entry divergence.
+            - 1.0 = no erosion (0% erosion, 100% remains)
+            - 0.4 = 60% erosion (40% remains, 60% eroded)
+            - 0.0 = 100% erosion (0% remains, fully eroded)
         """
         if not self.current_divergence or self.entry_divergence == 0:
             return Decimal("1.0")
