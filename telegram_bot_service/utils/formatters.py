@@ -12,7 +12,7 @@ EXCHANGE_EMOJIS = {
     "aster": "✨",
     "backpack": "🎒",
     "paradex": "🎪",
-    "grvt": "🔷",
+    "grvt": "🟠",
     "edgex": "🔹",
 }
 
@@ -145,19 +145,33 @@ class TelegramFormatter:
             # Side emoji
             side_emoji = "🟢" if side == "long" else "🔴" if side == "short" else "⚪"
             
+            # Exchange emoji
+            dex_emoji = TelegramFormatter._get_exchange_emoji(dex)
+            
             # Get leverage if available
             leverage = leg.get('leverage')
             if leverage is not None:
                 leverage_str = f" {int(leverage)}x" if leverage >= 1 else f" {leverage:.1f}x"
-                lines.append(f"<b>{side_emoji} {dex}</b> ({side.upper()}{leverage_str})")
+                lines.append(f"<b>{dex_emoji} {side_emoji} {dex}</b> ({side.upper()}{leverage_str})")
             else:
-                lines.append(f"<b>{side_emoji} {dex}</b> ({side.upper()})")
+                lines.append(f"<b>{dex_emoji} {side_emoji} {dex}</b> ({side.upper()})")
             
             # Price info
             if entry_price:
                 lines.append(f"  Entry: <code>${entry_price:.6f}</code>")
             if mark_price:
                 lines.append(f"  Mark:  <code>${mark_price:.6f}</code>")
+            
+            # Liquidation price (right after mark price)
+            liquidation_price = leg.get('liquidation_price')
+            if liquidation_price is not None:
+                try:
+                    liq_price = float(liquidation_price)
+                    if liq_price > 0:
+                        lines.append(f"  Liq:   <code>${liq_price:.6f}</code>")
+                except (ValueError, TypeError):
+                    # Skip if conversion fails
+                    pass
             
             # Quantity
             if quantity:
@@ -173,7 +187,7 @@ class TelegramFormatter:
                 funding_emoji = "💰" if funding_accrued > 0 else "💸" if funding_accrued < 0 else "➖"
                 lines.append(f"  Funding: {funding_emoji} <code>${funding_accrued:+.2f}</code>")
             
-            # Funding APY
+            # Funding APY (per leg)
             if funding_apy is not None:
                 apy_emoji = "📈" if funding_apy > 0 else "📉" if funding_apy < 0 else "➖"
                 lines.append(f"  APY: {apy_emoji} <code>{funding_apy:.2f}%</code>")
@@ -483,7 +497,7 @@ class TelegramFormatter:
     @staticmethod
     def _get_exchange_emoji(dex_name: str) -> str:
         """Get emoji for exchange name."""
-        return EXCHANGE_EMOJIS.get(dex_name.lower(), "")
+        return EXCHANGE_EMOJIS.get(dex_name.lower(), "📊")
     
     @staticmethod
     def format_position_pnl(account_name: str, positions: List[Dict[str, Any]]) -> str:

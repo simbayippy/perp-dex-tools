@@ -437,6 +437,16 @@ class LighterPositionManager:
                             f"qty={position_qty}, market_id={pos.market_id}"
                         )
                     
+                    # Extract liquidation_price (handle None/empty string cases)
+                    liquidation_price_raw = getattr(pos, 'liquidation_price', None)
+                    liquidation_price_decimal = None
+                    if liquidation_price_raw is not None and liquidation_price_raw != "":
+                        try:
+                            liquidation_price_decimal = Decimal(str(liquidation_price_raw))
+                        except Exception:
+                            # Skip if parsing fails
+                            pass
+                    
                     pos_dict = {
                         'market_id': pos.market_id,
                         'symbol': pos.symbol,
@@ -445,7 +455,7 @@ class LighterPositionManager:
                         'position_value': Decimal(pos.position_value),
                         'unrealized_pnl': Decimal(pos.unrealized_pnl),
                         'realized_pnl': Decimal(pos.realized_pnl),
-                        'liquidation_price': Decimal(pos.liquidation_price),
+                        'liquidation_price': liquidation_price_decimal,
                         'allocated_margin': Decimal(pos.allocated_margin),
                         'sign': pos.sign  # 1 for Long, -1 for Short
                     }
