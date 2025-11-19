@@ -314,17 +314,19 @@ class StrategyNotificationService:
         pnl_pct: Optional[Decimal] = None,
         age_hours: Optional[float] = None,
         size_usd: Optional[Decimal] = None,
+        liquidation_risk_details: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Send notification when a position is closed.
         
         Args:
             symbol: Trading symbol (e.g., "BTC")
-            reason: Reason for closing (e.g., "PROFIT_EROSION", "DIVERGENCE_FLIPPED", "TIME_LIMIT")
+            reason: Reason for closing (e.g., "PROFIT_EROSION", "DIVERGENCE_FLIPPED", "TIME_LIMIT", "LIQUIDATION_RISK_PARADEX")
             pnl_usd: Optional PnL in USD
             pnl_pct: Optional PnL percentage
             age_hours: Optional position age in hours
             size_usd: Optional position size in USD
+            liquidation_risk_details: Optional dict with liquidation risk info (for future use)
             
         Returns:
             True if notification queued successfully, False otherwise
@@ -348,7 +350,14 @@ class StrategyNotificationService:
             user_id = str(run_row["user_id"])
             
             # Format reason for display
-            reason_display = reason.replace("_", " ").title()
+            if reason.startswith("LIQUIDATION_RISK_"):
+                # Extract exchange name and format nicely
+                exchange_name = reason.replace("LIQUIDATION_RISK_", "").upper()
+                exchange_emoji = self._get_exchange_emoji(exchange_name.lower())
+                exchange_display = f"{exchange_emoji} {exchange_name}" if exchange_emoji else exchange_name
+                reason_display = f"Liquidation Risk ({exchange_display})"
+            else:
+                reason_display = reason.replace("_", " ").title()
             
             # Format message
             message = (
