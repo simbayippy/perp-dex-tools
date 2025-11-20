@@ -152,6 +152,7 @@ class AtomicMultiOrderExecutor:
         _exception = None
         rollback_performed = False
         rollback_cost = Decimal("0")
+        execution_successful = False  # Track if execution succeeded to prevent rollback in finally block
         contexts: List[OrderContext] = []
         
         try:
@@ -295,7 +296,12 @@ class AtomicMultiOrderExecutor:
                         if hedge_success:
                             # Hedge succeeded and orders are balanced - return success immediately
                             # Don't continue to post-execution imbalance checks since we already verified balance
-                            all_completed = True
+                            # CRITICAL: Set success flag to prevent rollback in finally block
+                            execution_successful = True
+                            self.logger.info(
+                                "🎯 Execution successful - both orders filled and balanced. "
+                                "Returning early to skip redundant post-execution checks."
+                            )
                             # Return success result immediately - don't continue to imbalance checks
                             return self._build_execution_result(
                                 contexts=contexts,
@@ -577,11 +583,12 @@ class AtomicMultiOrderExecutor:
             filled_orders_count = sum(1 for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal("0"))
             
             # Only rollback if:
-            # 1. Rollback wasn't already performed (flag check)
-            # 2. Contexts haven't been cleared (safety check - rollback_manager clears them)
-            # 3. There are filled orders
-            # 4. Rollback on partial is enabled
-            if not rollback_performed and not contexts_cleared and filled_orders_count > 0 and rollback_on_partial:
+            # 1. Execution didn't already succeed (early return with success)
+            # 2. Rollback wasn't already performed (flag check)
+            # 3. Contexts haven't been cleared (safety check - rollback_manager clears them)
+            # 4. There are filled orders
+            # 5. Rollback on partial is enabled
+            if not execution_successful and not rollback_performed and not contexts_cleared and filled_orders_count > 0 and rollback_on_partial:
                 filled_orders_list = [
                     ctx.result
                     for ctx in contexts
