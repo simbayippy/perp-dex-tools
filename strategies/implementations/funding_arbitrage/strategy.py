@@ -236,12 +236,53 @@ class FundingArbitrageStrategy(BaseStrategy):
 
             self.logger.info("Scanning for new funding arbitrage opportunities")
             opportunities = await self.opportunity_scanner.scan()
+            self.logger.info(f"Found {len(opportunities)} opportunities to process")
+            
+            processed_count = 0
+            skipped_count = 0
+            failed_count = 0
+            
             for opportunity in opportunities:
                 if not await self.opportunity_scanner.has_capacity():
+                    self.logger.debug("No capacity remaining, stopping opportunity processing")
                     break
+                    
                 if not await self.opportunity_scanner.should_take(opportunity):
+                    skipped_count += 1
+                    self.logger.debug(
+                        f"⏭️  Skipping {opportunity.symbol} - failed should_take() validation"
+                    )
                     continue
-                await self.position_opener.open(opportunity)
+                
+                # Process each opportunity independently - if one fails, continue with others
+                processed_count += 1
+                self.logger.info(
+                    f"🔄 Processing opportunity {processed_count}/{len(opportunities)}: "
+                    f"{opportunity.symbol} ({opportunity.long_dex}/{opportunity.short_dex})"
+                )
+                try:
+                    result = await self.position_opener.open(opportunity)
+                    if result is None:
+                        failed_count += 1
+                        self.logger.warning(
+                            f"⚠️  {opportunity.symbol}: Position opening returned None "
+                            f"(likely failed validation). Continuing with other opportunities..."
+                        )
+                except Exception as opp_exc:
+                    # Log the error but continue processing other opportunities
+                    failed_count += 1
+                    self.logger.error(
+                        f"❌ Failed to process opportunity for {opportunity.symbol}: {opp_exc}. "
+                        f"Continuing with other opportunities..."
+                    )
+                    self.failed_symbols.add(opportunity.symbol)
+                    continue
+            
+            if processed_count > 0 or skipped_count > 0 or failed_count > 0:
+                self.logger.info(
+                    f"📊 Opportunity processing summary: {processed_count} processed, "
+                    f"{skipped_count} skipped, {failed_count} failed out of {len(opportunities)} total"
+                )
 
         except Exception as exc:
             self.logger.error(f"Strategy execution failed: {exc}")
