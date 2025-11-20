@@ -245,10 +245,26 @@ class EventBasedReconciler:
                         f"+{new_fills_from_order} (total: {accumulated_filled_qty}/{target_quantity}) @ ${fill_price}"
                     )
                 else:
+                    # Try to get cancellation reason for better logging
+                    cancellation_reason = None
+                    try:
+                        order_status_check = await exchange_client.get_order_info(order_id)
+                        if order_status_check:
+                            cancellation_reason = getattr(order_status_check, 'cancel_reason', None)
+                    except Exception:
+                        pass
+                    
                     error = "Order cancelled without fills"
-                    logger.debug(
-                        f"🔄 [{exchange_name}] Order {order_id} cancelled without fills for {symbol}"
-                    )
+                    if cancellation_reason:
+                        logger.info(
+                            f"🔄 [{exchange_name}] Order {order_id} cancelled without fills for {symbol}. "
+                            f"Reason: {cancellation_reason}. Will retry with adaptive pricing."
+                        )
+                    else:
+                        logger.info(
+                            f"🔄 [{exchange_name}] Order {order_id} cancelled without fills for {symbol}. "
+                            f"Will retry with adaptive pricing."
+                        )
             else:  # TIMEOUT
                 # Proactively cancel the order since it timed out
                 # This prevents orders from staying open unnecessarily

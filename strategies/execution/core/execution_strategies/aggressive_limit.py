@@ -340,11 +340,41 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                     last_order_filled_qty = recon_result.current_order_filled_qty
                     accumulated_filled_qty = recon_result.accumulated_filled_qty
                     
-                    if recon_result.error:
+                    # Only set execution_error for fatal errors, not retryable cancellations
+                    # "Order cancelled without fills" is retryable - should not break the loop
+                    if recon_result.error and recon_result.error != "Order cancelled without fills":
                         execution_error = recon_result.error
                     
                     if recon_result.fill_price:
                         accumulated_fill_price = recon_result.fill_price
+                    
+                    # Log cancellation reason for debugging
+                    if recon_result.error == "Order cancelled without fills":
+                        # Try to get cancellation reason from order info
+                        try:
+                            order_status_check = await exchange_client.get_order_info(order_id)
+                            if order_status_check:
+                                cancel_reason = getattr(order_status_check, 'cancel_reason', None)
+                                if cancel_reason:
+                                    logger.info(
+                                        f"🔄 [{exchange_name}] Order {order_id} cancelled without fills for {symbol}. "
+                                        f"Reason: {cancel_reason}. Retrying with adaptive pricing."
+                                    )
+                                else:
+                                    logger.info(
+                                        f"🔄 [{exchange_name}] Order {order_id} cancelled without fills for {symbol}. "
+                                        f"Retrying with adaptive pricing (attempt {retry_count + 1}/{max_retries})."
+                                    )
+                            else:
+                                logger.info(
+                                    f"🔄 [{exchange_name}] Order {order_id} cancelled without fills for {symbol}. "
+                                    f"Retrying with adaptive pricing (attempt {retry_count + 1}/{max_retries})."
+                                )
+                        except Exception:
+                            logger.info(
+                                f"🔄 [{exchange_name}] Order {order_id} cancelled without fills for {symbol}. "
+                                f"Retrying with adaptive pricing (attempt {retry_count + 1}/{max_retries})."
+                            )
                     
                     # Check if filled
                     if recon_result.filled and accumulated_filled_qty > Decimal("0"):
@@ -389,25 +419,41 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                         retries_used += 1
                         continue
                     elif not recon_result.filled:
-                        # Order not filled, cancel and retry
+                        # Order not filled - check if it was cancelled and get reason
+                        cancellation_reason = None
                         try:
                             order_status_check = await exchange_client.get_order_info(order_id)
-                            if order_status_check and order_status_check.status not in {"CANCELED", "CANCELLED"}:
-                                logger.debug(
-                                    f"🔄 [{exchange_name}] Order {order_id} not filled after {attempt_timeout}s, "
-                                    f"canceling and retrying (attempt {retry_count + 1}/{max_retries})"
-                                )
-                                await exchange_client.cancel_order(order_id)
+                            if order_status_check:
+                                if order_status_check.status in {"CANCELED", "CANCELLED"}:
+                                    cancellation_reason = getattr(order_status_check, 'cancel_reason', None)
+                                    logger.info(
+                                        f"🔄 [{exchange_name}] Order {order_id} cancelled without fills for {symbol}. "
+                                        f"Reason: {cancellation_reason or 'unknown'}. "
+                                        f"Retrying with adaptive pricing (attempt {retry_count + 1}/{max_retries})"
+                                    )
+                                elif order_status_check.status not in {"FILLED"}:
+                                    logger.debug(
+                                        f"🔄 [{exchange_name}] Order {order_id} not filled after {attempt_timeout}s, "
+                                        f"canceling and retrying (attempt {retry_count + 1}/{max_retries})"
+                                    )
+                                    await exchange_client.cancel_order(order_id)
                             else:
                                 logger.debug(
-                                    f"📊 [{exchange_name}] Order {order_id} already {order_status_check.status}, "
-                                    f"skipping cancel (attempt {retry_count + 1}/{max_retries})"
+                                    f"🔄 [{exchange_name}] Order {order_id} status unknown. "
+                                    f"Retrying (attempt {retry_count + 1}/{max_retries})"
                                 )
                         except Exception as cancel_exc:
                             logger.debug(f"⚠️ [{exchange_name}] Exception during cancel check: {cancel_exc}")
                         
-                        if execution_error:
+                        # Only break on fatal errors, not retryable cancellations
+                        # "Order cancelled without fills" is retryable - continue loop
+                        if execution_error and execution_error != "Order cancelled without fills":
+                            logger.warning(
+                                f"⚠️ [{exchange_name}] Fatal error detected: {execution_error}. "
+                                f"Stopping retries for {symbol}"
+                            )
                             break
+                        
                         await asyncio.sleep(retry_backoff_ms / 1000.0)
                         retries_used += 1
                         continue
