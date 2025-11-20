@@ -222,10 +222,11 @@ class PositionOpener:
 
             return persistence.position
 
-        except Exception as exc:
+        except Exception as e:
             strategy = self._strategy
             strategy.logger.error(
-                f"❌ {opportunity.symbol}: Unexpected error - {exc}"
+                f"❌ {opportunity.symbol}: Unexpected error - {e}",
+                exc_info=True
             )
             strategy.failed_symbols.add(opportunity.symbol)
             return None

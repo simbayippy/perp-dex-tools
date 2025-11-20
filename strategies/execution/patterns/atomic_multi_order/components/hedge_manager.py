@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from ..contexts import OrderContext
 from .hedge.hedge_target_calculator import HedgeTargetCalculator
@@ -112,6 +112,7 @@ class HedgeManager:
         total_timeout_seconds: Optional[float] = None,
         inside_tick_retries: Optional[int] = None,
         max_deviation_pct: Optional[Decimal] = None,
+        executor: Optional[Any] = None,
     ) -> HedgeResult:
         """
         Attempt to hedge using aggressive limit orders with adaptive pricing.
@@ -139,6 +140,7 @@ class HedgeManager:
             total_timeout_seconds: Total timeout before market fallback (None = auto: 3.0s for closing, 6.0s for opening)
             inside_tick_retries: Number of retries using "inside spread" pricing (None = auto: 2 for closing, 3 for opening)
             max_deviation_pct: Max market movement % to attempt break-even hedge (None = default: 0.5%)
+            executor: Optional AtomicMultiOrderExecutor instance for websocket callback registration
             
         Returns:
             HedgeResult with execution details
@@ -189,7 +191,8 @@ class HedgeManager:
                 retry_backoff_ms=retry_backoff_ms,
                 total_timeout_seconds=total_timeout_seconds,
                 inside_tick_retries=inside_tick_retries,
-                max_deviation_pct=max_deviation_pct
+                max_deviation_pct=max_deviation_pct,
+                executor=executor
             )
             
             if not result.success:
