@@ -391,6 +391,18 @@ class FundingArbitrageStrategy(BaseStrategy):
                     risk_defaults.min_hold_hours,
                 ) or 0.0
             ),
+            enable_liquidation_prevention=strategy_params.get(
+                'enable_liquidation_prevention',
+                risk_defaults.enable_liquidation_prevention,
+            ),
+            min_liquidation_distance_pct=Decimal(
+                str(
+                    strategy_params.get(
+                        'min_liquidation_distance_pct',
+                        risk_defaults.min_liquidation_distance_pct,
+                    )
+                )
+            ),
         )
 
         max_oi_value = strategy_params.get('max_oi_usd')
