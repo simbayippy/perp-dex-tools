@@ -130,6 +130,11 @@ class MockExchangeClient:
     
     async def get_position_snapshot(self, symbol: str):
         """Mock position snapshot retrieval."""
+        # Track calls for testing
+        if not hasattr(self, '_position_snapshot_calls'):
+            self._position_snapshot_calls = []
+        self._position_snapshot_calls.append(symbol)
+        
         if symbol in self.position_snapshots:
             return self.position_snapshots[symbol]
         # Return empty position by default
@@ -223,7 +228,8 @@ async def test_market_hedge_partial_fill_before_cancel_tracked():
     other_ctx.hedge_target_quantity = Decimal("4.393")
     
     # Mock market order executor to return partial fill before cancel
-    with patch('strategies.execution.patterns.atomic_multi_order.components.hedge_manager.OrderExecutor') as mock_exec_cls:
+    # OrderExecutor is imported inside hedge() method, so patch at the source
+    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_exec_cls:
         hedge_executor = AsyncMock()
         mock_exec_cls.return_value = hedge_executor
         
@@ -330,8 +336,8 @@ async def test_rollback_safety_check_detects_untracked_positions():
     )
     
     # CRITICAL: Verify position snapshot was queried (Step 2.5 safety check)
-    assert 'XMR' in [call[0] if isinstance(call, tuple) else call for call in mock_client.order_info_calls] or \
-           hasattr(mock_client, '_position_snapshot_called')
+    assert hasattr(mock_client, '_position_snapshot_calls'), "Position snapshot should be tracked"
+    assert 'XMR' in mock_client._position_snapshot_calls, "Step 2.5 should query position snapshot for XMR"
     
     # CRITICAL: Verify rollback market order was placed for ACTUAL position size
     market_orders = [o for o in mock_client.placed_orders if o['type'] == 'market']
@@ -875,7 +881,7 @@ async def test_one_side_fill_hedge_success():
     ])
     
     # Mock hedge to succeed
-    with patch('strategies.execution.patterns.atomic_multi_order.components.hedge_manager.OrderExecutor') as mock_exec_cls:
+    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_exec_cls:
         hedge_executor = AsyncMock()
         mock_exec_cls.return_value = hedge_executor
         hedge_executor.execute_order.return_value = SimpleNamespace(
@@ -966,7 +972,7 @@ async def test_one_side_fill_hedge_failure_rollback():
     ])
     
     # Mock hedge to fail
-    with patch('strategies.execution.patterns.atomic_multi_order.components.hedge_manager.OrderExecutor') as mock_exec_cls:
+    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_exec_cls:
         hedge_executor = AsyncMock()
         mock_exec_cls.return_value = hedge_executor
         hedge_executor.execute_order.return_value = SimpleNamespace(
@@ -1063,7 +1069,7 @@ async def test_partial_fill_hedge_partial_fill_rollback():
     ])
     
     # Mock aggressive limit hedge to fail, then market hedge to partially fill
-    with patch('strategies.execution.patterns.atomic_multi_order.components.hedge_manager.OrderExecutor') as mock_exec_cls:
+    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_exec_cls:
         hedge_executor = AsyncMock()
         mock_exec_cls.return_value = hedge_executor
         
@@ -1178,7 +1184,7 @@ async def test_rollback_on_partial_false_no_rollback():
     ])
     
     # Mock hedge to fail
-    with patch('strategies.execution.patterns.atomic_multi_order.components.hedge_manager.OrderExecutor') as mock_exec_cls:
+    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_exec_cls:
         hedge_executor = AsyncMock()
         mock_exec_cls.return_value = hedge_executor
         hedge_executor.execute_order.return_value = SimpleNamespace(
