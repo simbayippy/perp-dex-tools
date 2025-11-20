@@ -445,24 +445,19 @@ class AtomicMultiOrderExecutor:
 
                 post_trade = await self._exposure_verifier.verify_post_trade_exposure(contexts)
                 if post_trade is not None:
-                    net_usd = post_trade.get("net_usd", Decimal("0"))
-                    net_pct = post_trade.get("net_pct", Decimal("0"))
                     net_qty = post_trade.get("net_qty", Decimal("0"))
-                    # Note: net_qty from post_trade is already in actual tokens (from exchange snapshots)
-                    # Use net_qty for quantity comparison, net_usd is kept for logging only
+                    # Use net_qty for quantity comparison (exposure verified purely on quantity)
                     imbalance_tokens = max(imbalance_tokens, net_qty)
 
-                    if net_usd > Decimal("0"):
-                        if net_pct > self._post_trade_max_imbalance_pct:
-                            self.logger.warning(
-                                "⚠️ Post-trade exposure detected after hedging: "
-                                f"net_qty={net_qty:.6f}, net_usd=${net_usd:.4f} ({net_pct*100:.2f}%)."
-                            )
-                        elif net_qty > self._post_trade_base_tolerance:
-                            self.logger.debug(
-                                "Post-trade exposure within tolerance: "
-                                f"net_qty={net_qty:.6f}, net_usd=${net_usd:.4f} ({net_pct*100:.2f}%)."
-                            )
+                    if net_qty > self._post_trade_base_tolerance:
+                        self.logger.warning(
+                            "⚠️ Post-trade exposure detected after hedging: "
+                            f"net_qty={net_qty:.6f} tokens."
+                        )
+                    elif net_qty > Decimal("0"):
+                        self.logger.debug(
+                            f"Post-trade exposure within tolerance: net_qty={net_qty:.6f} tokens."
+                        )
                 
                 return self._build_execution_result(
                     contexts=contexts,
@@ -511,11 +506,8 @@ class AtomicMultiOrderExecutor:
 
             post_trade = await self._exposure_verifier.verify_post_trade_exposure(contexts)
             if post_trade is not None:
-                net_usd = post_trade.get("net_usd", Decimal("0"))
-                net_pct = post_trade.get("net_pct", Decimal("0"))
                 net_qty = post_trade.get("net_qty", Decimal("0"))
-                # Use net_qty (quantity) for imbalance comparison, not net_usd
-                # net_usd is kept for logging/monitoring purposes only
+                # Use net_qty for imbalance comparison (exposure verified purely on quantity)
                 imbalance_tokens = max(imbalance_tokens, net_qty)
                 if net_qty > Decimal("0"):
                     # Calculate quantity imbalance percentage
@@ -524,7 +516,7 @@ class AtomicMultiOrderExecutor:
                     if net_qty_pct > self._post_trade_max_imbalance_pct:
                         self.logger.warning(
                             "⚠️ Residual quantity exposure detected after partial execution: "
-                            f"net_qty={net_qty:.6f} tokens ({net_qty_pct*100:.2f}%), net_usd=${net_usd:.4f} (for reference)."
+                            f"net_qty={net_qty:.6f} tokens ({net_qty_pct*100:.2f}%)."
                         )
 
             return self._build_execution_result(
