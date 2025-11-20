@@ -26,7 +26,7 @@ from strategies.execution.patterns.atomic_multi_order import (
     OrderSpec,
     AtomicExecutionResult,
 )
-from strategies.execution.patterns.atomic_multi_order.components.hedge_manager import HedgeManager
+from strategies.execution.patterns.atomic_multi_order.components import HedgeManager
 from strategies.execution.patterns.atomic_multi_order.components.rollback_manager import RollbackManager
 from strategies.execution.patterns.atomic_multi_order.contexts import OrderContext
 from strategies.execution.core.order_execution.market_order_executor import ExecutionResult
@@ -252,7 +252,7 @@ async def test_market_hedge_partial_fill_before_cancel_tracked():
         )
         
         # Execute hedge
-        success, error = await hedge_manager.hedge(
+        result = await hedge_manager.hedge(
             trigger_ctx=trigger_ctx,
             contexts=[trigger_ctx, other_ctx],
             logger=executor.logger,
@@ -260,9 +260,9 @@ async def test_market_hedge_partial_fill_before_cancel_tracked():
         )
         
         # Verify hedge failed (as expected)
-        assert success is False
-        assert error is not None
-        assert "partial fill" in error.lower() or "exceeds_max_slippage" in error.lower()
+        assert result.success is False
+        assert result.error_message is not None
+        assert "partial fill" in result.error_message.lower() or "exceeds_max_slippage" in result.error_message.lower()
         
         # CRITICAL: Verify context.filled_quantity was updated
         assert other_ctx.filled_quantity == partial_fill_qty, \
@@ -275,6 +275,82 @@ async def test_market_hedge_partial_fill_before_cancel_tracked():
         
         # Verify context is marked as completed
         assert other_ctx.completed is True
+
+
+@pytest.mark.asyncio
+async def test_hedge_skips_when_quantity_filled_even_if_usd_tracking_wrong(executor):
+    """
+    CRITICAL TEST: Verify that hedge is skipped when quantity is fully filled,
+    even if filled_usd tracking thinks there's remaining USD.
+    
+    This prevents over-hedging due to unreliable USD tracking.
+    
+    Scenario:
+    - Context is fully filled by quantity (4.393 XMR)
+    - But filled_usd tracking is wrong (due to missing price info)
+    - remaining_usd would be > 0, triggering old fallback bug
+    - Hedge should SKIP since quantity is already filled
+    """
+    hedge_manager = HedgeManager()
+    mock_client = MockExchangeClient("PARADEX")
+    
+    # Simulate context that is fully filled by quantity
+    ctx = OrderContext(
+        spec=OrderSpec(
+            exchange_client=mock_client,
+            symbol="XMR",
+            side="buy",
+            size_usd=Decimal("1600"),  # Original target
+            quantity=Decimal("4.393")   # Original target
+        ),
+        cancel_event=asyncio.Event(),
+        task=asyncio.create_task(asyncio.sleep(0)),
+        completed=True,
+        filled_quantity=Decimal("4.393"),  # ✅ Fully filled by quantity
+    )
+    
+    # Simulate filled_usd being WRONG (due to missing price)
+    # This would make remaining_usd > 0, triggering old fallback bug
+    ctx.filled_usd = Decimal("1200")  # Wrong! Should be ~1600
+    ctx.hedge_target_quantity = Decimal("4.393")
+    
+    # Mock trigger context (fully filled)
+    trigger_ctx = OrderContext(
+        spec=OrderSpec(
+            exchange_client=MockExchangeClient("LIGHTER"),
+            symbol="XMR",
+            side="sell",
+            size_usd=Decimal("1600"),
+            quantity=Decimal("4.393")
+        ),
+        cancel_event=asyncio.Event(),
+        task=asyncio.create_task(asyncio.sleep(0)),
+        completed=True,
+        filled_quantity=Decimal("4.393"),
+        result={'filled_quantity': Decimal("4.393"), 'fill_price': Decimal("365.00")}
+    )
+    
+    # Execute hedge - should skip since quantity is filled
+    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_exec_cls:
+        mock_executor = AsyncMock()
+        mock_exec_cls.return_value = mock_executor
+        
+        result = await hedge_manager.hedge(
+            trigger_ctx=trigger_ctx,
+            contexts=[trigger_ctx, ctx],
+            logger=executor.logger,
+            reduce_only=False
+        )
+        
+        # CRITICAL: Verify NO hedge order was placed
+        mock_executor.execute_order.assert_not_called()
+        
+        # Hedge should succeed (nothing to do)
+        assert result.success is True
+        assert result.error_message is None
+        
+        # Verify remaining_quantity is 0 (so hedge correctly skipped)
+        assert ctx.remaining_quantity == Decimal("0")
 
 
 @pytest.mark.asyncio
@@ -468,7 +544,7 @@ async def test_aggressive_limit_hedge_accumulates_partial_fills():
     
     # Execute aggressive limit hedge (will timeout and fallback)
     with patch('asyncio.sleep', new_callable=AsyncMock):  # Speed up timeout
-        success, error = await hedge_manager.aggressive_limit_hedge(
+        result = await hedge_manager.aggressive_limit_hedge(
             trigger_ctx=trigger_ctx,
             contexts=[trigger_ctx, other_ctx],
             logger=executor.logger,

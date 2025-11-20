@@ -31,11 +31,23 @@ def execution_result_to_dict(spec, execution_result, hedge: bool = False) -> Dic
     return data
 
 
-def apply_result_to_context(ctx: OrderContext, result: Dict[str, Any]) -> None:
+def apply_result_to_context(
+    ctx: OrderContext, 
+    result: Dict[str, Any],
+    executor: Optional[Any] = None
+) -> None:
     """Persist an execution result onto the associated context.
     
     Records the fill to accumulate ctx.filled_quantity, then updates ctx.result
     to reflect the accumulated total (not just this order's fill).
+    
+    Also registers context with executor for websocket callback routing if executor
+    is provided and order_id is available.
+    
+    Args:
+        ctx: OrderContext to update
+        result: Execution result dictionary
+        executor: Optional AtomicMultiOrderExecutor instance for websocket callback registration
     """
     ctx.result = result.copy()  # Copy to avoid mutating original
     ctx.completed = True
@@ -46,6 +58,12 @@ def apply_result_to_context(ctx: OrderContext, result: Dict[str, Any]) -> None:
     # Update ctx.result to reflect accumulated total (may include multiple fills)
     # This ensures consistency between ctx.result and ctx.filled_quantity
     ctx.result["filled_quantity"] = ctx.filled_quantity
+    
+    # Register context with executor for websocket callback routing
+    if executor is not None:
+        order_id = result.get("order_id")
+        if order_id:
+            executor._register_order_context(ctx, str(order_id))
 
 
 async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
@@ -54,8 +72,20 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
 
     Some exchanges return partial fills even after cancellation, so we query the order
     info and update the context before hedging.
+    
+    If websocket already handled the cancellation (websocket_cancelled=True), skip
+    reconciliation as websocket data is the source of truth.
     """
-    if ctx.remaining_usd <= Decimal("0"):
+    # If websocket already handled cancellation, skip reconciliation
+    if ctx.websocket_cancelled:
+        logger.debug(
+            f"Reconcile: {ctx.spec.symbol} order already handled by websocket callback. "
+            f"Skipping reconciliation."
+        )
+        return
+    
+    # Use quantity check - USD tracking is unreliable after cancellations
+    if ctx.remaining_quantity <= Decimal("0"):
         return
 
     result = ctx.result or {}
@@ -68,21 +98,57 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
     if get_order_info is None:
         return
 
+    # CRITICAL: Check websocket cache FIRST (without force_refresh) to get accurate fill data.
+    # Websocket updates are the source of truth and show the actual filled_size (e.g., 0.000 for cancelled orders).
+    # REST API may incorrectly calculate filled_size = order_size - remaining_size for cancelled orders.
+    #
+    # Exchange behavior varies:
+    # - Lighter/Paradex: Return cached data immediately if available (when force_refresh=False)
+    # - Aster/Backpack: Only return cached data if status is final (FILLED/CANCELED)
+    # All exchanges have websocket caches (latest_orders) updated by websocket handlers.
+    order_info = None
     try:
-        supports_force = False
-        try:
-            signature = inspect.signature(get_order_info)
-            supports_force = "force_refresh" in signature.parameters
-        except (TypeError, ValueError):  # pragma: no cover - defensive
+        # First, try to get order info from websocket cache (most accurate)
+        # This will use the latest_orders cache which is updated by websocket handlers.
+        # For Lighter/Paradex: Returns cached data immediately if available.
+        # For Aster/Backpack: Returns cached data only if status is final (FILLED/CANCELED).
+        order_info = await get_order_info(order_id)
+        
+        # If we got websocket data and order is CANCELED with 0 fills, trust it and skip REST query
+        # This works for all exchanges because:
+        # - Lighter/Paradex: Cache will have the cancelled order with accurate filled_size
+        # - Aster/Backpack: Will return cached data for CANCELED status (final state)
+        if order_info is not None:
+            order_status = getattr(order_info, "status", "").upper()
+            reported_qty = coerce_decimal(getattr(order_info, "filled_size", None)) or Decimal("0")
+            
+            if order_status == "CANCELED" and reported_qty <= Decimal("0") and ctx.filled_quantity <= Decimal("0"):
+                logger.debug(
+                    f"Reconcile: {ctx.spec.symbol} order {order_id} is CANCELED with 0 fills "
+                    f"(from websocket cache). Skipping reconciliation - no fills to record."
+                )
+                return
+        
+        # If websocket cache doesn't have final status or we need fresh data, query REST API
+        # This happens if:
+        # - Cache doesn't have the order yet (websocket update hasn't arrived)
+        # - Aster/Backpack: Cache has non-final status (OPEN/PARTIALLY_FILLED)
+        # But we'll apply defensive checks to REST API data to catch incorrect filled_size
+        if order_info is None or getattr(order_info, "status", "").upper() not in {"FILLED", "CANCELED", "CANCELLED"}:
             supports_force = False
-
-        if supports_force:
             try:
-                order_info = await get_order_info(order_id, force_refresh=True)
-            except TypeError:
+                signature = inspect.signature(get_order_info)
+                supports_force = "force_refresh" in signature.parameters
+            except (TypeError, ValueError):  # pragma: no cover - defensive
+                supports_force = False
+
+            if supports_force:
+                try:
+                    order_info = await get_order_info(order_id, force_refresh=True)
+                except TypeError:
+                    order_info = await get_order_info(order_id)
+            elif order_info is None:
                 order_info = await get_order_info(order_id)
-        else:
-            order_info = await get_order_info(order_id)
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning(
             f"⚠️ Failed to reconcile fill for {ctx.spec.symbol} after cancel: {exc}"
@@ -94,10 +160,20 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
 
     # Check order status - if CANCELED with 0 fills, don't reconcile
     order_status = getattr(order_info, "status", "").upper()
-    reported_qty = coerce_decimal(getattr(order_info, "filled_size", None))
+    reported_qty = coerce_decimal(getattr(order_info, "filled_size", None)) or Decimal("0")
     remaining_size = coerce_decimal(getattr(order_info, "remaining_size", None)) or Decimal("0")
     spec_qty = getattr(ctx.spec, "quantity", None)
     spec_qty_dec = Decimal(str(spec_qty)) if spec_qty is not None else None
+    
+    # CRITICAL: If order is CANCELED and filled_size is 0 (from websocket or REST),
+    # and we have no fills in context, skip reconciliation - order was cancelled without any fills
+    if order_status == "CANCELED" and reported_qty <= Decimal("0") and ctx.filled_quantity <= Decimal("0"):
+        logger.debug(
+            f"Reconcile: {ctx.spec.symbol} order {order_id} is CANCELED with 0 fills "
+            f"(reported_qty={reported_qty}, ctx.filled_quantity={ctx.filled_quantity}). "
+            f"Skipping reconciliation - no fills to record."
+        )
+        return
     
     # CRITICAL: If order is CANCELED and remaining_size is 0 (nothing remaining),
     # then filled_size should equal what was actually filled. If we have no fills recorded
@@ -105,25 +181,33 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
     # This can happen when exchange clients incorrectly calculate filled_size = size - remaining
     # for canceled orders with 0 fills (where remaining=0, so filled_size=size, but no actual fills occurred).
     if order_status == "CANCELED":
-        # If remaining_size is 0 or very small (within 1% of spec_qty), the order had no remaining quantity
-        # If we have no fills recorded but REST reports fills, be very suspicious
-        if ctx.filled_quantity <= Decimal("0") and spec_qty_dec is not None:
-            # Calculate what percentage of spec_qty is remaining
+        # CRITICAL FIX: For CANCELED orders, if remaining_size is 0 (or very small), we should be
+        # very suspicious of filled_size that equals (or is close to) spec_qty. Many exchanges
+        # incorrectly calculate filled_size = order_size - remaining_size, which for a cancelled
+        # order with remaining_size=0 gives filled_size=order_size, even if no fills occurred.
+        # 
+        # We should skip reconciliation if:
+        # 1. remaining_size is 0 (or very small, < 1% of spec_qty)
+        # 2. AND reported_qty is close to spec_qty (within 10% - this catches exact matches and rounding)
+        # 3. AND we have no fills recorded in context (ctx.filled_quantity <= 0)
+        #
+        # This prevents false fills from being recorded when an order was cancelled without any fills.
+        if spec_qty_dec is not None and reported_qty is not None:
             remaining_pct = (remaining_size / spec_qty_dec * Decimal("100")) if spec_qty_dec > Decimal("0") else Decimal("100")
+            reported_pct = (reported_qty / spec_qty_dec * Decimal("100")) if spec_qty_dec > Decimal("0") else Decimal("0")
+            qty_diff_pct = abs(reported_qty - spec_qty_dec) / spec_qty_dec * Decimal("100") if spec_qty_dec > Decimal("0") else Decimal("100")
             
-            # If remaining is very small (< 1% of spec) and reported_qty is close to spec_qty (> 90%),
-            # this is likely a bug where filled_size was incorrectly calculated
-            if remaining_pct < Decimal("1") and reported_qty is not None:
-                reported_pct = (reported_qty / spec_qty_dec * Decimal("100")) if spec_qty_dec > Decimal("0") else Decimal("0")
-                if reported_pct > Decimal("90"):
-                    logger.warning(
-                        f"⚠️ Reconcile: CANCELED order {order_id} reports filled_size={reported_qty} "
-                        f"({reported_pct:.2f}% of spec.quantity={spec_qty_dec}), but context shows 0 fills "
-                        f"and remaining_size={remaining_size} ({remaining_pct:.2f}% remaining). "
-                        f"This suggests the exchange client incorrectly calculated filled_size for a canceled order. "
-                        f"Skipping reconciliation to prevent false fills."
-                    )
-                    return
+            # If remaining is very small (< 1% of spec) and reported_qty is close to spec_qty (within 10%),
+            # and we have no fills recorded, this is likely incorrect REST API data
+            if remaining_pct < Decimal("1") and qty_diff_pct < Decimal("10") and ctx.filled_quantity <= Decimal("0"):
+                logger.warning(
+                    f"⚠️ Reconcile: CANCELED order {order_id} reports filled_size={reported_qty} "
+                    f"({reported_pct:.2f}% of spec.quantity={spec_qty_dec}, diff={qty_diff_pct:.2f}%), "
+                    f"but context shows 0 fills and remaining_size={remaining_size} ({remaining_pct:.2f}% remaining). "
+                    f"This suggests the exchange client incorrectly calculated filled_size for a canceled order. "
+                    f"Skipping reconciliation to prevent false fills."
+                )
+                return
         
         # Additional check: If order is CANCELED and remaining_size is exactly 0 or very close to 0,
         # and reported_qty is close to spec_qty but we have no fills, skip reconciliation

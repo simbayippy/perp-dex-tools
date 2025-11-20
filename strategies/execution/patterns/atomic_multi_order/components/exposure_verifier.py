@@ -54,41 +54,65 @@ class ExposureVerifier:
                     self.logger.warning(
                         f"⚠️ [{exchange_client.get_exchange_name().upper()}] Position snapshot fetch failed for {sym}: {exc}"
                     )
-                    return None
-                return snapshot
+                    return None, None, None
+                return snapshot, exchange_client, sym
 
             tasks.append(fetch_snapshot())
 
         if not tasks:
             return None
 
-        snapshots = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
         total_long_qty = Decimal("0")
         total_short_qty = Decimal("0")
         total_long_usd = Decimal("0")
         total_short_usd = Decimal("0")
 
-        for idx, snapshot in enumerate(snapshots):
-            if isinstance(snapshot, Exception) or snapshot is None:
+        for result in results:
+            if isinstance(result, Exception) or result is None:
                 continue
+            
+            snapshot, client, symbol = result
+            if snapshot is None or client is None or symbol is None:
+                continue
+            
             quantity = snapshot.quantity or Decimal("0")
             exposure_usd = snapshot.exposure_usd
             mark_price = snapshot.mark_price or snapshot.entry_price
 
-            abs_qty = quantity.copy_abs()
-            if exposure_usd is None and mark_price is not None:
-                exposure_usd = abs_qty * mark_price
-            elif exposure_usd is None:
-                exposure_usd = Decimal("0")
+            # Normalize quantity to actual tokens using multiplier (like imbalance_analyzer does)
+            try:
+                multiplier = Decimal(str(client.get_quantity_multiplier(symbol)))
+            except Exception as exc:
+                self.logger.warning(
+                    f"Failed to get multiplier for {symbol} on "
+                    f"{client.get_exchange_name()}: {exc}. Using 1."
+                )
+                multiplier = Decimal("1")
+            
+            # Convert exchange quantity to actual tokens
+            actual_tokens = quantity.copy_abs() * multiplier
 
-            if quantity > Decimal("0"):
-                total_long_qty += abs_qty
+            # CRITICAL: Use snapshot.side if available, as some exchanges (e.g., Paradex)
+            # convert short positions to positive quantities. Fallback to quantity sign.
+            side = snapshot.side
+            if side is None:
+                # Infer from quantity sign if side not explicitly provided
+                if quantity > Decimal("0"):
+                    side = "long"
+                elif quantity < Decimal("0"):
+                    side = "short"
+            
+            if side == "long":
+                total_long_qty += actual_tokens
                 total_long_usd += exposure_usd or Decimal("0")
-            elif quantity < Decimal("0"):
-                total_short_qty += abs_qty
+            elif side == "short":
+                total_short_qty += actual_tokens
                 total_short_usd += exposure_usd or Decimal("0")
+            # If side is still None and quantity is 0, skip (no position)
 
+        # Calculate net exposure (long - short, then absolute value)
         net_qty = (total_long_qty - total_short_qty).copy_abs()
         net_usd = (total_long_usd - total_short_usd).copy_abs()
 

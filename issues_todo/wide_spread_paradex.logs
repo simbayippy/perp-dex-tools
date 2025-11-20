@@ -1,0 +1,15 @@
+2025-11-20 06:09:13 | INFO     | unified_logger:_emit:618                 | =======================================================
+2025-11-20 06:09:13 | INFO     | unified_logger:_emit:618                 | close.2. 🚀 Order Placement
+2025-11-20 06:09:13 | INFO     | unified_logger:_emit:618                 | =======================================================
+2025-11-20 06:09:13 | INFO     | executor:execute_atomically:180          | 🚀 Placing all orders simultaneously...
+2025-11-20 06:09:13 | INFO     | order_executor:execute_order:146         | 🔴 [LIGHTER] Executing sell XMR ($1590.5033485 qty=4.301) in mode limit_only
+2025-11-20 06:09:13 | INFO     | price_provider:_fetch_exchange_bbo:76    | ✅ [LIGHTER] BBO: bid=369.712, ask=369.889
+2025-11-20 06:09:13 | INFO     | limit_order_executor:execute:107         | [LIGHTER] Placing limit sell XMR (contract_id=77): 4.301 @ $369.786 (mid: $369.8005, offset: 0.0200%)
+2025-11-20 06:09:13 | INFO     | order_manager:place_limit_order:185      | 📤 [LIGHTER] Submitting order: market=77 client_id=953990 side=ASK price=369786 amount=4301
+2025-11-20 06:09:14 | INFO     | order_executor:execute_order:146         | 🟢 [PARADEX] Executing buy XMR ($1591.10701436577 qty=4.301) in mode limit_only
+2025-11-20 06:09:14 | INFO     | price_provider:_fetch_exchange_bbo:76    | ✅ [PARADEX] BBO: bid=369.64, ask=378.2
+2025-11-20 06:09:14 | INFO     | limit_order_executor:execute:107         | [PARADEX] Placing limit buy XMR (contract_id=XMR-USD-PERP): 4.301 @ $378.12 (mid: $373.92, offset: 0.0200%)
+2025-11-20 06:09:14 | INFO     | ...:handle_websocket_order_update:139    | [WEBSOCKET] [PARADEX] OPEN 4.301 @ 378.12
+2025-11-20 06:09:14 | INFO     | ...:handle_websocket_order_update:128    | [WEBSOCKET] [PARADEX] FILLED 4.301 @ 378.12
+2025-11-20 06:09:14 | INFO     | limit_order_executor:execute:241         | [PARADEX] Limit order filled: 4.301 @ $378.12
+2025-11-20 06:09:14 | INFO     | executor:_handle_full_fill_trigger:618   | ✅ PARADEX XMR fully filled (4.301). Cancelling remaining limit orders and hedging to prevent directional exposure.
