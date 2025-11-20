@@ -942,6 +942,7 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                 filled_quantity=state.accumulated_filled_qty,
                 fill_price=state.accumulated_fill_price,
                 execution_mode_used=f"aggressive_limit_{state.last_pricing_strategy}",
+                order_id=state.last_order_id,
             )
         
         finally:
