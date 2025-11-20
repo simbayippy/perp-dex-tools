@@ -37,6 +37,7 @@ class LighterWebSocketHandlers:
         current_order_client_id_ref: Any,
         current_order_ref: Any,
         order_fill_callback: Optional[Any] = None,
+        order_status_callback: Optional[Any] = None,
         order_manager: Optional[Any] = None,
         position_manager: Optional[Any] = None,
         account_manager: Optional[Any] = None,
@@ -54,7 +55,8 @@ class LighterWebSocketHandlers:
             client_to_server_order_index: Mapping from client to server order IDs
             current_order_client_id_ref: Reference to client.current_order_client_id
             current_order_ref: Reference to client.current_order
-            order_fill_callback: Optional callback for order fills
+            order_fill_callback: Optional callback for incremental order fills
+            order_status_callback: Optional callback for order status changes (FILLED/CANCELED)
             order_manager: Optional order manager (for notifications)
             position_manager: Optional position manager (for position updates)
             account_manager: Optional account manager (for user stats)
@@ -69,6 +71,7 @@ class LighterWebSocketHandlers:
         self.current_order_client_id_ref = current_order_client_id_ref
         self.current_order_ref = current_order_ref
         self.order_fill_callback = order_fill_callback
+        self.order_status_callback = order_status_callback
         self.order_manager = order_manager
         self.position_manager = position_manager
         self.account_manager = account_manager
@@ -232,6 +235,7 @@ class LighterWebSocketHandlers:
                     if self.order_manager:
                         self.order_manager.notify_order_update(server_key)
 
+                # Call incremental fill callback (for FILLED orders)
                 if status == 'FILLED' and self.order_fill_callback:
                     try:
                         sequence = getattr(order_data, 'offset', None)
@@ -245,6 +249,23 @@ class LighterWebSocketHandlers:
                             sequence,
                         )
                     )
+                
+                # Call status callback for final states (FILLED/CANCELED)
+                if self.order_status_callback and status in ['FILLED', 'CANCELED']:
+                    try:
+                        asyncio.get_running_loop().create_task(
+                            self.order_status_callback(
+                                order_id,
+                                status,
+                                filled_size,
+                                price,
+                            )
+                        )
+                    except RuntimeError:
+                        # No running loop - log warning but continue
+                        self.logger.warning(
+                            f"Cannot call order_status_callback for {order_id}: no running event loop"
+                        )
     
     def _is_liquidation_fill(
         self, 

@@ -615,4 +615,3 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
         finally:
             # Restore original websocket callback
             self._restore_websocket_callback(exchange_client)
-

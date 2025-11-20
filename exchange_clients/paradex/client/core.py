@@ -9,7 +9,7 @@ import asyncio
 from decimal import Decimal
 from typing import Dict, Any, List, Optional, Tuple, Callable, Awaitable
 
-from exchange_clients.base_client import BaseExchangeClient, OrderFillCallback
+from exchange_clients.base_client import BaseExchangeClient, OrderFillCallback, OrderStatusCallback
 from exchange_clients.base_models import (
     OrderResult,
     OrderInfo,
@@ -104,6 +104,7 @@ class ParadexClient(BaseExchangeClient):
         l2_address: Optional[str] = None,
         environment: Optional[str] = None,
         order_fill_callback: OrderFillCallback = None,
+        order_status_callback: OrderStatusCallback = None,
     ):
         """
         Initialize Paradex client with L2 credentials.
@@ -115,6 +116,7 @@ class ParadexClient(BaseExchangeClient):
             l2_address: Optional L2 address (falls back to env var)
             environment: Optional environment name (falls back to env var, default 'prod')
             order_fill_callback: Optional callback for order fills
+            order_status_callback: Optional callback for order status changes (FILLED/CANCELED)
         """
         # Suppress SDK logging BEFORE any SDK imports
         suppress_paradex_sdk_logging()
@@ -132,6 +134,8 @@ class ParadexClient(BaseExchangeClient):
         
         if order_fill_callback is not None:
             self.order_fill_callback = order_fill_callback
+        if order_status_callback is not None:
+            self.order_status_callback = order_status_callback
         
         # Initialize logger
         self.logger = get_exchange_logger("paradex", self.config.ticker)
@@ -252,6 +256,7 @@ class ParadexClient(BaseExchangeClient):
                 logger=self.logger,
                 latest_orders=self._latest_orders,
                 order_fill_callback=self.order_fill_callback,
+                order_status_callback=self.order_status_callback,
                 order_manager=self.order_manager,
                 position_manager=self.position_manager,
                 emit_liquidation_event_fn=self.emit_liquidation_event,

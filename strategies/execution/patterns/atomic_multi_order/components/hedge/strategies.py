@@ -268,7 +268,7 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
     
     def __init__(
         self,
-            execution_strategy,  # Required: injected dependency - breaks circular dependency
+        execution_strategy,  # Required: injected dependency - breaks circular dependency
         price_provider=None,
         tracker: Optional[HedgeResultTracker] = None,
         market_fallback: Optional["MarketHedgeStrategy"] = None,

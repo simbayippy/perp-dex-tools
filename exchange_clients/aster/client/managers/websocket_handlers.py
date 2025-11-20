@@ -30,6 +30,7 @@ class AsterWebSocketHandlers:
         latest_orders: Dict[str, OrderInfo],
         order_update_handler: Optional[Callable] = None,
         order_fill_callback: Optional[Callable] = None,
+        order_status_callback: Optional[Callable] = None,
         order_manager: Optional[Any] = None,
         position_manager: Optional[Any] = None,
         emit_liquidation_event_fn: Optional[Callable] = None,
@@ -44,7 +45,8 @@ class AsterWebSocketHandlers:
             logger: Logger instance
             latest_orders: Latest orders dictionary (client._latest_orders) - stores OrderInfo objects
             order_update_handler: Optional callback for order updates
-            order_fill_callback: Optional callback for order fills
+            order_fill_callback: Optional callback for incremental order fills
+            order_status_callback: Optional callback for order status changes (FILLED/CANCELED)
             order_manager: Optional order manager (for notifications)
             position_manager: Optional position manager (for position tracking)
             emit_liquidation_event_fn: Function to emit liquidation events
@@ -56,6 +58,7 @@ class AsterWebSocketHandlers:
         self.latest_orders = latest_orders
         self.order_update_handler = order_update_handler
         self.order_fill_callback = order_fill_callback
+        self.order_status_callback = order_status_callback
         self.order_manager = order_manager
         self.position_manager = position_manager
         self.emit_liquidation_event = emit_liquidation_event_fn
@@ -162,6 +165,7 @@ class AsterWebSocketHandlers:
                 }
                 self.order_update_handler(payload)
 
+            # Call incremental fill callback (for partial fills)
             if self.order_fill_callback and filled is not None and price is not None:
                 fill_increment = filled - prev_filled
                 if fill_increment > Decimal("0"):
@@ -182,6 +186,28 @@ class AsterWebSocketHandlers:
                             price,
                             fill_increment,
                             order_data.get("u"),
+                        )
+            
+            # Call status callback for final states (FILLED/CANCELED)
+            # This fires even if fill_increment = 0 (instant fills) or for cancellations
+            if self.order_status_callback and status in {"FILLED", "CANCELED", "CANCELLED"}:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(
+                        self.order_status_callback(
+                            order_id,
+                            status,
+                            filled or Decimal("0"),
+                            price,
+                        )
+                    )
+                except RuntimeError:
+                    # No running loop; fallback to direct await
+                    await self.order_status_callback(
+                        order_id,
+                        status,
+                        filled or Decimal("0"),
+                        price,
                         )
 
         except Exception as e:

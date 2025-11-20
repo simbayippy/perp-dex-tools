@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional, Tuple, Callable, Awaitable
 from urllib.parse import urlencode
 import aiohttp
 
-from exchange_clients.base_client import BaseExchangeClient, OrderFillCallback
+from exchange_clients.base_client import BaseExchangeClient, OrderFillCallback, OrderStatusCallback
 from exchange_clients.base_models import (
     OrderResult,
     OrderInfo,
@@ -42,6 +42,7 @@ class AsterClient(BaseExchangeClient):
         api_key: Optional[str] = None,
         secret_key: Optional[str] = None,
         order_fill_callback: OrderFillCallback = None,
+        order_status_callback: OrderStatusCallback = None,
     ):
         """
         Initialize Aster client.
@@ -51,6 +52,7 @@ class AsterClient(BaseExchangeClient):
             api_key: Optional API key (falls back to env var)
             secret_key: Optional secret key (falls back to env var)
             order_fill_callback: Optional callback for order fills
+            order_status_callback: Optional callback for order status changes (FILLED/CANCELED)
         """
         # Set credentials BEFORE calling super().__init__() because it triggers _validate_config()
         self.api_key = api_key or os.getenv('ASTER_API_KEY')
@@ -60,6 +62,8 @@ class AsterClient(BaseExchangeClient):
         super().__init__(config)
         if order_fill_callback is not None:
             self.order_fill_callback = order_fill_callback
+        if order_status_callback is not None:
+            self.order_status_callback = order_status_callback
 
         # Initialize logger early
         self.logger = get_exchange_logger("aster", self.config.ticker)
@@ -214,6 +218,7 @@ class AsterClient(BaseExchangeClient):
                 latest_orders=self._latest_orders,
                 order_update_handler=self._order_update_handler,
                 order_fill_callback=self.order_fill_callback,
+                order_status_callback=self.order_status_callback,
                 order_manager=self.order_manager,
                 position_manager=self.position_manager,
                 emit_liquidation_event_fn=self.emit_liquidation_event,
