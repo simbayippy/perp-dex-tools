@@ -569,6 +569,14 @@ class AtomicMultiOrderExecutor:
             # Cleanup: Restore original callbacks and clear registries
             self._cleanup_websocket_callbacks()
             
+            # CRITICAL: If execution already succeeded (early return), don't override with failure result
+            # The finally block in Python executes even after a return statement in the try block
+            # If the finally block also returns, it will override the try block's return value
+            # So we must NOT return from finally when execution succeeded
+            if execution_successful:
+                # Execution succeeded - do not override the success result
+                return
+            
             # Check if we need to rollback - only if rollback wasn't already performed
             rollback_cost = None
             
@@ -583,12 +591,12 @@ class AtomicMultiOrderExecutor:
             filled_orders_count = sum(1 for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal("0"))
             
             # Only rollback if:
-            # 1. Execution didn't already succeed (early return with success)
+            # 1. Execution didn't already succeed (early return with success) - already checked above
             # 2. Rollback wasn't already performed (flag check)
             # 3. Contexts haven't been cleared (safety check - rollback_manager clears them)
             # 4. There are filled orders
             # 5. Rollback on partial is enabled
-            if not execution_successful and not rollback_performed and not contexts_cleared and filled_orders_count > 0 and rollback_on_partial:
+            if not rollback_performed and not contexts_cleared and filled_orders_count > 0 and rollback_on_partial:
                 filled_orders_list = [
                     ctx.result
                     for ctx in contexts
