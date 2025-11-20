@@ -6,76 +6,15 @@ Multiple improvements to price validation and exit logic to improve profitabilit
 
 ## Completion Status
 
-- ✅ **Issue 1**: Price Divergence Validation on Entry - **COMPLETED**
-- ✅ **Issue 2**: Wide Spread Cooldown Mechanism - **COMPLETED**
-- ⏳ **Issue 3**: Delayed Exit Until Profitable - **TODO**
-- ⏳ **Issue 4**: Take Profit on Price Divergence Opportunities - **TODO**
-- ✅ **Issue 5**: Liquidation Prevention - **COMPLETED**
+- ⏳ **Issue 1**: Delayed Exit Until Profitable - **TODO**
+- ⏳ **Issue 2**: Take Profit on Price Divergence Opportunities - **TODO**
+- ⏳ **Issue 3**: Wide Spread Protection on Exit - **TODO**
+
+**Note**: Issues 1, 2, and 5 from the original document have been completed and removed. This document now focuses only on remaining TODO items.
 
 ## Issues
 
-### 1. Price Divergence Validation on Entry ✅ COMPLETED
-
-**Problem**: Currently, the system uses `max_spread_threshold_pct` (default 0.5%) to decide whether to use break-even price alignment, but it still allows positions to open even if prices diverge significantly between exchanges.
-
-**Current Behavior**:
-- If spread > 0.5%, falls back to BBO-based pricing (long_ask, short_bid)
-- Still opens position even if prices are drastically different
-
-**Requested**: Don't open positions if prices between exchanges vary drastically (e.g., > 1-2%)
-
-**Impact**: Prevents entering positions where price divergence could lead to immediate unrealized losses
-
-**Implementation Status**: ✅ **COMPLETED**
-
-**Key Implementation Details**:
-- Created `EntryValidator` class in `operations/opening/entry_validator.py` with `validate_price_divergence()` method
-- Validates BBO prices before entry: calculates mid prices `(bid + ask) / 2` and checks divergence `(max_mid - min_mid) / min_mid`
-- Integrated into `execution_engine.py` after fetching BBO prices
-- Config: `max_entry_price_divergence_pct` (default: 0.01 = 1%)
-- When validation fails, symbol is marked for cooldown and added to `failed_symbols`
-- Price divergence is also displayed in position opened notifications
-
-**Files Modified**:
-- `strategies/implementations/funding_arbitrage/operations/opening/entry_validator.py` (NEW)
-- `strategies/implementations/funding_arbitrage/operations/opening/execution_engine.py`
-- `strategies/implementations/funding_arbitrage/config.py`
-- `strategies/implementations/funding_arbitrage/config_builder/schema.py`
-- `strategies/implementations/funding_arbitrage/utils/notification_service.py`
-
-### 2. Wide Spread Cooldown Mechanism ✅ COMPLETED
-
-**Problem**: If a coin consistently has wide spreads, the system keeps trying to trade it on every scan, wasting resources.
-
-**Requested**: 
-- Skip coins with wide spreads
-- Implement a cooldown mechanism (don't skip forever, but temporarily)
-- After cooldown expires, try again
-
-**Use Case**: Some coins may have temporary wide spreads due to low liquidity or exchange issues, but should be retried later
-
-**Implementation Status**: ✅ **COMPLETED**
-
-**Key Implementation Details**:
-- Created `CooldownManager` class in `operations/cooldown_manager.py` to manage symbol cooldowns
-- Tracks cooldown state: `{symbol: timestamp}` dictionary
-- Cooldown is triggered when:
-  - Price divergence validation fails
-  - Wide spread detected (`bbo_fallback` strategy used or spread exceeds threshold)
-- Cooldown check happens in `opportunity_scanner.py` before processing each opportunity
-- Config: `wide_spread_cooldown_minutes` (default: 60 minutes)
-- Cooldown manager is initialized in `strategy.py` and accessible via `strategy.cooldown_manager`
-- Automatic cleanup of expired cooldowns on each check
-
-**Files Modified**:
-- `strategies/implementations/funding_arbitrage/operations/cooldown_manager.py` (NEW)
-- `strategies/implementations/funding_arbitrage/operations/opportunity_scanner.py`
-- `strategies/implementations/funding_arbitrage/operations/opening/execution_engine.py`
-- `strategies/implementations/funding_arbitrage/strategy.py`
-- `strategies/implementations/funding_arbitrage/config.py`
-- `strategies/implementations/funding_arbitrage/config_builder/schema.py`
-
-### 3. Delayed Exit Until Profitable (TODO)
+### 1. Delayed Exit Until Profitable (TODO)
 
 **Problem**: When exit conditions are met (e.g., min_hold satisfied, erosion threshold), positions are immediately closed with market orders, which can lead to slippage and losses.
 
@@ -141,7 +80,7 @@ Multiple improvements to price validation and exit logic to improve profitabilit
    - `order_builder.py` has logic for limit vs market orders
    - `position.metadata["legs"]` contains entry prices and fill data
 
-### 4. Take Profit on Price Divergence Opportunities (TODO)
+### 2. Take Profit on Price Divergence Opportunities (TODO)
 
 **Problem**: When price movements create profitable opportunities (one leg profitable, other leg less losing), the system doesn't take advantage.
 
@@ -218,50 +157,74 @@ Multiple improvements to price validation and exit logic to improve profitabilit
    - `profit_taking_loss_tolerance_pct`: Max loss on one leg while other is profitable (2-3% recommended)
    - Consider making these configurable per-symbol or based on volatility
 
+### 3. Wide Spread Protection on Exit (TODO)
+
+**Problem**: When closing positions, the system places limit orders without checking if the spread is too wide, leading to terrible execution and significant slippage losses.
+
+**Example from Logs**:
+```
+✅ [PARADEX] BBO: bid=369.64, ask=378.2
+[PARADEX] Placing limit buy XMR (contract_id=XMR-USD-PERP): 4.301 @ $378.12
+```
+
+**Issue Analysis**:
+- Paradex has an **insane spread**: bid=369.64, ask=378.2 (~2.3% spread)
+- System places limit buy order at $378.12 (near the ask price)
+- When closing a short position, buying at ask = terrible execution
+- This results in massive slippage losses ("getting cooked")
+- The system doesn't validate spread width before placing close orders
+- No mechanism to defer closing when liquidity is poor
+
+**Impact**: 
+- Significant slippage losses on exit
+- Especially problematic for exchanges with poor liquidity (like Paradex)
+- Can turn profitable positions into losses due to exit slippage
+
+**Requested Solution**:
+
+1. **Spread Validation Before Exit**:
+   - Check BBO spread before placing close orders
+   - Calculate spread percentage: `(ask - bid) / mid_price`
+   - If spread exceeds threshold (e.g., >1-2%), defer closing or use alternative strategy
+
+2. **Wide Spread Handling Options**:
+   - **Option A**: Defer closing - Skip closing this iteration, retry later when spread narrows
+   - **Option B**: Use market orders only if spread is acceptable (but still risky)
+   - **Option C**: Place limit order on favorable side (bid for sells, ask for buys) and wait
+   - **Option D**: Split order - place partial limit orders over time to reduce impact
+
+3. **Implementation Approach**:
+   - Add spread check in `order_builder.py` or `close_executor.py` before building order specs
+   - Fetch BBO prices and calculate spread
+   - If spread > threshold:
+     - Log warning with spread details
+     - Either skip closing (defer) or use market orders (if critical)
+   - Add config: `max_exit_spread_pct` (default: 0.01 = 1%)
+   - Add config: `wide_spread_exit_strategy` ("defer", "market", "limit_favorable_side")
+
+4. **Edge Cases**:
+   - Critical exits (liquidation risk) should still proceed even with wide spread
+   - Consider exchange-specific thresholds (Paradex might need higher tolerance)
+   - Track which exchanges consistently have wide spreads
+   - May want to mark exchange for cooldown if spread consistently wide
+
+**Files to Modify**:
+- `operations/closing/order_builder.py` - Add spread validation before building order spec
+- `operations/closing/close_executor.py` - Check spread before executing close
+- `config.py` - Add spread threshold config
+- `config_builder/schema.py` - Add config builder prompts
+
+**Code References**:
+- `order_builder.py.build_order_spec()` - Currently uses `extract_snapshot_price()` or `fetch_mid_price()`
+- `close_executor.py._close_legs_atomically()` - Calls order_builder
+- BBO fetching: `price_provider.get_bbo_prices()` (used in execution_engine.py)
+- Spread calculation similar to `entry_validator.py.validate_price_divergence()`
+
+**Priority**: **HIGH** - This is causing immediate financial losses on every wide-spread exit
+
 ## Implementation Plan
 
-### Issue 1: Price Divergence Validation ✅ COMPLETED
-
-**Location**: `strategies/implementations/funding_arbitrage/operations/opening/execution_engine.py`
-
-**Implementation**:
-1. ✅ Created `EntryValidator` class with `validate_price_divergence()` static method
-2. ✅ Calculates mid prices: `long_mid = (long_bid + long_ask) / 2`, `short_mid = (short_bid + short_ask) / 2`
-3. ✅ Calculates divergence: `divergence_pct = (max_mid - min_mid) / min_mid`
-4. ✅ Validates before order plan preparation in `execution_engine.py`
-5. ✅ If validation fails, marks symbol for cooldown and adds to `failed_symbols`
-6. ✅ Config: `max_entry_price_divergence_pct` (default: 0.01 = 1%)
-7. ✅ Added to config builder schema with helpful prompts
-
-**Files Modified**:
-- ✅ `operations/opening/entry_validator.py` (NEW) - Validation logic
-- ✅ `operations/opening/execution_engine.py` - Integration
-- ✅ `config.py` - Config parameter
-- ✅ `config_builder/schema.py` - Config builder
-- ✅ `utils/notification_service.py` - Display price divergence in notifications
-
-### Issue 2: Wide Spread Cooldown ✅ COMPLETED
-
-**Location**: `strategies/implementations/funding_arbitrage/operations/cooldown_manager.py`
-
-**Implementation**:
-1. ✅ Created `CooldownManager` class with in-memory tracking: `{symbol: timestamp}`
-2. ✅ Cooldown triggered when:
-   - Price divergence validation fails
-   - Wide spread detected (BBO fallback or spread > threshold)
-3. ✅ Cooldown check in `opportunity_scanner.py` before processing opportunities
-4. ✅ Automatic cleanup of expired cooldowns
-5. ✅ Config: `wide_spread_cooldown_minutes` (default: 60 minutes)
-
-**Files Modified**:
-- ✅ `operations/cooldown_manager.py` (NEW) - Cooldown management
-- ✅ `operations/opportunity_scanner.py` - Cooldown check integration
-- ✅ `operations/opening/execution_engine.py` - Cooldown marking
-- ✅ `strategy.py` - Initialize cooldown manager
-- ✅ `config.py` - Config parameter
-- ✅ `config_builder/schema.py` - Config builder
-
-### Issue 3: Delayed Exit Until Profitable
+### Issue 1: Delayed Exit Until Profitable
 
 **Location**: `strategies/implementations/funding_arbitrage/operations/closing/`
 
@@ -300,7 +263,7 @@ Multiple improvements to price validation and exit logic to improve profitabilit
 - `config.py` - Add polling config
 - `models.py` - Add `exit_polling_state` to position metadata
 
-### Issue 4: Take Profit on Divergence
+### Issue 2: Take Profit on Divergence
 
 **Location**: `strategies/implementations/funding_arbitrage/operations/closing/`
 
@@ -336,38 +299,57 @@ Multiple improvements to price validation and exit logic to improve profitabilit
 - `position_closer.py` - Handle profit-taking exits
 - `config.py` - Add profit-taking config
 
+### Issue 3: Wide Spread Protection on Exit
+
+**Location**: `strategies/implementations/funding_arbitrage/operations/closing/`
+
+**Changes**:
+1. Add spread validation before closing:
+   - Fetch BBO prices for each exchange leg
+   - Calculate spread: `spread_pct = (ask - bid) / mid_price`
+   - If spread > `max_exit_spread_pct`, handle according to strategy
+
+2. Wide spread handling logic:
+   ```python
+   # In order_builder.py or close_executor.py
+   bid, ask = await price_provider.get_bbo_prices(client, symbol)
+   mid_price = (bid + ask) / 2
+   spread_pct = (ask - bid) / mid_price
+   
+   if spread_pct > max_exit_spread_pct:
+       if wide_spread_exit_strategy == "defer":
+           # Skip closing this iteration, log warning
+           logger.warning(f"Wide spread on {exchange}: {spread_pct*100:.2f}%, deferring close")
+           return None  # Skip this close
+       elif wide_spread_exit_strategy == "market":
+           # Use market orders (only if critical)
+           execution_mode = "market_only"
+       elif wide_spread_exit_strategy == "limit_favorable_side":
+           # Place limit on favorable side (bid for sells, ask for buys)
+           # This won't fill immediately but avoids terrible execution
+   ```
+
+3. Add config:
+   - `max_exit_spread_pct`: Decimal (default: 0.01 = 1%)
+   - `wide_spread_exit_strategy`: str ("defer", "market", "limit_favorable_side")
+   - `enable_wide_spread_protection`: bool (default: True)
+
+4. Critical exit override:
+   - Liquidation risk exits should still proceed even with wide spread
+   - May use market orders for critical exits if spread is too wide
+
+**Files**:
+- `order_builder.py` - Add spread check before building order spec
+- `close_executor.py` - Validate spread before executing close
+- `config.py` - Add spread protection config
+- `config_builder/schema.py` - Add config builder prompts
+
 ## Configuration Changes
 
-### ✅ Implemented Configurations
+### TODO Configurations
 
 ```python
-# Entry validation (Issue 1)
-max_entry_price_divergence_pct: Decimal = Field(
-    default=Decimal("0.01"),  # 1% (changed from original 2% plan)
-    description="Maximum price divergence between exchanges to allow entry"
-)
-
-# Cooldown (Issue 2)
-wide_spread_cooldown_minutes: int = Field(
-    default=60,
-    description="Cooldown period for symbols with wide spreads"
-)
-
-# Liquidation prevention (Issue 5)
-enable_liquidation_prevention: bool = Field(
-    default=True,
-    description="Enable proactive liquidation prevention"
-)
-min_liquidation_distance_pct: Decimal = Field(
-    default=Decimal("0.10"),  # 10% (changed from original 5% plan)
-    description="Minimum distance to liquidation before forced close"
-)
-```
-
-### ⏳ TODO Configurations (Issues 3 & 4)
-
-```python
-# Exit polling (Issue 3)
+# Exit polling (Issue 1)
 enable_exit_polling: bool = Field(
     default=True,
     description="Enable exit polling to wait for profitable exit"
@@ -385,7 +367,7 @@ exit_order_type: str = Field(
     description="Order type for exit (limit or aggressive_limit)"
 )
 
-# Profit taking (Issue 4)
+# Profit taking (Issue 2)
 enable_profit_taking: bool = Field(
     default=True,
     description="Enable profit-taking on favorable price divergence"
@@ -398,27 +380,38 @@ max_price_deviation_for_hold_pct: Decimal = Field(
     default=Decimal("0.05"),  # 5%
     description="Maximum unfavorable price deviation to hold position"
 )
+
+# Wide spread protection (Issue 3)
+max_exit_spread_pct: Decimal = Field(
+    default=Decimal("0.01"),  # 1%
+    description="Maximum spread percentage allowed before deferring exit"
+)
+wide_spread_exit_strategy: str = Field(
+    default="defer",
+    description="Strategy when spread is too wide: 'defer', 'market', 'limit_favorable_side'"
+)
+enable_wide_spread_protection: bool = Field(
+    default=True,
+    description="Enable spread validation before closing positions"
+)
 ```
 
 ## Testing
 
-1. **Price Divergence Validation**:
-   - Test with coins that have >2% price divergence
-   - Verify positions are not opened
-   - Verify logging is clear
+1. **Wide Spread Protection**:
+   - Test with exchanges that have wide spreads (e.g., Paradex with >2% spread)
+   - Verify closing is deferred when spread exceeds threshold
+   - Test that critical exits (liquidation) still proceed despite wide spread
+   - Verify logging shows spread details when deferring
+   - Test different exit strategies (defer vs market vs limit_favorable_side)
 
-2. **Wide Spread Cooldown**:
-   - Test cooldown activation
-   - Test cooldown expiration
-   - Verify symbol is retried after cooldown
-
-3. **Exit Polling**:
+2. **Exit Polling**:
    - Test exit polling activation
    - Test break-even price calculation
    - Test limit order placement
    - Test timeout fallback
 
-4. **Profit Taking**:
+3. **Profit Taking**:
    - Test profit-taking trigger conditions
    - Test hold logic for unfavorable deviations
    - Verify PnL calculations are correct
@@ -436,14 +429,13 @@ max_price_deviation_for_hold_pct: Decimal = Field(
 
 ## Priority
 
-1. **High**: Issue 1 (Price Divergence Validation) - Prevents bad entries
-2. **High**: Issue 3 (Delayed Exit) - Improves exit profitability
-3. **Medium**: Issue 4 (Profit Taking) - Captures additional profits
-4. **Low**: Issue 2 (Cooldown) - Optimization, less critical
+1. **High**: Issue 3 (Wide Spread Protection) - Prevents immediate slippage losses
+2. **High**: Issue 1 (Delayed Exit) - Improves exit profitability
+3. **Medium**: Issue 2 (Profit Taking) - Captures additional profits
 
 ## Notes
 
-- Issue 3 (Delayed Exit) is the most complex and will require careful state management
+- Issue 1 (Delayed Exit) is the most complex and will require careful state management
 - Consider adding position metadata fields to track exit polling state
 - Exit polling should respect existing risk management (e.g., liquidation risk)
 - Profit-taking should not interfere with normal exit conditions (erosion, funding flip, etc.)
@@ -458,99 +450,4 @@ These improvements can be expanded upon, and new improvements should be added wh
 - **Slippage prediction**: Use historical data to predict slippage and adjust order types accordingly
 - **Market condition awareness**: Adapt exit strategies based on overall market conditions (volatile vs stable)
 
-## Liquidation Prevention ✅ COMPLETED
-
-### Problem
-
-Liquidation fees can be significant and should be avoided. If we know and store liquidation prices, we should monitor them and close positions proactively before liquidation occurs.
-
-### Solution
-
-Add liquidation monitoring and prevention logic:
-
-1. **Monitor Liquidation Distance**:
-   - Track liquidation price for each leg (already fetched in `position_monitor.py`)
-   - Calculate distance to liquidation as percentage
-   - Set a safety threshold (e.g., close when within 5-10% of liquidation)
-
-2. **Liquidation Prevention Logic**:
-   ```python
-   # In exit_evaluator.py or position_closer.py
-   def check_liquidation_risk(position, snapshots):
-       for dex, snapshot in snapshots.items():
-           if not snapshot or not snapshot.liquidation_price:
-               continue
-           
-           mark_price = snapshot.mark_price
-           liquidation_price = snapshot.liquidation_price
-           side = snapshot.side or ("long" if snapshot.quantity > 0 else "short")
-           
-           # Calculate distance to liquidation
-           if side == "long":
-               # Long: liquidation_price < mark_price
-               distance_pct = ((mark_price - liquidation_price) / mark_price * 100) if mark_price > 0 else None
-           else:  # short
-               # Short: liquidation_price > mark_price
-               distance_pct = ((liquidation_price - mark_price) / mark_price * 100) if mark_price > 0 else None
-           
-           # Check if too close to liquidation
-           min_liquidation_distance_pct = 5.0  # Configurable threshold
-           if distance_pct is not None and distance_pct < min_liquidation_distance_pct:
-               return True, f"LIQUIDATION_RISK_{dex.upper()}"
-       
-       return False, None
-   ```
-
-3. **Priority**: Liquidation prevention should be HIGHEST priority exit condition (even before erosion, funding flip, etc.)
-
-4. **Config Parameters**:
-   ```python
-   min_liquidation_distance_pct: Decimal = Field(
-       default=Decimal("0.05"),  # 5%
-       description="Minimum distance to liquidation before forced close"
-   )
-   enable_liquidation_prevention: bool = Field(
-       default=True,
-       description="Enable proactive liquidation prevention"
-   )
-   ```
-
-5. **Implementation Location**:
-   - Add to `exit_evaluator.py` as highest priority check
-   - Check before all other exit conditions
-   - Use market orders for liquidation prevention (speed is critical)
-
-**Implementation Status**: ✅ **COMPLETED**
-
-**Key Implementation Details**:
-- Implemented `check_liquidation_risk()` method in `exit_evaluator.py`
-- Calculates liquidation distance: `(mark_price - liquidation_price) / mark_price` for longs, `(liquidation_price - mark_price) / mark_price` for shorts
-- Checked FIRST in `position_closer.evaluateAndClosePositions()` (highest priority)
-- Uses LIMIT orders (not market) for liquidation prevention to avoid slippage (per user preference)
-- Config: `enable_liquidation_prevention` (default: True), `min_liquidation_distance_pct` (default: 0.10 = 10%)
-- Pre-flight check added in `PreFlightChecker` to prevent opening positions that would immediately trigger liquidation risk
-- Telegram notifications sent when liquidation risk detected (pre-flight) or when position closed due to liquidation risk
-- Notification includes: exchange name, distance percentage, threshold, mark price, liquidation price
-
-**Files Modified**:
-- `strategies/implementations/funding_arbitrage/operations/closing/exit_evaluator.py`
-- `strategies/implementations/funding_arbitrage/operations/closing/position_closer.py`
-- `strategies/implementations/funding_arbitrage/operations/closing/order_builder.py`
-- `strategies/implementations/funding_arbitrage/operations/closing/close_executor.py`
-- `strategies/implementations/funding_arbitrage/config.py`
-- `strategies/implementations/funding_arbitrage/config_builder/schema.py`
-- `strategies/implementations/funding_arbitrage/utils/notification_service.py`
-- `strategies/execution/patterns/atomic_multi_order/components/preflight_checker.py`
-- `strategies/execution/patterns/atomic_multi_order/executor.py`
-- `database/migrations/018_add_liquidation_risk_notification_type.sql` (NEW)
-- `database/scripts/setup/seed_strategy_configs.py`
-
-### Notes
-
-- Liquidation price is dynamic and changes with margin usage, leverage, and price movements
-- Must refresh liquidation price regularly via position monitoring
-- Consider margin buffer: even if distance is > threshold, monitor closely if margin is getting tight
-- Different exchanges may have different liquidation mechanisms - ensure compatibility
-- **Important**: Pre-flight check prevents negative loop where low balance → high liquidation risk → open position → immediate close → lose on fees
-- **Notification spam prevention**: Liquidation risk notifications are sent only once per (exchange, symbol) combination until risk is resolved
 
