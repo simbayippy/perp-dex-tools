@@ -127,6 +127,23 @@ class MarketHedgeStrategy(HedgeStrategy):
                 error_message=None
             )
         
+        # Check if remaining quantity rounds to zero (below exchange minimum step size)
+        # This can happen with small partial fills on exchanges with large step sizes
+        rounded_qty = spec.exchange_client.round_to_step(remaining_qty)
+        if rounded_qty <= Decimal("0"):
+            logger.warning(
+                f"⚠️ [{exchange_name}] Hedge quantity {remaining_qty} rounds to zero for {spec.symbol} "
+                f"(step_size likely {getattr(spec.exchange_client.config, 'step_size', 'unknown')}). "
+                f"Skipping hedge - remaining imbalance is below exchange minimum."
+            )
+            # Return success with 0 filled quantity - small imbalance is acceptable
+            return HedgeResult(
+                success=True,
+                filled_quantity=Decimal("0"),
+                execution_mode="market_skip_too_small",
+                error_message=None,
+            )
+        
         # Calculate USD estimate from quantity using latest BBO (for logging only)
         estimated_usd = Decimal("0")
         try:
@@ -324,6 +341,23 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
         
         # Track initial filled quantity before execution
         initial_filled_qty = target_ctx.filled_quantity
+        
+        # Check if remaining quantity rounds to zero (below exchange minimum step size)
+        # This can happen with small partial fills on exchanges with large step sizes
+        rounded_qty = spec.exchange_client.round_to_step(remaining_qty)
+        if rounded_qty <= Decimal("0"):
+            logger.warning(
+                f"⚠️ [{exchange_name}] Hedge quantity {remaining_qty} rounds to zero for {symbol} "
+                f"(step_size likely {getattr(spec.exchange_client.config, 'step_size', 'unknown')}). "
+                f"Skipping hedge - remaining imbalance is below exchange minimum."
+            )
+            # Return success with 0 filled quantity - small imbalance is acceptable
+            return HedgeResult(
+                success=True,
+                filled_quantity=Decimal("0"),
+                execution_mode="aggressive_limit_skip_too_small",
+                error_message=None,
+            )
         
         # Execute using general-purpose aggressive limit execution strategy
         execution_result = await self._execution_strategy.execute(
