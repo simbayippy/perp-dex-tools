@@ -54,12 +54,82 @@ class StubExchangeClient:
         self._bbo_prices = bbo_prices or (Decimal("100"), Decimal("100.5"))
         self.config = SimpleNamespace(contract_id=f"{name.upper()}-CONTRACT")
         self.closed = []
+        self._orders = {}
+        self._order_counter = 0
+        self.limit_orders = []
+        self.market_orders = []
     
     def get_exchange_name(self):
         return self._name
     
     async def fetch_bbo_prices(self, symbol: str):
         return self._bbo_prices
+    
+    def get_quantity_multiplier(self, symbol: str) -> Decimal:
+        """Return quantity multiplier for the symbol (usually 1.0)."""
+        return Decimal("1.0")
+    
+    async def place_limit_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str, reduce_only: bool = False):
+        """Mock place_limit_order for testing."""
+        from exchange_clients.base_models import OrderInfo, OrderResult
+        order_id = f"{self._name}-limit-{self._order_counter}"
+        self._order_counter += 1
+        info = OrderInfo(
+            order_id=order_id,
+            side=side,
+            size=Decimal(str(quantity)),
+            price=Decimal(str(price)),
+            status="FILLED",
+            filled_size=Decimal(str(quantity)),
+        )
+        self._orders[order_id] = info
+        self.limit_orders.append({
+            "contract_id": contract_id,
+            "quantity": Decimal(str(quantity)),
+            "price": Decimal(str(price)),
+            "side": side,
+            "reduce_only": reduce_only,
+        })
+        return OrderResult(
+            success=True,
+            order_id=order_id,
+            side=side,
+            size=Decimal(str(quantity)),
+            price=Decimal(str(price)),
+            status="FILLED",
+            filled_size=Decimal(str(quantity)),
+        )
+    
+    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str, reduce_only: bool = False):
+        """Mock place_market_order for testing."""
+        from exchange_clients.base_models import OrderResult
+        order_id = f"{self._name}-market-{self._order_counter}"
+        self._order_counter += 1
+        price = Decimal("100.25")
+        self.market_orders.append({
+            "contract_id": contract_id,
+            "quantity": Decimal(str(quantity)),
+            "side": side,
+            "reduce_only": reduce_only,
+        })
+        return OrderResult(
+            success=True,
+            order_id=order_id,
+            side=side,
+            size=Decimal(str(quantity)),
+            price=price,
+            status="FILLED",
+            filled_size=Decimal(str(quantity)),
+        )
+    
+    async def get_order_info(self, order_id: str, *, force_refresh: bool = False):
+        """Mock get_order_info for testing."""
+        return self._orders.get(order_id)
+    
+    async def cancel_order(self, order_id: str):
+        """Mock cancel_order for testing."""
+        from exchange_clients.base_models import OrderResult
+        return OrderResult(success=True, order_id=order_id)
     
     def round_to_step(self, quantity: Decimal) -> Decimal:
         return quantity
@@ -202,14 +272,14 @@ async def test_non_critical_exit_deferral_flow():
     closer = PositionCloser(strategy)
     closer._risk_manager = None  # Skip risk manager
     
-    # Mock should_close to return True with non-critical reason
-    async def mock_should_close(position, snapshots, gather_current_rates, should_skip_erosion_exit):
+    # Mock should_close to return True with non-critical reason (instance method takes self as first param)
+    async def mock_should_close(self, position, snapshots, gather_current_rates, should_skip_erosion_exit):
         return True, "PROFIT_EROSION"  # Non-critical
     
     closer._exit_evaluator.should_close = types.MethodType(mock_should_close, closer._exit_evaluator)
     
-    # Mock fetch snapshots
-    async def mock_fetch_snapshots(position):
+    # Mock fetch snapshots (instance method takes self as first param)
+    async def mock_fetch_snapshots(self, position):
         return {
             "aster": ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("1"), side="long"),
             "lighter": ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("1"), side="short"),
@@ -217,14 +287,14 @@ async def test_non_critical_exit_deferral_flow():
     
     closer._fetch_leg_snapshots = types.MethodType(mock_fetch_snapshots, closer)
     
-    # Mock gather_current_rates to return None (skip risk manager)
-    async def mock_gather_rates(position):
+    # Mock gather_current_rates to return None (skip risk manager) - instance method takes self as first param
+    async def mock_gather_rates(self, position):
         return None
     
     closer._gather_current_rates = types.MethodType(mock_gather_rates, closer)
     
-    # Mock should_skip_erosion_exit
-    async def mock_skip_erosion(position, reason):
+    # Mock should_skip_erosion_exit - instance method takes self as first param
+    async def mock_skip_erosion(self, position, reason):
         return False
     
     closer._should_skip_erosion_exit = types.MethodType(mock_skip_erosion, closer)
@@ -256,15 +326,16 @@ async def test_critical_exit_proceeds_despite_wide_spread():
     
     strategy = _make_strategy(position_manager, exchange_clients, bbo_prices=wide_bbo)
     closer = PositionCloser(strategy)
+    closer._risk_manager = None  # Skip risk manager
     
-    # Mock detect_liquidation to return critical reason
-    def mock_detect_liquidation(position, snapshots):
+    # Mock detect_liquidation to return critical reason (instance method takes self as first param)
+    def mock_detect_liquidation(self, position, snapshots):
         return "LEG_LIQUIDATED"  # Critical
     
     closer._exit_evaluator.detect_liquidation = types.MethodType(mock_detect_liquidation, closer._exit_evaluator)
     
-    # Mock fetch snapshots
-    async def mock_fetch_snapshots(position):
+    # Mock fetch snapshots (instance method takes self as first param)
+    async def mock_fetch_snapshots(self, position):
         return {
             "aster": ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("1"), side="long"),
             "lighter": ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("0"), side=None),  # Missing leg
@@ -305,15 +376,17 @@ async def test_user_manual_close_with_wide_spread_warning():
     controller = FundingArbStrategyController(strategy=strategy)
     
     # Mock database fetch for account validation
-    with patch('strategies.control.funding_arb_controller.database') as mock_db:
+    # database is imported inside close_position, so patch it at the module level
+    test_account_id = str(uuid4())
+    with patch('database.connection.database') as mock_db:
         mock_db.fetch_one = AsyncMock(return_value={
             'id': str(position.id),
-            'account_id': str(uuid4()),
+            'account_id': test_account_id,  # Use same account_id as passed to close_position
             'account_name': 'test_account'
         })
         
-        # Mock position manager get
-        async def mock_get(position_id):
+        # Mock position manager get (instance method takes self as first param)
+        async def mock_get(self, position_id):
             return position
         
         strategy.position_manager.get = types.MethodType(mock_get, strategy.position_manager)
@@ -321,7 +394,7 @@ async def test_user_manual_close_with_wide_spread_warning():
         # Try to close with market order (should return warning)
         result = await controller.close_position(
             position_id=str(position.id),
-            account_ids=[str(uuid4())],  # Mock account ID
+            account_ids=[test_account_id],  # Use same account_id as returned by mock_db
             order_type="market",
             reason="telegram_manual_close",
             confirm_wide_spread=False
@@ -354,8 +427,8 @@ async def test_user_manual_close_confirmed_proceeds():
     # Mock position closer to actually close
     closer = PositionCloser(strategy)
     
-    # Mock fetch snapshots
-    async def mock_fetch_snapshots(position):
+    # Mock fetch snapshots (instance method takes self as first param)
+    async def mock_fetch_snapshots(self, position):
         return {
             "aster": ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("1"), side="long"),
             "lighter": ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("1"), side="short"),
@@ -393,14 +466,14 @@ async def test_acceptable_spread_allows_non_critical_exit():
     closer = PositionCloser(strategy)
     closer._risk_manager = None
     
-    # Mock should_close to return True with non-critical reason
-    async def mock_should_close(position, snapshots, gather_current_rates, should_skip_erosion_exit):
+    # Mock should_close to return True with non-critical reason (instance method takes self as first param)
+    async def mock_should_close(self, position, snapshots, gather_current_rates, should_skip_erosion_exit):
         return True, "PROFIT_EROSION"  # Non-critical
     
     closer._exit_evaluator.should_close = types.MethodType(mock_should_close, closer._exit_evaluator)
     
-    # Mock fetch snapshots
-    async def mock_fetch_snapshots(position):
+    # Mock fetch snapshots (instance method takes self as first param)
+    async def mock_fetch_snapshots(self, position):
         return {
             "aster": ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("1"), side="long"),
             "lighter": ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("1"), side="short"),
