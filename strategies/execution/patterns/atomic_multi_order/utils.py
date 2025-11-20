@@ -114,20 +114,44 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
         # For Aster/Backpack: Returns cached data only if status is final (FILLED/CANCELED).
         order_info = await get_order_info(order_id)
         
-        # If we got websocket data and order is CANCELED with 0 fills, trust it and skip REST query
-        # This works for all exchanges because:
-        # - Lighter/Paradex: Cache will have the cancelled order with accurate filled_size
-        # - Aster/Backpack: Will return cached data for CANCELED status (final state)
+        # CRITICAL: If we got CANCELED status from websocket cache, trust it completely
+        # Websocket data is the source of truth - don't query REST API which may have incorrect data
+        # This prevents false fills when REST API incorrectly calculates filled_size = size - remaining
+        # for cancelled orders (where remaining=0, so filled_size=size, but no actual fills occurred)
         if order_info is not None:
             order_status = getattr(order_info, "status", "").upper()
             reported_qty = coerce_decimal(getattr(order_info, "filled_size", None)) or Decimal("0")
             
-            if order_status == "CANCELED" and reported_qty <= Decimal("0") and ctx.filled_quantity <= Decimal("0"):
-                logger.debug(
-                    f"Reconcile: {ctx.spec.symbol} order {order_id} is CANCELED with 0 fills "
-                    f"(from websocket cache). Skipping reconciliation - no fills to record."
-                )
-                return
+            # If order is CANCELED from websocket cache, trust the websocket data completely
+            # Only reconcile if we have fills recorded in context that need to be verified
+            if order_status == "CANCELED":
+                if ctx.filled_quantity <= Decimal("0"):
+                    # No fills in context and order is CANCELED - trust websocket (no fills occurred)
+                    logger.debug(
+                        f"Reconcile: {ctx.spec.symbol} order {order_id} is CANCELED with 0 fills "
+                        f"(from websocket cache, reported_qty={reported_qty}). "
+                        f"Trusting websocket data - skipping reconciliation to prevent false fills."
+                    )
+                    return
+                else:
+                    # We have fills in context - verify they match websocket data
+                    # If websocket reports 0 fills but we have fills, something is wrong
+                    if reported_qty <= Decimal("0"):
+                        logger.warning(
+                            f"⚠️ Reconcile: {ctx.spec.symbol} order {order_id} is CANCELED from websocket "
+                            f"with reported_qty={reported_qty}, but context has fills={ctx.filled_quantity}. "
+                            f"Trusting websocket data (no fills occurred)."
+                        )
+                        # Clear context fills since websocket says no fills
+                        ctx.filled_quantity = Decimal("0")
+                        return
+                    # If websocket reports fills, use that (should match context)
+                    if reported_qty <= ctx.filled_quantity:
+                        logger.debug(
+                            f"Reconcile: {ctx.spec.symbol} order {order_id} CANCELED with fills "
+                            f"already accounted (websocket={reported_qty}, context={ctx.filled_quantity})"
+                        )
+                        return
         
         # If websocket cache doesn't have final status or we need fresh data, query REST API
         # This happens if:
@@ -174,6 +198,22 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
             f"Skipping reconciliation - no fills to record."
         )
         return
+    
+    # CRITICAL: If order is CANCELED from REST API but we have no fills in context,
+    # be very suspicious of reported_qty that matches spec_qty (likely incorrect REST API data)
+    # This catches cases where REST API incorrectly calculates filled_size = size - remaining
+    # for cancelled orders with remaining=0 (giving filled_size=size even though no fills occurred)
+    if order_status == "CANCELED" and ctx.filled_quantity <= Decimal("0") and spec_qty_dec is not None:
+        # Check if reported_qty is suspiciously close to spec_qty (within 5%)
+        qty_diff_pct = abs(reported_qty - spec_qty_dec) / spec_qty_dec * Decimal("100") if spec_qty_dec > Decimal("0") else Decimal("100")
+        if qty_diff_pct < Decimal("5") and remaining_size <= Decimal("0.0001"):
+            logger.warning(
+                f"⚠️ Reconcile: CANCELED order {order_id} from REST API reports filled_size={reported_qty} "
+                f"(within {qty_diff_pct:.2f}% of spec.quantity={spec_qty_dec}), but context shows 0 fills "
+                f"and remaining_size={remaining_size}. This suggests incorrect REST API data. "
+                f"Skipping reconciliation to prevent false fills."
+            )
+            return
     
     # CRITICAL: If order is CANCELED and remaining_size is 0 (nothing remaining),
     # then filled_size should equal what was actually filled. If we have no fills recorded
