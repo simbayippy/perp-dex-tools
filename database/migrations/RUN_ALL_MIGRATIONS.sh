@@ -24,6 +24,7 @@ python database/scripts/migrations/run_migration.py database/migrations/014_add_
 python database/scripts/migrations/run_migration.py database/migrations/015_add_strategy_notifications.sql
 python database/scripts/migrations/run_migration.py database/migrations/016_add_trade_fills_table.sql
 python database/scripts/migrations/run_migration.py database/migrations/017_add_insufficient_margin_notification_type.sql
+python database/scripts/migrations/run_migration.py database/migrations/018_add_liquidation_risk_notification_type.sql
 
 echo ""
 echo "=================================="

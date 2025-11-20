@@ -247,7 +247,14 @@ class StrategyNotificationService:
             if short_execution_type:
                 message += f"\n  Type: <b>{short_execution_type}</b>"
             
-            message += f"\n\n⚡ Divergence: {divergence_pct:.4f}%"
+            # Calculate price divergence from actual entry prices (fill prices)
+            price_divergence_pct = None
+            if long_price and short_price and long_price > 0 and short_price > 0:
+                min_price = min(long_price, short_price)
+                max_price = max(long_price, short_price)
+                price_divergence_pct = ((max_price - min_price) / min_price) * Decimal("100")
+                message += f"\n\n⚡ Price Divergence: {price_divergence_pct:.4f}%"
+            
             message += f"\n💸 Entry APY: <b>{entry_apy:.2f}%</b>"
             
             # Prepare details
@@ -263,6 +270,8 @@ class StrategyNotificationService:
                 details["long_price"] = float(long_price)
             if short_price:
                 details["short_price"] = float(short_price)
+            if price_divergence_pct is not None:
+                details["price_divergence_pct"] = float(price_divergence_pct)
             if long_exposure:
                 details["long_exposure"] = float(long_exposure)
             if short_exposure:
@@ -314,17 +323,19 @@ class StrategyNotificationService:
         pnl_pct: Optional[Decimal] = None,
         age_hours: Optional[float] = None,
         size_usd: Optional[Decimal] = None,
+        liquidation_risk_details: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Send notification when a position is closed.
         
         Args:
             symbol: Trading symbol (e.g., "BTC")
-            reason: Reason for closing (e.g., "PROFIT_EROSION", "DIVERGENCE_FLIPPED", "TIME_LIMIT")
+            reason: Reason for closing (e.g., "PROFIT_EROSION", "DIVERGENCE_FLIPPED", "TIME_LIMIT", "LIQUIDATION_RISK_PARADEX")
             pnl_usd: Optional PnL in USD
             pnl_pct: Optional PnL percentage
             age_hours: Optional position age in hours
             size_usd: Optional position size in USD
+            liquidation_risk_details: Optional dict with liquidation risk info (for future use)
             
         Returns:
             True if notification queued successfully, False otherwise
@@ -348,7 +359,14 @@ class StrategyNotificationService:
             user_id = str(run_row["user_id"])
             
             # Format reason for display
-            reason_display = reason.replace("_", " ").title()
+            if reason.startswith("LIQUIDATION_RISK_"):
+                # Extract exchange name and format nicely
+                exchange_name = reason.replace("LIQUIDATION_RISK_", "").upper()
+                exchange_emoji = self._get_exchange_emoji(exchange_name.lower())
+                exchange_display = f"{exchange_emoji} {exchange_name}" if exchange_emoji else exchange_name
+                reason_display = f"Liquidation Risk ({exchange_display})"
+            else:
+                reason_display = reason.replace("_", " ").title()
             
             # Format message
             message = (
@@ -499,5 +517,96 @@ class StrategyNotificationService:
             return True
         except Exception as e:
             logger.error(f"Error sending insufficient margin notification: {e}")
+            return False
+
+    async def notify_liquidation_risk(
+        self,
+        symbol: str,
+        exchange_name: str,
+        distance_pct: Decimal,
+        threshold_pct: Decimal,
+        mark_price: Decimal,
+        liquidation_price: Decimal,
+    ) -> bool:
+        """
+        Send notification when there's liquidation risk detected before opening a position.
+        
+        Args:
+            symbol: Trading symbol (e.g., "XMR", "BTC")
+            exchange_name: Exchange name with liquidation risk
+            distance_pct: Current distance to liquidation (e.g., 0.0796 = 7.96%)
+            threshold_pct: Liquidation risk threshold (e.g., 0.10 = 10%)
+            mark_price: Current mark price
+            liquidation_price: Liquidation price
+            
+        Returns:
+            True if notification queued successfully, False otherwise
+        """
+        run_id = await self._get_strategy_run_id()
+        if not run_id:
+            return False
+        
+        try:
+            # Get user_id from strategy_run
+            if not DATABASE_AVAILABLE or not database.is_connected:
+                return False
+            
+            run_row = await database.fetch_one(
+                "SELECT user_id FROM strategy_runs WHERE id = :run_id",
+                {"run_id": run_id}
+            )
+            if not run_row:
+                return False
+            
+            user_id = str(run_row["user_id"])
+            
+            # Format message - highlight the exchange with liquidation risk
+            exchange_emoji = self._get_exchange_emoji(exchange_name)
+            message = (
+                f"⚠️ <b>Liquidation Risk Detected</b>\n\n"
+                f"🔴 <b>Exchange: {exchange_emoji} {exchange_name.upper()}</b>\n"
+                f"Symbol: <b>{symbol}</b>\n"
+                f"Distance to liquidation: <b>{distance_pct*100:.2f}%</b>\n"
+                f"Threshold: {threshold_pct*100:.2f}%\n"
+                f"Mark price: ${mark_price:.6f}\n"
+                f"Liquidation price: ${liquidation_price:.6f}\n\n"
+                f"💡 Position opening skipped to prevent immediate liquidation risk. "
+                f"Please increase margin on <b>{exchange_name.upper()}</b> or reduce position size."
+            )
+            
+            # Prepare details
+            details: Dict[str, Any] = {
+                "symbol": symbol,
+                "exchange_name": exchange_name,
+                "distance_pct": float(distance_pct),
+                "threshold_pct": float(threshold_pct),
+                "mark_price": float(mark_price),
+                "liquidation_price": float(liquidation_price),
+            }
+            
+            # Insert notification
+            await database.execute(
+                """
+                INSERT INTO strategy_notifications (
+                    strategy_run_id, user_id, notification_type,
+                    symbol, message, details
+                )
+                VALUES (
+                    :run_id, :user_id, 'liquidation_risk',
+                    :symbol, :message, CAST(:details AS jsonb)
+                )
+                """,
+                {
+                    "run_id": run_id,
+                    "user_id": user_id,
+                    "symbol": symbol,
+                    "message": message,
+                    "details": json.dumps(details)
+                }
+            )
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error sending liquidation risk notification: {e}")
             return False
 

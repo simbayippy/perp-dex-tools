@@ -73,12 +73,25 @@ class OpportunityScanner:
             strategy.logger.info(f"Found {len(opportunities)} opportunities")
 
             max_new = strategy.config.max_new_positions_per_cycle
+            cooldown_minutes = getattr(strategy.config, "wide_spread_cooldown_minutes", 60)
+            
             for opportunity in opportunities[:max_new]:
                 if opportunity.symbol in strategy.failed_symbols:
                     strategy.logger.debug(
                         f"⏭️  Skipping {opportunity.symbol} - already failed validation this cycle"
                     )
                     continue
+
+                # Check cooldown status
+                if hasattr(strategy, "cooldown_manager"):
+                    if strategy.cooldown_manager.is_in_cooldown(opportunity.symbol, cooldown_minutes):
+                        status = strategy.cooldown_manager.get_cooldown_status(opportunity.symbol, cooldown_minutes)
+                        remaining_minutes = int(status["remaining_seconds"] / 60)
+                        strategy.logger.debug(
+                            f"⏭️  Skipping {opportunity.symbol} - in cooldown "
+                            f"({remaining_minutes} minutes remaining)"
+                        )
+                        continue
 
                 if not await self.has_capacity():
                     break

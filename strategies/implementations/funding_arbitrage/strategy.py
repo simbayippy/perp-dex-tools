@@ -47,6 +47,7 @@ from exchange_clients.events import LiquidationEvent
 from .position_monitor import PositionMonitor
 # Funding_arb operation helpers
 from .operations import PositionOpener, OpportunityScanner, PositionCloser
+from .operations.cooldown_manager import CooldownManager
 
 
 class FundingArbitrageStrategy(BaseStrategy):
@@ -195,6 +196,10 @@ class FundingArbitrageStrategy(BaseStrategy):
             logger=self.logger,
             strategy_config=self.config,
         )
+        
+        # Cooldown manager for wide spread tracking
+        self.cooldown_manager = CooldownManager()
+        
         self.position_opener = PositionOpener(self)
         self.opportunity_scanner = OpportunityScanner(self)
         self.position_closer = PositionCloser(self)

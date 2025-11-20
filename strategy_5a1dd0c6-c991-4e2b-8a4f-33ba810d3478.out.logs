@@ -1,0 +1,335 @@
+position_m:_get_funding_for_snapshot:338     | [LIGHTER] Querying position_funding() API for STRK (cache expired)
+position_mana:get_cumulative_funding:697     | [LIGHTER] Funding for current position (market_id=104): $0.0000 (from 9 records, filtered 9 before position opened at 1763589839.368238)
+position_monit:_log_exchange_metrics:324     | Position STRK snapshot [Account: acc1]
+current -2.0351%                             | erosion 107.59% (limit 60.00%)
+Min hold: satisfied (risk checks active since 2025-11-19 23:03:59)
+Max hold: 5h remaining (force close at 2025-11-20 04:03:59, configured: 6h)
+------------------------------------------------------------------------------------------------
+Exchange     Side   Qty         Entry        Mark         uPnL         Funding      Funding APY
+------------------------------------------------------------------------------------------------
+LIGHTER     long    3229.1000    0.247300    0.249155        5.99        0.00    42.9240%
+PARADEX     short   3229.1000    0.247166    0.248970       -5.95        0.03    40.8889%
+2025-11-19 23:04:25 | INFO     | close_executo:_close_legs_atomically:161 | 🔒 Closing position STRK atomically | Reason: DIVERGENCE_FLIPPED | Legs: [LIGHTER:sell:3229.1, PARADEX:buy:3229.1]
+executor:execute_atomically:144              | Starting atomic execution of 2 orders (rollback_on_partial=True)
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | close.2. 🚀 Order Placement
+unified_logger:_emit:618                     | =======================================================
+executor:execute_atomically:180              | 🚀 Placing all orders simultaneously...
+order_executor:execute_order:146             | 🔴 [LIGHTER] Executing sell STRK ($804.433392 qty=3229.1) in mode limit_only
+price_provider:_fetch_exchange_bbo:76        | ✅ [LIGHTER] BBO: bid=0.24907, ask=0.24923
+limit_order_executor:execute:107             | [LIGHTER] Placing limit sell STRK (contract_id=104): 3229.1 @ $0.24912 (mid: $0.24915, offset: 0.0200%)
+order_manager:place_limit_order:185          | 📤 [LIGHTER] Submitting order: market=104 client_id=465303 side=ASK price=24912 amount=32291
+order_executor:execute_order:146             | 🟢 [PARADEX] Executing buy STRK ($803.947864524 qty=3229.1) in mode limit_only
+price_provider:_fetch_exchange_bbo:76        | ✅ [PARADEX] BBO: bid=0.2491, ask=0.2501
+limit_order_executor:execute:107             | [PARADEX] Placing limit buy STRK (contract_id=STRK-USD-PERP): 3229.1 @ $0.2500 (mid: $0.2496, offset: 0.0200%)
+...:handle_websocket_order_update:139        | [WEBSOCKET] [PARADEX] OPEN 3229.1 @ 0.25
+...:handle_websocket_order_update:128        | [WEBSOCKET] [PARADEX] FILLED 3229.1 @ 0.25
+limit_order_executor:execute:241             | [PARADEX] Limit order filled: 3229.1 @ $0.25
+executor:_handle_full_fill_trigger:618       | ✅ PARADEX STRK fully filled (3229.1). Cancelling remaining limit orders and hedging to prevent directional exposure.
+executor:_handle_full_fill_trigger:627       | 🔄 Cancelling limit order for LIGHTER STRK (remaining: 3229.1) → will hedge with market order
+limit_order_executor:execute:196             | [LIGHTER] Cancellation requested for limit order 465303
+...:handle_websocket_order_update:182        | [WEBSOCKET] [LIGHTER] CANCELED 0.0 @ 0.24912
+2025-11-19 23:04:26 | INFO     | ...:handle_websocket_order_update:212    | TRANSACTION: SELL 0.0 @ 0.24912 | Order: 465303 | Status: CANCELED
+hedge_manager:aggressive_limit_hedge:260     | ================================================================================
+hedge_manager:aggressive_limit_hedge:261     | ⚡ AGGRESSIVE LIMIT HEDGE: STRK on LIGHTER for remaining qty=3229.1, $804.43
+hedge_manager:aggressive_limit_hedge:264     | ================================================================================
+price_provider:_fetch_exchange_bbo:76        | ✅ [LIGHTER] BBO: bid=0.2492, ask=0.24943
+...:calculate_break_even_hedge_price:259     | Using break-even hedge price: 0.249975 < trigger 0.250000 (deviation: 0.26%)
+hedge_manager:_calculate_hedge_price:711     | ✅ [LIGHTER] Using break-even hedge price: 0.249975 < trigger 0.250000 for STRK
+order_manager:place_limit_order:185          | 📤 [LIGHTER] Submitting order: market=104 client_id=467413 side=ASK price=24998 amount=32291
+...:handle_websocket_order_update:171        | [WEBSOCKET] [LIGHTER] OPEN 3229.1 @ 0.24998
+...:handle_websocket_order_update:182        | [WEBSOCKET] [LIGHTER] CANCELED 0.0 @ 0.24998
+2025-11-19 23:04:29 | INFO     | ...:handle_websocket_order_update:212    | TRANSACTION: SELL 0.0 @ 0.24998 | Order: 467413 | Status: CANCELED
+price_provider:_fetch_exchange_bbo:76        | ✅ [LIGHTER] BBO: bid=0.24913, ask=0.24947
+...:calculate_break_even_hedge_price:259     | Using break-even hedge price: 0.249975 < trigger 0.250000 (deviation: 0.27%)
+hedge_manager:_calculate_hedge_price:711     | ✅ [LIGHTER] Using break-even hedge price: 0.249975 < trigger 0.250000 for STRK
+order_manager:place_limit_order:185          | 📤 [LIGHTER] Submitting order: market=104 client_id=469595 side=ASK price=24998 amount=32291
+...:handle_websocket_order_update:171        | [WEBSOCKET] [LIGHTER] OPEN 3229.1 @ 0.24998
+...:handle_websocket_order_update:182        | [WEBSOCKET] [LIGHTER] CANCELED 0.0 @ 0.24998
+2025-11-19 23:04:30 | INFO     | ...:handle_websocket_order_update:212    | TRANSACTION: SELL 0.0 @ 0.24998 | Order: 469595 | Status: CANCELED
+hedge_manager:aggressive_limit_hedge:289     | --------------------------------------------------------------------------------
+hedge_manager:aggressive_limit_hedge:290     | ⏱️ Aggressive limit hedge timeout after 3.60s for LIGHTER STRK. Falling back to market order.
+hedge_manager:aggressive_limit_hedge:294     | --------------------------------------------------------------------------------
+hedge_manager:aggressive_limit_hedge:553     | --------------------------------------------------------------------------------
+hedge_manager:aggressive_limit_hedge:554     | 📋 Final Reconciliation Check: STRK on LIGHTER
+hedge_manager:aggressive_limit_hedge:555     | --------------------------------------------------------------------------------
+hedge_manager:aggressive_limit_hedge:581     | ================================================================================
+hedge_manager:aggressive_limit_hedge:582     | ⚠️ AGGRESSIVE LIMIT HEDGE FAILED: Falling back to market order
+hedge_manager:aggressive_limit_hedge:583     | ================================================================================
+hedge_manager:aggressive_limit_hedge:610     | ⚠️ [LIGHTER] Aggressive limit hedge exhausted for STRK. Falling back to market order for full quantity 3229.1 (current fills: 0).
+hedge_manager:hedge:102                      | ⚡ Hedging STRK on LIGHTER for remaining qty=3229.1, $804.43
+order_executor:execute_order:146             | 🔴 [LIGHTER] Executing sell STRK (qty=3229.1) in mode market_only
+price_provider:_fetch_exchange_bbo:76        | ✅ [LIGHTER] BBO: bid=0.24912, ask=0.24931
+market_order_executor:execute:95             | [LIGHTER] Placing market sell STRK (contract_id=104): 3229.1 @ ~$0.24912
+order_manager:place_market_order:392         | 📤 [LIGHTER] Placing market order: market=104, client_id=471026, side=SELL, base_amount=32291, avg_execution_price=23675
+...:handle_websocket_order_update:182        | [WEBSOCKET] [LIGHTER] FILLED 3229.1 @ 0.23675
+2025-11-19 23:04:31 | INFO     | ...:handle_websocket_order_update:212    | TRANSACTION: SELL 3229.1 @ 0.23675 | Order: 471026 | Status: FILLED
+market_order_executor:execute:367            | [LIGHTER] Market order filled: 3229.1 @ $0.23675 (slippage: $39.94 / 4.965%)
+hedge_manager:aggressive_limit_hedge:627     | ================================================================================
+hedge_manager:aggressive_limit_hedge:628     | ✅ MARKET HEDGE FALLBACK COMPLETE: STRK on LIGHTER
+hedge_manager:aggressive_limit_hedge:629     | ================================================================================
+2025-11-19 23:04:31 | WARNING  | ...:handle_positions_stream_update:435   | ⚠️ [LIGHTER] Position suddenly zeroed: STRK | Previous qty: 3229.1 | Market ID: 104 | Possible liquidation (no liquidation notification received)
+core:get_user_trade_history:689              | [LIGHTER] Fetching trade history for STRK (normalized: STRK, market_id=104, account_index=213803, order_index=29554872573930475, time_range=1763593175-1763593775)
+core:get_user_trade_history:689              | [LIGHTER] Fetching trade history for STRK (normalized: STRK, market_id=104, account_index=213803, no order filter, time_range=1763589839-1763593475)
+core:get_user_trade_history:519              | [PARADEX] Fetching trade history for STRK (time_range=1763593175-1763593775, order_id=1763593465480201709194180004)
+core:get_user_trade_history:648              | [PARADEX] Filtering results: total_fills=1, filtered_by_order_id=0, filtered_by_time=0, final_count=1
+core:get_user_trade_history:519              | [PARADEX] Fetching trade history for STRK (time_range=1763589839-1763593475, order_id=None)
+core:get_user_trade_history:648              | [PARADEX] Filtering results: total_fills=1, filtered_by_order_id=0, filtered_by_time=0, final_count=1
+...:calculate_pnl_from_trade_history:303     | PnL calculation (trade_history_with_order_id): price_pnl=$-3.40, funding=$0.03 (from trade_history), entry_fees=$0.00, closing_fees=$0.18, total_fees=$0.18, net_pnl=$-3.54
+position_manager:close:654                   | ✅ Closed position e633eb77-1b78-4800-aa5e-da9c259924b9: STRK Reason: DIVERGENCE_FLIPPED, PnL: $-3.54, Duration: 1.0h
+position_closer:close:334                    | ✅ Closed STRK (DIVERGENCE_FLIPPED): PnL=$-3.54 (-0.44%), Age=1.0h
+position_cl:evaluateAndClosePositions:87     | Closed STRK: DIVERGENCE_FLIPPED
+strategy:execute_strategy:237                | Scanning for new funding arbitrage opportunities
+opportunity_finde:find_opportunities:171     | Found 1 raw opportunities, 1 after filtering, returning top 1
+opportunity_scanner:scan:73                  | Found 1 opportunities
+account_manager:get_leverage_info:291        | 📊 [PARADEX] Leverage info for XMR:
+- Symbol max leverage: 20.0x
+- Account leverage: N/Ax
+- Max notional: 15000
+- Margin requirement: 0.0500 (5.0%)
+account_manager:get_leverage_info:258        | 📊 [LIGHTER] Leverage info for XMR:
+- Symbol max leverage: 10.0x
+- Account leverage: 1E+3x
+- Max notional: None
+- Margin requirement: 0.1 (10.0%)
+opportunity:_calculate_position_size:236     | 📊 [XMR] Calculated position size: target_margin=$160.00 × leverage=1E+1x = $1600.00 exposure
+opportunity:_calculate_position_size:236     | 📊 [XMR] Calculated position size: target_margin=$160.00 × leverage=1E+1x = $1600.00 exposure
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 2. 🔍 Leverage Validation & Normalization
+unified_logger:_emit:618                     | =======================================================
+account_manager:get_account_balance:133      | [LIGHTER] get_account_balance WebSocket user_stats not available, using REST fallback (300 weight)
+leverage_valid:get_max_position_size:266     | ✅ [LEVERAGE] Position size $1600.00 supported by all exchanges
+...:normalize_and_set_leverage:329           | 📊 [PARADEX] Max leverage for XMR: 20x
+...:normalize_and_set_leverage:329           | 📊 [LIGHTER] Max leverage for XMR: 10x
+...:normalize_and_set_leverage:345           | 🔧 [LEVERAGE] Normalizing to minimum leverage: 10x (limited by lighter)
+account_manager:set_account_leverage:367     | [PARADEX] Setting leverage for XMR (XMR-USD-PERP) to 10x...
+account_manager:set_account_leverage:389     | ✅ [PARADEX] Successfully set leverage to 10x for XMR (XMR-USD-PERP)
+...:normalize_and_set_leverage:363           | ✅ [PARADEX] Leverage set to 10x for XMR
+...:normalize_and_set_leverage:355           | ⚠️  [LIGHTER] Does not support set_account_leverage(), skipping
+...:normalize_and_set_leverage:375           | ✅ [LEVERAGE] All exchanges normalized to 10x for XMR
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 1. 📋 XMR • Opportunity Validation
+unified_logger:_emit:618                     | =======================================================
+execution_engine:execute_trade:63            | Ensuring XMR is tradeable on both paradex and lighter
+contract_p:ensure_contract_attributes:98     | 🔧 [PARADEX] Initializing contract attributes for XMR
+...:ensure_contract_attributes:115           | ✅ [PARADEX] XMR initialized → contract_id=XMR-USD-PERP, tick_size=0.01
+contract_p:ensure_contract_attributes:98     | 🔧 [LIGHTER] Initializing contract attributes for XMR
+...:ensure_contract_attributes:115           | ✅ [LIGHTER] XMR initialized → contract_id=77, tick_size=0.001
+execution_engine:execute_trade:86            | ✅ XMR available on both PARADEX and LIGHTER
+2025-11-19 23:05:09 | INFO     | execution_engine:execute_trade:93        | 🎯 Execution plan for XMR: Long PARADEX ($1600.00) | Short LIGHTER ($1600.00) | Divergence 0.025%
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 3. 🧨 Atomic Multi-Order Execution
+unified_logger:_emit:618                     | =======================================================
+manager:_perform_market_switch:196           | [PARADEX] 🔄 Switching from STRK-USD-PERP to XMR-USD-PERP
+2025-11-19 23:05:10 | INFO     | market_swit:log_market_switch_result:254 | [PARADEX] ✅ Switched from STRK-USD-PERP to XMR-USD-PERP (15 bids, 15 asks) | config.contract_id updated to XMR-USD-PERP
+manager:_log:79                              | [LIGHTER] 🔄 Switching order book from market 104 to 77
+message_handler:_log:73                      | [LIGHTER] Order book snapshot loaded with 146 bids and 179 asks (BBO: 363.898/364.106)
+2025-11-19 23:05:11 | INFO     | market_switcher:_log:54                  | [LIGHTER] ✅ Switched order book from market 104 to 77 (146 bids, 179 asks) | config.contract_id updated to 77
+price_provider:_fetch_exchange_bbo:76        | ✅ [PARADEX] BBO: bid=363.86, ask=365.43
+price_provider:_fetch_exchange_bbo:76        | ✅ [LIGHTER] BBO: bid=363.898, ask=364.106
+execution_engine:_prepare_order_plan:295     | 📊 [XMR] Price alignment: aligned (spread: 0.18%) - long=363.841250 < short=364.162750
+executor:execute_atomically:144              | Starting atomic execution of 2 orders (rollback_on_partial=True)
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 3.1. 🔍 Pre-flight Checks
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 3.1.2. 💰 Margin & Balance Checks
+unified_logger:_emit:618                     | =======================================================
+preflight_checker:check:134                  | Running balance checks...
+preflight_checker:check:238                  | ✅ paradex balance OK: $183.39 >= $167.83
+account_manager:get_account_balance:133      | [LIGHTER] get_account_balance WebSocket user_stats not available, using REST fallback (300 weight)
+preflight_checker:check:238                  | ✅ lighter balance OK: $332.18 >= $167.98
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 3.1.2.5. ⚠️ Liquidation Risk Check
+unified_logger:_emit:618                     | =======================================================
+preflight_checker:check:245                  | Checking liquidation risk for existing positions...
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 3.1.3. 🌊 Order Book Liquidity
+unified_logger:_emit:618                     | =======================================================
+preflight_checker:check:337                  | Running liquidity checks...
+market_data:get_order_book_depth:274         | 📞 [REST][PARADEX] Fetching order book via REST API: XMR-USD-PERP, levels=20
+2025-11-19 23:05:12 | INFO     | market_data:get_order_book_depth:356     | 📚 [PARADEX] REST order book: XMR-USD-PERP (20 bids, 20 asks) | Best: 363.86/365.43 | Spread: 43 bps
+2025-11-19 23:05:12 | INFO     | ...:check_execution_feasibility:172      | 📊 [LIQUIDITY-paradex] XMR: 20 bids, 20 asks | Best: 363.86/365.43 | Spread: 43 bps
+...:check_execution_feasibility:189          | 📈 [LIQUIDITY-paradex] Fill analysis: Can fill: True, Levels needed: 9/20, Total available: $1598.35
+2025-11-19 23:05:12 | INFO     | ...:check_execution_feasibility:239      | ❌ [LIQUIDITY-paradex] VERDICT for buy $1598.35461125 XMR: Recommendation='use_market_acceptable' | Score=0.79 | Slippage=0.398% | Spread=43bps
+market_data:get_order_book_depth:360         | 📡 [LIGHTER] Using real-time order book from WebSocket (20 bids, 20 asks)
+2025-11-19 23:05:12 | INFO     | ...:check_execution_feasibility:172      | 📊 [LIQUIDITY-lighter] XMR: 20 bids, 20 asks | Best: 363.898/364.106 | Spread: 5 bps
+...:check_execution_feasibility:189          | 📈 [LIQUIDITY-lighter] Fill analysis: Can fill: True, Levels needed: 1/20, Total available: $1599.77
+2025-11-19 23:05:12 | INFO     | ...:check_execution_feasibility:239      | ✅ [LIQUIDITY-lighter] VERDICT for sell $1599.76696075 XMR: Recommendation='use_limit' | Score=0.99 | Slippage=0.000% | Spread=5bps
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 3.1.4. 💵 Minimum Order Notional
+unified_logger:_emit:618                     | =======================================================
+preflight_checker:check:366                  | Validating minimum notional requirements...
+preflight_checker:check:398                  | ✅ [PARADEX] XMR notional $1598.35 meets minimum $10.00
+preflight_checker:check:398                  | ✅ [LIGHTER] XMR notional $1599.77 meets minimum $10.00
+preflight_checker:check:403                  | ✅ All pre-flight checks passed
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 3.2. 🚀 Order Placement
+unified_logger:_emit:618                     | =======================================================
+executor:execute_atomically:180              | 🚀 Placing all orders simultaneously...
+order_executor:execute_order:146             | 🟢 [PARADEX] Executing buy XMR ($1598.35461125 qty=4.393) in mode limit_only
+price_provider:_fetch_exchange_bbo:76        | ✅ [PARADEX] BBO: bid=363.86, ask=365.43
+limit_order_executor:execute:107             | [PARADEX] Placing limit buy XMR (contract_id=XMR-USD-PERP): 4.393 @ $365.36 (mid: $364.645, offset: 0.0200%)
+order_executor:execute_order:146             | 🔴 [LIGHTER] Executing sell XMR ($1599.76696075 qty=4.393) in mode limit_only
+price_provider:_fetch_exchange_bbo:76        | ✅ [LIGHTER] BBO: bid=363.898, ask=364.106
+limit_order_executor:execute:107             | [LIGHTER] Placing limit sell XMR (contract_id=77): 4.393 @ $363.971 (mid: $364.002, offset: 0.0200%)
+order_manager:place_limit_order:185          | 📤 [LIGHTER] Submitting order: market=77 client_id=512780 side=ASK price=363971 amount=4393
+...:handle_websocket_order_update:139        | [WEBSOCKET] [PARADEX] OPEN 4.393 @ 365.36
+...:handle_websocket_order_update:171        | [WEBSOCKET] [LIGHTER] OPEN 4.393 @ 363.971
+...:handle_websocket_order_update:182        | [WEBSOCKET] [LIGHTER] FILLED 4.393 @ 363.971
+2025-11-19 23:05:14 | INFO     | ...:handle_websocket_order_update:212    | TRANSACTION: SELL 4.393 @ 363.971 | Order: 512780 | Status: FILLED
+limit_order_executor:execute:241             | [LIGHTER] Limit order filled: 4.393 @ $363.971
+executor:_handle_full_fill_trigger:618       | ✅ LIGHTER XMR fully filled (4.393). Cancelling remaining limit orders and hedging to prevent directional exposure.
+executor:_handle_full_fill_trigger:627       | 🔄 Cancelling limit order for PARADEX XMR (remaining: 4.393) → will hedge with market order
+limit_order_executor:execute:196             | [PARADEX] Cancellation requested for limit order 1763593512940201709194180015
+...:handle_websocket_order_update:123        | [WEBSOCKET] [PARADEX] CANCELED (cancelled: 4.393) @ 365.36
+hedge_manager:aggressive_limit_hedge:260     | ================================================================================
+hedge_manager:aggressive_limit_hedge:261     | ⚡ AGGRESSIVE LIMIT HEDGE: XMR on PARADEX for remaining qty=4.393, $1598.35
+hedge_manager:aggressive_limit_hedge:264     | ================================================================================
+price_provider:_fetch_exchange_bbo:76        | ✅ [PARADEX] BBO: bid=363.84, ask=365.43
+...:calculate_break_even_hedge_price:293     | Using break-even hedge price: 363.934603 < trigger 363.971000 (deviation: 0.19%)
+hedge_manager:_calculate_hedge_price:711     | ✅ [PARADEX] Using break-even hedge price: 363.934603 < trigger 363.971000 for XMR
+...:handle_websocket_order_update:139        | [WEBSOCKET] [PARADEX] OPEN 4.393 @ 363.93
+...:handle_websocket_order_update:123        | [WEBSOCKET] [PARADEX] CANCELED (cancelled: 4.393) @ 363.93
+price_provider:_fetch_exchange_bbo:76        | ✅ [PARADEX] BBO: bid=363.84, ask=365.43
+...:calculate_break_even_hedge_price:293     | Using break-even hedge price: 363.934603 < trigger 363.971000 (deviation: 0.19%)
+hedge_manager:_calculate_hedge_price:711     | ✅ [PARADEX] Using break-even hedge price: 363.934603 < trigger 363.971000 for XMR
+...:handle_websocket_order_update:139        | [WEBSOCKET] [PARADEX] OPEN 4.393 @ 363.93
+...:handle_websocket_order_update:123        | [WEBSOCKET] [PARADEX] CANCELED (cancelled: 4.393) @ 363.93
+price_provider:_fetch_exchange_bbo:76        | ✅ [PARADEX] BBO: bid=363.93, ask=365.43
+...:calculate_break_even_hedge_price:293     | Using break-even hedge price: 363.934603 < trigger 363.971000 (deviation: 0.20%)
+hedge_manager:_calculate_hedge_price:711     | ✅ [PARADEX] Using break-even hedge price: 363.934603 < trigger 363.971000 for XMR
+...:handle_websocket_order_update:139        | [WEBSOCKET] [PARADEX] OPEN 4.393 @ 363.93
+hedge_manager:aggressive_limit_hedge:289     | --------------------------------------------------------------------------------
+hedge_manager:aggressive_limit_hedge:290     | ⏱️ Aggressive limit hedge timeout after 7.03s for PARADEX XMR. Falling back to market order.
+hedge_manager:aggressive_limit_hedge:294     | --------------------------------------------------------------------------------
+hedge_manager:aggressive_limit_hedge:553     | --------------------------------------------------------------------------------
+hedge_manager:aggressive_limit_hedge:554     | 📋 Final Reconciliation Check: XMR on PARADEX
+hedge_manager:aggressive_limit_hedge:555     | --------------------------------------------------------------------------------
+hedge_manager:aggressive_limit_hedge:581     | ================================================================================
+hedge_manager:aggressive_limit_hedge:582     | ⚠️ AGGRESSIVE LIMIT HEDGE FAILED: Falling back to market order
+hedge_manager:aggressive_limit_hedge:583     | ================================================================================
+hedge_manager:aggressive_limit_hedge:610     | ⚠️ [PARADEX] Aggressive limit hedge exhausted for XMR. Falling back to market order for full quantity 4.393 (current fills: 0).
+hedge_manager:hedge:102                      | ⚡ Hedging XMR on PARADEX for remaining qty=4.393, $1598.35
+order_executor:execute_order:146             | 🟢 [PARADEX] Executing buy XMR (qty=4.393) in mode market_only
+price_provider:_fetch_exchange_bbo:76        | ✅ [PARADEX] BBO: bid=363.8, ask=365.43
+market_order_executor:execute:95             | [PARADEX] Placing market buy XMR (contract_id=XMR-USD-PERP): 4.393 @ ~$365.43
+...:handle_websocket_order_update:123        | [WEBSOCKET] [PARADEX] CANCELED (cancelled: 4.393) @ 363.93
+...:handle_websocket_order_update:116        | [WEBSOCKET] [PARADEX] CANCELED (filled: 1.187, cancelled: 3.206) @ 366.16
+market_order_executor:execute:168            | [PARADEX] ⚠️ Market order canceled with PARTIAL FILL: 1.187 @ $366.16 (order_id=1763593522440201709194180000, reason=exceeds_max_slippage)
+market_order_executor:execute:193            | [PARADEX] Market order canceled due to slippage with partial fill (OPEN operation). Falling back to aggressive limit order for remaining 3.206 XMR
+...:_fallback_to_limit_on_slippage_error:432 | [PARADEX] Attempting limit order fallback for XMR (original error: exceeds_max_slippage)
+price_provider:_fetch_exchange_bbo:76        | ✅ [PARADEX] BBO: bid=363.8, ask=365.36
+...:_fallback_to_limit_on_slippage_error:536 | [PARADEX] Placing aggressive limit buy XMR: 3.206 @ $365.36 (at touch for immediate fill)
+price_provider:_fetch_exchange_bbo:76        | ✅ [PARADEX] BBO: bid=363.8, ask=365.36
+limit_order_executor:execute:107             | [PARADEX] Placing limit buy XMR (contract_id=XMR-USD-PERP): 3.206 @ $365.36 (mid: $364.58, offset: 0%)
+...:handle_websocket_order_update:123        | [WEBSOCKET] [PARADEX] CANCELED (cancelled: 3.206) @ 365.36
+limit_order_executor:execute:268             | [PARADEX] Limit order cancelled due to post_only_violation (order_id=1763593523510201709272320000). Order will be retried with fresh BBO.
+...:_fallback_to_limit_on_slippage_error:566 | [PARADEX] Limit order fallback failed for XMR: Market order failed (exceeds_max_slippage) and limit fallback also failed: Order cancelled: post_only_violation. Retryable.
+market_order_executor:execute:250            | [PARADEX] ⚠️ Market order had partial fill (1.187 @ $366.16) (OPEN operation) but limit fallback failed: Market order failed (exceeds_max_slippage) and limit fallback also failed: Order cancelled: post_only_violation. Retryable.. This partial fill MUST be tracked for rollback!
+hedge_manager:hedge:133                      | Market order canceled with partial fill (1.187/4.393). Limit fallback failed: Market order failed (exceeds_max_slippage) and limit fallback also failed: Order cancelled: post_only_violation. Retryable.
+executor:_handle_full_fill_trigger:739       | Hedge failed (Market order canceled with partial fill (1.187/4.393). Limit fallback failed: Market order failed (exceeds_max_slippage) and limit fallback also failed: Order cancelled: post_only_violation. Retryable.) — attempting rollback of partial fills
+rollback_manager:rollback:61                 | 🚨 EMERGENCY ROLLBACK (OPEN OPERATION): Closing 1 filled orders
+rollback_manager:rollback:67                 | Step 1/4: Canceling all orders to prevent further fills...
+rollback_manager:rollback:180                | Step 2/4: Querying actual filled amounts...
+rollback_manager:rollback:253                | Step 2.5/4: Querying actual positions as safety check for OPEN operations...
+position_m:_get_funding_for_snapshot:338     | [LIGHTER] Querying position_funding() API for XMR (no cache)
+rollback_manager:rollback:330                | Step 3/4: Closing 1 filled positions...
+rollback_manager:rollback:340                | Rollback: buy XMR 4.393 @ market (contract_id=77, exchange=lighter)
+order_manager:place_market_order:392         | 📤 [LIGHTER] Placing market order: market=77, client_id=525340, side=BUY, base_amount=4393, avg_execution_price=382139
+...:handle_websocket_order_update:182        | [WEBSOCKET] [LIGHTER] FILLED 4.393 @ 382.139
+2025-11-19 23:05:26 | INFO     | ...:handle_websocket_order_update:212    | TRANSACTION: BUY 4.393 @ 382.139 | Order: 525340 | Status: FILLED
+2025-11-19 23:05:26 | WARNING  | ...:handle_positions_stream_update:435   | ⚠️ [LIGHTER] Position suddenly zeroed: XMR | Previous qty: 4.393 | Market ID: 77 | Possible liquidation (no liquidation notification received)
+rollback_manager:rollback:431                | Rollback cost for XMR: $79.81 (entry: $363.971, exit: $382.139)
+rollback_manager:rollback:437                | Step 4/4: Verifying positions are closed...
+rollback_manager:rollback:485                | ✅ [lighter] XMR: Position verified closed
+rollback_manager:rollback:497                | ✅ Rollback complete. Total cost: $79.81
+executor:_handle_full_fill_trigger:782       | Rollback completed after hedge failure; total cost $79.8120
+...:reconcile_context_after_cancel:184       | Reconcile: XMR order 512780 - adding fill: additional=4.393 @ 363.971, total will be 4.393
+execution_engine:execute_trade:147           | ❌ XMR: Atomic execution failed - Market order canceled with partial fill (1.187/4.393). Limit fallback failed: Market order failed (exceeds_max_slippage) and limit fallback also failed: Order cancelled: post_only_violation. Retryable.
+execution_engine:execute_trade:152           | 🔄 Emergency rollback performed, cost: $79.81
+strategy:execute_strategy:237                | Scanning for new funding arbitrage opportunities
+opportunity_finde:find_opportunities:171     | Found 2 raw opportunities, 2 after filtering, returning top 2
+opportunity_scanner:scan:73                  | Found 2 opportunities
+opportunity:_calculate_position_size:236     | 📊 [XMR] Calculated position size: target_margin=$160.00 × leverage=1E+1x = $1600.00 exposure
+opportunity:_calculate_position_size:236     | 📊 [XMR] Calculated position size: target_margin=$160.00 × leverage=1E+1x = $1600.00 exposure
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 2. 🔍 Leverage Validation & Normalization
+unified_logger:_emit:618                     | =======================================================
+account_manager:get_account_balance:133      | [LIGHTER] get_account_balance WebSocket user_stats not available, using REST fallback (300 weight)
+leverage_valid:get_max_position_size:266     | ✅ [LEVERAGE] Position size $1600.00 supported by all exchanges
+...:normalize_and_set_leverage:329           | 📊 [PARADEX] Max leverage for XMR: 20x
+...:normalize_and_set_leverage:329           | 📊 [LIGHTER] Max leverage for XMR: 10x
+...:normalize_and_set_leverage:345           | 🔧 [LEVERAGE] Normalizing to minimum leverage: 10x (limited by lighter)
+account_manager:set_account_leverage:367     | [PARADEX] Setting leverage for XMR (XMR-USD-PERP) to 10x...
+account_manager:set_account_leverage:389     | ✅ [PARADEX] Successfully set leverage to 10x for XMR (XMR-USD-PERP)
+...:normalize_and_set_leverage:363           | ✅ [PARADEX] Leverage set to 10x for XMR
+...:normalize_and_set_leverage:355           | ⚠️  [LIGHTER] Does not support set_account_leverage(), skipping
+...:normalize_and_set_leverage:375           | ✅ [LEVERAGE] All exchanges normalized to 10x for XMR
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 1. 📋 XMR • Opportunity Validation
+unified_logger:_emit:618                     | =======================================================
+execution_engine:execute_trade:63            | Ensuring XMR is tradeable on both paradex and lighter
+contract_p:ensure_contract_attributes:98     | 🔧 [PARADEX] Initializing contract attributes for XMR
+...:ensure_contract_attributes:115           | ✅ [PARADEX] XMR initialized → contract_id=XMR-USD-PERP, tick_size=0.01
+execution_engine:execute_trade:86            | ✅ XMR available on both PARADEX and LIGHTER
+2025-11-19 23:06:09 | INFO     | execution_engine:execute_trade:93        | 🎯 Execution plan for XMR: Long PARADEX ($1600.00) | Short LIGHTER ($1600.00) | Divergence 0.036%
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 3. 🧨 Atomic Multi-Order Execution
+unified_logger:_emit:618                     | =======================================================
+price_provider:_fetch_exchange_bbo:76        | ✅ [PARADEX] BBO: bid=363.96, ask=365.63
+price_provider:_fetch_exchange_bbo:76        | ✅ [LIGHTER] BBO: bid=364.033, ask=364.283
+execution_engine:_prepare_order_plan:295     | 📊 [XMR] Price alignment: post_only_adjusted (spread: 0.17%) - long=363.887208 < short=364.317250
+executor:execute_atomically:144              | Starting atomic execution of 2 orders (rollback_on_partial=True)
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 3.1. 🔍 Pre-flight Checks
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 3.1.2. 💰 Margin & Balance Checks
+unified_logger:_emit:618                     | =======================================================
+preflight_checker:check:134                  | Running balance checks...
+preflight_checker:check:199                  | ❌ Insufficient balance on paradex: available=$138.41, required=$167.77 ($159.78 + 5% buffer)
+preflight_checker:check:217                  | 📢 Sent insufficient margin notification for PARADEX/XMR
+execution_engine:execute_trade:147           | ❌ XMR: Atomic execution failed - Pre-flight check failed: Insufficient balance on paradex: available=$138.41, required=$167.77 ($159.78 + 5% buffer)
+strategy:execute_strategy:237                | Scanning for new funding arbitrage opportunities
+opportunity_finde:find_opportunities:171     | Found 2 raw opportunities, 2 after filtering, returning top 2
+opportunity_scanner:scan:73                  | Found 2 opportunities
+opportunity:_calculate_position_size:236     | 📊 [XMR] Calculated position size: target_margin=$160.00 × leverage=1E+1x = $1600.00 exposure
+opportunity:_calculate_position_size:236     | 📊 [XMR] Calculated position size: target_margin=$160.00 × leverage=1E+1x = $1600.00 exposure
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 2. 🔍 Leverage Validation & Normalization
+unified_logger:_emit:618                     | =======================================================
+account_manager:get_account_balance:133      | [LIGHTER] get_account_balance WebSocket user_stats not available, using REST fallback (300 weight)
+leverage_valid:get_max_position_size:266     | ✅ [LEVERAGE] Position size $1600.00 supported by all exchanges
+...:normalize_and_set_leverage:329           | 📊 [PARADEX] Max leverage for XMR: 20x
+...:normalize_and_set_leverage:329           | 📊 [LIGHTER] Max leverage for XMR: 10x
+...:normalize_and_set_leverage:345           | 🔧 [LEVERAGE] Normalizing to minimum leverage: 10x (limited by lighter)
+account_manager:set_account_leverage:367     | [PARADEX] Setting leverage for XMR (XMR-USD-PERP) to 10x...
+account_manager:set_account_leverage:389     | ✅ [PARADEX] Successfully set leverage to 10x for XMR (XMR-USD-PERP)
+...:normalize_and_set_leverage:363           | ✅ [PARADEX] Leverage set to 10x for XMR
+...:normalize_and_set_leverage:355           | ⚠️  [LIGHTER] Does not support set_account_leverage(), skipping
+...:normalize_and_set_leverage:375           | ✅ [LEVERAGE] All exchanges normalized to 10x for XMR
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 1. 📋 XMR • Opportunity Validation
+unified_logger:_emit:618                     | =======================================================
+execution_engine:execute_trade:63            | Ensuring XMR is tradeable on both paradex and lighter
+contract_p:ensure_contract_attributes:98     | 🔧 [PARADEX] Initializing contract attributes for XMR
+...:ensure_contract_attributes:115           | ✅ [PARADEX] XMR initialized → contract_id=XMR-USD-PERP, tick_size=0.01
+execution_engine:execute_trade:86            | ✅ XMR available on both PARADEX and LIGHTER
+2025-11-19 23:07:09 | INFO     | execution_engine:execute_trade:93        | 🎯 Execution plan for XMR: Long PARADEX ($1600.00) | Short LIGHTER ($1600.00) | Divergence 0.034%
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 3. 🧨 Atomic Multi-Order Execution
+unified_logger:_emit:618                     | =======================================================
+price_provider:_fetch_exchange_bbo:76        | ✅ [PARADEX] BBO: bid=363.52, ask=365.76
+price_provider:_fetch_exchange_bbo:76        | ✅ [LIGHTER] BBO: bid=364.076, ask=364.323
+execution_engine:_prepare_order_plan:295     | 📊 [XMR] Price alignment: post_only_adjusted (spread: 0.12%) - long=363.447296 < short=364.395865
+executor:execute_atomically:144              | Starting atomic execution of 2 orders (rollback_on_partial=True)
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 3.1. 🔍 Pre-flight Checks
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | =======================================================
+unified_logger:_emit:618                     | 3.1.2. 💰 Margin & Balance Checks
+unified_logger:_emit:618                     | =======================================================
+preflight_checker:check:134                  | Running balance checks...
+preflight_checker:check:199                  | ❌ Insufficient balance on paradex: available=$138.65, required=$167.53 ($159.55 + 5% buffer)
+execution_engine:execute_trade:147           | ❌ XMR: Atomic execution failed - Pre-flight check failed: Insufficient balance on paradex: available=$138.65, required=$167.53 ($159.55 + 5% buffer)

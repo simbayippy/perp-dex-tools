@@ -204,6 +204,57 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             help_text="Force close positions older than this, regardless of profit",
             show_default_in_prompt=True,
         ),
+        create_decimal_parameter(
+            key="max_entry_price_divergence_pct",
+            prompt="Maximum price divergence between exchanges to allow entry (decimal, 0.01 = 1%)?",
+            default=Decimal("0.01"),  # 1%
+            min_value=Decimal("0.001"),  # 0.1%
+            max_value=Decimal("0.10"),  # 10%
+            required=False,
+            help_text=(
+                "Prevent entering positions when prices diverge significantly between exchanges. "
+                "Lower values are more conservative and avoid bad entries, but may skip valid opportunities. "
+                "Example: 0.01 = 1% max divergence allowed."
+            ),
+        ),
+        create_decimal_parameter(
+            key="min_liquidation_distance_pct",
+            prompt="Minimum distance to liquidation before forced close (decimal, 0.10 = 10%)?",
+            default=Decimal("0.10"),  # 10%
+            min_value=Decimal("0.01"),  # 1%
+            max_value=Decimal("0.50"),  # 50%
+            required=False,
+            help_text=(
+                "Proactively close positions when they get too close to liquidation. "
+                "Higher values provide more safety margin but may close positions prematurely. "
+                "Example: 0.10 = close when within 10% of liquidation price."
+            ),
+        ),
+        ParameterSchema(
+            key="enable_liquidation_prevention",
+            prompt="Enable proactive liquidation prevention?",
+            param_type=ParameterType.BOOLEAN,
+            default=True,
+            required=False,
+            help_text="When enabled, positions are closed proactively before reaching liquidation. "
+            "Disabled: only react to actual liquidations.",
+            show_default_in_prompt=True,
+        ),
+        ParameterSchema(
+            key="wide_spread_cooldown_minutes",
+            prompt="Cooldown period for symbols with wide spreads (minutes)?",
+            param_type=ParameterType.INTEGER,
+            default=60,
+            min_value=1,
+            max_value=1440,  # 24 hours
+            required=False,
+            help_text=(
+                "When a symbol has wide spreads or fails entry validation, skip it for this duration "
+                "to avoid wasting resources. After cooldown expires, the symbol will be retried. "
+                "Example: 60 = skip for 1 hour."
+            ),
+            show_default_in_prompt=True,
+        ),
         # ====================================================================
         # Execution Settings
         # ====================================================================
@@ -252,6 +303,10 @@ FUNDING_ARB_SCHEMA = StrategySchema(
             "profit_erosion_threshold",
             "min_hold_hours",
             "max_position_age_hours",
+            "max_entry_price_divergence_pct",
+            "min_liquidation_distance_pct",
+            "enable_liquidation_prevention",
+            "wide_spread_cooldown_minutes",
         ],
         "Execution": [
             "max_new_positions_per_cycle",
@@ -292,6 +347,10 @@ def create_default_funding_config() -> dict:
         "profit_erosion_threshold": Decimal("0.5"),
         "min_hold_hours": 0,
         "max_position_age_hours": 168,
+        "max_entry_price_divergence_pct": Decimal("0.01"),  # 1%
+        "min_liquidation_distance_pct": Decimal("0.10"),  # 10%
+        "enable_liquidation_prevention": True,
+        "wide_spread_cooldown_minutes": 60,
         "max_new_positions_per_cycle": 1,
         "check_interval_seconds": 60,
         "dry_run": False,
