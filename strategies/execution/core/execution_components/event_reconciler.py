@@ -128,7 +128,14 @@ class EventBasedReconciler:
                     # Update tracker with final fill
                     if filled_size > tracker.filled_quantity:
                         tracker.on_fill(filled_size - tracker.filled_quantity, price or tracker.limit_price)
+                    # Always update filled_quantity to match websocket (handles instant fills)
+                    if filled_size > tracker.filled_quantity:
+                        tracker.filled_quantity = filled_size
+                    if price is not None:
+                        tracker.fill_price = price
                     tracker.status = "FILLED"
+                    # CRITICAL: Set fill_event to wake up wait_for_event() task
+                    tracker.fill_event.set()
                 elif status_upper in {"CANCELED", "CANCELLED"}:
                     self.logger.info(
                         f"🔔 Routing websocket CANCELED status to tracker {order_id}: "
@@ -179,9 +186,16 @@ class EventBasedReconciler:
                             # Only update if we have new fills
                             if filled_size_decimal > tracker.filled_quantity:
                                 tracker.on_fill(filled_size_decimal - tracker.filled_quantity, price_decimal)
+                            # Always update filled_quantity to match cache (handles instant fills)
+                            if filled_size_decimal > tracker.filled_quantity:
+                                tracker.filled_quantity = filled_size_decimal
+                            if cached_price is not None:
+                                tracker.fill_price = price_decimal
                             
                             # Ensure status is set to FILLED
                             tracker.status = "FILLED"
+                            # CRITICAL: Set fill_event to wake up wait_for_event() task
+                            tracker.fill_event.set()
                             return "FILLED"
                             
                         elif status in {"CANCELED", "CANCELLED"}:
@@ -273,7 +287,14 @@ class EventBasedReconciler:
                     if status == "FILLED":
                         if filled_size > tracker.filled_quantity:
                             tracker.on_fill(filled_size - tracker.filled_quantity, price or tracker.limit_price)
+                        # Always update filled_quantity to match websocket (handles instant fills)
+                        if filled_size > tracker.filled_quantity:
+                            tracker.filled_quantity = filled_size
+                        if price is not None:
+                            tracker.fill_price = price
                         tracker.status = "FILLED"
+                        # CRITICAL: Set fill_event to wake up wait_for_event() task
+                        tracker.fill_event.set()
                     elif status in {"CANCELED", "CANCELLED"}:
                         tracker.on_cancel(filled_size)
             except Exception as exc:
@@ -501,6 +522,14 @@ class EventBasedReconciler:
                                     price = getattr(final_check, 'price', limit_price)
                                     if filled_size > tracker.filled_quantity:
                                         tracker.on_fill(filled_size - tracker.filled_quantity, price)
+                                    # Always update filled_quantity to match polling result (handles instant fills)
+                                    if filled_size > tracker.filled_quantity:
+                                        tracker.filled_quantity = filled_size
+                                    if price is not None:
+                                        tracker.fill_price = price
+                                    tracker.status = "FILLED"
+                                    # Set fill_event for consistency (even though wait_for_event already timed out)
+                                    tracker.fill_event.set()
                                     logger.warning(
                                         f"⚠️ [{exchange_name}] Order {order_id} filled but websocket event missed. "
                                         f"Captured via polling: {filled_size} @ ${price}"
