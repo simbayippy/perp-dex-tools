@@ -207,6 +207,18 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                 current_order_filled_qty = Decimal("0")
                 
                 try:
+                    # Calculate remaining quantity after accumulated partial fills
+                    # CHECK THIS FIRST before calculating prices or placing orders
+                    remaining_qty = target_quantity - accumulated_filled_qty
+                    if remaining_qty <= Decimal("0"):
+                        logger.info(
+                            f"✅ [{exchange_name}] Target quantity fully filled for {symbol}: "
+                            f"accumulated={accumulated_filled_qty}/{target_quantity}. "
+                            f"Stopping retries (attempt {retry_count + 1})"
+                        )
+                        execution_success = True
+                        break
+                    
                     # Calculate price using pricer
                     price_result = await self._pricer.calculate_aggressive_limit_price(
                         exchange_client=exchange_client,
@@ -220,12 +232,6 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                         logger=logger,
                     )
                     last_pricing_strategy = price_result.pricing_strategy  # Track for final result
-                    
-                    # Calculate remaining quantity after accumulated partial fills
-                    remaining_qty = target_quantity - accumulated_filled_qty
-                    if remaining_qty <= Decimal("0"):
-                        execution_success = True
-                        break
                     
                     # Round quantity to step size
                     order_quantity = exchange_client.round_to_step(remaining_qty)
@@ -355,6 +361,16 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                     last_order_filled_qty = recon_result.current_order_filled_qty
                     accumulated_filled_qty = recon_result.accumulated_filled_qty
                     
+                    # DEBUG: Log reconciliation result for debugging
+                    logger.info(
+                        f"🔍 [{exchange_name}] Reconciliation result for {symbol}: "
+                        f"filled={recon_result.filled}, "
+                        f"filled_qty={recon_result.filled_qty}, "
+                        f"accumulated={accumulated_filled_qty}/{target_quantity}, "
+                        f"partial={recon_result.partial_fill_detected}, "
+                        f"error={recon_result.error}"
+                    )
+                    
                     # Only set execution_error for fatal errors, not retryable cancellations
                     # "Order cancelled without fills" is retryable - should not break the loop
                     if recon_result.error and recon_result.error != "Order cancelled without fills":
@@ -395,6 +411,12 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                     if recon_result.filled and accumulated_filled_qty > Decimal("0"):
                         filled_qty = accumulated_filled_qty
                         fill_price = accumulated_fill_price or price_result.limit_price
+                        
+                        logger.info(
+                            f"✅ [{exchange_name}] Order filled for {symbol}: "
+                            f"accumulated={accumulated_filled_qty}, target={target_quantity}, "
+                            f"threshold={target_quantity * Decimal('0.99')}"
+                        )
                         
                         if accumulated_filled_qty >= target_quantity * Decimal("0.99"):  # 99% threshold
                             logger.info("=" * 80)

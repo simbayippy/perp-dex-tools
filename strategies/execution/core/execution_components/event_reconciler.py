@@ -56,6 +56,10 @@ class EventBasedReconciler:
                     return
                 
                 # Tracker registered - route fill directly
+                self.logger.info(
+                    f"🔔 Routing websocket fill to tracker {order_id}: "
+                    f"filled_size={filled_size}, price={price}"
+                )
                 tracker.on_fill(filled_size, price)
                 
             except Exception as exc:
@@ -231,7 +235,8 @@ class EventBasedReconciler:
                 
                 logger.info(
                     f"✅ [{exchange_name}] Order {order_id} filled via websocket: "
-                    f"{filled_qty} @ ${fill_price} for {symbol}"
+                    f"{filled_qty} @ ${fill_price} for {symbol} "
+                    f"(tracker status: {tracker.status})"
                 )
             elif status == "CANCELED":
                 # Check for partial fills
