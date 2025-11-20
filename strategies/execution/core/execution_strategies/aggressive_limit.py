@@ -318,7 +318,8 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                     
                     # attempt_timeout: Time to wait for order to fill after placement
                     # This is just the wait time, not including price calc or order placement
-                    attempt_timeout = min(2, remaining_timeout)
+                    # Increased to 5s to allow orders time to fill (some fills take 5+ seconds)
+                    attempt_timeout = min(5, remaining_timeout)
                     
                     # Wait for fill status using event-based reconciler (if available) or polling reconciler
                     if use_event_based and self._can_use_websocket_events(exchange_client):
@@ -469,11 +470,16 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                                         f"Retrying with adaptive pricing (attempt {retry_count + 1}/{max_retries})"
                                     )
                                 elif order_status_check.status not in {"FILLED"}:
-                                    logger.debug(
+                                    logger.info(
                                         f"🔄 [{exchange_name}] Order {order_id} not filled after {attempt_timeout}s, "
                                         f"canceling and retrying (attempt {retry_count + 1}/{max_retries})"
                                     )
-                                    await exchange_client.cancel_order(order_id)
+                                    try:
+                                        await exchange_client.cancel_order(order_id)
+                                    except Exception as cancel_exc:
+                                        logger.warning(
+                                            f"⚠️ [{exchange_name}] Failed to cancel order {order_id}: {cancel_exc}"
+                                        )
                             else:
                                 logger.debug(
                                     f"🔄 [{exchange_name}] Order {order_id} status unknown. "
@@ -518,6 +524,17 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                     exchange_name=exchange_name,
                     symbol=symbol,
                 )
+                
+                # Check if final reconciliation found that we actually filled completely
+                if accumulated_filled_qty >= target_quantity * Decimal("0.99"):
+                    logger.info("=" * 80)
+                    logger.info(
+                        f"✅ AGGRESSIVE LIMIT EXECUTION SUCCESS (via final reconciliation): "
+                        f"[{exchange_name}] {symbol} @ ${accumulated_fill_price or 'n/a'} "
+                        f"qty={accumulated_filled_qty} (total: {accumulated_filled_qty}/{target_quantity})"
+                    )
+                    logger.info("=" * 80)
+                    execution_success = True
             
             # Fallback to market if limit execution failed
             if not execution_success:

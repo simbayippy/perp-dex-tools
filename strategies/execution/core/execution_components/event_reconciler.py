@@ -271,21 +271,84 @@ class EventBasedReconciler:
                             f"Will retry with adaptive pricing."
                         )
             else:  # TIMEOUT
-                # Proactively cancel the order since it timed out
-                # This prevents orders from staying open unnecessarily
+                # ACID-like approach: Ensure order is in final state before returning
+                # Use websocket events instead of polling (much faster and more efficient!)
+                logger.info(
+                    f"⏱️ [{exchange_name}] Order {order_id} timed out after {attempt_timeout}s. "
+                    f"Sending cancel and waiting for final state via websocket for {symbol}"
+                )
+                
+                # Step 1: Try to cancel ONCE
                 try:
-                    order_status_check = await exchange_client.get_order_info(order_id)
-                    if order_status_check and order_status_check.status not in {"CANCELED", "CANCELLED", "FILLED"}:
+                    # Send cancel request (may fail if already filled/cancelled - that's ok)
+                    logger.info(f"🔄 [{exchange_name}] Attempting to cancel order {order_id}")
+                    try:
+                        await exchange_client.cancel_order(order_id)
+                    except Exception as cancel_exc:
                         logger.debug(
-                            f"⏱️ [{exchange_name}] Order {order_id} timed out after {attempt_timeout}s. "
-                            f"Proactively cancelling for {symbol}"
+                            f"Cancel exception for {order_id}: {cancel_exc}. "
+                            f"Order may have filled/cancelled already (will be caught by websocket)."
                         )
-                        try:
-                            await exchange_client.cancel_order(order_id)
-                        except Exception as cancel_exc:
-                            logger.debug(f"⚠️ [{exchange_name}] Failed to cancel timed-out order {order_id}: {cancel_exc}")
                 except Exception as status_exc:
-                    logger.debug(f"⚠️ [{exchange_name}] Failed to check order status for {order_id}: {status_exc}")
+                    logger.warning(f"⚠️ [{exchange_name}] Failed to send cancel: {status_exc}")
+                
+                # Step 2: Wait for websocket event (fill or cancel)
+                # The tracker is still registered and receiving websocket callbacks!
+                # This is MUCH better than polling
+                extended_wait = 3.0  # Wait up to 3s for websocket event
+                wait_start = time.time()
+                
+                logger.debug(
+                    f"⏳ [{exchange_name}] Waiting up to {extended_wait}s for websocket event "
+                    f"(fill or cancel) for {order_id}"
+                )
+                
+                while time.time() - wait_start < extended_wait:
+                    # Check if tracker received websocket event
+                    if tracker.status in {"FILLED", "CANCELED"}:
+                        if tracker.status == "FILLED":
+                            logger.info(
+                                f"✅ [{exchange_name}] Order {order_id} filled (via websocket): "
+                                f"{tracker.filled_quantity} @ ${tracker.fill_price or limit_price} for {symbol}"
+                            )
+                        else:
+                            logger.info(
+                                f"✅ [{exchange_name}] Order {order_id} cancelled (via websocket) for {symbol}"
+                            )
+                        break
+                    
+                    # Wait a bit and check again
+                    await asyncio.sleep(0.1)
+                
+                # After extended wait, check if still pending
+                if tracker.status not in {"FILLED", "CANCELED"}:
+                    # Last resort: poll once to check final state
+                    try:
+                        final_check = await exchange_client.get_order_info(order_id)
+                        if final_check:
+                            final_status = final_check.status.upper()
+                            if final_status == "FILLED":
+                                filled_size = getattr(final_check, 'filled_size', Decimal("0"))
+                                price = getattr(final_check, 'price', limit_price)
+                                if filled_size > tracker.filled_quantity:
+                                    tracker.on_fill(filled_size - tracker.filled_quantity, price)
+                                logger.warning(
+                                    f"⚠️ [{exchange_name}] Order {order_id} filled but websocket event missed. "
+                                    f"Captured via polling: {filled_size} @ ${price}"
+                                )
+                            elif final_status in {"CANCELED", "CANCELLED"}:
+                                logger.warning(
+                                    f"⚠️ [{exchange_name}] Order {order_id} cancelled but websocket event missed."
+                                )
+                            else:
+                                logger.error(
+                                    f"❌ [{exchange_name}] Order {order_id} still OPEN after cancel + {extended_wait}s wait! "
+                                    f"This may cause double-ordering. Status: {final_status}"
+                                )
+                    except Exception as final_exc:
+                        logger.error(
+                            f"❌ [{exchange_name}] Failed to verify final state for {order_id}: {final_exc}"
+                        )
                 
                 # Check if we have partial fills
                 if tracker.filled_quantity > Decimal("0"):
