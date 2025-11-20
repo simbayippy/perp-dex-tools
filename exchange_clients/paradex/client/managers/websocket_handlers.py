@@ -29,6 +29,7 @@ class ParadexWebSocketHandlers:
         logger: Any,
         latest_orders: Dict[str, OrderInfo],
         order_fill_callback: Optional[Any] = None,
+        order_status_callback: Optional[Any] = None,
         order_manager: Optional[Any] = None,
         position_manager: Optional[Any] = None,
         emit_liquidation_event_fn: Optional[Any] = None,
@@ -42,7 +43,8 @@ class ParadexWebSocketHandlers:
             config: Trading configuration object
             logger: Logger instance
             latest_orders: Latest orders dictionary (client._latest_orders) - stores OrderInfo objects
-            order_fill_callback: Optional callback for order fills
+            order_fill_callback: Optional callback for incremental order fills
+            order_status_callback: Optional callback for order status changes (FILLED/CANCELED)
             order_manager: Optional order manager (for notifications)
             position_manager: Optional position manager (for position updates)
             emit_liquidation_event_fn: Function to emit liquidation events
@@ -53,11 +55,14 @@ class ParadexWebSocketHandlers:
         self.logger = logger
         self.latest_orders = latest_orders
         self.order_fill_callback = order_fill_callback
+        self.order_status_callback = order_status_callback
         self.order_manager = order_manager
         self.position_manager = position_manager
         self.emit_liquidation_event = emit_liquidation_event_fn
         self.get_exchange_name = get_exchange_name_fn or (lambda: "paradex")
         self.normalize_symbol = normalize_symbol_fn or (lambda s: s.upper())
+        # Track previous position quantities for zero detection
+        self._previous_positions: Dict[str, Decimal] = {}
     
     async def handle_websocket_order_update(self, order_data: Dict[str, Any]) -> None:
         """
@@ -129,6 +134,11 @@ class ParadexWebSocketHandlers:
                     f"[WEBSOCKET] [PARADEX] {status} "
                     f"{order_info.filled_size} @ {order_info.price}"
                 )
+                # Check for position zeroed when order is FILLED
+                if market and self.position_manager:
+                    asyncio.create_task(
+                        self._check_position_zeroed(market, order_info.filled_size)
+                    )
             elif status == 'PARTIALLY_FILLED':
                 self.logger.info(
                     f"[WEBSOCKET] [PARADEX] {status} "
@@ -146,7 +156,7 @@ class ParadexWebSocketHandlers:
                     f"{order_info.size} @ {order_info.price}"
                 )
             
-            # Call order fill callback if fill occurred
+            # Call incremental fill callback (for partial fills)
             if self.order_fill_callback and order_info.filled_size > prev_filled:
                 fill_increment = order_info.filled_size - prev_filled
                 if fill_increment > Decimal("0"):
@@ -167,6 +177,28 @@ class ParadexWebSocketHandlers:
                             order_info.price,
                             fill_increment,
                             None,
+                        )
+            
+            # Call status callback for final states (FILLED/CLOSED/CANCELED)
+            # This fires even if fill_increment = 0 (instant fills) or for cancellations
+            if self.order_status_callback and status in {'FILLED', 'CLOSED', 'CANCELED'}:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(
+                        self.order_status_callback(
+                            order_id,
+                            status,
+                            order_info.filled_size or Decimal("0"),
+                            order_info.price,
+                        )
+                    )
+                except RuntimeError:
+                    # No running loop; fallback to direct await
+                    await self.order_status_callback(
+                        order_id,
+                        status,
+                        order_info.filled_size or Decimal("0"),
+                        order_info.price,
                         )
             
         except Exception as e:
@@ -257,4 +289,42 @@ class ParadexWebSocketHandlers:
                 
         except Exception as e:
             self.logger.error(f"[PARADEX] Error handling liquidation notification: {e}")
+
+    async def _check_position_zeroed(self, market: str, filled_qty: Decimal) -> None:
+        """
+        Check if position went to zero after an order fill.
+        
+        Similar to Lighter's position zeroed detection, but triggered by order fills
+        since Paradex doesn't have a position stream.
+        
+        Args:
+            market: Trading market/symbol (e.g., "BTC-USD-PERP")
+            filled_qty: Quantity that was filled
+        """
+        try:
+            if not self.position_manager:
+                return
+            
+            # Normalize symbol
+            normalized_symbol = self.normalize_symbol(market)
+            
+            # Get current position
+            current_qty = await self.position_manager.get_account_positions(market)
+            
+            # Get previous position quantity
+            prev_qty = self._previous_positions.get(normalized_symbol, Decimal("0"))
+            
+            # Update tracking
+            self._previous_positions[normalized_symbol] = current_qty
+            
+            # Check if position went from non-zero to zero
+            if prev_qty != 0 and current_qty == 0:
+                self.logger.warning(
+                    f"⚠️ [PARADEX] Position suddenly zeroed: {normalized_symbol} | "
+                    f"Previous qty: {prev_qty} | Filled qty: {filled_qty} | "
+                    f"Possible causes: liquidation (no notification), rollback, or manual close"
+                )
+        except Exception as e:
+            # Don't let position check errors break order processing
+            self.logger.debug(f"[PARADEX] Error checking position zeroed: {e}")
 

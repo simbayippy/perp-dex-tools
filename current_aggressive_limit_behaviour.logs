@@ -1,0 +1,18 @@
+2025-11-20 12:39:32 | INFO     | aggressive_limit:execute:170             | ================================================================================
+2025-11-20 12:39:32 | INFO     | aggressive_limit:execute:171             | ⚡ AGGRESSIVE LIMIT EXECUTION: AVNT on ASTER: 139.0 qty (≈$59.71)
+2025-11-20 12:39:32 | INFO     | aggressive_limit:execute:175             | ================================================================================
+2025-11-20 12:39:32 | INFO     | market_data:fetch_bbo_prices:69          | 📡 [ASTER] Using real-time BBO from WebSocket
+2025-11-20 12:39:32 | INFO     | price_provider:_fetch_exchange_bbo:76    | ✅ [ASTER] BBO: bid=0.4294, ask=0.4296
+2025-11-20 12:39:32 | INFO     | ...:calculate_break_even_hedge_price:293 | Using break-even hedge price: 0.429187 < trigger 0.429230 (deviation: 0.07%)
+2025-11-20 12:39:32 | INFO     | ...:calculate_aggressive_limit_price:131 | ✅ [ASTER] Using break-even price: 0.429187 < trigger 0.429230 for AVNT 
+2025-11-20 12:39:32 | INFO     | ...:handle_websocket_order_update:130    | [WEBSOCKET] [ASTER] CANCELED 139 @ 0.4293000
+2025-11-20 12:39:32 | INFO     | ...:handle_websocket_order_update:135    | [WEBSOCKET] [ASTER] OPEN 139 @ 0.4292000
+2025-11-20 12:39:36 | INFO     | ...:handle_websocket_order_update:130    | [WEBSOCKET] [ASTER] CANCELED 139 @ 0.4292000
+2025-11-20 12:39:36 | INFO     | market_data:fetch_bbo_prices:69          | 📡 [ASTER] Using real-time BBO from WebSocket
+2025-11-20 12:39:36 | INFO     | price_provider:_fetch_exchange_bbo:76    | ✅ [ASTER] BBO: bid=0.4295, ask=0.4296
+2025-11-20 12:39:36 | INFO     | ...:calculate_break_even_hedge_price:293 | Using break-even hedge price: 0.429187 < trigger 0.429230 (deviation: 0.08%)
+2025-11-20 12:39:36 | INFO     | ...:calculate_aggressive_limit_price:131 | ✅ [ASTER] Using break-even price: 0.429187 < trigger 0.429230 for AVNT 
+2025-11-20 12:39:36 | INFO     | ...:handle_websocket_order_update:135    | [WEBSOCKET] [ASTER] OPEN 139 @ 0.4292000
+2025-11-20 12:39:40 | INFO     | ...:handle_websocket_order_update:130    | [WEBSOCKET] [ASTER] CANCELED 139 @ 0.4292000
+2025-11-20 12:39:40 | INFO     | aggressive_limit:execute:199             | --------------------------------------------------------------------------------
+2025-11-20 12:39:40 | WARNING  | aggressive_limit:execute:200             | ⏱️ Aggressive limit execution timeout after 7.82s for ASTER AVNT (placed 2 orders, 2 retries). Falling back to market order.

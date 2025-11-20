@@ -1,4 +1,4 @@
-"""Order polling and reconciliation utilities for hedge execution."""
+"""Order polling and reconciliation utilities for order execution."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ class ReconciliationResult:
         accumulated_filled_qty: Decimal,
         current_order_filled_qty: Decimal,
         partial_fill_detected: bool,
-        hedge_error: Optional[str] = None
+        error: Optional[str] = None
     ):
         self.filled = filled
         self.filled_qty = filled_qty
@@ -27,11 +27,11 @@ class ReconciliationResult:
         self.accumulated_filled_qty = accumulated_filled_qty
         self.current_order_filled_qty = current_order_filled_qty
         self.partial_fill_detected = partial_fill_detected
-        self.hedge_error = hedge_error
+        self.error = error
 
 
 class OrderReconciler:
-    """Handles order polling and reconciliation for hedge execution."""
+    """Handles order polling and reconciliation for order execution."""
     
     async def poll_order_until_filled(
         self,
@@ -39,10 +39,9 @@ class OrderReconciler:
         order_id: str,
         order_quantity: Decimal,
         limit_price: Decimal,
+        target_quantity: Decimal,
         accumulated_filled_qty: Decimal,
         current_order_filled_qty: Decimal,
-        initial_filled_qty: Decimal,
-        hedge_target: Decimal,
         attempt_timeout: float,
         pricing_strategy: str,
         retry_count: int,
@@ -64,10 +63,9 @@ class OrderReconciler:
             order_id: Order ID to poll
             order_quantity: Original order quantity
             limit_price: Limit price used for the order
+            target_quantity: Target quantity to fill
             accumulated_filled_qty: Accumulated fills across all retry attempts
             current_order_filled_qty: Fills for current order (to detect new fills)
-            initial_filled_qty: Initial fills before aggressive limit hedge started
-            hedge_target: Target quantity to fill
             attempt_timeout: Timeout for this polling attempt
             pricing_strategy: Pricing strategy used (for logging)
             retry_count: Current retry count (for logging)
@@ -85,7 +83,7 @@ class OrderReconciler:
         fill_price: Optional[Decimal] = None
         accumulated_fill_price: Optional[Decimal] = None
         partial_fill_detected_this_iteration = False
-        hedge_error: Optional[str] = None
+        error: Optional[str] = None
         
         while time.time() - fill_start_time < attempt_timeout:
             try:
@@ -120,13 +118,12 @@ class OrderReconciler:
                             current_order_filled_qty = order_filled_size  # Update tracking for this order
                             accumulated_fill_price = Decimal(str(order_info.price)) if hasattr(order_info, 'price') else limit_price
                             
-                            # Calculate total filled (initial + new) and remaining
-                            total_filled_qty = initial_filled_qty + accumulated_filled_qty
-                            remaining_after_partial = hedge_target - total_filled_qty
+                            # Calculate total filled and remaining
+                            remaining_after_partial = target_quantity - accumulated_filled_qty
                             logger.info(
                                 f"📊 [{exchange_name}] Partial fill detected for {symbol}: "
                                 f"+{new_fills_from_order} (total new: {accumulated_filled_qty}, "
-                                f"total all: {total_filled_qty}/{hedge_target}) @ ${accumulated_fill_price} "
+                                f"total all: {accumulated_filled_qty}/{target_quantity}) @ ${accumulated_fill_price} "
                                 f"(remaining: {remaining_after_partial})"
                             )
                             
@@ -159,11 +156,10 @@ class OrderReconciler:
                             accumulated_filled_qty += new_fills_from_order
                             current_order_filled_qty = order_filled_size
                             accumulated_fill_price = Decimal(str(order_info.price)) if hasattr(order_info, 'price') else limit_price
-                            total_filled_qty = initial_filled_qty + accumulated_filled_qty
                             logger.info(
                                 f"📊 [{exchange_name}] Partial fill before cancellation for {symbol}: "
                                 f"+{new_fills_from_order} (total new: {accumulated_filled_qty}, "
-                                f"total all: {total_filled_qty}/{hedge_target}) @ ${accumulated_fill_price}"
+                                f"total all: {accumulated_filled_qty}/{target_quantity}) @ ${accumulated_fill_price}"
                             )
                         
                         cancel_reason = getattr(order_info, 'cancel_reason', '') or ''
@@ -177,20 +173,19 @@ class OrderReconciler:
                             filled = False  # Will trigger retry
                             break
                         else:
-                            # Other cancellation - check if we have enough fills (total, not just new)
-                            total_filled_qty = initial_filled_qty + accumulated_filled_qty
-                            if total_filled_qty >= hedge_target * Decimal("0.99"):  # 99% threshold
+                            # Other cancellation - check if we have enough fills
+                            if accumulated_filled_qty >= target_quantity * Decimal("0.99"):  # 99% threshold
                                 filled = True
                                 filled_qty = accumulated_filled_qty  # NEW fills only
                                 fill_price = accumulated_fill_price or limit_price
                             else:
-                                hedge_error = f"Order cancelled: {cancel_reason}"
+                                error = f"Order cancelled: {cancel_reason}"
                                 filled = False
                             break
             except Exception as exc:
                 logger.debug(f"Error checking order status: {exc}")
             
-            await asyncio.sleep(0.1)  # Poll every 100ms
+            await asyncio.sleep(0.05)  # Poll every 50ms for faster response
         
         return ReconciliationResult(
             filled=filled,
@@ -199,7 +194,7 @@ class OrderReconciler:
             accumulated_filled_qty=accumulated_filled_qty,
             current_order_filled_qty=current_order_filled_qty,
             partial_fill_detected=partial_fill_detected_this_iteration,
-            hedge_error=hedge_error
+            error=error
         )
     
     async def reconcile_final_state(

@@ -14,6 +14,10 @@ from exchange_clients.events import LiquidationEvent, LiquidationEventDispatcher
 # Type alias for optional order fill callback
 OrderFillCallback = Optional[Callable[[str, Decimal, Decimal, Optional[int]], Awaitable[None]]]
 
+# Type alias for optional order status callback (fires on FILLED/CANCELED status changes)
+OrderStatusCallback = Optional[Callable[[str, str, Decimal, Optional[Decimal]], Awaitable[None]]]
+# Args: (order_id, status, filled_size, price)
+
 if TYPE_CHECKING:
     from .base_websocket import BaseWebSocketManager
 
@@ -66,6 +70,7 @@ class BaseExchangeClient(ABC):
         # e.g., {"STBL": "STBLUSDT", "MET": "METUSDT"}
         self._contract_id_cache: Dict[str, str] = {}
         self.order_fill_callback: OrderFillCallback = None
+        self.order_status_callback: OrderStatusCallback = None
         self._contract_id_fallback_logged: Set[str] = set()
 
     @abstractmethod

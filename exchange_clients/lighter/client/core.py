@@ -47,6 +47,7 @@ class LighterClient(BaseExchangeClient):
         account_index: Optional[int] = None,
         api_key_index: Optional[int] = None,
         order_fill_callback: Optional[Callable[[str, Decimal, Decimal, Optional[int]], Awaitable[None]]] = None,
+        order_status_callback: Optional[Callable[[str, str, Decimal, Optional[Decimal]], Awaitable[None]]] = None,
     ):
         """
         Initialize Lighter client.
@@ -101,6 +102,7 @@ class LighterClient(BaseExchangeClient):
         self._latest_orders: Dict[str, OrderInfo] = {}
         self._order_update_events: Dict[str, asyncio.Event] = {}
         self.order_fill_callback = order_fill_callback
+        self.order_status_callback = order_status_callback
         default_window = 6 * 3600
         try:
             window_value = int(getattr(config, "inactive_order_lookup_window_seconds", default_window))
@@ -279,6 +281,7 @@ class LighterClient(BaseExchangeClient):
                 current_order_client_id_ref=self,
                 current_order_ref=self,
                 order_fill_callback=self.order_fill_callback,
+                order_status_callback=self.order_status_callback,
                 order_manager=self.order_manager,
                 position_manager=self.position_manager,
                 account_manager=self.account_manager,

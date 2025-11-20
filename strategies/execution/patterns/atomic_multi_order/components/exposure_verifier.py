@@ -1,7 +1,13 @@
 """
 Exposure verifier for atomic multi-order execution.
 
-Verifies post-trade exposure by querying actual position snapshots from exchanges.
+Verifies post-trade exposure using websocket-updated context data as PRIMARY source,
+with exchange snapshots as fallback if websocket data is unavailable.
+
+Websocket callbacks are the source of truth - they update OrderContext.filled_quantity
+in real-time. Exchange snapshots are only used as fallback when websocket data is not available.
+
+Exposure is verified purely on quantity (delta-neutrality), not USD values.
 """
 
 from __future__ import annotations
@@ -16,22 +22,22 @@ from ..contexts import OrderContext
 
 
 class ExposureVerifier:
-    """Verifies post-trade exposure by querying exchange position snapshots."""
+    """Verifies post-trade exposure using websocket-updated context data as primary source."""
 
     def __init__(self, logger=None):
         self.logger = logger or get_core_logger("exposure_verifier")
 
-    async def verify_post_trade_exposure(
+    async def _calculate_exposure_from_snapshots(
         self, contexts: List[OrderContext]
-    ) -> Optional[Dict[str, Decimal]]:
+    ) -> Optional[Decimal]:
         """
-        Pull live position snapshots and detect any residual exposure.
-
+        Calculate exposure from exchange snapshots (fallback when websocket data unavailable).
+        
         Args:
             contexts: List of order contexts to verify
-
+        
         Returns:
-            Dictionary with exposure metrics, or None if verification not possible
+            Net quantity imbalance, or None if snapshot fetch fails
         """
         unique_keys = set()
         tasks = []
@@ -50,7 +56,7 @@ class ExposureVerifier:
             async def fetch_snapshot(exchange_client=client, sym=symbol):
                 try:
                     snapshot = await exchange_client.get_position_snapshot(sym)
-                except Exception as exc:  # pragma: no cover - defensive
+                except Exception as exc:
                     self.logger.warning(
                         f"⚠️ [{exchange_client.get_exchange_name().upper()}] Position snapshot fetch failed for {sym}: {exc}"
                     )
@@ -62,12 +68,10 @@ class ExposureVerifier:
         if not tasks:
             return None
 
+        snapshot_long_qty = Decimal("0")
+        snapshot_short_qty = Decimal("0")
+        
         results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        total_long_qty = Decimal("0")
-        total_short_qty = Decimal("0")
-        total_long_usd = Decimal("0")
-        total_short_usd = Decimal("0")
 
         for result in results:
             if isinstance(result, Exception) or result is None:
@@ -78,10 +82,8 @@ class ExposureVerifier:
                 continue
             
             quantity = snapshot.quantity or Decimal("0")
-            exposure_usd = snapshot.exposure_usd
-            mark_price = snapshot.mark_price or snapshot.entry_price
 
-            # Normalize quantity to actual tokens using multiplier (like imbalance_analyzer does)
+            # Normalize quantity to actual tokens using multiplier
             try:
                 multiplier = Decimal(str(client.get_quantity_multiplier(symbol)))
             except Exception as exc:
@@ -91,39 +93,78 @@ class ExposureVerifier:
                 )
                 multiplier = Decimal("1")
             
-            # Convert exchange quantity to actual tokens
             actual_tokens = quantity.copy_abs() * multiplier
 
-            # CRITICAL: Use snapshot.side if available, as some exchanges (e.g., Paradex)
-            # convert short positions to positive quantities. Fallback to quantity sign.
+            # Use snapshot.side if available
             side = snapshot.side
             if side is None:
-                # Infer from quantity sign if side not explicitly provided
                 if quantity > Decimal("0"):
                     side = "long"
                 elif quantity < Decimal("0"):
                     side = "short"
             
             if side == "long":
-                total_long_qty += actual_tokens
-                total_long_usd += exposure_usd or Decimal("0")
+                snapshot_long_qty += actual_tokens
             elif side == "short":
-                total_short_qty += actual_tokens
-                total_short_usd += exposure_usd or Decimal("0")
-            # If side is still None and quantity is 0, skip (no position)
+                snapshot_short_qty += actual_tokens
+        
+        net_qty = (snapshot_long_qty - snapshot_short_qty).copy_abs()
+        return net_qty
 
-        # Calculate net exposure (long - short, then absolute value)
-        net_qty = (total_long_qty - total_short_qty).copy_abs()
-        net_usd = (total_long_usd - total_short_usd).copy_abs()
-
-        max_usd = max(total_long_usd, total_short_usd)
-        net_pct = net_usd / max_usd if max_usd > Decimal("0") else Decimal("0")
-
-        return {
-            "net_qty": net_qty,
-            "net_usd": net_usd,
-            "net_pct": net_pct,
-            "long_usd": total_long_usd,
-            "short_usd": total_short_usd,
-        }
+    async def verify_post_trade_exposure(
+        self, contexts: List[OrderContext]
+    ) -> Optional[Dict[str, Decimal]]:
+        """
+        Verify post-trade exposure using websocket-updated context data as PRIMARY source.
+        
+        Websocket callbacks update OrderContext.filled_quantity in real-time, so we use
+        context data as the source of truth. Exchange snapshots are used as fallback
+        only when websocket data is unavailable.
+        
+        Exposure is verified purely on quantity (delta-neutrality), not USD values.
+        
+        Args:
+            contexts: List of order contexts to verify (websocket-updated)
+        
+        Returns:
+            Dictionary with net_qty (net quantity imbalance), or None if verification not possible
+        """
+        # PRIMARY: Calculate exposure from context data (websocket-updated, source of truth)
+        context_long_qty = Decimal("0")
+        context_short_qty = Decimal("0")
+        has_context_data = False
+        
+        for ctx in contexts:
+            if ctx.filled_quantity and ctx.filled_quantity > Decimal("0"):
+                has_context_data = True
+                # Get multiplier for this exchange/symbol
+                try:
+                    multiplier = Decimal(str(ctx.spec.exchange_client.get_quantity_multiplier(ctx.spec.symbol)))
+                except Exception:
+                    multiplier = Decimal("1")
+                
+                actual_tokens = ctx.filled_quantity.copy_abs() * multiplier
+                
+                if ctx.spec.side == "buy":
+                    context_long_qty += actual_tokens
+                elif ctx.spec.side == "sell":
+                    context_short_qty += actual_tokens
+        
+        if has_context_data:
+            # Use websocket-updated context data (source of truth)
+            net_qty = (context_long_qty - context_short_qty).copy_abs()
+            return {
+                "net_qty": net_qty,
+            }
+        else:
+            # FALLBACK: Websocket data not available, use exchange snapshots
+            self.logger.debug(
+                "Websocket data not available for exposure check, falling back to exchange snapshots"
+            )
+            net_qty = await self._calculate_exposure_from_snapshots(contexts)
+            if net_qty is not None:
+                return {
+                    "net_qty": net_qty,
+                }
+            return None
 

@@ -16,77 +16,124 @@ A comprehensive trading application for executing strategies across multiple cen
 
 ```
 perp-dex-tools/
-├── exchange_clients/          # Exchange client implementations
-│   ├── base_client.py         # Base exchange client interface
-│   ├── base_websocket.py      # Base WebSocket handler
-│   ├── base_funding_adapter.py # Base funding rate adapter
-│   ├── factory.py             # Exchange factory for dynamic loading
-│   ├── lighter/               # Lighter Network implementation
-│   ├── aster/                 # Aster implementation
-│   ├── backpack/              # Backpack implementation
-│   ├── paradex/               # Paradex implementation
-│   ├── edgex/                 # EdgeX implementation
-│   └── grvt/                  # GRVT implementation
+├── exchange_clients/                          # Exchange client implementations
+│   ├── base_client.py                         # Base exchange client interface
+│   ├── base_websocket.py                      # Base WebSocket handler
+│   ├── base_funding_adapter.py                # Base funding rate adapter
+│   ├── factory.py                             # Exchange factory for dynamic loading
+│   ├── lighter/                               # Lighter Network implementation
+│   ├── aster/                                 # Aster implementation
+│   ├── backpack/                              # Backpack implementation
+│   ├── paradex/                               # Paradex implementation
+│   ├── edgex/                                 # EdgeX implementation
+│   └── grvt/                                  # GRVT implementation
 │
-├── strategies/                # Trading strategy implementations
-│   ├── base_strategy.py       # Base strategy class
-│   ├── factory.py             # Strategy factory
+├── strategies/                                # Trading strategy implementations
+│   ├── base_strategy.py                       # Base strategy class
+│   ├── factory.py                             # Strategy factory
 │   ├── implementations/
-│   │   ├── grid/              # Grid trading strategy
-│   │   └── funding_arbitrage/ # Funding rate arbitrage strategy
-│   ├── execution/             # Execution layer (order placement, liquidity analysis)
-│   └── control/               # Strategy control API
+│   │   ├── grid/                              # Grid trading strategy
+│   │   └── funding_arbitrage/                 # Funding rate arbitrage strategy
+│   ├── execution/                             # Execution layer (order placement, liquidity analysis)
+│   │   ├── core/                              # Core execution utilities
+│   │   │   ├── order_executor.py              # Main OrderExecutor facade (unified execution interface)
+│   │   │   ├── execution_types.py             # ExecutionMode enum, ExecutionResult dataclass
+│   │   │   ├── execution_strategies/          # Execution strategy implementations
+│   │   │   │   ├── base.py                    # ExecutionStrategy ABC with websocket infrastructure
+│   │   │   │   ├── aggressive_limit.py        # AggressiveLimitExecutionStrategy (retries, adaptive pricing)
+│   │   │   │   ├── simple_limit.py            # SimpleLimitExecutionStrategy (single attempt)
+│   │   │   │   └── market.py                  # MarketExecutionStrategy (immediate execution)
+│   │   │   ├── execution_components/          # Supporting components for execution strategies
+│   │   │   │   ├── pricer.py                  # AggressiveLimitPricer (inside spread pricing)
+│   │   │   │   ├── reconciler.py              # OrderReconciler (order polling & reconciliation)
+│   │   │   │   ├── event_reconciler.py        # EventBasedReconciler (websocket-based order tracking)
+│   │   │   │   └── order_tracker.py           # OrderTracker (order state tracking)
+│   │   │   ├── order_execution/               # Lower-level order executors
+│   │   │   │   ├── limit_order_executor.py    # LimitOrderExecutor
+│   │   │   │   ├── market_order_executor.py   # MarketOrderExecutor
+│   │   │   │   └── order_confirmation.py      # OrderConfirmationWaiter
+│   │   │   ├── liquidity_analyzer.py          # Pre-flight liquidity checks
+│   │   │   ├── position_sizer.py              # USD ↔ Quantity conversion
+│   │   │   ├── slippage_calculator.py         # Slippage tracking
+│   │   │   ├── price_provider.py              # BBO price retrieval
+│   │   │   ├── price_alignment.py             # Break-even price alignment
+│   │   │   ├── leverage_validator.py          # Leverage validation
+│   │   │   └── utils.py                       # Execution utilities
+│   │   └── patterns/                          # Execution patterns
+│   │       └── atomic_multi_order/            # Atomic multi-order execution pattern
+│   │           ├── executor.py                # AtomicMultiOrderExecutor
+│   │           ├── contexts.py                # OrderContext for multi-order coordination
+│   │           ├── utils.py                   # Atomic execution utilities
+│   │           └── components/                # Atomic execution components
+│   │               ├── preflight_checker.py              # Pre-flight validation
+│   │               ├── execution_state.py                # Execution state management
+│   │               ├── exposure_verifier.py              # Exposure verification
+│   │               ├── full_fill_handler.py              # Full fill handling logic
+│   │               ├── partial_fill_handler.py           # Partial fill handling logic
+│   │               ├── post_execution_validator.py       # Post-execution validation
+│   │               ├── rollback_manager.py               # Rollback on failure
+│   │               ├── hedge_manager.py                  # Hedge execution orchestrator
+│   │               ├── imbalance_analyzer.py             # Imbalance analysis
+│   │               ├── websocket_manager.py              # Websocket callback management
+│   │               └── hedge/                            # Hedge-specific components
+│   │                   ├── strategies.py                 # Hedge strategies (Market, AggressiveLimit)
+│   │                   ├── hedge_manager.py              # Hedge manager (uses ExecutionStrategy)
+│   │                   ├── hedge_pricer.py               # Hedge price calculation
+│   │                   ├── hedge_target_calculator.py    # Hedge target calculation
+│   │                   ├── hedge_result_tracker.py       # Hedge result tracking
+│   │                   └── order_reconciler.py           # Hedge order reconciliation
+│   └── control/                               # Strategy control API
 │
-├── funding_rate_service/      # Market data collection microservice
-│   ├── main.py                # FastAPI application entry point
-│   ├── api/                   # REST API endpoints
-│   ├── collection/            # Data collection from exchanges
-│   ├── core/                  # Business logic (opportunity finder, fee calculator)
-│   ├── models/                 # Data models
-│   ├── tasks/                 # Background tasks
-│   └── scripts/               # Utility scripts
+├── funding_rate_service/                      # Market data collection microservice
+│   ├── main.py                                # FastAPI application entry point
+│   ├── api/                                   # REST API endpoints
+│   ├── collection/                            # Data collection from exchanges
+│   ├── core/                                  # Business logic (opportunity finder, fee calculator)
+│   ├── models/                                # Data models
+│   ├── tasks/                                 # Background tasks
+│   └── scripts/                               # Utility scripts
 │
-├── database/                  # Database layer
-│   ├── connection.py          # Database connection management
-│   ├── credential_loader.py   # Account credential loader & decryption
-│   ├── migration_manager.py   # Migration tracking
-│   ├── schema.sql             # Base database schema
-│   ├── migrations/            # Database migration files
-│   ├── repositories/          # Data access layer
-│   └── scripts/               # Database management scripts
-│       ├── setup/             # Initialization and seeding
-│       ├── accounts/          # Account management
-│       ├── users/             # User management
-│       ├── proxies/           # Proxy management
-│       ├── migrations/        # Migration runners
-│       └── funding_rates/     # Funding rate management
+├── database/                                  # Database layer
+│   ├── connection.py                          # Database connection management
+│   ├── credential_loader.py                   # Account credential loader & decryption
+│   ├── migration_manager.py                   # Migration tracking
+│   ├── schema.sql                             # Base database schema
+│   ├── migrations/                            # Database migration files
+│   ├── repositories/                          # Data access layer
+│   └── scripts/                               # Database management scripts
+│       ├── setup/                             # Initialization and seeding
+│       ├── accounts/                          # Account management
+│       ├── users/                             # User management
+│       ├── proxies/                           # Proxy management
+│       ├── migrations/                        # Migration runners
+│       └── funding_rates/                     # Funding rate management
 │
-├── telegram_bot_service/     # Telegram bot interface
-│   ├── main.py                # Bot entry point
-│   ├── core/                  # Core bot functionality
-│   ├── handlers/              # Command handlers
-│   ├── managers/              # Strategy and position managers
-│   └── verification/          # User verification
+├── telegram_bot_service/                      # Telegram bot interface
+│   ├── main.py                                # Bot entry point
+│   ├── core/                                  # Core bot functionality
+│   ├── handlers/                              # Command handlers
+│   ├── managers/                              # Strategy and position managers
+│   └── verification/                          # User verification
 │
-├── networking/                # Proxy and networking utilities
-│   ├── selector.py             # Proxy selection logic
-│   ├── session_proxy.py        # Session proxy manager
-│   └── repository.py          # Proxy repository
+├── networking/                                # Proxy and networking utilities
+│   ├── selector.py                            # Proxy selection logic
+│   ├── session_proxy.py                       # Session proxy manager
+│   └── repository.py                          # Proxy repository
 │
-├── trading_config/            # Configuration management
-│   ├── config_builder.py      # Interactive config builder
-│   └── config_yaml.py         # YAML config loader
+├── trading_config/                            # Configuration management
+│   ├── config_builder.py                      # Interactive config builder
+│   └── config_yaml.py                         # YAML config loader
 │
-├── scripts/                   # Utility scripts
-│   ├── monitor_positions.py   # Position monitoring
-│   ├── start_control_api.py   # Control API server
-│   └── strategies/            # Strategy management scripts
+├── scripts/                                   # Utility scripts
+│   ├── monitor_positions.py                   # Position monitoring
+│   ├── start_control_api.py                   # Control API server
+│   └── strategies/                            # Strategy management scripts
 │
-├── configs/                   # Strategy configuration files (YAML)
-├── runbot.py                  # Trading bot entry point
-├── trading_bot.py             # Main trading orchestrator
-├── Makefile                   # Installation and setup automation
-└── requirements.txt           # Python dependencies
+├── configs/                                   # Strategy configuration files (YAML)
+├── runbot.py                                  # Trading bot entry point
+├── trading_bot.py                             # Main trading orchestrator
+├── Makefile                                   # Installation and setup automation
+└── requirements.txt                           # Python dependencies
 ```
 
 ## Installation
@@ -429,6 +476,7 @@ The application follows a modular architecture with base classes that define int
 - **Base Client** (`exchange_clients/base_client.py`): Exchange clients implement trading operations (place orders, get positions, etc.)
 - **Base WebSocket** (`exchange_clients/base_websocket.py`): WebSocket handlers for real-time market data
 - **Base Funding Adapter** (`exchange_clients/base_funding_adapter.py`): Adapters for collecting funding rate data
+- **Base Execution Strategy** (`strategies/execution/core/execution_strategies/base.py`): All execution strategies inherit from this class, providing websocket-based order tracking infrastructure for faster, event-driven order fill detection
 
 ### Factory Pattern
 
@@ -447,6 +495,14 @@ Each strategy runs independently:
 - Strategies are started via `runbot.py` or Telegram bot
 - Each strategy instance runs in its own process (managed by Supervisor when started via Telegram)
 - Strategies can be controlled via REST API (when enabled)
+
+### Execution Strategies
+
+The execution layer provides multiple strategies for order placement:
+- **Market Execution**: Immediate execution at market price (via `MarketExecutionStrategy`)
+- **Simple Limit**: Single limit order attempt (via `SimpleLimitExecutionStrategy`)
+- **Aggressive Limit**: Multiple retries with adaptive pricing (via `AggressiveLimitExecutionStrategy`)
+- All execution strategies inherit websocket infrastructure from `ExecutionStrategy` base class for event-based order tracking, reducing reliance on polling
 
 ### Data Flow
 

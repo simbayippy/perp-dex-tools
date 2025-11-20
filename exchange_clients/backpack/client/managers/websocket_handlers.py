@@ -30,7 +30,9 @@ class BackpackWebSocketHandlers:
         latest_orders: Dict[str, OrderInfo],
         order_update_handler: Optional[Callable] = None,
         order_fill_callback: Optional[Callable] = None,
+        order_status_callback: Optional[Callable] = None,
         order_manager: Optional[Any] = None,
+        position_manager: Optional[Any] = None,
         emit_liquidation_event_fn: Optional[Callable] = None,
         get_exchange_name_fn: Optional[Callable] = None,
     ):
@@ -42,8 +44,10 @@ class BackpackWebSocketHandlers:
             logger: Logger instance
             latest_orders: Dictionary storing latest OrderInfo objects
             order_update_handler: Optional handler for order updates
-            order_fill_callback: Optional callback for order fills
+            order_fill_callback: Optional callback for incremental order fills
+            order_status_callback: Optional callback for order status changes (FILLED/CANCELED)
             order_manager: Optional order manager (for notifications)
+            position_manager: Optional position manager (for position tracking)
             emit_liquidation_event_fn: Function to emit liquidation events
             get_exchange_name_fn: Function to get exchange name
         """
@@ -52,9 +56,13 @@ class BackpackWebSocketHandlers:
         self.latest_orders = latest_orders
         self.order_update_handler = order_update_handler
         self.order_fill_callback = order_fill_callback
+        self.order_status_callback = order_status_callback
         self.order_manager = order_manager
+        self.position_manager = position_manager
         self.emit_liquidation_event = emit_liquidation_event_fn
         self.get_exchange_name = get_exchange_name_fn or (lambda: "backpack")
+        # Track previous position quantities for zero detection
+        self._previous_positions: Dict[str, Decimal] = {}
 
     async def handle_order_update(self, order_data: Dict[str, Any]) -> None:
         """
@@ -149,6 +157,11 @@ class BackpackWebSocketHandlers:
                     f"[WEBSOCKET] [BACKPACK] {status} "
                     f"{filled or quantity} @ {price or 'n/a'}"
                 )
+                # Check for position zeroed when order is FILLED
+                if symbol and self.position_manager:
+                    asyncio.create_task(
+                        self._check_position_zeroed(symbol, filled or quantity)
+                    )
             else:
                 self.logger.info(
                     f"[WEBSOCKET] [BACKPACK] {status} "
@@ -169,6 +182,7 @@ class BackpackWebSocketHandlers:
                 }
                 self.order_update_handler(payload)
 
+            # Call incremental fill callback (for partial fills)
             if self.order_fill_callback and filled is not None and price is not None:
                 fill_increment = filled - prev_filled
                 if fill_increment > Decimal("0"):
@@ -188,6 +202,27 @@ class BackpackWebSocketHandlers:
                             price,
                             fill_increment,
                             order_data.get("u"),
+                        )
+            
+            # Call status callback for final states (FILLED/CANCELED)
+            # This fires even if fill_increment = 0 (instant fills) or for cancellations
+            if self.order_status_callback and status in {"FILLED", "CANCELED", "CANCELLED"}:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(
+                        self.order_status_callback(
+                            order_id,
+                            status,
+                            filled or Decimal("0"),
+                            price,
+                        )
+                    )
+                except RuntimeError:
+                    await self.order_status_callback(
+                        order_id,
+                        status,
+                        filled or Decimal("0"),
+                        price,
                         )
         except Exception as exc:
             self.logger.error(f"Error handling Backpack order update: {exc}")
@@ -258,4 +293,43 @@ class BackpackWebSocketHandlers:
             await self.emit_liquidation_event(event)
         except Exception as exc:
             self.logger.error(f"Error handling Backpack liquidation notification: {exc}")
+
+    async def _check_position_zeroed(self, symbol: str, filled_qty: Decimal) -> None:
+        """
+        Check if position went to zero after an order fill.
+        
+        Similar to Lighter's position zeroed detection, but triggered by order fills
+        since Backpack doesn't have a position stream.
+        
+        Args:
+            symbol: Trading symbol
+            filled_qty: Quantity that was filled
+        """
+        try:
+            if not self.position_manager:
+                return
+            
+            # Normalize symbol
+            normalized_symbol = to_internal_symbol(symbol) or (getattr(self.config, "ticker", None) or symbol)
+            normalized_symbol = normalized_symbol.upper()
+            
+            # Get current position
+            current_qty = await self.position_manager.get_account_positions()
+            
+            # Get previous position quantity
+            prev_qty = self._previous_positions.get(normalized_symbol, Decimal("0"))
+            
+            # Update tracking
+            self._previous_positions[normalized_symbol] = current_qty
+            
+            # Check if position went from non-zero to zero
+            if prev_qty != 0 and current_qty == 0:
+                self.logger.warning(
+                    f"⚠️ [BACKPACK] Position suddenly zeroed: {normalized_symbol} | "
+                    f"Previous qty: {prev_qty} | Filled qty: {filled_qty} | "
+                    f"Possible causes: liquidation (no notification), rollback, or manual close"
+                )
+        except Exception as e:
+            # Don't let position check errors break order processing
+            self.logger.debug(f"[BACKPACK] Error checking position zeroed: {e}")
 

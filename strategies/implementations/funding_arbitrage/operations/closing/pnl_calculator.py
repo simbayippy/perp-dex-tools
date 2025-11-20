@@ -248,16 +248,46 @@ class PnLCalculator:
         closing_fees = Decimal("0")
         total_realized_funding = Decimal("0")
         
+        # Calculate entry prices from entry trades (weighted average) for each DEX
+        # This is used as fallback when metadata entry_price is missing or zero
+        entry_prices_from_trades: Dict[str, Decimal] = {}
         for dex, trades in entry_trades_by_dex.items():
-            for trade in trades:
-                entry_fees += trade.fee
-                if trade.realized_funding is not None:
-                    total_realized_funding += trade.realized_funding
+            if trades:
+                total_value = Decimal("0")
+                total_qty = Decimal("0")
+                for trade in trades:
+                    entry_fees += trade.fee
+                    if trade.realized_funding is not None:
+                        total_realized_funding += trade.realized_funding
+                    # Calculate weighted average entry price
+                    total_value += trade.price * trade.quantity
+                    total_qty += trade.quantity
+                if total_qty > 0:
+                    entry_prices_from_trades[dex] = total_value / total_qty
+                    strategy.logger.debug(
+                        f"[{dex}] Calculated entry price from trades: ${entry_prices_from_trades[dex]:.6f} "
+                        f"(from {len(trades)} entry trades)"
+                    )
+            else:
+                # No entry trades found, but still process fees if any
+                for trade in trades:
+                    entry_fees += trade.fee
+                    if trade.realized_funding is not None:
+                        total_realized_funding += trade.realized_funding
         
         for dex, trades in exit_trades_by_dex.items():
             leg_meta = legs_metadata.get(dex, {})
             entry_price = leg_meta.get("entry_price")
             side = leg_meta.get("side", "long")
+            
+            # If entry_price from metadata is missing or zero, use calculated entry price from trades
+            if not entry_price or entry_price == Decimal("0"):
+                entry_price = entry_prices_from_trades.get(dex)
+                if entry_price:
+                    strategy.logger.debug(
+                        f"[{dex}] Using entry price from trades (${entry_price:.6f}) "
+                        f"since metadata entry_price was missing or zero"
+                    )
             
             for trade in trades:
                 closing_fees += trade.fee
@@ -266,7 +296,11 @@ class PnLCalculator:
                 
                 if trade.realized_pnl is not None:
                     total_price_pnl += trade.realized_pnl
-                elif entry_price:
+                    strategy.logger.debug(
+                        f"[{dex}] Price PnL from realized_pnl: ${trade.realized_pnl:.2f} "
+                        f"(exit=${trade.price:.6f}, qty={trade.quantity})"
+                    )
+                elif entry_price and entry_price > Decimal("0"):
                     entry_price_decimal = to_decimal(entry_price)
                     if side == "long":
                         leg_pnl = (trade.price - entry_price_decimal) * trade.quantity
@@ -276,6 +310,12 @@ class PnLCalculator:
                     strategy.logger.debug(
                         f"[{dex}] Price PnL from trade history: ${leg_pnl:.2f} "
                         f"(entry=${entry_price_decimal:.6f}, exit=${trade.price:.6f}, qty={trade.quantity})"
+                    )
+                else:
+                    strategy.logger.warning(
+                        f"[{dex}] Cannot calculate PnL for exit trade: "
+                        f"entry_price missing/zero and no realized_pnl "
+                        f"(exit=${trade.price:.6f}, qty={trade.quantity})"
                     )
         
         if total_realized_funding != 0:

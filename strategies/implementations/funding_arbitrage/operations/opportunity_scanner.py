@@ -72,10 +72,14 @@ class OpportunityScanner:
 
             strategy.logger.info(f"Found {len(opportunities)} opportunities")
 
-            max_new = strategy.config.max_new_positions_per_cycle
             cooldown_minutes = getattr(strategy.config, "wide_spread_cooldown_minutes", 60)
             
-            for opportunity in opportunities[:max_new]:
+            # Filter opportunities: only do basic checks here (failed_symbols, cooldown, capacity)
+            # Don't call should_take() here - let execute_strategy() handle that per-opportunity
+            # so that if one fails, others can still be processed
+            # Don't limit by max_new_positions_per_cycle here - let execute_strategy() handle that
+            # This ensures all opportunities are attempted, and we stop after opening max_new positions
+            for opportunity in opportunities:
                 if opportunity.symbol in strategy.failed_symbols:
                     strategy.logger.debug(
                         f"⏭️  Skipping {opportunity.symbol} - already failed validation this cycle"
@@ -96,8 +100,10 @@ class OpportunityScanner:
                 if not await self.has_capacity():
                     break
 
-                if await self.should_take(opportunity):
-                    candidates.append(opportunity)
+                # Add to candidates - should_take() will be called in execute_strategy()
+                # This allows all opportunities to be attempted, and only the ones that fail
+                # during execution will be skipped
+                candidates.append(opportunity)
 
         except Exception as exc:  # pragma: no cover - defensive logging
             strategy.logger.error(f"Error scanning opportunities: {exc}")

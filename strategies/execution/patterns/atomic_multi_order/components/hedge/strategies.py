@@ -11,8 +11,6 @@ from strategies.execution.core.execution_types import ExecutionMode
 from ...contexts import OrderContext
 from .hedge_target_calculator import HedgeTargetCalculator
 from .hedge_result_tracker import HedgeResultTracker
-from .hedge_pricer import HedgePricer
-from .order_reconciler import OrderReconciler
 
 
 class HedgeResult:
@@ -127,8 +125,25 @@ class MarketHedgeStrategy(HedgeStrategy):
                 error_message=None
             )
         
-        # Calculate USD estimate from quantity using latest BBO (for logging only)
-        estimated_usd = Decimal("0")
+        # Check if remaining quantity rounds to zero (below exchange minimum step size)
+        # This can happen with small partial fills on exchanges with large step sizes
+        rounded_qty = spec.exchange_client.round_to_step(remaining_qty)
+        if rounded_qty <= Decimal("0"):
+            logger.warning(
+                f"⚠️ [{exchange_name}] Hedge quantity {remaining_qty} rounds to zero for {spec.symbol} "
+                f"(step_size likely {getattr(spec.exchange_client.config, 'step_size', 'unknown')}). "
+                f"Skipping hedge - remaining imbalance is below exchange minimum."
+            )
+            # Return success with 0 filled quantity - small imbalance is acceptable
+            return HedgeResult(
+                success=True,
+                filled_quantity=Decimal("0"),
+                execution_mode="market_skip_too_small",
+                error_message=None,
+            )
+        
+        # Check minimum order notional before attempting hedge
+        # This prevents attempting to hedge small partial fills that are below minimum order size
         try:
             if self._price_provider and remaining_qty > Decimal("0"):
                 best_bid, best_ask = await self._price_provider.get_bbo_prices(
@@ -136,8 +151,28 @@ class MarketHedgeStrategy(HedgeStrategy):
                 )
                 price = best_ask if spec.side == "buy" else best_bid
                 estimated_usd = remaining_qty * price
+                
+                # Check minimum order notional
+                min_notional = spec.exchange_client.get_min_order_notional(spec.symbol)
+                if min_notional is not None and min_notional > Decimal("0"):
+                    if estimated_usd < min_notional:
+                        logger.warning(
+                            f"⚠️ [{exchange_name}] Hedge order notional ${estimated_usd:.4f} below minimum ${min_notional:.2f} "
+                            f"for {spec.symbol}. Skipping hedge - size too small. "
+                            f"This should trigger rollback instead."
+                        )
+                        return HedgeResult(
+                            success=False,
+                            filled_quantity=Decimal("0"),
+                            execution_mode="market_skip_below_min_notional",
+                            error_message=f"Hedge order notional ${estimated_usd:.4f} below minimum ${min_notional:.2f}",
+                        )
+            else:
+                estimated_usd = Decimal("0")
         except Exception:
-            pass  # Skip USD estimate if BBO unavailable
+            estimated_usd = Decimal("0")
+            # If we can't get price, continue but log warning
+            logger.debug(f"Could not fetch price for minimum notional check on {exchange_name} {spec.symbol}")
         
         logger.info(
             f"⚡ Hedging {spec.symbol} on {exchange_name}: "
@@ -233,15 +268,27 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
     
     def __init__(
         self,
+        execution_strategy,  # Required: injected dependency - breaks circular dependency
         price_provider=None,
-        pricer: Optional[HedgePricer] = None,
-        reconciler: Optional[OrderReconciler] = None,
         tracker: Optional[HedgeResultTracker] = None,
-        market_fallback: Optional["MarketHedgeStrategy"] = None
+        market_fallback: Optional["MarketHedgeStrategy"] = None,
     ):
+        """
+        Initialize aggressive limit hedge strategy.
+        
+        Args:
+            execution_strategy: AggressiveLimitExecutionStrategy instance (required).
+                This dependency injection breaks circular dependencies and makes
+                dependencies explicit. Must be provided by the caller (e.g., HedgeManager).
+                Pricing and reconciliation are handled by the execution strategy.
+            price_provider: Optional PriceProvider for BBO price retrieval
+            tracker: Optional HedgeResultTracker instance
+            market_fallback: Optional MarketHedgeStrategy for fallback
+        """
+        self._execution_strategy = execution_strategy
         self._price_provider = price_provider
-        self._pricer = pricer or HedgePricer(price_provider=price_provider)
-        self._reconciler = reconciler or OrderReconciler()
+        # Note: Pricing and reconciliation are handled by AggressiveLimitExecutionStrategy
+        # No need for separate pricer/reconciler - execution strategy handles it
         self._tracker = tracker or HedgeResultTracker()
         self._target_calculator = HedgeTargetCalculator()
         self._market_fallback = market_fallback or MarketHedgeStrategy(price_provider=price_provider, tracker=self._tracker)
@@ -275,21 +322,7 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
         - Fewer retries (5 vs 8) to avoid delay
         - Faster fallback to market orders
         """
-        import asyncio
-        import time
         from types import SimpleNamespace
-        
-        # Auto-configure parameters based on operation type
-        if reduce_only:
-            max_retries = max_retries if max_retries is not None else 5
-            retry_backoff_ms = retry_backoff_ms if retry_backoff_ms is not None else 50
-            total_timeout_seconds = total_timeout_seconds if total_timeout_seconds is not None else 3.0
-            inside_tick_retries = inside_tick_retries if inside_tick_retries is not None else 2
-        else:
-            max_retries = max_retries if max_retries is not None else 8
-            retry_backoff_ms = retry_backoff_ms if retry_backoff_ms is not None else 75
-            total_timeout_seconds = total_timeout_seconds if total_timeout_seconds is not None else 6.0
-            inside_tick_retries = inside_tick_retries if inside_tick_retries is not None else 3
         
         spec = target_ctx.spec
         exchange_name = spec.exchange_client.get_exchange_name().upper()
@@ -308,8 +341,40 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
                 execution_mode="aggressive_limit_skip"
             )
         
-        # Calculate USD estimate for logging
-        estimated_usd = Decimal("0")
+        # Extract trigger fill price and side for break-even pricing
+        trigger_fill_price: Optional[Decimal] = None
+        trigger_side: Optional[str] = None
+        if trigger_ctx and trigger_ctx.result:
+            trigger_fill_price_raw = trigger_ctx.result.get("fill_price")
+            if trigger_fill_price_raw:
+                try:
+                    trigger_fill_price = Decimal(str(trigger_fill_price_raw))
+                    trigger_side = trigger_ctx.spec.side
+                except (ValueError, TypeError):
+                    pass
+        
+        # Track initial filled quantity before execution
+        initial_filled_qty = target_ctx.filled_quantity
+        
+        # Check if remaining quantity rounds to zero (below exchange minimum step size)
+        # This can happen with small partial fills on exchanges with large step sizes
+        rounded_qty = spec.exchange_client.round_to_step(remaining_qty)
+        if rounded_qty <= Decimal("0"):
+            logger.warning(
+                f"⚠️ [{exchange_name}] Hedge quantity {remaining_qty} rounds to zero for {symbol} "
+                f"(step_size likely {getattr(spec.exchange_client.config, 'step_size', 'unknown')}). "
+                f"Skipping hedge - remaining imbalance is below exchange minimum."
+            )
+            # Return success with 0 filled quantity - small imbalance is acceptable
+            return HedgeResult(
+                success=True,
+                filled_quantity=Decimal("0"),
+                execution_mode="aggressive_limit_skip_too_small",
+                error_message=None,
+            )
+        
+        # Check minimum order notional before attempting hedge
+        # This prevents attempting to hedge small partial fills that are below minimum order size
         try:
             if self._price_provider and remaining_qty > Decimal("0"):
                 best_bid, best_ask = await self._price_provider.get_bbo_prices(
@@ -317,277 +382,134 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
                 )
                 price = best_ask if spec.side == "buy" else best_bid
                 estimated_usd = remaining_qty * price
-        except Exception:
-            pass
+                
+                # Check minimum order notional
+                min_notional = spec.exchange_client.get_min_order_notional(symbol)
+                if min_notional is not None and min_notional > Decimal("0"):
+                    if estimated_usd < min_notional:
+                        logger.warning(
+                            f"⚠️ [{exchange_name}] Hedge order notional ${estimated_usd:.4f} below minimum ${min_notional:.2f} "
+                            f"for {symbol}. Skipping aggressive limit hedge - size too small. "
+                            f"This should trigger rollback instead."
+                        )
+                        return HedgeResult(
+                            success=False,
+                            filled_quantity=Decimal("0"),
+                            execution_mode="aggressive_limit_skip_below_min_notional",
+                            error_message=f"Hedge order notional ${estimated_usd:.4f} below minimum ${min_notional:.2f}",
+                        )
+        except Exception as e:
+            # If we can't get price, continue but log warning
+            logger.debug(f"Could not fetch price for minimum notional check on {exchange_name} {symbol}: {e}")
         
-        logger.info("=" * 80)
-        logger.info(
-            f"⚡ AGGRESSIVE LIMIT HEDGE: {symbol} on {exchange_name}: "
-            f"{remaining_qty} qty" + (f" (≈${float(estimated_usd):.2f})" if estimated_usd > Decimal("0") else "")
+        # Execute using general-purpose aggressive limit execution strategy
+        execution_result = await self._execution_strategy.execute(
+            exchange_client=spec.exchange_client,
+            symbol=symbol,
+            side=spec.side,
+            quantity=remaining_qty,
+            reduce_only=reduce_only,
+            max_retries=max_retries,
+            retry_backoff_ms=retry_backoff_ms,
+            total_timeout_seconds=total_timeout_seconds,
+            inside_tick_retries=inside_tick_retries,
+            max_deviation_pct=max_deviation_pct,
+            trigger_fill_price=trigger_fill_price,
+            trigger_side=trigger_side,
+            logger=logger,
         )
-        logger.info("=" * 80)
         
-        # Track fills during aggressive limit hedge
-        start_time = time.time()
-        hedge_success = False
-        hedge_error: Optional[str] = None
-        initial_filled_qty = target_ctx.filled_quantity
-        accumulated_filled_qty = Decimal("0")
-        accumulated_fill_price: Optional[Decimal] = None
-        last_order_filled_qty = Decimal("0")
-        last_order_id: Optional[str] = None
-        retries_used = 0
-        last_pricing_strategy = "unknown"  # Track pricing strategy for final result
-        
-        for retry_count in range(max_retries):
-            # Check total timeout
-            elapsed_time = time.time() - start_time
-            if elapsed_time >= total_timeout_seconds:
-                logger.info("-" * 80)
-                logger.warning(
-                    f"⏱️ Aggressive limit hedge timeout after {elapsed_time:.2f}s for {exchange_name} {symbol}. "
-                    f"Falling back to market order."
-                )
-                logger.info("-" * 80)
-                break
+        # Convert ExecutionResult to HedgeResult
+        if execution_result.success and execution_result.filled:
+            # Check if this was a market fallback (execution_mode_used contains "fallback_market")
+            is_market_fallback = execution_result.execution_mode_used and "fallback_market" in execution_result.execution_mode_used
             
-            current_order_filled_qty = Decimal("0")
+            filled_qty = execution_result.filled_quantity or Decimal("0")
+            fill_price = execution_result.fill_price
             
-            try:
-                # Calculate hedge price using pricer helper
-                price_result = await self._pricer.calculate_aggressive_limit_price(
-                    spec=spec,
-                    trigger_ctx=trigger_ctx,
-                    retry_count=retry_count,
-                    inside_tick_retries=inside_tick_retries,
-                    max_deviation_pct=max_deviation_pct,
-                    logger=logger,
-                    exchange_name=exchange_name,
-                    symbol=symbol,
-                )
-                last_pricing_strategy = price_result.pricing_strategy  # Track for final result
-                
-                # Calculate remaining quantity after accumulated partial fills
-                total_filled_qty = initial_filled_qty + accumulated_filled_qty
-                remaining_qty = hedge_target - total_filled_qty
-                if remaining_qty <= Decimal("0"):
-                    hedge_success = True
-                    break
-                
-                # Round quantity to step size
-                order_quantity = spec.exchange_client.round_to_step(remaining_qty)
-                
-                if order_quantity <= Decimal("0"):
-                    logger.warning(
-                        f"⚠️ [{exchange_name}] Order quantity rounded to zero for {symbol} "
-                        f"(accumulated_filled={accumulated_filled_qty}, hedge_target={hedge_target})"
-                    )
-                    if accumulated_filled_qty > Decimal("0"):
-                        hedge_success = True
-                    break
-                
-                strategy_info = f"{price_result.pricing_strategy}"
-                if price_result.break_even_strategy and price_result.break_even_strategy != price_result.pricing_strategy:
-                    strategy_info += f" (break_even: {price_result.break_even_strategy})"
-                
-                logger.debug(
-                    f"🔄 [{exchange_name}] Aggressive limit hedge attempt {retry_count + 1}/{max_retries} "
-                    f"for {symbol}: {strategy_info} @ ${price_result.limit_price} qty={order_quantity} "
-                    f"(best_bid=${price_result.best_bid}, best_ask=${price_result.best_ask})"
+            if is_market_fallback:
+                # Market fallback case - use market hedge tracker
+                # The ExecutionResult already includes both limit fills (if any) and market fills
+                # We need to track this as a market hedge result
+                execution_result_for_tracker = SimpleNamespace(
+                    success=True,
+                    filled=True,
+                    fill_price=fill_price,
+                    filled_quantity=filled_qty,
+                    slippage_usd=Decimal("0"),
+                    execution_mode_used=execution_result.execution_mode_used or "aggressive_limit_fallback_market",
+                    order_id=execution_result.order_id,
+                    retryable=False,
                 )
                 
-                # Place limit order
-                contract_id = spec.exchange_client.resolve_contract_id(symbol)
-                order_result = await spec.exchange_client.place_limit_order(
-                    contract_id=contract_id,
-                    quantity=float(order_quantity),
-                    price=float(price_result.limit_price),
-                    side=spec.side,
-                    reduce_only=reduce_only,
+                # Track as market hedge (this will update context correctly)
+                # Note: initial_filled_qty is the quantity before aggressive limit hedge started
+                # filled_qty includes any limit fills + market fills
+                # We need to determine maker vs taker quantities
+                # For now, assume all fills are taker (market) since fallback happened
+                # TODO: Could track partial limit fills separately if needed
+                self._tracker.apply_market_hedge_result(
+                    target_ctx,
+                    execution_result_for_tracker,
+                    spec,
+                    initial_maker_qty=None,  # No prior maker fills if we're here
+                    executor=executor
                 )
                 
-                if not order_result.success:
-                    error_msg = order_result.error_message or f"Limit order placement failed on {exchange_name}"
-                    logger.warning(f"⚠️ [{exchange_name}] Limit order placement failed for {symbol}: {error_msg}")
-                    
-                    if "post" in error_msg.lower() or "post-only" in error_msg.lower():
-                        logger.info(
-                            f"🔄 [{exchange_name}] Post-only violation detected for {symbol}. "
-                            f"Retrying with fresh BBO ({price_result.pricing_strategy} strategy)."
-                        )
-                        await asyncio.sleep(retry_backoff_ms / 1000.0)
-                        retries_used += 1
-                        continue
-                    else:
-                        hedge_error = error_msg
-                        break
+                maker_qty = target_ctx.result.get("maker_qty", Decimal("0")) if target_ctx.result else Decimal("0")
+                taker_qty = target_ctx.result.get("taker_qty", Decimal("0")) if target_ctx.result else Decimal("0")
                 
-                order_id = order_result.order_id
-                if not order_id:
-                    logger.warning(f"⚠️ [{exchange_name}] No order_id returned for {symbol}")
-                    await asyncio.sleep(retry_backoff_ms / 1000.0)
-                    retries_used += 1
-                    continue
-                
-                last_order_id = order_id
-                
-                # Register hedge order context for websocket callbacks (real-time fill tracking)
-                if executor is not None:
-                    executor._register_order_context(target_ctx, str(order_id))
-                
-                # Wait for fill with timeout per attempt
-                remaining_timeout = total_timeout_seconds - elapsed_time
-                if remaining_timeout <= 0:
-                    try:
-                        order_status_check = await spec.exchange_client.get_order_info(order_id)
-                        if order_status_check and order_status_check.status not in {"CANCELED", "CANCELLED", "FILLED"}:
-                            await spec.exchange_client.cancel_order(order_id)
-                    except Exception:
-                        pass
-                    break
-                
-                attempt_timeout = min(1.5, remaining_timeout)
-                
-                # Poll for fill status using reconciler helper
-                recon_result = await self._reconciler.poll_order_until_filled(
-                    exchange_client=spec.exchange_client,
-                    order_id=order_id,
-                    order_quantity=order_quantity,
-                    limit_price=price_result.limit_price,
-                    accumulated_filled_qty=accumulated_filled_qty,
-                    current_order_filled_qty=current_order_filled_qty,
-                    initial_filled_qty=initial_filled_qty,
-                    hedge_target=hedge_target,
-                    attempt_timeout=attempt_timeout,
-                    pricing_strategy=price_result.pricing_strategy,
-                    retry_count=retry_count,
-                    retry_backoff_ms=retry_backoff_ms,
-                    logger=logger,
-                    exchange_name=exchange_name,
-                    symbol=symbol,
+                return HedgeResult(
+                    success=True,
+                    filled_quantity=target_ctx.filled_quantity,  # Use context value (updated by tracker)
+                    fill_price=fill_price,
+                    execution_mode=execution_result.execution_mode_used or "aggressive_limit_fallback_market",
+                    maker_quantity=maker_qty,
+                    taker_quantity=taker_qty,
+                )
+            else:
+                # Pure aggressive limit success - track as aggressive limit result
+                execution_result_for_tracker = SimpleNamespace(
+                    success=True,
+                    filled=True,
+                    fill_price=fill_price,
+                    filled_quantity=filled_qty,
+                    slippage_usd=Decimal("0"),
+                    execution_mode_used=execution_result.execution_mode_used or "aggressive_limit",
+                    order_id=execution_result.order_id,
+                    retryable=False,
                 )
                 
-                last_order_filled_qty = recon_result.current_order_filled_qty
-                accumulated_filled_qty = recon_result.accumulated_filled_qty
-                
-                if recon_result.hedge_error:
-                    hedge_error = recon_result.hedge_error
-                
-                if recon_result.fill_price:
-                    accumulated_fill_price = recon_result.fill_price
-                
-                # Check if filled
-                if recon_result.filled and accumulated_filled_qty > Decimal("0"):
-                    filled_qty = accumulated_filled_qty
-                    fill_price = accumulated_fill_price or price_result.limit_price
-                    
-                    total_filled_qty = initial_filled_qty + accumulated_filled_qty
-                    if total_filled_qty >= hedge_target * Decimal("0.99"):  # 99% threshold
-                        logger.info("=" * 80)
-                        logger.info(
-                            f"✅ AGGRESSIVE LIMIT HEDGE SUCCESS: [{exchange_name}] {symbol} "
-                            f"@ ${fill_price} qty={filled_qty} new fills (total: {total_filled_qty}/{hedge_target}, "
-                            f"attempt {retry_count + 1})"
-                        )
-                        logger.info("=" * 80)
-                        
-                        # Apply result using tracker
-                        execution_result = SimpleNamespace(
-                            success=True,
-                            filled=True,
-                            fill_price=fill_price,
-                            filled_quantity=filled_qty,
-                            slippage_usd=Decimal("0"),
-                            execution_mode_used=f"aggressive_limit_{price_result.pricing_strategy}",
-                            order_id=order_id,
-                            retryable=False,
-                        )
-                        self._tracker.apply_aggressive_limit_hedge_result(
-                            target_ctx,
-                            execution_result,
-                            spec,
-                            initial_filled_qty,
-                            accumulated_filled_qty,
-                            fill_price,
-                            order_id,
-                            price_result.pricing_strategy,
-                            executor=executor
-                        )
-                        
-                        hedge_success = True
-                        retries_used = retry_count + 1
-                        break
-                    else:
-                        # Partial fill but not enough - continue retrying
-                        logger.info(
-                            f"📊 [{exchange_name}] Partial fill {filled_qty} new fills "
-                            f"(total: {total_filled_qty}/{hedge_target}) for {symbol}. "
-                            f"Continuing to fill remainder."
-                        )
-                        if not recon_result.partial_fill_detected:
-                            try:
-                                await spec.exchange_client.cancel_order(order_id)
-                            except Exception:
-                                pass
-                        await asyncio.sleep(retry_backoff_ms / 1000.0)
-                        retries_used += 1
-                        continue
-                elif recon_result.partial_fill_detected:
-                    # Had partial fill but loop exited - continue retrying
-                    total_filled_qty = initial_filled_qty + accumulated_filled_qty
-                    logger.debug(
-                        f"📊 [{exchange_name}] Partial fill {accumulated_filled_qty} new fills "
-                        f"(total: {total_filled_qty}/{hedge_target}) for {symbol}. "
-                        f"Retrying for remainder."
-                    )
-                    await asyncio.sleep(retry_backoff_ms / 1000.0)
-                    retries_used += 1
-                    continue
-                elif not recon_result.filled:
-                    # Order not filled, cancel and retry
-                    try:
-                        order_status_check = await spec.exchange_client.get_order_info(order_id)
-                        if order_status_check and order_status_check.status not in {"CANCELED", "CANCELLED"}:
-                            await spec.exchange_client.cancel_order(order_id)
-                    except Exception:
-                        pass
-                    
-                    if hedge_error:
-                        break
-                    await asyncio.sleep(retry_backoff_ms / 1000.0)
-                    retries_used += 1
-                    continue
-                
-            except Exception as exc:
-                logger.error(
-                    f"❌ [{exchange_name}] Aggressive limit hedge attempt {retry_count + 1} "
-                    f"exception for {symbol}: {exc}"
+                # Track maker quantity (all fills from aggressive limit are maker)
+                self._tracker.apply_aggressive_limit_hedge_result(
+                    target_ctx,
+                    execution_result_for_tracker,
+                    spec,
+                    initial_filled_qty,
+                    filled_qty,  # accumulated_filled_qty (new fills only)
+                    fill_price or Decimal("0"),
+                    execution_result.order_id or "",
+                    execution_result.execution_mode_used.replace("aggressive_limit_", "") if execution_result.execution_mode_used else "unknown",
+                    executor=executor
                 )
-                hedge_error = str(exc)
-                await asyncio.sleep(retry_backoff_ms / 1000.0)
-                retries_used += 1
-        
-        # Final reconciliation check
-        if not hedge_success and last_order_id:
-            logger.info("-" * 80)
-            logger.info(f"📋 Final Reconciliation Check: {symbol} on {exchange_name}")
-            logger.info("-" * 80)
+                
+                maker_qty = target_ctx.result.get("maker_qty", Decimal("0")) if target_ctx.result else Decimal("0")
+                
+                return HedgeResult(
+                    success=True,
+                    filled_quantity=filled_qty,
+                    fill_price=fill_price,
+                    execution_mode=execution_result.execution_mode_used or "aggressive_limit",
+                    maker_quantity=maker_qty,
+                    taker_quantity=Decimal("0"),
+                )
+        elif execution_result.filled and execution_result.filled_quantity and execution_result.filled_quantity > Decimal("0"):
+            # Partial fill case - fallback to market for remainder
+            accumulated_filled_qty = execution_result.filled_quantity
+            accumulated_fill_price = execution_result.fill_price
             
-            accumulated_filled_qty, accumulated_fill_price = await self._reconciler.reconcile_final_state(
-                exchange_client=spec.exchange_client,
-                order_id=last_order_id,
-                last_known_fills=last_order_filled_qty,
-                accumulated_filled_qty=accumulated_filled_qty,
-                accumulated_fill_price=accumulated_fill_price,
-                logger=logger,
-                exchange_name=exchange_name,
-                symbol=symbol,
-            )
-        
-        # Fallback to market if limit hedge failed
-        if not hedge_success:
             logger.info("=" * 80)
-            logger.info(f"⚠️ AGGRESSIVE LIMIT HEDGE FAILED: Falling back to market order")
+            logger.info(f"⚠️ AGGRESSIVE LIMIT HEDGE PARTIAL: Falling back to market order")
             logger.info("=" * 80)
             
             total_filled_qty = initial_filled_qty + accumulated_filled_qty
@@ -626,7 +548,6 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
                     execution_mode="aggressive_limit_fallback_failed",
                     maker_quantity=accumulated_filled_qty,
                     error_message=market_result.error_message,
-                    retries_used=retries_used
                 )
             else:
                 logger.info("=" * 80)
@@ -641,21 +562,40 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
                     success=True,
                     filled_quantity=target_ctx.filled_quantity,
                     fill_price=market_result.fill_price or accumulated_fill_price,
-                    execution_mode=f"aggressive_limit_fallback_market",
+                    execution_mode="aggressive_limit_fallback_market",
                     maker_quantity=total_maker_qty,
                     taker_quantity=total_taker_qty,
-                    retries_used=retries_used
                 )
-        
-        # Success case
-        maker_qty = target_ctx.result.get("maker_qty", Decimal("0")) if target_ctx.result else Decimal("0")
-        return HedgeResult(
-            success=True,
-            filled_quantity=accumulated_filled_qty,
-            fill_price=accumulated_fill_price,
-            execution_mode=f"aggressive_limit_{last_pricing_strategy}",
-            maker_quantity=maker_qty,
-            taker_quantity=Decimal("0"),
-            retries_used=retries_used
-        )
+        else:
+            # Complete failure - fallback to market
+            logger.info("=" * 80)
+            logger.info(f"⚠️ AGGRESSIVE LIMIT HEDGE FAILED: Falling back to market order")
+            logger.info("=" * 80)
+            
+            # Fallback to market hedge
+            market_result = await self._market_fallback.execute_hedge(
+                trigger_ctx=None,
+                target_ctx=target_ctx,
+                hedge_target=hedge_target,
+                logger=logger,
+                reduce_only=reduce_only,
+                executor=executor
+            )
+            
+            if not market_result.success:
+                return HedgeResult(
+                    success=False,
+                    filled_quantity=Decimal("0"),
+                    execution_mode="aggressive_limit_fallback_failed",
+                    error_message=market_result.error_message or execution_result.error_message or "Aggressive limit hedge failed",
+                )
+            else:
+                return HedgeResult(
+                    success=True,
+                    filled_quantity=market_result.filled_quantity,
+                    fill_price=market_result.fill_price,
+                    execution_mode="aggressive_limit_fallback_market",
+                    maker_quantity=Decimal("0"),
+                    taker_quantity=market_result.taker_quantity,
+                )
 

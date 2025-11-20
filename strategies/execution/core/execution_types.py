@@ -19,6 +19,7 @@ class ExecutionMode(Enum):
     LIMIT_WITH_FALLBACK = "limit_with_fallback"
     MARKET_ONLY = "market_only"
     ADAPTIVE = "adaptive"
+    AGGRESSIVE_LIMIT = "aggressive_limit"
 
 
 @dataclass

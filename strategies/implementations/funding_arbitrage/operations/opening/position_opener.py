@@ -107,14 +107,14 @@ class PositionOpener:
                 if long_client:
                     try:
                         long_snapshot = await long_client.get_position_snapshot(symbol)
-                    except Exception as exc:
-                        self._strategy.logger.debug(f"Could not fetch {long_dex} snapshot for notification: {exc}")
+                    except Exception as e:
+                        self._strategy.logger.debug(f"Could not fetch {long_dex} snapshot for notification: {e}")
                 
                 if short_client:
                     try:
                         short_snapshot = await short_client.get_position_snapshot(symbol)
-                    except Exception as exc:
-                        self._strategy.logger.debug(f"Could not fetch {short_dex} snapshot for notification: {exc}")
+                    except Exception as e:
+                        self._strategy.logger.debug(f"Could not fetch {short_dex} snapshot for notification: {e}")
                 
                 position_legs = execution.position.metadata.setdefault("legs", {})
                 
@@ -217,15 +217,16 @@ class PositionOpener:
                     long_execution_type=long_execution_type,
                     short_execution_type=short_execution_type,
                 )
-            except Exception as exc:
-                self._strategy.logger.warning(f"Failed to send position opened notification: {exc}")
+            except Exception as e:
+                self._strategy.logger.warning(f"Failed to send position opened notification: {e}")
 
             return persistence.position
 
-        except Exception as exc:
+        except Exception as e:
             strategy = self._strategy
             strategy.logger.error(
-                f"❌ {opportunity.symbol}: Unexpected error - {exc}"
+                f"❌ {opportunity.symbol}: Unexpected error - {e}",
+                exc_info=True
             )
             strategy.failed_symbols.add(opportunity.symbol)
             return None
