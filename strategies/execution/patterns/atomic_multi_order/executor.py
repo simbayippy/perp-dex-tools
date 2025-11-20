@@ -293,7 +293,20 @@ class AtomicMultiOrderExecutor:
                             rollback_cost = rollback_cost_local
                         
                         if hedge_success:
+                            # Hedge succeeded and orders are balanced - return success immediately
+                            # Don't continue to post-execution imbalance checks since we already verified balance
                             all_completed = True
+                            # Return success result immediately - don't continue to imbalance checks
+                            return self._build_execution_result(
+                                contexts=contexts,
+                                orders=orders,
+                                elapsed_ms=elapsed_ms(),
+                                success=True,
+                                all_filled=True,
+                                error_message=None,
+                                rollback_performed=False,
+                                rollback_cost=Decimal("0"),
+                            )
                         else:
                             break
 
