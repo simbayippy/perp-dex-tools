@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -12,6 +13,7 @@ from exchange_clients.base_models import ExchangePositionSnapshot
 from ..core.contract_preparer import ContractPreparer
 from ..core.websocket_manager import WebSocketManager
 from ..core.decimal_utils import to_decimal
+from ..core.price_utils import calculate_spread_pct, MAX_EXIT_SPREAD_PCT
 from ...risk_management import get_risk_manager
 from .exit_evaluator import ExitEvaluator
 from .pnl_calculator import PnLCalculator
@@ -44,6 +46,7 @@ class PositionCloser:
         strategy = self._strategy
         actions: List[str] = []
         positions = await strategy.position_manager.get_open_positions()
+        enable_polling = getattr(strategy.config, "enable_exit_polling", True)
 
         for position in positions:
             # Skip positions that are already being closed (prevents race conditions)
@@ -56,8 +59,11 @@ class PositionCloser:
             snapshots = await self._fetch_leg_snapshots(position)
 
             # Check liquidation risk FIRST (highest priority - proactive prevention)
+            # Critical exits bypass polling entirely
             liquidation_risk_reason = self._exit_evaluator.check_liquidation_risk(position, snapshots)
             if liquidation_risk_reason is not None:
+                # Cancel any existing polling for critical exit
+                self._cancel_exit_polling(position)
                 # Use limit orders to prevent slippage (speed is less critical than avoiding slippage)
                 await self.close(position, liquidation_risk_reason, live_snapshots=snapshots, order_type="limit")
                 strategy.logger.warning(
@@ -67,8 +73,10 @@ class PositionCloser:
                 continue
 
             # Check if already liquidated (reactive detection)
+            # Critical exits bypass polling entirely
             liquidation_reason = self._exit_evaluator.detect_liquidation(position, snapshots)
             if liquidation_reason is not None:
+                self._cancel_exit_polling(position)
                 await self.close(position, liquidation_reason, live_snapshots=snapshots)
                 strategy.logger.warning(
                     f"Closed {position.symbol}: {liquidation_reason}"
@@ -78,6 +86,7 @@ class PositionCloser:
 
             imbalance_reason = self._exit_evaluator.detect_imbalance(position, snapshots)
             if imbalance_reason is not None:
+                self._cancel_exit_polling(position)
                 await self.close(position, imbalance_reason, live_snapshots=snapshots)
                 strategy.logger.warning(
                     f"Closed {position.symbol}: {imbalance_reason}"
@@ -85,22 +94,160 @@ class PositionCloser:
                 actions.append(f"Closed {position.symbol}: {imbalance_reason}")
                 continue
 
+            # Check if position is in exit polling state
+            polling_state = self._check_exit_polling_state(position)
+            
+            if polling_state:
+                # Position is in polling state - handle polling logic
+                await self._handle_exit_polling(
+                    position, polling_state, snapshots, actions
+                )
+                continue
+            
+            # Position is NOT in polling - evaluate exit conditions
             should_close, reason = await self._exit_evaluator.should_close(
                 position,
                 snapshots,
                 gather_current_rates=self._gather_current_rates,
                 should_skip_erosion_exit=self._should_skip_erosion_exit,
             )
+            
             if should_close:
-                await self.close(position, reason or "UNKNOWN", live_snapshots=snapshots)
-                strategy.logger.info(f"Closed {position.symbol}: {reason}")
-                actions.append(f"Closed {position.symbol}: {reason}")
+                if enable_polling:
+                    # Check spread before entering polling
+                    spread_acceptable = await self._check_spread_before_polling(
+                        position, snapshots
+                    )
+                    
+                    if not spread_acceptable:
+                        # Spread too wide, defer (will check again next iteration)
+                        strategy.logger.debug(
+                            f"Deferring exit polling start for {position.symbol} due to wide spread"
+                        )
+                        continue
+                    
+                    # Check if break-even is available NOW
+                    can_exit_now = self._exit_evaluator.can_exit_at_break_even(
+                        position, snapshots
+                    )
+                    
+                    if can_exit_now:
+                        # Break-even available immediately - exit now (no polling delay)
+                        # Use limit orders for better execution
+                        await self.close(position, reason or "UNKNOWN", live_snapshots=snapshots, order_type="limit")
+                        strategy.logger.info(
+                            f"Closed {position.symbol}: {reason} (break-even available immediately)"
+                        )
+                        actions.append(f"Closed {position.symbol}: {reason}")
+                    else:
+                        # Break-even not available - start polling
+                        self._start_exit_polling(position, reason or "UNKNOWN")
+                        strategy.logger.info(
+                            f"Started exit polling for {position.symbol}: {reason} "
+                            f"(waiting for break-even exit opportunity)"
+                        )
+                else:
+                    # Polling disabled - exit immediately
+                    await self.close(position, reason or "UNKNOWN", live_snapshots=snapshots)
+                    strategy.logger.info(f"Closed {position.symbol}: {reason}")
+                    actions.append(f"Closed {position.symbol}: {reason}")
             else:
                 strategy.logger.debug(
                     f"Position {position.symbol} not closing: {reason}"
                 )
 
         return actions
+    
+    async def _handle_exit_polling(
+        self,
+        position: "FundingArbPosition",
+        polling_state: Dict[str, Any],
+        snapshots: Dict[str, Optional["ExchangePositionSnapshot"]],
+        actions: List[str],
+    ) -> None:
+        """
+        Handle exit polling logic for a position in polling state.
+        
+        Args:
+            position: Position in polling state
+            polling_state: Polling state dict
+            snapshots: Current exchange snapshots
+            actions: Actions list to append to
+        """
+        strategy = self._strategy
+        
+        # Update last check time
+        polling_state["last_check_at"] = datetime.now(timezone.utc).isoformat()
+        if position.metadata is None:
+            position.metadata = {}
+        position.metadata["exit_polling_state"] = polling_state
+        
+        # Check if timeout expired
+        if self._is_polling_timeout_expired(polling_state):
+            # Timeout expired - force exit with aggressive limit orders
+            reason = polling_state.get("exit_reason", "TIMEOUT")
+            strategy.logger.warning(
+                f"⏰ Exit polling timeout expired for {position.symbol}. "
+                f"Forcing exit with aggressive limit orders."
+            )
+            self._cancel_exit_polling(position)
+            # Use limit order type to ensure aggressive_limit execution mode is used
+            await self.close(position, f"{reason}_TIMEOUT", live_snapshots=snapshots, order_type="limit")
+            actions.append(f"Closed {position.symbol}: {reason}_TIMEOUT (timeout)")
+            return
+        
+        # Re-evaluate exit conditions (maybe funding improved?)
+        should_close, current_reason = await self._exit_evaluator.should_close(
+            position,
+            snapshots,
+            gather_current_rates=self._gather_current_rates,
+            should_skip_erosion_exit=self._should_skip_erosion_exit,
+        )
+        
+        if not should_close:
+            # Exit conditions no longer met - cancel polling
+            strategy.logger.info(
+                f"✅ Exit conditions no longer met for {position.symbol} "
+                f"(was: {polling_state.get('exit_reason')}, now: {current_reason}). "
+                f"Cancelling exit polling."
+            )
+            self._cancel_exit_polling(position)
+            await strategy.position_manager.update(position)
+            return
+        
+        # Exit conditions still met - check if break-even reached
+        can_exit = self._exit_evaluator.can_exit_at_break_even(position, snapshots)
+        
+        if can_exit:
+            # Break-even reached - check spread before attempting exit
+            spread_acceptable = await self._check_spread_before_exit(position, snapshots)
+            
+            if spread_acceptable:
+                # Break-even reached and spread acceptable - attempt exit
+                reason = polling_state.get("exit_reason", "UNKNOWN")
+                strategy.logger.info(
+                    f"✅ Break-even exit opportunity available for {position.symbol}. "
+                    f"Attempting exit."
+                )
+                self._cancel_exit_polling(position)
+                # Use limit orders for better execution
+                await self.close(position, reason, live_snapshots=snapshots, order_type="limit")
+                actions.append(f"Closed {position.symbol}: {reason} (break-even)")
+            else:
+                # Break-even reached but spread too wide - continue polling
+                strategy.logger.debug(
+                    f"Break-even reached for {position.symbol} but spread too wide. "
+                    f"Continuing polling."
+                )
+        else:
+            # Break-even not reached yet - continue polling
+            strategy.logger.debug(
+                f"⏳ Exit polling for {position.symbol}: waiting for break-even "
+                f"(reason: {polling_state.get('exit_reason')})"
+            )
+        
+        # Update position with polling state
+        await strategy.position_manager.update(position)
 
     async def handle_liquidation_event(self, event: LiquidationEvent) -> None:
         """React to liquidation notifications by immediately unwinding impacted positions."""
@@ -134,6 +281,26 @@ class PositionCloser:
         """Close a position and calculate PnL."""
         strategy = self._strategy
         self._current_close_order_type = order_type
+
+        # Check if this is a manual close (from telegram bot or control API)
+        # Manual closes should cancel any existing exit polling and proceed immediately
+        manual_close_reasons = {
+            "telegram_manual_close",
+            "telegram_stop_with_close",
+            "manual_close",
+        }
+        is_manual_close = reason.lower() in manual_close_reasons or reason.startswith("telegram_")
+        
+        if is_manual_close:
+            # Cancel any existing exit polling for manual closes
+            polling_state = self._check_exit_polling_state(position)
+            if polling_state:
+                strategy.logger.info(
+                    f"🛑 Manual close requested for {position.symbol}. "
+                    f"Cancelling exit polling (was waiting for: {polling_state.get('exit_reason')})"
+                )
+                self._cancel_exit_polling(position)
+                await strategy.position_manager.update(position)
 
         # Check if position is already being closed (prevent concurrent closes)
         if position.id in self._positions_closing:
@@ -595,6 +762,164 @@ class PositionCloser:
         
         return True
 
+    def _check_exit_polling_state(
+        self, position: "FundingArbPosition"
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Check if position is in exit polling state.
+        
+        Returns:
+            Polling state dict if in polling, None otherwise
+        """
+        polling_state = (position.metadata or {}).get("exit_polling_state")
+        if polling_state and isinstance(polling_state, dict):
+            return polling_state
+        return None
+    
+    def _start_exit_polling(
+        self, position: "FundingArbPosition", reason: str
+    ) -> None:
+        """
+        Start exit polling state for position.
+        
+        Args:
+            position: Position to start polling for
+            reason: Exit reason that triggered polling
+        """
+        strategy = self._strategy
+        max_duration_minutes = getattr(
+            strategy.config, "exit_polling_max_duration_minutes", 10
+        )
+        
+        polling_state = {
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "exit_reason": reason,
+            "max_duration_minutes": max_duration_minutes,
+            "last_check_at": datetime.now(timezone.utc).isoformat(),
+        }
+        
+        if position.metadata is None:
+            position.metadata = {}
+        position.metadata["exit_polling_state"] = polling_state
+        
+        strategy.logger.info(
+            f"⏳ Started exit polling for {position.symbol} (reason: {reason}, "
+            f"max duration: {max_duration_minutes} minutes)"
+        )
+    
+    def _cancel_exit_polling(self, position: "FundingArbPosition") -> None:
+        """
+        Cancel exit polling state for position.
+        
+        Args:
+            position: Position to cancel polling for
+        """
+        strategy = self._strategy
+        if position.metadata and "exit_polling_state" in position.metadata:
+            polling_state = position.metadata.pop("exit_polling_state")
+            reason = polling_state.get("exit_reason", "UNKNOWN")
+            strategy.logger.info(
+                f"✅ Cancelled exit polling for {position.symbol} (reason: {reason})"
+            )
+    
+    def _is_polling_timeout_expired(
+        self, polling_state: Dict[str, Any]
+    ) -> bool:
+        """
+        Check if polling timeout has expired.
+        
+        Args:
+            polling_state: Polling state dict
+            
+        Returns:
+            True if timeout expired, False otherwise
+        """
+        started_at_str = polling_state.get("started_at")
+        max_duration_minutes = polling_state.get("max_duration_minutes", 10)
+        
+        if not started_at_str:
+            return True  # Invalid state, consider expired
+        
+        try:
+            started_at = datetime.fromisoformat(started_at_str.replace("Z", "+00:00"))
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+            
+            elapsed_minutes = (datetime.now(timezone.utc) - started_at).total_seconds() / 60
+            return elapsed_minutes >= max_duration_minutes
+        except Exception:
+            return True  # On error, consider expired
+    
+    async def _check_spread_before_polling(
+        self,
+        position: "FundingArbPosition",
+        snapshots: Dict[str, Optional["ExchangePositionSnapshot"]],
+    ) -> bool:
+        """
+        Check if spread is acceptable before entering polling.
+        
+        Returns:
+            True if spread is acceptable, False if too wide (should defer)
+        """
+        strategy = self._strategy
+        
+        if not getattr(strategy.config, "enable_wide_spread_protection", True):
+            return True  # Spread protection disabled, allow polling
+        
+        try:
+            price_provider = getattr(strategy, "price_provider", None)
+            if not price_provider:
+                return True  # No price provider, allow polling
+            
+            # Check spread for both legs
+            for dex in [position.long_dex, position.short_dex]:
+                client = strategy.exchange_clients.get(dex)
+                if not client:
+                    continue
+                
+                snapshot = snapshots.get(dex) or snapshots.get(dex.lower())
+                if not snapshot:
+                    continue
+                
+                try:
+                    bid, ask = await price_provider.get_bbo_prices(client, position.symbol)
+                    spread_pct = calculate_spread_pct(bid, ask)
+                    
+                    if spread_pct is not None and spread_pct > MAX_EXIT_SPREAD_PCT:
+                        strategy.logger.info(
+                            f"⏸️  Wide spread detected on {dex.upper()} {position.symbol}: "
+                            f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
+                            f"Deferring exit polling."
+                        )
+                        return False
+                except Exception as exc:
+                    strategy.logger.warning(
+                        f"Failed to check spread for {dex} {position.symbol}: {exc}. "
+                        f"Allowing polling."
+                    )
+                    continue
+            
+            return True  # Spread acceptable
+        except Exception as exc:
+            strategy.logger.warning(
+                f"Error checking spread before polling for {position.symbol}: {exc}. "
+                f"Allowing polling."
+            )
+            return True
+    
+    async def _check_spread_before_exit(
+        self,
+        position: "FundingArbPosition",
+        snapshots: Dict[str, Optional["ExchangePositionSnapshot"]],
+    ) -> bool:
+        """
+        Check if spread is acceptable before attempting exit during polling.
+        
+        Returns:
+            True if spread is acceptable, False if too wide (should continue polling)
+        """
+        return await self._check_spread_before_polling(position, snapshots)
+    
     @staticmethod
     def _symbols_match(position_symbol: Optional[str], event_symbol: Optional[str]) -> bool:
         """Check if two symbols match (handles variations like BTC vs BTCUSDT)."""
