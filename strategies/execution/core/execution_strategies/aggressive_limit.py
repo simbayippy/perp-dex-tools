@@ -263,15 +263,30 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                         error_msg = order_result.error_message or f"Limit order placement failed on {exchange_name}"
                         logger.warning(f"⚠️ [{exchange_name}] Limit order placement failed for {symbol}: {error_msg}")
                         
-                        if "post" in error_msg.lower() or "post-only" in error_msg.lower():
+                        # Check for retryable errors (post-only violations, expired orders, etc.)
+                        error_lower = error_msg.lower()
+                        is_retryable = (
+                            "post" in error_lower or 
+                            "post-only" in error_lower or
+                            "expired" in error_lower or
+                            "did not remain open" in error_lower or
+                            "gtx" in error_lower
+                        )
+                        
+                        if is_retryable:
                             logger.info(
-                                f"🔄 [{exchange_name}] Post-only violation detected for {symbol}. "
-                                f"Retrying with fresh BBO ({price_result.pricing_strategy} strategy)."
+                                f"🔄 [{exchange_name}] Retryable order rejection detected for {symbol}: {error_msg}. "
+                                f"Retrying with adaptive pricing ({price_result.pricing_strategy} strategy, attempt {retry_count + 1}/{max_retries})."
                             )
                             await asyncio.sleep(retry_backoff_ms / 1000.0)
                             retries_used += 1
                             continue
                         else:
+                            # Only fatal errors break the loop (e.g., insufficient balance, invalid symbol)
+                            logger.error(
+                                f"❌ [{exchange_name}] Fatal order placement error for {symbol}: {error_msg}. "
+                                f"Stopping retries."
+                            )
                             execution_error = error_msg
                             break
                     
