@@ -127,8 +127,8 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
             if order_status == "CANCELED":
                 if ctx.filled_quantity <= Decimal("0"):
                     # No fills in context and order is CANCELED - trust websocket (no fills occurred)
-                logger.debug(
-                    f"Reconcile: {ctx.spec.symbol} order {order_id} is CANCELED with 0 fills "
+                    logger.debug(
+                        f"Reconcile: {ctx.spec.symbol} order {order_id} is CANCELED with 0 fills "
                         f"(from websocket cache, reported_qty={reported_qty}). "
                         f"Trusting websocket data - skipping reconciliation to prevent false fills."
                     )
