@@ -321,8 +321,16 @@ async def test_rollback_safety_check_detects_untracked_positions():
     
     mock_client.get_position_snapshot = mock_get_position_snapshot
     
-    # Mock market order for rollback
+    # Mock market order for rollback (track attempts)
     async def mock_place_market_order(contract_id, quantity, side, reduce_only=False):
+        # Track the order attempt
+        mock_client.placed_orders.append({
+            'type': 'market',
+            'contract_id': contract_id,
+            'quantity': quantity,
+            'side': side,
+            'reduce_only': reduce_only
+        })
         return OrderResult(
             success=True,
             order_id='rollback_order',
@@ -638,7 +646,13 @@ async def test_rollback_payload_construction():
         completed=True
     )
     ctx1.record_fill(Decimal("1.0"), Decimal("50000"))
-    ctx1.result = {'filled_quantity': Decimal("1.0"), 'fill_price': Decimal("50000")}
+    ctx1.result = {
+        'filled_quantity': Decimal("1.0"),
+        'fill_price': Decimal("50000"),
+        'symbol': 'BTC-PERP',
+        'side': 'buy',
+        'exchange_client': mock_client_1
+    }
     
     ctx2 = OrderContext(
         spec=OrderSpec(
@@ -653,7 +667,13 @@ async def test_rollback_payload_construction():
         completed=True
     )
     ctx2.record_fill(Decimal("0.5"), Decimal("50000"))
-    ctx2.result = {'filled_quantity': Decimal("0.5"), 'fill_price': Decimal("50000")}
+    ctx2.result = {
+        'filled_quantity': Decimal("0.5"),
+        'fill_price': Decimal("50000"),
+        'symbol': 'BTC-PERP',
+        'side': 'sell',
+        'exchange_client': mock_client_2
+    }
     
     # Create suspicious context (filled_quantity > spec.quantity * 1.1)
     ctx3 = OrderContext(
@@ -669,7 +689,13 @@ async def test_rollback_payload_construction():
         completed=True
     )
     ctx3.record_fill(Decimal("12.0"), Decimal("300"))  # 12.0 > 10.0 * 1.1 = 11.0 (suspicious!)
-    ctx3.result = {'filled_quantity': Decimal("12.0"), 'fill_price': Decimal("300")}
+    ctx3.result = {
+        'filled_quantity': Decimal("12.0"),
+        'fill_price': Decimal("300"),
+        'symbol': 'ETH-PERP',
+        'side': 'buy',
+        'exchange_client': mock_client_1
+    }
     
     contexts = [ctx1, ctx2, ctx3]
     
