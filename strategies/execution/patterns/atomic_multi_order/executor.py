@@ -421,8 +421,12 @@ class AtomicMultiOrderExecutor:
                             ctx.filled_usd = Decimal("0")
                         rollback_performed = True  # Mark as performed
                 
-                # Get exception message safely
-                exc_message = str(_exception) if _exception is not None else "Unknown error"
+                # Build descriptive error message from contexts and exception
+                exc_message = self._build_descriptive_error_message(
+                    contexts=contexts,
+                    orders=orders,
+                    exception=_exception,
+                )
 
                 return self._build_execution_result(
                     contexts=contexts,
@@ -458,6 +462,103 @@ class AtomicMultiOrderExecutor:
         # 1. remaining_quantity is zero (or within tolerance for rounding)
         # 2. AND the result indicates it's filled (not just a partial fill timeout)
         return remaining_qty <= tolerance and result_filled
+
+    def _build_descriptive_error_message(
+        self,
+        contexts: List[OrderContext],
+        orders: List[OrderSpec],
+        exception: Optional[Exception] = None,
+    ) -> str:
+        """
+        Build a descriptive error message from order contexts and exception.
+        
+        Args:
+            contexts: List of order contexts
+            orders: Original order specs
+            exception: Optional exception that occurred
+            
+        Returns:
+            Descriptive error message
+        """
+        error_parts = []
+        
+        if exception:
+            error_parts.append(f"Exception: {str(exception)}")
+        
+        # Analyze each order's status
+        order_statuses = []
+        for ctx in contexts:
+            exchange_name = ctx.spec.exchange_client.get_exchange_name().upper()
+            symbol = ctx.spec.symbol
+            side = ctx.spec.side.upper()
+            
+            status_parts = [f"{exchange_name}:{side} {symbol}"]
+            
+            if ctx.result:
+                filled_qty = ctx.filled_quantity or Decimal("0")
+                remaining_qty = ctx.remaining_quantity or Decimal("0")
+                
+                # Check fill status
+                if ctx.result.get("filled", False) and filled_qty > Decimal("0"):
+                    if remaining_qty <= Decimal("0.0001"):
+                        status_parts.append("FILLED")
+                    else:
+                        target_qty = ctx.spec.quantity or Decimal("0")
+                        if target_qty > Decimal("0"):
+                            status_parts.append(f"PARTIAL ({filled_qty:.6f}/{target_qty:.6f})")
+                        else:
+                            status_parts.append(f"PARTIAL ({filled_qty:.6f})")
+                else:
+                    status_parts.append("NOT FILLED")
+                    
+                    # Check for specific error reasons
+                    error_msg = ctx.result.get("error_message") or ctx.result.get("error") or ""
+                    execution_mode = ctx.result.get("execution_mode_used", "")
+                    status = ctx.result.get("status", "").upper()
+                    cancel_reason = ctx.result.get("cancel_reason", "")
+                    
+                    if ctx.result.get("retryable", False):
+                        status_parts.append("(post-only violation - retryable)")
+                    elif status == "EXPIRED" or cancel_reason == "expired" or "expired" in error_msg.lower() or "EXPIRED" in execution_mode:
+                        status_parts.append("(expired)")
+                    elif status in {"CANCELED", "CANCELLED"} or "cancel" in error_msg.lower() or "CANCEL" in execution_mode:
+                        if cancel_reason:
+                            status_parts.append(f"(canceled: {cancel_reason})")
+                        else:
+                            status_parts.append("(canceled)")
+                    elif status == "REJECTED" or "rejected" in error_msg.lower():
+                        if cancel_reason:
+                            status_parts.append(f"(rejected: {cancel_reason})")
+                        else:
+                            status_parts.append("(rejected)")
+                    elif "timeout" in error_msg.lower() or "TIMEOUT" in execution_mode:
+                        status_parts.append("(timeout)")
+                    elif error_msg:
+                        # Truncate long error messages
+                        short_error = error_msg[:100] + "..." if len(error_msg) > 100 else error_msg
+                        status_parts.append(f"({short_error})")
+                    elif status:
+                        status_parts.append(f"({status})")
+                    else:
+                        status_parts.append("(unknown reason)")
+            else:
+                status_parts.append("NO RESULT")
+            
+            order_statuses.append(" ".join(status_parts))
+        
+        if order_statuses:
+            error_parts.append("Order statuses: " + "; ".join(order_statuses))
+        
+        # Calculate fill summary
+        filled_count = sum(1 for ctx in contexts if ctx.result and ctx.result.get("filled", False) and ctx.filled_quantity > Decimal("0"))
+        total_count = len(orders)
+        error_parts.append(f"Filled: {filled_count}/{total_count} orders")
+        
+        # Build final message
+        if error_parts:
+            return " | ".join(error_parts)
+        else:
+            return "Unknown error - no order status information available"
 
     def _create_error_result_dict(
         self,
