@@ -13,6 +13,12 @@ from strategies.execution.core.execution_types import ExecutionMode, ExecutionRe
 from strategies.execution.core.liquidity_analyzer import LiquidityAnalyzer, LiquidityReport
 from strategies.execution.core.position_sizer import PositionSizer
 from strategies.execution.core.slippage_calculator import SlippageCalculator
+from strategies.execution.core.execution_strategies import (
+    ExecutionStrategy,
+    SimpleLimitExecutionStrategy,
+    AggressiveLimitExecutionStrategy,
+    MarketExecutionStrategy,
+)
 
 __all__ = [
     "OrderExecutor",
@@ -22,5 +28,9 @@ __all__ = [
     "LiquidityReport",
     "PositionSizer",
     "SlippageCalculator",
+    "ExecutionStrategy",
+    "SimpleLimitExecutionStrategy",
+    "AggressiveLimitExecutionStrategy",
+    "MarketExecutionStrategy",
 ]
 

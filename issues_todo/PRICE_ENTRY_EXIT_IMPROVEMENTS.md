@@ -215,39 +215,39 @@ Multiple improvements to price validation and exit logic to improve profitabilit
    - **Problem**: When one leg is liquidated/missing, emergency close uses market orders
    - **Failure Chain**: Market order → exceeds_max_slippage → Limit fallback → post_only_violation → Complete failure
    - **Example**: Paradex bid=366.87, ask=378.2 (~3% spread), market order at ask fails, limit at ask violates post-only
-   - **Solution**: **Leverage Hedge Manager's Aggressive Limit Strategy** (see `hedge_manager.py` and `strategies.py`)
-     - The hedge manager already solves this exact problem with `AggressiveLimitHedgeStrategy`:
+   - **Solution**: ✅ **Use Refactored Aggressive Limit Execution Strategy** (see `strategies/execution/core/execution_strategies/aggressive_limit.py`)
+     - ✅ The refactored `AggressiveLimitExecutionStrategy` solves this exact problem:
        - Places limit orders **inside spread** (1 tick inside) to avoid post-only violations
        - Retries with fresh BBO on post-only violations
        - Handles partial fills and continues filling remainder
        - Falls back to market orders if timeout/retries exhausted
        - Has adaptive pricing: starts inside spread, moves to touch after retries
-     - **Reuse this infrastructure** for emergency closes:
-       - Create a similar strategy for emergency closes (or reuse hedge strategy)
-       - Check spread before attempting close
-       - Use aggressive limit strategy instead of simple market → limit fallback
+     - **Integration approach** for emergency closes:
+       - ✅ Strategy is already refactored and available via `OrderExecutor` with `ExecutionMode.AGGRESSIVE_LIMIT`
+       - **TODO**: Check spread before attempting close
+       - **TODO**: Use `ExecutionMode.AGGRESSIVE_LIMIT` instead of simple market → limit fallback
        - This ensures order fills as much as possible, even with wide spreads
      - **Benefits**:
-       - Avoids post-only violations by placing inside spread
-       - Handles partial fills gracefully
-       - Retries intelligently with fresh BBO
-       - Falls back to market only if truly necessary
-       - Already battle-tested in hedge manager
+       - ✅ Avoids post-only violations by placing inside spread
+       - ✅ Handles partial fills gracefully
+       - ✅ Retries intelligently with fresh BBO
+       - ✅ Falls back to market only if truly necessary
+       - ✅ Already battle-tested in hedge manager and now available as general-purpose component
 
 **Files to Modify**:
 
-**Phase 1: Refactoring (Recommended First Step)**:
-- `strategies/execution/core/aggressive_limit_executor.py` (NEW) - Extract general-purpose aggressive limit execution
-  - Move core logic from `AggressiveLimitHedgeStrategy`
-  - Make it generic (not hedge-specific)
-  - Support all execution scenarios (opening, closing, hedging)
-- `strategies/execution/core/aggressive_limit_pricer.py` (NEW) - Extract price calculation logic
-  - Move from `hedge_pricer.py`
-  - General-purpose price calculation inside spread
-- `strategies/execution/patterns/atomic_multi_order/components/hedge/strategies.py` - Update to use refactored version
-  - Hedge manager becomes a thin wrapper around the general executor
+**Phase 1: Refactoring** ✅ **COMPLETED**
+- ✅ `strategies/execution/core/execution_strategies/aggressive_limit.py` - General-purpose aggressive limit execution strategy
+- ✅ `strategies/execution/core/execution_components/pricer.py` - General-purpose price calculation inside spread
+- ✅ `strategies/execution/core/execution_components/reconciler.py` - General-purpose order reconciliation
+- ✅ `strategies/execution/core/execution_strategies/base.py` - ExecutionStrategy ABC interface
+- ✅ `strategies/execution/core/execution_strategies/simple_limit.py` - Simple limit execution strategy
+- ✅ `strategies/execution/core/execution_strategies/market.py` - Market execution strategy
+- ✅ `strategies/execution/core/order_executor.py` - Refactored to use execution strategies
+- ✅ `strategies/execution/patterns/atomic_multi_order/components/hedge/strategies.py` - Updated to use AggressiveLimitExecutionStrategy
+- ✅ `strategies/execution/patterns/atomic_multi_order/components/hedge_manager.py` - Uses dependency injection for execution strategy
 
-**Phase 2: Integration**:
+**Phase 2: Integration** (TODO):
 - `operations/closing/order_builder.py` - Add spread validation before building order spec
 - `operations/closing/close_executor.py` - Check spread before executing close, especially in `_force_close_leg()`
   - **KEY**: Replace simple market → limit fallback with `AggressiveLimitExecutor`
@@ -258,39 +258,32 @@ Multiple improvements to price validation and exit logic to improve profitabilit
 - `config.py` - Add spread threshold config
 - `config_builder/schema.py` - Add config builder prompts
 
-**Reusable Components** (Current Location - Needs Refactoring):
-- `strategies/execution/patterns/atomic_multi_order/components/hedge/strategies.py` - `AggressiveLimitHedgeStrategy`
-  - Already handles: inside spread pricing, post-only retries, partial fills, market fallback
-  - Currently hedge-specific but logic is general-purpose
-- `strategies/execution/patterns/atomic_multi_order/components/hedge/hedge_pricer.py` - Price calculation logic
-  - Calculates prices inside spread to avoid post-only violations
-  - Currently hedge-specific but logic is general-purpose
+**Reusable Components** ✅ **COMPLETED**:
+- ✅ `strategies/execution/core/execution_strategies/aggressive_limit.py` - `AggressiveLimitExecutionStrategy`
+  - General-purpose execution strategy with inside spread pricing, post-only retries, partial fills, market fallback
+  - Reusable for opening, closing, hedging, and any execution scenario
+- ✅ `strategies/execution/core/execution_components/pricer.py` - `AggressiveLimitPricer`
+  - General-purpose price calculation inside spread to avoid post-only violations
+- ✅ `strategies/execution/core/execution_components/reconciler.py` - `OrderReconciler`
+  - General-purpose order polling and reconciliation logic
 
-**Architectural Improvement Opportunity**:
-The `AggressiveLimitHedgeStrategy` is actually a **general-purpose execution strategy** that should be reusable across many scenarios, not just hedging. Similar to how `OrderExecutor` is in `strategies/execution/core/`, this should be refactored to a more general location.
+**Refactoring Completed** ✅:
+The `AggressiveLimitHedgeStrategy` has been successfully refactored into a general-purpose `AggressiveLimitExecutionStrategy` located in `strategies/execution/core/execution_strategies/`. The strategy is now:
 
-**Proposed Refactoring**:
-1. **Move to general execution layer**: `strategies/execution/core/aggressive_limit_executor.py` or `strategies/execution/strategies/aggressive_limit.py`
-2. **Rename to be more general**: `AggressiveLimitExecutionStrategy` or `SmartLimitExecutor`
-3. **Make it reusable for**:
-   - **Position Opening**: Funding arb position opener could use this instead of simple limit orders
-   - **Position Closing**: Emergency closes, wide spread exits
-   - **Hedging**: Current use case (would use the refactored version)
-   - **Any execution**: Any scenario needing smart limit order placement with retries
+1. ✅ **Located in general execution layer**: `strategies/execution/core/execution_strategies/aggressive_limit.py`
+2. ✅ **Named for general use**: `AggressiveLimitExecutionStrategy`
+3. ✅ **Reusable for**:
+   - **Position Opening**: Can be used via `OrderExecutor` with `ExecutionMode.AGGRESSIVE_LIMIT`
+   - **Position Closing**: Ready to be integrated for emergency closes and wide spread exits
+   - **Hedging**: Currently used via `AggressiveLimitHedgeStrategy` which delegates to it
+   - **Any execution**: Available through the unified `OrderExecutor` interface
 
-**Benefits of Refactoring**:
-- **Reusability**: One implementation used across all execution scenarios
-- **Consistency**: Same smart execution logic everywhere
-- **Maintainability**: Fix bugs/improvements in one place
-- **Testability**: Test once, use everywhere
-- **Better Architecture**: Follows separation of concerns (execution logic separate from hedge-specific logic)
-
-**Implementation Approach**:
-- Create `strategies/execution/core/aggressive_limit_executor.py` (or similar)
-- Extract core logic from `AggressiveLimitHedgeStrategy`
-- Make it accept generic parameters (not hedge-specific)
-- Update hedge manager to use the refactored version
-- Use it in position opener, close executor, etc.
+**Benefits Achieved**:
+- ✅ **Reusability**: One implementation used across all execution scenarios
+- ✅ **Consistency**: All execution uses same smart limit order logic via `OrderExecutor`
+- ✅ **Maintainability**: Fix bugs/improvements once, benefits all scenarios
+- ✅ **Testability**: Test once, use everywhere
+- ✅ **Better Architecture**: Separation of concerns achieved (execution logic separate from hedge-specific logic)
 
 **Code References**:
 - `order_builder.py.build_order_spec()` - Currently uses `extract_snapshot_price()` or `fetch_mid_price()`
@@ -382,40 +375,34 @@ The `AggressiveLimitHedgeStrategy` is actually a **general-purpose execution str
 
 ### Issue 3: Wide Spread Protection on Exit
 
-**Location**: `strategies/implementations/funding_arbitrage/operations/closing/` + `strategies/execution/core/` (refactoring)
+**Location**: `strategies/implementations/funding_arbitrage/operations/closing/` + `strategies/execution/core/`
 
-**Recommended Approach**: **Refactor First, Then Integrate**
+**Status**: ✅ **Phase 1 Refactoring Completed** - Ready for Phase 2 Integration
 
-**Phase 1: Refactoring (Recommended First)**:
-1. Extract `AggressiveLimitHedgeStrategy` to general execution layer:
-   - Create `strategies/execution/core/aggressive_limit_executor.py` (or `strategies/execution/strategies/aggressive_limit.py`)
-   - Move core logic from `AggressiveLimitHedgeStrategy` (retries, partial fills, market fallback)
-   - Make it generic (not hedge-specific) - accept `exchange_client`, `symbol`, `side`, `quantity` instead of `OrderContext`
-   - Rename to `AggressiveLimitExecutor` or `SmartLimitExecutor`
-   - This becomes a reusable execution component, similar to `OrderExecutor`
-2. Extract price calculation logic:
-   - Create `strategies/execution/core/aggressive_limit_pricer.py`
-   - Move from `hedge_pricer.py`
+**Phase 1: Refactoring** ✅ **COMPLETED**:
+1. ✅ Extracted `AggressiveLimitExecutionStrategy` to general execution layer:
+   - Created `strategies/execution/core/execution_strategies/aggressive_limit.py`
+   - Moved core logic from `AggressiveLimitHedgeStrategy` (retries, partial fills, market fallback)
+   - Made it generic (not hedge-specific) - accepts `exchange_client`, `symbol`, `side`, `quantity`
+   - Now a reusable execution component, integrated into `OrderExecutor`
+2. ✅ Extracted price calculation logic:
+   - Created `strategies/execution/core/execution_components/pricer.py` - `AggressiveLimitPricer`
    - General-purpose price calculation inside spread
-3. Update hedge manager to use refactored version:
-   - Hedge manager becomes thin wrapper around general executor
-   - Maintains backward compatibility
-   - Uses `AggressiveLimitExecutor` internally
+3. ✅ Extracted order reconciliation logic:
+   - Created `strategies/execution/core/execution_components/reconciler.py` - `OrderReconciler`
+   - General-purpose order polling and reconciliation
+4. ✅ Updated hedge manager to use refactored version:
+   - `AggressiveLimitHedgeStrategy` now delegates to `AggressiveLimitExecutionStrategy`
+   - Uses dependency injection pattern
+   - Hedge manager creates and injects execution strategy
 
-**Benefits of Refactoring**:
-- **Reusability**: Same executor for position opening, closing, hedging, any execution
-- **Consistency**: All execution uses same smart limit order logic
-- **Maintainability**: Fix bugs/improvements once, benefits all scenarios
-- **Testability**: Test once, use everywhere
-- **Better Architecture**: Follows separation of concerns (execution logic separate from strategy-specific logic)
-
-**Phase 2: Integration**:
+**Phase 2: Integration** (TODO):
 1. Add spread validation before closing:
    - Fetch BBO prices for each exchange leg
    - Calculate spread: `spread_pct = (ask - bid) / mid_price`
    - If spread > `max_exit_spread_pct`, use `AggressiveLimitExecutor` instead of simple market/limit
 
-2. Wide spread handling logic (using refactored executor):
+2. Wide spread handling logic (using refactored execution strategy):
    ```python
    # In order_builder.py or close_executor.py
    bid, ask = await price_provider.get_bbo_prices(client, symbol)
@@ -434,76 +421,70 @@ The `AggressiveLimitHedgeStrategy` is actually a **general-purpose execution str
            # Place limit on favorable side (bid for sells, ask for buys)
            # This won't fill immediately but avoids terrible execution
        elif wide_spread_exit_strategy == "limit_inside_spread":
-           # Use AggressiveLimitExecutor (refactored from hedge manager)
-           from strategies.execution.core.aggressive_limit_executor import AggressiveLimitExecutor
+           # Use AggressiveLimitExecutionStrategy via OrderExecutor
+           from strategies.execution.core import OrderExecutor, ExecutionMode
            
-           executor = AggressiveLimitExecutor(price_provider=price_provider)
-           result = await executor.execute(
+           executor = OrderExecutor(price_provider=price_provider)
+           result = await executor.execute_order(
                exchange_client=client,
                symbol=symbol,
                side=side,
                quantity=quantity,
+               mode=ExecutionMode.AGGRESSIVE_LIMIT,
                reduce_only=True,
                max_retries=5,
                total_timeout_seconds=3.0,
                inside_tick_retries=2,
-               logger=logger,
            )
-           # Executor handles: inside spread pricing, retries, partial fills, market fallback
+           # Strategy handles: inside spread pricing, retries, partial fills, market fallback
    ```
 
-3. **Emergency Close Specific Handling** (Using Refactored Aggressive Limit Executor):
+3. **Emergency Close Specific Handling** (Using Refactored Aggressive Limit Execution Strategy):
    ```python
    # In close_executor.py._force_close_leg()
-   # After refactoring, use the general-purpose executor:
-   from strategies.execution.core.aggressive_limit_executor import AggressiveLimitExecutor
+   # Use the general-purpose execution strategy via OrderExecutor:
+   from strategies.execution.core import OrderExecutor, ExecutionMode
    
    # Check spread first
    bid, ask = await price_provider.get_bbo_prices(client, symbol)
    spread_pct = (ask - bid) / ((bid + ask) / 2)
    
    if spread_pct > max_exit_spread_pct:
-       # Wide spread detected - use aggressive limit executor
-       executor = AggressiveLimitExecutor(price_provider=price_provider)
+       # Wide spread detected - use aggressive limit execution strategy
+       executor = OrderExecutor(price_provider=price_provider)
        
-       result = await executor.execute(
+       result = await executor.execute_order(
            exchange_client=client,
            symbol=symbol,
            side=leg["side"],
            quantity=leg["quantity"],
+           mode=ExecutionMode.AGGRESSIVE_LIMIT,
            reduce_only=True,  # Closing operation
            max_retries=5,  # Fewer retries for emergency
            total_timeout_seconds=3.0,  # Shorter timeout
            inside_tick_retries=2,  # Start inside spread
-           logger=logger,
        )
        
-       if result.success:
+       if result.success and result.filled:
            # Successfully closed using aggressive limit
            return
        else:
-           # Executor already tried market fallback, but we can handle error
+           # Strategy already tried market fallback, but we can handle error
            raise RuntimeError(f"Emergency close failed: {result.error_message}")
    ```
 
-   **Key Insight**: The hedge manager's `AggressiveLimitHedgeStrategy` already solves the exact problem, but it should be refactored to be general-purpose:
-   - Places orders **inside spread** (1 tick inside) to avoid post-only violations
-   - Retries with fresh BBO on violations
-   - Handles partial fills gracefully
-   - Falls back to market if needed
-   - Has adaptive pricing (inside → touch → market)
+   **Key Insight**: ✅ The refactored `AggressiveLimitExecutionStrategy` solves this exact problem:
+   - ✅ Places orders **inside spread** (1 tick inside) to avoid post-only violations
+   - ✅ Retries with fresh BBO on violations
+   - ✅ Handles partial fills gracefully
+   - ✅ Falls back to market if needed
+   - ✅ Has adaptive pricing (inside → touch → market)
    
-   **Refactoring Benefits**:
-   - **Reusable**: Same executor for opening, closing, hedging
-   - **Consistent**: All execution uses same smart logic
-   - **Maintainable**: Fix bugs once, benefits all scenarios
-   - **Testable**: Test once, use everywhere
-   
-   **Implementation Approach**:
-   1. **First**: Refactor `AggressiveLimitHedgeStrategy` → `AggressiveLimitExecutor` in `strategies/execution/core/`
-   2. **Then**: Use it in emergency closes, position opening, and anywhere else needing smart limit orders
-   3. Check spread before attempting close
-   4. If spread wide, use aggressive limit executor instead of simple market → limit fallback
+   **Next Steps**:
+   1. ✅ **Completed**: Refactored `AggressiveLimitHedgeStrategy` → `AggressiveLimitExecutionStrategy` in `strategies/execution/core/`
+   2. **TODO**: Integrate into emergency closes, position closing, and anywhere else needing smart limit orders
+   3. **TODO**: Check spread before attempting close
+   4. **TODO**: If spread wide, use `ExecutionMode.AGGRESSIVE_LIMIT` instead of simple market → limit fallback
    5. This ensures maximum fill probability even with wide spreads
 
 3. Add config:
@@ -517,58 +498,66 @@ The `AggressiveLimitHedgeStrategy` is actually a **general-purpose execution str
 
 **Files**:
 
-**Phase 1 (Refactoring - Recommended First)**:
-- `strategies/execution/core/aggressive_limit_executor.py` (NEW) - General-purpose aggressive limit executor
-  - Extract core logic from `AggressiveLimitHedgeStrategy`
-  - Make it generic (accept `exchange_client`, `symbol`, `side`, `quantity` instead of `OrderContext`)
+**Phase 1 (Refactoring)** ✅ **COMPLETED**:
+- ✅ `strategies/execution/core/execution_strategies/aggressive_limit.py` - General-purpose aggressive limit execution strategy
+  - Extracted core logic from `AggressiveLimitHedgeStrategy`
+  - Generic implementation (accepts `exchange_client`, `symbol`, `side`, `quantity`)
   - Reusable for opening, closing, hedging, any execution scenario
-- `strategies/execution/core/aggressive_limit_pricer.py` (NEW) - Price calculation inside spread
-  - Extract from `hedge_pricer.py`
+- ✅ `strategies/execution/core/execution_components/pricer.py` - Price calculation inside spread
+  - Extracted from hedge-specific pricer
   - General-purpose price calculation logic
-- `strategies/execution/patterns/atomic_multi_order/components/hedge/strategies.py` - Update to use refactored executor
-  - Hedge manager becomes thin wrapper around general executor
-- `strategies/execution/__init__.py` - Export new `AggressiveLimitExecutor`
+- ✅ `strategies/execution/core/execution_components/reconciler.py` - Order reconciliation
+  - General-purpose order polling and reconciliation
+- ✅ `strategies/execution/core/execution_strategies/base.py` - ExecutionStrategy ABC
+- ✅ `strategies/execution/core/execution_strategies/simple_limit.py` - Simple limit execution strategy
+- ✅ `strategies/execution/core/execution_strategies/market.py` - Market execution strategy
+- ✅ `strategies/execution/core/order_executor.py` - Refactored to use execution strategies
+- ✅ `strategies/execution/patterns/atomic_multi_order/components/hedge/strategies.py` - Updated to use AggressiveLimitExecutionStrategy
+- ✅ `strategies/execution/patterns/atomic_multi_order/components/hedge_manager.py` - Uses dependency injection
+- ✅ `strategies/execution/core/__init__.py` - Exports new execution strategies
 
-**Phase 2 (Integration)**:
+**Phase 2 (Integration)** (TODO):
 - `operations/closing/order_builder.py` - Add spread check before building order spec
-- `operations/closing/close_executor.py` - Validate spread before executing close, use `AggressiveLimitExecutor`
-- `operations/opening/execution_engine.py` - Consider using `AggressiveLimitExecutor` for position opening (optional improvement)
+- `operations/closing/close_executor.py` - Validate spread before executing close, use `ExecutionMode.AGGRESSIVE_LIMIT` via `OrderExecutor`
+- `operations/opening/execution_engine.py` - Consider using `ExecutionMode.AGGRESSIVE_LIMIT` for position opening (optional improvement)
   - Currently uses `atomic_multi_order` executor which has its own logic
-  - Could enhance with `AggressiveLimitExecutor` for better fill rates on wide spreads
+  - Could enhance with `ExecutionMode.AGGRESSIVE_LIMIT` via `OrderExecutor` for better fill rates on wide spreads
   - Similar to how hedge manager uses it - ensures orders fill even with poor liquidity
 - `config.py` - Add spread protection config
 - `config_builder/schema.py` - Add config builder prompts
 
-**Usage Examples After Refactoring**:
+**Usage Examples** (After Refactoring ✅):
 ```python
+from strategies.execution.core import OrderExecutor, ExecutionMode
+
 # Position Opening (funding arb)
-executor = AggressiveLimitExecutor(price_provider=price_provider)
-result = await executor.execute(
+executor = OrderExecutor(price_provider=price_provider)
+result = await executor.execute_order(
     exchange_client=long_client,
     symbol=symbol,
     side="buy",
     quantity=long_quantity,
+    mode=ExecutionMode.AGGRESSIVE_LIMIT,
     reduce_only=False,  # Opening position
     max_retries=8,  # More retries for opening
     total_timeout_seconds=6.0,
-    logger=logger,
 )
 
 # Position Closing (emergency close)
-executor = AggressiveLimitExecutor(price_provider=price_provider)
-result = await executor.execute(
+executor = OrderExecutor(price_provider=price_provider)
+result = await executor.execute_order(
     exchange_client=client,
     symbol=symbol,
     side="buy",
     quantity=quantity,
+    mode=ExecutionMode.AGGRESSIVE_LIMIT,
     reduce_only=True,  # Closing position
     max_retries=5,  # Fewer retries for closing
     total_timeout_seconds=3.0,
-    logger=logger,
 )
 
 # Hedging (existing use case)
-# Hedge manager would use the same executor internally
+# Hedge manager uses AggressiveLimitExecutionStrategy internally via dependency injection
 ```
 
 ## Configuration Changes

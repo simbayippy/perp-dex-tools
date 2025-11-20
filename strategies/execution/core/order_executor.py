@@ -26,6 +26,9 @@ from .order_execution.limit_order_executor import LimitOrderExecutor
 from .order_execution.market_order_executor import MarketOrderExecutor
 from .order_execution.order_confirmation import OrderConfirmationWaiter
 from .price_provider import PriceProvider
+from .execution_strategies.simple_limit import SimpleLimitExecutionStrategy
+from .execution_strategies.aggressive_limit import AggressiveLimitExecutionStrategy
+from .execution_strategies.market import MarketExecutionStrategy
 
 # Re-export for backward compatibility
 __all__ = ["OrderExecutor", "ExecutionMode", "ExecutionResult"]
@@ -83,11 +86,26 @@ class OrderExecutor:
         self.default_limit_price_offset_pct = default_limit_price_offset_pct
         self.logger = get_core_logger("order_executor")
         
-        # Initialize extracted executors
+        # Initialize extracted executors (for backward compatibility and internal use)
         self.confirmation_waiter = OrderConfirmationWaiter()
         self.limit_executor = LimitOrderExecutor(price_provider=price_provider)
         self.market_executor = MarketOrderExecutor(
             price_provider=price_provider,
+            limit_executor=self.limit_executor,
+            confirmation_waiter=self.confirmation_waiter
+        )
+        
+        # Initialize execution strategies
+        self.simple_limit_strategy = SimpleLimitExecutionStrategy(
+            price_provider=price_provider,
+            limit_executor=self.limit_executor
+        )
+        self.aggressive_limit_strategy = AggressiveLimitExecutionStrategy(
+            price_provider=price_provider
+        )
+        self.market_strategy = MarketExecutionStrategy(
+            price_provider=price_provider,
+            market_executor=self.market_executor,
             limit_executor=self.limit_executor,
             confirmation_waiter=self.confirmation_waiter
         )
@@ -103,7 +121,15 @@ class OrderExecutor:
         timeout_seconds: Optional[float] = None,
         limit_price_offset_pct: Optional[Decimal] = None,
         cancel_event: Optional[asyncio.Event] = None,
-        reduce_only: bool = False
+        reduce_only: bool = False,
+        # Aggressive limit mode parameters
+        max_retries: Optional[int] = None,
+        retry_backoff_ms: Optional[int] = None,
+        total_timeout_seconds: Optional[float] = None,
+        inside_tick_retries: Optional[int] = None,
+        max_deviation_pct: Optional[Decimal] = None,
+        trigger_fill_price: Optional[Decimal] = None,
+        trigger_side: Optional[str] = None,
     ) -> ExecutionResult:
         """
         Execute order with intelligent mode selection.
@@ -113,10 +139,20 @@ class OrderExecutor:
             symbol: Trading pair (e.g., "BTC-PERP")
             side: "buy" or "sell"
             size_usd: Order size in USD
+            quantity: Order quantity
             mode: Execution mode
             timeout_seconds: Timeout for limit orders (uses default if None)
             limit_price_offset_pct: Price improvement for limit orders (None = executor default)
             cancel_event: Optional asyncio.Event to request cancellation (only respected for limit orders)
+            reduce_only: If True, order can only reduce existing positions
+            # Aggressive limit mode parameters (only used when mode=AGGRESSIVE_LIMIT):
+            max_retries: Maximum retry attempts (None = auto: 5 for closing, 8 for opening)
+            retry_backoff_ms: Delay between retries in milliseconds (None = auto)
+            total_timeout_seconds: Total timeout before market fallback (None = auto)
+            inside_tick_retries: Number of retries using "inside spread" pricing (None = auto)
+            max_deviation_pct: Max market movement % to attempt break-even pricing (None = default: 0.5%)
+            trigger_fill_price: Optional fill price from trigger order (for break-even pricing)
+            trigger_side: Optional side of trigger order ("buy" or "sell")
         
         Returns:
             ExecutionResult with all execution details
@@ -157,35 +193,40 @@ class OrderExecutor:
                 offset_pct = Decimal(str(offset_pct))
 
             if mode == ExecutionMode.MARKET_ONLY:
-                result = await self.market_executor.execute(
-                    exchange_client, symbol, side, size_usd, quantity, reduce_only
+                result = await self.market_strategy.execute(
+                    exchange_client=exchange_client,
+                    symbol=symbol,
+                    side=side,
+                    size_usd=size_usd,
+                    quantity=quantity,
+                    reduce_only=reduce_only,
                 )
             
             elif mode == ExecutionMode.LIMIT_ONLY:
-                result = await self.limit_executor.execute(
-                    exchange_client,
-                    symbol,
-                    side,
-                    size_usd,
-                    quantity,
-                    timeout,
-                    offset_pct,
-                    cancel_event,
-                    reduce_only,
+                result = await self.simple_limit_strategy.execute(
+                    exchange_client=exchange_client,
+                    symbol=symbol,
+                    side=side,
+                    size_usd=size_usd,
+                    quantity=quantity,
+                    reduce_only=reduce_only,
+                    timeout_seconds=timeout,
+                    price_offset_pct=offset_pct,
+                    cancel_event=cancel_event,
                 )
             
             elif mode == ExecutionMode.LIMIT_WITH_FALLBACK:
                 # Try limit first
-                result = await self.limit_executor.execute(
-                    exchange_client,
-                    symbol,
-                    side,
-                    size_usd,
-                    quantity,
-                    timeout,
-                    offset_pct,
-                    cancel_event,
-                    reduce_only,
+                result = await self.simple_limit_strategy.execute(
+                    exchange_client=exchange_client,
+                    symbol=symbol,
+                    side=side,
+                    size_usd=size_usd,
+                    quantity=quantity,
+                    reduce_only=reduce_only,
+                    timeout_seconds=timeout,
+                    price_offset_pct=offset_pct,
+                    cancel_event=cancel_event,
                 )
                 
                 if not result.filled:
@@ -193,10 +234,33 @@ class OrderExecutor:
                     self.logger.info(
                         f"Limit order timeout for {symbol}, falling back to market"
                     )
-                    result = await self.market_executor.execute(
-                        exchange_client, symbol, side, size_usd, quantity, reduce_only
+                    result = await self.market_strategy.execute(
+                        exchange_client=exchange_client,
+                        symbol=symbol,
+                        side=side,
+                        size_usd=size_usd,
+                        quantity=quantity,
+                        reduce_only=reduce_only,
                     )
                     result.execution_mode_used = "market_fallback"
+            
+            elif mode == ExecutionMode.AGGRESSIVE_LIMIT:
+                result = await self.aggressive_limit_strategy.execute(
+                    exchange_client=exchange_client,
+                    symbol=symbol,
+                    side=side,
+                    size_usd=size_usd,
+                    quantity=quantity,
+                    reduce_only=reduce_only,
+                    max_retries=max_retries,
+                    retry_backoff_ms=retry_backoff_ms,
+                    total_timeout_seconds=total_timeout_seconds,
+                    inside_tick_retries=inside_tick_retries,
+                    max_deviation_pct=max_deviation_pct,
+                    trigger_fill_price=trigger_fill_price,
+                    trigger_side=trigger_side,
+                    logger=self.logger,
+                )
             
             elif mode == ExecutionMode.ADAPTIVE:
                 # Use liquidity analyzer to decide (will implement later)
@@ -211,6 +275,7 @@ class OrderExecutor:
                     timeout_seconds=timeout,
                     limit_price_offset_pct=offset_pct,
                     cancel_event=cancel_event,
+                    reduce_only=reduce_only,
                 )
             
             else:

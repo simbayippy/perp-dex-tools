@@ -35,6 +35,39 @@ perp-dex-tools/
 │   │   ├── grid/              # Grid trading strategy
 │   │   └── funding_arbitrage/ # Funding rate arbitrage strategy
 │   ├── execution/             # Execution layer (order placement, liquidity analysis)
+│   │   ├── core/              # Core execution utilities
+│   │   │   ├── order_executor.py          # Main OrderExecutor facade (unified execution interface)
+│   │   │   ├── execution_types.py         # ExecutionMode enum, ExecutionResult dataclass
+│   │   │   ├── execution_strategies/      # Execution strategy implementations
+│   │   │   │   ├── base.py                # ExecutionStrategy ABC interface
+│   │   │   │   ├── aggressive_limit.py    # AggressiveLimitExecutionStrategy (retries, adaptive pricing)
+│   │   │   │   ├── simple_limit.py        # SimpleLimitExecutionStrategy (single attempt)
+│   │   │   │   └── market.py               # MarketExecutionStrategy (immediate execution)
+│   │   │   ├── execution_components/      # Supporting components for execution strategies
+│   │   │   │   ├── pricer.py               # AggressiveLimitPricer (inside spread pricing)
+│   │   │   │   └── reconciler.py           # OrderReconciler (order polling & reconciliation)
+│   │   │   ├── order_execution/            # Lower-level order executors
+│   │   │   │   ├── limit_order_executor.py # LimitOrderExecutor
+│   │   │   │   ├── market_order_executor.py # MarketOrderExecutor
+│   │   │   │   └── order_confirmation.py   # OrderConfirmationWaiter
+│   │   │   ├── liquidity_analyzer.py       # Pre-flight liquidity checks
+│   │   │   ├── position_sizer.py           # USD ↔ Quantity conversion
+│   │   │   ├── slippage_calculator.py      # Slippage tracking
+│   │   │   ├── price_provider.py           # BBO price retrieval
+│   │   │   └── price_alignment.py          # Break-even price alignment
+│   │   └── patterns/          # Execution patterns
+│   │       └── atomic_multi_order/  # Atomic multi-order execution pattern
+│   │           ├── executor.py       # AtomicMultiOrderExecutor
+│   │           ├── contexts.py       # OrderContext for multi-order coordination
+│   │           └── components/       # Atomic execution components
+│   │               ├── preflight_checker.py    # Pre-flight validation
+│   │               ├── exposure_verifier.py    # Exposure verification
+│   │               ├── rollback_manager.py     # Rollback on failure
+│   │               ├── hedge_manager.py         # Hedge execution orchestrator
+│   │               └── hedge/                  # Hedge-specific components
+│   │                   ├── strategies.py        # Hedge strategies (Market, AggressiveLimit)
+│   │                   ├── hedge_manager.py     # Hedge manager (uses ExecutionStrategy)
+│   │                   └── hedge_target_calculator.py
 │   └── control/               # Strategy control API
 │
 ├── funding_rate_service/      # Market data collection microservice

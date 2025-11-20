@@ -8,20 +8,34 @@ from typing import Any, List, Optional, Tuple
 from ...contexts import OrderContext
 from .hedge_target_calculator import HedgeTargetCalculator
 from .strategies import MarketHedgeStrategy, AggressiveLimitHedgeStrategy
+from strategies.execution.core.execution_strategies.aggressive_limit import AggressiveLimitExecutionStrategy
 
 
 class HedgeManager:
     """Orchestrates hedge execution using pluggable strategies."""
 
-    def __init__(self, price_provider=None, default_strategy: Optional["AggressiveLimitHedgeStrategy"] = None) -> None:
+    def __init__(self, price_provider=None) -> None:
+        """
+        Initialize hedge manager.
+        
+        Args:
+            price_provider: Optional PriceProvider for BBO price retrieval
+        """
         self._price_provider = price_provider
         
         # Initialize helper components
         self._target_calculator = HedgeTargetCalculator()
         
+        # Initialize execution strategy (create once, inject into hedge strategy)
+        # Dependency injection: create execution strategy here and inject into hedge strategy
+        execution_strategy = AggressiveLimitExecutionStrategy(price_provider=price_provider)
+        
         # Initialize strategies
         self._market_strategy = MarketHedgeStrategy(price_provider=price_provider)
-        self._aggressive_limit_strategy = default_strategy or AggressiveLimitHedgeStrategy(price_provider=price_provider)
+        self._aggressive_limit_strategy = AggressiveLimitHedgeStrategy(
+            execution_strategy=execution_strategy,  # Required: inject dependency first
+            price_provider=price_provider
+        )
 
     async def hedge(
         self,
