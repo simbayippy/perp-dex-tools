@@ -241,8 +241,18 @@ class FundingArbitrageStrategy(BaseStrategy):
             processed_count = 0
             skipped_count = 0
             failed_count = 0
+            successful_count = 0
+            max_new = self.config.max_new_positions_per_cycle
             
             for opportunity in opportunities:
+                # Stop if we've opened max_new_positions_per_cycle successful positions
+                if successful_count >= max_new:
+                    self.logger.info(
+                        f"✅ Opened {successful_count} positions (max_new_positions_per_cycle={max_new}). "
+                        f"Stopping opportunity processing for this cycle."
+                    )
+                    break
+                    
                 if not await self.opportunity_scanner.has_capacity():
                     self.logger.debug("No capacity remaining, stopping opportunity processing")
                     break
@@ -266,7 +276,13 @@ class FundingArbitrageStrategy(BaseStrategy):
                     if result is None:
                         failed_count += 1
                         # Continue to next opportunity if this one failed
-                    # If successful, continue to next opportunity (up to max_new_positions_per_cycle and capacity)
+                    else:
+                        # Successfully opened position
+                        successful_count += 1
+                        self.logger.info(
+                            f"✅ Successfully opened position {successful_count}/{max_new} for {opportunity.symbol}"
+                        )
+                        # Continue to next opportunity (up to max_new_positions_per_cycle)
                 except Exception as opp_exc:
                     # Log the error but continue processing other opportunities
                     failed_count += 1
