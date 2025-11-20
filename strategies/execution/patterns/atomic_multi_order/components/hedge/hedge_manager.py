@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from ..contexts import OrderContext
-from .hedge.hedge_target_calculator import HedgeTargetCalculator
-from .hedge.strategies import MarketHedgeStrategy, AggressiveLimitHedgeStrategy, HedgeResult
+from ...contexts import OrderContext
+from .hedge_target_calculator import HedgeTargetCalculator
+from .strategies import MarketHedgeStrategy, AggressiveLimitHedgeStrategy
 
 
 class HedgeManager:
@@ -29,14 +29,15 @@ class HedgeManager:
         contexts: List[OrderContext],
         logger,
         reduce_only: bool = False,
-    ) -> HedgeResult:
+    ) -> Tuple[bool, Optional[str]]:
         """
         Attempt to flatten any residual exposure using market orders.
 
         This method orchestrates hedge execution using MarketHedgeStrategy.
+        Maintains backward compatibility by returning tuple instead of HedgeResult.
 
         Returns:
-            HedgeResult with execution details.
+            Tuple of (success, error message).
         """
         for ctx in contexts:
             if ctx is trigger_ctx:
@@ -83,9 +84,9 @@ class HedgeManager:
             )
             
             if not result.success:
-                return result
+                return False, result.error_message
 
-        return HedgeResult(success=True)
+        return True, None
 
     async def aggressive_limit_hedge(
         self,
@@ -98,11 +99,12 @@ class HedgeManager:
         total_timeout_seconds: Optional[float] = None,
         inside_tick_retries: Optional[int] = None,
         max_deviation_pct: Optional[Decimal] = None,
-    ) -> HedgeResult:
+    ) -> Tuple[bool, Optional[str]]:
         """
         Attempt to hedge using aggressive limit orders with adaptive pricing.
         
         This method orchestrates hedge execution using AggressiveLimitHedgeStrategy.
+        Maintains backward compatibility by returning tuple instead of HedgeResult.
         
         Strategy:
         - Start with limit orders 1 tick inside spread (safer, avoids post-only violations)
@@ -127,7 +129,7 @@ class HedgeManager:
             max_deviation_pct: Max market movement % to attempt break-even hedge (None = default: 0.5%)
             
         Returns:
-            HedgeResult with execution details
+            Tuple of (success, error message)
         """
         for ctx in contexts:
             if ctx is trigger_ctx:
@@ -156,7 +158,7 @@ class HedgeManager:
                     f"hedge_target_quantity and spec.quantity are both None. This indicates a configuration issue."
                 )
                 logger.error(f"❌ [{exchange_name}] {error_msg}")
-                return HedgeResult(success=False, error_message=error_msg)
+                return False, error_msg
             
             # Calculate remaining quantity
             remaining_qty = self._target_calculator.calculate_remaining_quantity(ctx, hedge_target)
@@ -179,6 +181,6 @@ class HedgeManager:
             )
             
             if not result.success:
-                return result
+                return False, result.error_message
 
-        return HedgeResult(success=True)
+        return True, None

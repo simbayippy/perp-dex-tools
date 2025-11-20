@@ -309,11 +309,11 @@ class AtomicMultiOrderExecutor:
                         other_ctx.hedge_target_quantity = target_qty
                     
                     # Hedge immediately with aggressive limit orders
-                    hedge_success, hedge_error = await self._hedge_manager.aggressive_limit_hedge(
+                    hedge_result = await self._hedge_manager.aggressive_limit_hedge(
                         partial_ctx, contexts, self.logger
                     )
                     
-                    if hedge_success:
+                    if hedge_result.success:
                         all_completed = True
                     else:
                         if rollback_on_partial:
@@ -723,21 +723,21 @@ class AtomicMultiOrderExecutor:
                 return True, None, False, Decimal("0")
         
         # Execute aggressive limit hedge (with reduce_only flag for close operations)
-        hedge_success, hedge_error = await self._hedge_manager.aggressive_limit_hedge(
+        hedge_result = await self._hedge_manager.aggressive_limit_hedge(
             trigger_ctx, contexts, self.logger, reduce_only=is_close_operation
         )
 
         rollback_performed = False
         rollback_cost = Decimal("0")
 
-        if hedge_success:
+        if hedge_result.success:
             return True, None, False, Decimal("0")
         else:
             if not rollback_on_partial:
-                return False, hedge_error or "Hedge failure", False, Decimal("0")
+                return False, hedge_result.error_message or "Hedge failure", False, Decimal("0")
             else:
                 self.logger.warning(
-                    f"Hedge failed ({hedge_error or 'no error supplied'}) — attempting rollback of partial fills"
+                    f"Hedge failed ({hedge_result.error_message or 'no error supplied'}) — attempting rollback of partial fills"
                 )
                 for ctx in contexts:
                     ctx.cancel_event.set()

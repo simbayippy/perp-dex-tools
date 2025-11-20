@@ -23,7 +23,7 @@ from strategies.execution.patterns.atomic_multi_order import (
     AtomicExecutionResult,
     _OrderContext,
 )
-from strategies.execution.patterns.atomic_multi_order.components.hedge_manager import HedgeManager
+from strategies.execution.patterns.atomic_multi_order.components import HedgeManager
 from exchange_clients.base_models import OrderResult, OrderInfo
 
 
@@ -309,10 +309,10 @@ async def test_execute_market_hedge_places_market_orders():
             order_id="hedge_order",
         )
 
-        success, error = await manager.hedge(trigger_ctx, [trigger_ctx, other_ctx], executor.logger)
+        result = await manager.hedge(trigger_ctx, [trigger_ctx, other_ctx], executor.logger)
 
-    assert success is True
-    assert error is None
+    assert result.success is True
+    assert result.error_message is None
     assert other_ctx.completed is True
     assert other_ctx.filled_quantity > Decimal("0")
 
@@ -353,10 +353,10 @@ async def test_execute_market_hedge_skips_already_filled_contexts():
         hedge_executor = AsyncMock()
         mock_exec_cls.return_value = hedge_executor
 
-        success, error = await manager.hedge(trigger_ctx, [trigger_ctx, other_ctx], executor.logger)
+        result = await manager.hedge(trigger_ctx, [trigger_ctx, other_ctx], executor.logger)
 
-    assert success is True
-    assert error is None
+    assert result.success is True
+    assert result.error_message is None
     hedge_executor.execute_order.assert_not_called()
 
     await asyncio.gather(trigger_task, other_task, return_exceptions=True)
