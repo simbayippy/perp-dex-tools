@@ -306,7 +306,13 @@ async def test_rollback_safety_check_detects_untracked_positions():
     
     # Mock position snapshot to return ACTUAL position (untracked)
     actual_position_qty = Decimal('1.187')
+    
+    # Initialize tracking attribute
+    mock_client._position_snapshot_calls = []
+    
     async def mock_get_position_snapshot(symbol: str):
+        # Track calls for verification
+        mock_client._position_snapshot_calls.append(symbol)
         snapshot = Mock()
         snapshot.quantity = actual_position_qty  # Actual position exists!
         snapshot.entry_price = Decimal('366.16')
@@ -508,8 +514,17 @@ async def test_rollback_failure_scenarios():
             remaining_size=Decimal('0')
         )
     
-    # Mock market order to FAIL
+    # Mock market order to FAIL (but still track the attempt)
     async def mock_place_market_order_fail(contract_id, quantity, side, reduce_only=False):
+        # Track the attempt even though it fails
+        mock_client.placed_orders.append({
+            'type': 'market',
+            'contract_id': contract_id,
+            'quantity': quantity,
+            'side': side,
+            'reduce_only': reduce_only,
+            'failed': True
+        })
         return OrderResult(
             success=False,
             order_id=None,
