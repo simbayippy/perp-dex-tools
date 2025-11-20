@@ -57,10 +57,12 @@ class AggressiveLimitPricer:
         Calculate aggressive limit price using break-even or adaptive pricing strategy.
         
         Strategy:
-        - First attempts break-even pricing relative to trigger fill price (if provided)
-        - Falls back to adaptive pricing (inside spread → touch)
-        - Inside spread: 1 tick away from best bid/ask (safer, avoids post-only violations)
-        - Touch: At best bid/ask (more aggressive)
+        - First attempt (retry_count == 0): Try break-even pricing if fillable, otherwise use touch
+        - Subsequent attempts: Use adaptive pricing prioritizing fill probability:
+          * Next attempts: Inside spread (1 tick away, still fillable, avoids post-only)
+          * Final attempts: Cross spread slightly (guaranteed fill but pays small spread)
+        - Break-even is only tried ONCE on the first attempt (if within 2 ticks of market)
+        - Core strategy is adaptive pricing with BBO -> touch -> inside spread -> cross spread
         
         Args:
             exchange_client: Exchange client instance
@@ -99,8 +101,9 @@ class AggressiveLimitPricer:
         pricing_strategy = None
         break_even_strategy = None
         
-        # Try break-even pricing if trigger fill price available
-        if trigger_fill_price and trigger_side:
+        # Try break-even pricing ONLY on first attempt (retry_count == 0)
+        # After first attempt, skip break-even and use adaptive pricing
+        if trigger_fill_price and trigger_side and retry_count == 0:
             # Use provided max_deviation_pct or default (0.5%)
             if max_deviation_pct is None:
                 max_deviation_pct = BreakEvenPriceAligner.DEFAULT_MAX_DEVIATION_PCT
@@ -116,22 +119,53 @@ class AggressiveLimitPricer:
             )
             
             if break_even_strategy == "break_even":
-                # Use break-even price
-                limit_price = break_even_price
-                pricing_strategy = "break_even"
-                # Determine comparison operator based on sides
-                if trigger_side == "buy" and side == "sell":
-                    comparison = "<"  # short < long
-                elif trigger_side == "sell" and side == "buy":
-                    comparison = "<"  # long < short
-                else:
-                    comparison = "?"
+                # Check if break-even price is actually fillable
+                # For aggressive limit orders, we want prices that are likely to fill quickly
+                # Buy orders: should be close to ask (at ask or ask - small offset) to fill as maker
+                # Sell orders: should be close to bid (at bid or bid + small offset) to fill as maker
+                # If break-even is too far from market, it won't fill and will timeout
+                is_fillable = False
+                if side == "buy":
+                    # Buy order: For maker fill, price should be close to ask
+                    # Check if break-even is within reasonable distance of ask (e.g., within 2 ticks)
+                    distance_from_ask = best_ask - break_even_price
+                    max_distance = tick_size * 2  # Allow up to 2 ticks away from ask
+                    is_fillable = distance_from_ask >= 0 and distance_from_ask <= max_distance
+                else:  # sell
+                    # Sell order: For maker fill, price should be close to bid
+                    # Check if break-even is within reasonable distance of bid (e.g., within 2 ticks)
+                    distance_from_bid = break_even_price - best_bid
+                    max_distance = tick_size * 2  # Allow up to 2 ticks away from bid
+                    is_fillable = distance_from_bid >= 0 and distance_from_bid <= max_distance
                 
-                if logger:
-                    logger.info(
-                        f"✅ [{exchange_name}] Using break-even price: {limit_price:.6f} "
-                        f"{comparison} trigger {trigger_fill_price:.6f} for {symbol} "
-                    )
+                if is_fillable:
+                    # Use break-even price
+                    limit_price = break_even_price
+                    pricing_strategy = "break_even"
+                    # Determine comparison operator based on sides
+                    if trigger_side == "buy" and side == "sell":
+                        comparison = "<"  # short < long
+                    elif trigger_side == "sell" and side == "buy":
+                        comparison = "<"  # long < short
+                    else:
+                        comparison = "?"
+                    
+                    if logger:
+                        logger.info(
+                            f"✅ [{exchange_name}] Using break-even price: {limit_price:.6f} "
+                            f"{comparison} trigger {trigger_fill_price:.6f} for {symbol} "
+                            f"(fillable: bid={best_bid:.6f}, ask={best_ask:.6f})"
+                        )
+                else:
+                    # Break-even price is not fillable - skip it and use adaptive pricing
+                    if logger:
+                        logger.warning(
+                            f"⚠️ [{exchange_name}] Break-even price {break_even_price:.6f} is not fillable "
+                            f"for {symbol} (side={side}, bid={best_bid:.6f}, ask={best_ask:.6f}). "
+                            f"Skipping break-even and using adaptive pricing to prioritize fill probability."
+                        )
+                    # Clear break_even_strategy so we fall through to adaptive pricing
+                    break_even_strategy = None
             else:
                 # Break-even not feasible, use BBO-based adaptive pricing
                 if logger:
@@ -141,21 +175,38 @@ class AggressiveLimitPricer:
                     )
         
         # If break-even not attempted or not feasible, use adaptive pricing strategy
+        # For aggressive limit orders, prioritize fill probability over price optimization
         if limit_price is None:
-            if retry_count < inside_tick_retries:
-                # Start inside spread (1 tick away from touch)
+            # Strategy progression to maximize fill probability:
+            # 1. First attempt: Touch best bid/ask (most aggressive, highest fill probability)
+            # 2. Next attempts: Inside spread (1 tick away, still fillable, avoids post-only)
+            # 3. Final attempts: Cross spread slightly (guaranteed fill but may pay spread)
+            
+            if retry_count == 0:
+                # First attempt: Touch best bid/ask for maximum fill probability
+                pricing_strategy = "touch"
+                if side == "buy":
+                    limit_price = best_ask  # At ask, will fill as maker if market moves up
+                else:
+                    limit_price = best_bid  # At bid, will fill as maker if market moves down
+            elif retry_count < inside_tick_retries:
+                # Next attempts: Inside spread (1 tick away from touch)
+                # Still fillable but safer from post-only violations
                 pricing_strategy = "inside_spread"
                 if side == "buy":
                     limit_price = best_ask - tick_size
                 else:
                     limit_price = best_bid + tick_size
             else:
-                # Move to touch (at best bid/ask)
-                pricing_strategy = "touch"
+                # Final attempts: Cross spread slightly to guarantee fill
+                # This ensures fill but we pay a small spread
+                pricing_strategy = "cross_spread"
                 if side == "buy":
-                    limit_price = best_ask
+                    # Cross ask slightly to guarantee fill
+                    limit_price = best_ask + tick_size
                 else:
-                    limit_price = best_bid
+                    # Cross bid slightly to guarantee fill
+                    limit_price = best_bid - tick_size
         
         # Round price to tick size
         limit_price = exchange_client.round_to_tick(limit_price)

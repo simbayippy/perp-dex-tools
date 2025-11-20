@@ -112,12 +112,12 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
         if reduce_only:
             max_retries = max_retries if max_retries is not None else 8  # Increased from 5
             retry_backoff_ms = retry_backoff_ms if retry_backoff_ms is not None else 30  # Reduced from 50ms
-            total_timeout_seconds = total_timeout_seconds if total_timeout_seconds is not None else 3.0
+            total_timeout_seconds = total_timeout_seconds if total_timeout_seconds is not None else 8.0  # Increased from 3.0s
             inside_tick_retries = inside_tick_retries if inside_tick_retries is not None else 2
         else:
-            max_retries = max_retries if max_retries is not None else 12  # Increased from 8
+            max_retries = max_retries if max_retries is not None else 15  # Increased from 12 to allow more attempts
             retry_backoff_ms = retry_backoff_ms if retry_backoff_ms is not None else 30  # Reduced from 75ms
-            total_timeout_seconds = total_timeout_seconds if total_timeout_seconds is not None else 6.0
+            total_timeout_seconds = total_timeout_seconds if total_timeout_seconds is not None else 13.0  # Increased from 6.0s to allow more attempts
             inside_tick_retries = inside_tick_retries if inside_tick_retries is not None else 3
         
         exchange_name = exchange_client.get_exchange_name().upper()
@@ -295,7 +295,9 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                             pass
                         break
                     
-                    attempt_timeout = min(0.8, remaining_timeout)
+                    # attempt_timeout: Time to wait for order to fill after placement
+                    # This is just the wait time, not including price calc or order placement
+                    attempt_timeout = min(2, remaining_timeout)
                     
                     # Wait for fill status using event-based reconciler (if available) or polling reconciler
                     if use_event_based and self._can_use_websocket_events(exchange_client):

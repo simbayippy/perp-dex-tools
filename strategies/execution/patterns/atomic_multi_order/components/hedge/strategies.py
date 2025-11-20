@@ -11,8 +11,6 @@ from strategies.execution.core.execution_types import ExecutionMode
 from ...contexts import OrderContext
 from .hedge_target_calculator import HedgeTargetCalculator
 from .hedge_result_tracker import HedgeResultTracker
-from .hedge_pricer import HedgePricer
-from .order_reconciler import OrderReconciler
 
 
 class HedgeResult:
@@ -270,10 +268,8 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
     
     def __init__(
         self,
-        execution_strategy,  # Required: injected dependency - breaks circular dependency
+            execution_strategy,  # Required: injected dependency - breaks circular dependency
         price_provider=None,
-        pricer: Optional[HedgePricer] = None,
-        reconciler: Optional[OrderReconciler] = None,
         tracker: Optional[HedgeResultTracker] = None,
         market_fallback: Optional["MarketHedgeStrategy"] = None,
     ):
@@ -284,17 +280,15 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
             execution_strategy: AggressiveLimitExecutionStrategy instance (required).
                 This dependency injection breaks circular dependencies and makes
                 dependencies explicit. Must be provided by the caller (e.g., HedgeManager).
+                Pricing and reconciliation are handled by the execution strategy.
             price_provider: Optional PriceProvider for BBO price retrieval
-            pricer: Optional HedgePricer instance (for hedge-specific pricing logic)
-            reconciler: Optional OrderReconciler instance (for hedge-specific reconciliation)
             tracker: Optional HedgeResultTracker instance
             market_fallback: Optional MarketHedgeStrategy for fallback
         """
         self._execution_strategy = execution_strategy
         self._price_provider = price_provider
-        # Keep old pricer/reconciler for hedge-specific logic (if needed)
-        self._pricer = pricer or HedgePricer(price_provider=price_provider)
-        self._reconciler = reconciler or OrderReconciler()
+        # Note: Pricing and reconciliation are handled by AggressiveLimitExecutionStrategy
+        # No need for separate pricer/reconciler - execution strategy handles it
         self._tracker = tracker or HedgeResultTracker()
         self._target_calculator = HedgeTargetCalculator()
         self._market_fallback = market_fallback or MarketHedgeStrategy(price_provider=price_provider, tracker=self._tracker)

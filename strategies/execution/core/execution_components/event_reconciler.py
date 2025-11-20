@@ -250,6 +250,22 @@ class EventBasedReconciler:
                         f"🔄 [{exchange_name}] Order {order_id} cancelled without fills for {symbol}"
                     )
             else:  # TIMEOUT
+                # Proactively cancel the order since it timed out
+                # This prevents orders from staying open unnecessarily
+                try:
+                    order_status_check = await exchange_client.get_order_info(order_id)
+                    if order_status_check and order_status_check.status not in {"CANCELED", "CANCELLED", "FILLED"}:
+                        logger.debug(
+                            f"⏱️ [{exchange_name}] Order {order_id} timed out after {attempt_timeout}s. "
+                            f"Proactively cancelling for {symbol}"
+                        )
+                        try:
+                            await exchange_client.cancel_order(order_id)
+                        except Exception as cancel_exc:
+                            logger.debug(f"⚠️ [{exchange_name}] Failed to cancel timed-out order {order_id}: {cancel_exc}")
+                except Exception as status_exc:
+                    logger.debug(f"⚠️ [{exchange_name}] Failed to check order status for {order_id}: {status_exc}")
+                
                 # Check if we have partial fills
                 if tracker.filled_quantity > Decimal("0"):
                     partial_fill_detected = True
