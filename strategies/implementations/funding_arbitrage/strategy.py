@@ -255,6 +255,7 @@ class FundingArbitrageStrategy(BaseStrategy):
                     continue
                 
                 # Process each opportunity independently - if one fails, continue with others
+                # Opportunities are already sorted by profitability (best first), so we try them in order
                 processed_count += 1
                 self.logger.info(
                     f"🔄 Processing opportunity {processed_count}/{len(opportunities)}: "
@@ -264,10 +265,8 @@ class FundingArbitrageStrategy(BaseStrategy):
                     result = await self.position_opener.open(opportunity)
                     if result is None:
                         failed_count += 1
-                        self.logger.warning(
-                            f"⚠️  {opportunity.symbol}: Position opening returned None "
-                            f"(likely failed validation). Continuing with other opportunities..."
-                        )
+                        # Continue to next opportunity if this one failed
+                    # If successful, continue to next opportunity (up to max_new_positions_per_cycle and capacity)
                 except Exception as opp_exc:
                     # Log the error but continue processing other opportunities
                     failed_count += 1
