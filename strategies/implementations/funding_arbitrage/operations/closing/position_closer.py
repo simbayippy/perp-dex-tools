@@ -16,7 +16,7 @@ from ...risk_management import get_risk_manager
 from .exit_evaluator import ExitEvaluator
 from .pnl_calculator import PnLCalculator
 from .close_executor import CloseExecutor
-from .order_builder import OrderBuilder
+from .order_builder import OrderBuilder, WideSpreadException
 
 if TYPE_CHECKING:
     from ...models import FundingArbPosition
@@ -186,13 +186,22 @@ class PositionCloser:
                         f"[{dex}] Missing funding_accrued in snapshot, will use cumulative_funding from DB"
                     )
             
-            await self._close_executor.close_exchange_positions(
-                position,
-                reason=reason,
-                live_snapshots=pre_close_snapshots,
-                order_type=order_type,
-                order_builder=self._order_builder,
-            )
+            try:
+                await self._close_executor.close_exchange_positions(
+                    position,
+                    reason=reason,
+                    live_snapshots=pre_close_snapshots,
+                    order_type=order_type,
+                    order_builder=self._order_builder,
+                )
+            except WideSpreadException as exc:
+                # Defer closing due to wide spread - position will be checked again next iteration
+                strategy.logger.info(
+                    f"⏸️  Deferring close for {position.symbol} due to wide spread "
+                    f"({exc.spread_pct*100:.2f}%) on {exc.exchange.upper()}. "
+                    f"Will retry next iteration."
+                )
+                return  # Exit early without closing position
 
             await asyncio.sleep(1.0)
             

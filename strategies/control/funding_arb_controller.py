@@ -494,7 +494,8 @@ class FundingArbStrategyController(BaseStrategyController):
         position_id: str,
         account_ids: List[str],
         order_type: str = "market",
-        reason: str = "manual_close"
+        reason: str = "manual_close",
+        confirm_wide_spread: bool = False
     ) -> Dict[str, Any]:
         """
         Close a position.
@@ -504,6 +505,7 @@ class FundingArbStrategyController(BaseStrategyController):
             account_ids: List of account IDs user can access (for validation)
             order_type: "market" or "limit"
             reason: Reason for closing
+            confirm_wide_spread: If True, proceed with close despite wide spread warning
             
         Returns:
             Dict with close operation result
@@ -536,10 +538,61 @@ class FundingArbStrategyController(BaseStrategyController):
         if not position:
             raise ValueError(f"Position {position_id} not found in strategy")
         
-        # Close position using strategy's position closer
-        # For market orders, we'll need to modify the closer to support manual market closes
-        # For now, use the existing close method with a flag for market orders
+        # Check spread before closing if protection is enabled and order_type is market
+        if (
+            order_type == "market" 
+            and not confirm_wide_spread
+            and getattr(self.strategy.config, "enable_wide_spread_protection", True)
+        ):
+            from strategies.implementations.funding_arbitrage.operations.core.price_utils import (
+                calculate_spread_pct,
+                MAX_EXIT_SPREAD_PCT,
+            )
+            
+            # Check spread for each leg
+            wide_spread_detected = False
+            max_spread_pct = None
+            max_bid = None
+            max_ask = None
+            max_dex = None
+            
+            for dex in filter(None, [position.long_dex, position.short_dex]):
+                client = self.strategy.exchange_clients.get(dex)
+                if not client:
+                    continue
+                
+                try:
+                    price_provider = self.strategy.price_provider
+                    bid, ask = await price_provider.get_bbo_prices(client, position.symbol)
+                    spread_pct = calculate_spread_pct(bid, ask)
+                    
+                    if spread_pct and spread_pct > MAX_EXIT_SPREAD_PCT:
+                        wide_spread_detected = True
+                        if max_spread_pct is None or spread_pct > max_spread_pct:
+                            max_spread_pct = spread_pct
+                            max_bid = bid
+                            max_ask = ask
+                            max_dex = dex
+                except Exception as exc:
+                    # If spread check fails, log but don't block closing
+                    self.strategy.logger.warning(
+                        f"Failed to check spread for {position.symbol} on {dex}: {exc}"
+                    )
+            
+            if wide_spread_detected:
+                # Return warning response
+                return {
+                    "success": False,
+                    "wide_spread_warning": True,
+                    "spread_pct": float(max_spread_pct),
+                    "bid": float(max_bid),
+                    "ask": float(max_ask),
+                    "exchange": max_dex.upper(),
+                    "symbol": position.symbol,
+                    "message": "Wide spread detected. Please confirm to proceed."
+                }
         
+        # Close position using strategy's position closer
         try:
             # Use the position closer's close method with explicit order_type
             await self.strategy.position_closer.close(

@@ -8,7 +8,13 @@ from strategies.execution.patterns.atomic_multi_order import OrderSpec
 
 from ..core.contract_preparer import ContractPreparer
 from ..core.websocket_manager import WebSocketManager
-from ..core.price_utils import extract_snapshot_price, fetch_mid_price
+from ..core.price_utils import (
+    extract_snapshot_price,
+    fetch_mid_price,
+    calculate_spread_pct,
+    MAX_EXIT_SPREAD_PCT,
+    MAX_EMERGENCY_CLOSE_SPREAD_PCT,
+)
 from ..core.decimal_utils import to_decimal
 
 if TYPE_CHECKING:
@@ -135,7 +141,9 @@ class CloseExecutor:
             return
 
         if len(legs) == 1:
-            await self._force_close_leg(position.symbol, legs[0], reason=reason, order_type=order_type)
+            await self._force_close_leg(
+                position, legs[0], reason=reason, order_type=order_type
+            )
             return
 
         await self._close_legs_atomically(position, legs, reason=reason, order_type=order_type, order_builder=order_builder)
@@ -329,14 +337,15 @@ class CloseExecutor:
 
     async def _force_close_leg(
         self,
-        symbol: str,
+        position: "FundingArbPosition",
         leg: Dict[str, Any],
         reason: str = "UNKNOWN",
         order_type: Optional[str] = None,
     ) -> None:
-        """Force close a single leg."""
+        """Force close a single leg with spread protection and adaptive pricing."""
         strategy = self._strategy
         
+        symbol = position.symbol
         dex = leg.get("dex", "UNKNOWN")
         side = leg.get("side", "?")
         quantity = leg.get("quantity", Decimal("0"))
@@ -360,11 +369,53 @@ class CloseExecutor:
 
         size_usd = leg["quantity"] * price if price is not None else None
 
-        strategy.logger.warning(
-            f"[{leg['dex']}] Emergency close {symbol} qty={leg['quantity']} via market order"
-        )
-
-        if order_type == "limit":
+        # Check spread and determine execution mode
+        critical_reasons = {
+            "SEVERE_IMBALANCE",
+            "LEG_LIQUIDATED",
+            "LIQUIDATION_ASTER",
+            "LIQUIDATION_LIGHTER",
+            "LIQUIDATION_BACKPACK",
+            "LIQUIDATION_PARADEX",
+        }
+        is_critical = reason in critical_reasons
+        
+        # Check spread if protection is enabled
+        use_aggressive_limit = False
+        if getattr(strategy.config, "enable_wide_spread_protection", True):
+            try:
+                price_provider = strategy.price_provider
+                bid, ask = await price_provider.get_bbo_prices(leg["client"], symbol)
+                spread_pct = calculate_spread_pct(bid, ask)
+                
+                if spread_pct is not None:
+                    threshold = MAX_EMERGENCY_CLOSE_SPREAD_PCT if is_critical else MAX_EXIT_SPREAD_PCT
+                    
+                    if spread_pct > threshold:
+                        strategy.logger.warning(
+                            f"⚠️  Wide spread detected on {dex.upper()} {symbol}: "
+                            f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
+                            f"Using aggressive limit execution for better fills."
+                        )
+                        use_aggressive_limit = True
+                    elif spread_pct > MAX_EXIT_SPREAD_PCT:
+                        # Even if below emergency threshold, use aggressive limit for better execution
+                        use_aggressive_limit = True
+            except Exception as exc:
+                strategy.logger.warning(
+                    f"⚠️  Failed to check spread for {symbol} on {dex}: {exc}. "
+                    f"Proceeding with original execution mode."
+                )
+        
+        # Determine execution mode
+        if use_aggressive_limit:
+            # Use aggressive limit with adaptive pricing (inside spread, touch, etc.)
+            mode = ExecutionMode.AGGRESSIVE_LIMIT
+            strategy.logger.info(
+                f"Using aggressive limit execution for {symbol} on {dex.upper()} "
+                f"(adaptive pricing: inside spread → touch → cross spread)"
+            )
+        elif order_type == "limit":
             mode = ExecutionMode.LIMIT_ONLY
         else:
             mode = ExecutionMode.MARKET_ONLY
@@ -376,12 +427,16 @@ class CloseExecutor:
             size_usd=size_usd,
             quantity=leg["quantity"],
             mode=mode,
-            timeout_seconds=10.0,
+            timeout_seconds=8.0 if use_aggressive_limit else 10.0,
+            reduce_only=True,
+            max_retries=5 if use_aggressive_limit else None,
+            total_timeout_seconds=8.0 if use_aggressive_limit else None,
+            inside_tick_retries=2 if use_aggressive_limit else None,
         )
 
         if not execution.success or not execution.filled:
-            error = execution.error_message or "market close failed"
-            raise RuntimeError(f"[{leg['dex']}] Emergency close failed: {error}")
+            error = execution.error_message or "close failed"
+            raise RuntimeError(f"[{dex}] Emergency close failed: {error}")
 
         leg_snapshot = leg.get("snapshot")
         if leg_snapshot is not None:
