@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Optional, Any, Tuple
 
 from ...contexts import OrderContext
-from ..utils import apply_result_to_context, execution_result_to_dict
+from ...utils import apply_result_to_context, execution_result_to_dict
 
 
 class HedgeResultTracker:
