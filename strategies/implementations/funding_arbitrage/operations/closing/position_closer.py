@@ -36,6 +36,8 @@ class PositionCloser:
         self._close_executor = CloseExecutor(strategy)
         self._order_builder = OrderBuilder(strategy)
         self._current_close_order_type: Optional[str] = None
+        # Track positions currently being closed to prevent concurrent close operations
+        self._positions_closing: set = set()
 
     async def evaluateAndClosePositions(self) -> List[str]:
         """Evaluate all open positions and close those that meet exit conditions."""
@@ -44,6 +46,13 @@ class PositionCloser:
         positions = await strategy.position_manager.get_open_positions()
 
         for position in positions:
+            # Skip positions that are already being closed (prevents race conditions)
+            if position.id in self._positions_closing:
+                strategy.logger.debug(
+                    f"Skipping {position.symbol} - position is already being closed"
+                )
+                continue
+            
             snapshots = await self._fetch_leg_snapshots(position)
 
             # Check liquidation risk FIRST (highest priority - proactive prevention)
@@ -125,6 +134,18 @@ class PositionCloser:
         """Close a position and calculate PnL."""
         strategy = self._strategy
         self._current_close_order_type = order_type
+
+        # Check if position is already being closed (prevent concurrent closes)
+        if position.id in self._positions_closing:
+            strategy.logger.warning(
+                f"Position {position.symbol} (id={position.id}) is already being closed. "
+                f"Skipping duplicate close request (reason: {reason})"
+            )
+            return
+        
+        # Mark position as being closed
+        self._positions_closing.add(position.id)
+        strategy.logger.debug(f"Marking position {position.symbol} (id={position.id}) as closing")
 
         try:
             pre_close_snapshots = live_snapshots or await self._fetch_leg_snapshots(position)
@@ -354,6 +375,10 @@ class PositionCloser:
                 f"Error closing position {position.id}: {exc}"
             )
             raise
+        finally:
+            # Always remove from closing set, even if close failed
+            self._positions_closing.discard(position.id)
+            strategy.logger.debug(f"Removed position {position.symbol} (id={position.id}) from closing set")
 
     def _build_risk_manager(self):
         """Build risk manager from strategy config."""
