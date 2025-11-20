@@ -17,7 +17,8 @@ class HedgeResultTracker:
         ctx: OrderContext,
         execution_result: Any,
         spec: Any,
-        initial_maker_qty: Optional[Decimal] = None
+        initial_maker_qty: Optional[Decimal] = None,
+        executor: Optional[Any] = None
     ) -> None:
         """
         Apply market hedge execution result to context with maker/taker tracking.
@@ -27,9 +28,10 @@ class HedgeResultTracker:
             execution_result: ExecutionResult from OrderExecutor
             spec: OrderSpec for the hedge order
             initial_maker_qty: Maker quantity from previous aggressive limit hedge (if any)
+            executor: Optional AtomicMultiOrderExecutor instance for websocket callback registration
         """
         hedge_dict = execution_result_to_dict(spec, execution_result, hedge=True)
-        apply_result_to_context(ctx, hedge_dict)
+        apply_result_to_context(ctx, hedge_dict, executor=executor)
         
         # Track taker quantity (market order fills) for mixed execution type display
         # If we already have maker_qty from aggressive limit hedge, add taker_qty
@@ -56,7 +58,8 @@ class HedgeResultTracker:
         accumulated_filled_qty: Decimal,
         fill_price: Decimal,
         order_id: str,
-        pricing_strategy: str
+        pricing_strategy: str,
+        executor: Optional[Any] = None
     ) -> None:
         """
         Apply aggressive limit hedge execution result to context.
@@ -70,9 +73,10 @@ class HedgeResultTracker:
             fill_price: Fill price for the hedge
             order_id: Order ID
             pricing_strategy: Pricing strategy used (for execution_mode)
+            executor: Optional AtomicMultiOrderExecutor instance for websocket callback registration
         """
         hedge_dict = execution_result_to_dict(spec, execution_result, hedge=True)
-        apply_result_to_context(ctx, hedge_dict)
+        apply_result_to_context(ctx, hedge_dict, executor=executor)
         
         # Track maker quantity (all fills from aggressive limit hedge are maker)
         # Include initial_filled_qty (from initial limit orders) as maker too

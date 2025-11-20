@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 
 from strategies.execution.core.execution_types import ExecutionMode
 
@@ -84,6 +84,7 @@ class MarketHedgeStrategy(HedgeStrategy):
         hedge_target: Decimal,
         logger,
         reduce_only: bool = False,
+        executor: Optional[Any] = None,
         **kwargs
     ) -> HedgeResult:
         """
@@ -179,7 +180,8 @@ class MarketHedgeStrategy(HedgeStrategy):
                 target_ctx,
                 execution,
                 spec,
-                initial_maker_qty=Decimal(str(initial_maker_qty)) if initial_maker_qty else None
+                initial_maker_qty=Decimal(str(initial_maker_qty)) if initial_maker_qty else None,
+                executor=executor
             )
             
             error_msg = execution.error_message or f"Market hedge failed on {exchange_name} (partial fill: {partial_fill_qty})"
@@ -208,7 +210,8 @@ class MarketHedgeStrategy(HedgeStrategy):
             target_ctx,
             execution,
             spec,
-            initial_maker_qty=Decimal(str(initial_maker_qty)) if initial_maker_qty else None
+            initial_maker_qty=Decimal(str(initial_maker_qty)) if initial_maker_qty else None,
+            executor=executor
         )
         
         filled_qty = execution.filled_quantity or Decimal("0")
@@ -255,6 +258,7 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
         total_timeout_seconds: Optional[float] = None,
         inside_tick_retries: Optional[int] = None,
         max_deviation_pct: Optional[Decimal] = None,
+        executor: Optional[Any] = None,
         **kwargs
     ) -> HedgeResult:
         """
@@ -427,6 +431,10 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
                 
                 last_order_id = order_id
                 
+                # Register hedge order context for websocket callbacks (real-time fill tracking)
+                if executor is not None:
+                    executor._register_order_context(target_ctx, str(order_id))
+                
                 # Wait for fill with timeout per attempt
                 remaining_timeout = total_timeout_seconds - elapsed_time
                 if remaining_timeout <= 0:
@@ -502,7 +510,8 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
                             accumulated_filled_qty,
                             fill_price,
                             order_id,
-                            price_result.pricing_strategy
+                            price_result.pricing_strategy,
+                            executor=executor
                         )
                         
                         hedge_success = True
@@ -605,7 +614,8 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
                 target_ctx=target_ctx,
                 hedge_target=hedge_target,
                 logger=logger,
-                reduce_only=reduce_only
+                reduce_only=reduce_only,
+                executor=executor
             )
             
             if not market_result.success:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from ...contexts import OrderContext
 from .hedge_target_calculator import HedgeTargetCalculator
@@ -29,6 +29,7 @@ class HedgeManager:
         contexts: List[OrderContext],
         logger,
         reduce_only: bool = False,
+        executor: Optional[Any] = None,
     ) -> Tuple[bool, Optional[str]]:
         """
         Attempt to flatten any residual exposure using market orders.
@@ -80,7 +81,8 @@ class HedgeManager:
                 target_ctx=ctx,
                 hedge_target=hedge_target,
                 logger=logger,
-                reduce_only=reduce_only
+                reduce_only=reduce_only,
+                executor=executor
             )
             
             if not result.success:
@@ -99,6 +101,7 @@ class HedgeManager:
         total_timeout_seconds: Optional[float] = None,
         inside_tick_retries: Optional[int] = None,
         max_deviation_pct: Optional[Decimal] = None,
+        executor: Optional[Any] = None,
     ) -> Tuple[bool, Optional[str]]:
         """
         Attempt to hedge using aggressive limit orders with adaptive pricing.
@@ -177,7 +180,8 @@ class HedgeManager:
                 retry_backoff_ms=retry_backoff_ms,
                 total_timeout_seconds=total_timeout_seconds,
                 inside_tick_retries=inside_tick_retries,
-                max_deviation_pct=max_deviation_pct
+                max_deviation_pct=max_deviation_pct,
+                executor=executor
             )
             
             if not result.success:

@@ -31,11 +31,23 @@ def execution_result_to_dict(spec, execution_result, hedge: bool = False) -> Dic
     return data
 
 
-def apply_result_to_context(ctx: OrderContext, result: Dict[str, Any]) -> None:
+def apply_result_to_context(
+    ctx: OrderContext, 
+    result: Dict[str, Any],
+    executor: Optional[Any] = None
+) -> None:
     """Persist an execution result onto the associated context.
     
     Records the fill to accumulate ctx.filled_quantity, then updates ctx.result
     to reflect the accumulated total (not just this order's fill).
+    
+    Also registers context with executor for websocket callback routing if executor
+    is provided and order_id is available.
+    
+    Args:
+        ctx: OrderContext to update
+        result: Execution result dictionary
+        executor: Optional AtomicMultiOrderExecutor instance for websocket callback registration
     """
     ctx.result = result.copy()  # Copy to avoid mutating original
     ctx.completed = True
@@ -46,6 +58,12 @@ def apply_result_to_context(ctx: OrderContext, result: Dict[str, Any]) -> None:
     # Update ctx.result to reflect accumulated total (may include multiple fills)
     # This ensures consistency between ctx.result and ctx.filled_quantity
     ctx.result["filled_quantity"] = ctx.filled_quantity
+    
+    # Register context with executor for websocket callback routing
+    if executor is not None:
+        order_id = result.get("order_id")
+        if order_id:
+            executor._register_order_context(ctx, str(order_id))
 
 
 async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
@@ -54,7 +72,18 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
 
     Some exchanges return partial fills even after cancellation, so we query the order
     info and update the context before hedging.
+    
+    If websocket already handled the cancellation (websocket_cancelled=True), skip
+    reconciliation as websocket data is the source of truth.
     """
+    # If websocket already handled cancellation, skip reconciliation
+    if ctx.websocket_cancelled:
+        logger.debug(
+            f"Reconcile: {ctx.spec.symbol} order already handled by websocket callback. "
+            f"Skipping reconciliation."
+        )
+        return
+    
     # Use quantity check - USD tracking is unreliable after cancellations
     if ctx.remaining_quantity <= Decimal("0"):
         return
