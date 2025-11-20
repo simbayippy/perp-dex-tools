@@ -160,6 +160,7 @@ class BackpackClient(BaseExchangeClient):
             order_update_handler=self._order_update_handler,
             order_fill_callback=self.order_fill_callback,
             order_manager=self.order_manager,
+            position_manager=self.position_manager,
             emit_liquidation_event_fn=self.emit_liquidation_event,
             get_exchange_name_fn=self.get_exchange_name,
         )
