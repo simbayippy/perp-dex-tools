@@ -55,7 +55,8 @@ async def reconcile_context_after_cancel(ctx: OrderContext, logger) -> None:
     Some exchanges return partial fills even after cancellation, so we query the order
     info and update the context before hedging.
     """
-    if ctx.remaining_usd <= Decimal("0"):
+    # Use quantity check - USD tracking is unreliable after cancellations
+    if ctx.remaining_quantity <= Decimal("0"):
         return
 
     result = ctx.result or {}

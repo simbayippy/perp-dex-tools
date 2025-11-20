@@ -71,11 +71,8 @@ class HedgeManager:
                     f"no hedge_target_quantity, using remaining_quantity={remaining_qty}"
                 )
             
-            # remaining_usd is unreliable after cancellation (may be based on wrong spec.size_usd)
-            # Only use it as fallback if remaining_qty is 0
-            remaining_usd = ctx.remaining_usd
-            
-            if remaining_usd <= Decimal("0") and remaining_qty <= Decimal("0"):
+            # Always use quantity for hedging - USD tracking is unreliable after cancellations
+            if remaining_qty <= Decimal("0"):
                 # CRITICAL: Detect suspicious scenario where we're skipping hedge after a trigger fill
                 # This can happen if reconciliation incorrectly added a false fill for a canceled order
                 # If trigger filled but remaining_qty=0, something is wrong
@@ -84,7 +81,7 @@ class HedgeManager:
                     hedge_target = Decimal(str(ctx.hedge_target_quantity))
                     if hedge_target > Decimal("0"):
                         logger.warning(
-                            f"⚠️ [HEDGE] {exchange_name} {spec.symbol}: Skipping hedge (remaining_qty=0, remaining_usd=0) "
+                            f"⚠️ [HEDGE] {exchange_name} {spec.symbol}: Skipping hedge (remaining_qty=0) "
                             f"but trigger {trigger_ctx.spec.exchange_client.get_exchange_name().upper()} "
                             f"{trigger_ctx.spec.symbol} filled {trigger_ctx.filled_quantity} and hedge_target={hedge_target}. "
                             f"ctx.filled_quantity={ctx.filled_quantity}. "
@@ -93,33 +90,29 @@ class HedgeManager:
                         )
                 continue
 
-            log_parts = []
-            if remaining_qty > Decimal("0"):
-                log_parts.append(f"qty={remaining_qty}")
-            if remaining_usd > Decimal("0"):
-                log_parts.append(f"${float(remaining_usd):.2f}")
-            descriptor = ", ".join(log_parts) if log_parts else "0"
+            # Calculate USD estimate from quantity using latest BBO (for logging only, not decisions)
+            estimated_usd = Decimal("0")
+            try:
+                if self._price_provider and remaining_qty > Decimal("0"):
+                    best_bid, best_ask = await self._price_provider.get_bbo_prices(
+                        spec.exchange_client, spec.symbol
+                    )
+                    price = best_ask if spec.side == "buy" else best_bid
+                    estimated_usd = remaining_qty * price
+            except Exception:
+                pass  # Skip USD estimate if BBO unavailable
+
             logger.info(
-                f"⚡ Hedging {spec.symbol} on {exchange_name} for remaining {descriptor}"
+                f"⚡ Hedging {spec.symbol} on {exchange_name}: "
+                f"{remaining_qty} qty" + (f" (≈${float(estimated_usd):.2f})" if estimated_usd > Decimal("0") else "")
             )
 
-            size_usd_arg: Optional[Decimal] = None
-            quantity_arg: Optional[Decimal] = None
             try:
-                # Always prioritize quantity over USD when hedging (more accurate)
-                if remaining_qty > Decimal("0"):
-                    quantity_arg = remaining_qty
-                elif remaining_usd > Decimal("0"):
-                    size_usd_arg = remaining_usd
-                else:
-                    continue
-                
                 execution = await hedge_executor.execute_order(
                     exchange_client=spec.exchange_client,
                     symbol=spec.symbol,
                     side=spec.side,
-                    size_usd=size_usd_arg,
-                    quantity=quantity_arg,
+                    quantity=remaining_qty,  # Always use quantity - more reliable than USD
                     mode=ExecutionMode.MARKET_ONLY,
                     timeout_seconds=spec.timeout_seconds,
                     reduce_only=reduce_only,  # Use reduce_only when hedging close operations
@@ -256,9 +249,8 @@ class HedgeManager:
                     hedge_target = Decimal(str(spec_quantity))
                 remaining_qty = ctx.remaining_quantity
             
-            remaining_usd = ctx.remaining_usd
-            
-            if remaining_usd <= Decimal("0") and remaining_qty <= Decimal("0"):
+            # Always use quantity for hedging - USD tracking is unreliable after cancellations
+            if remaining_qty <= Decimal("0"):
                 continue
 
             # If hedge_target is still None, fail fast - we can't track partial fills properly
@@ -270,27 +262,24 @@ class HedgeManager:
                 logger.error(f"❌ [{exchange_name}] {error_msg}")
                 return False, error_msg
 
-            log_parts = []
-            if remaining_qty > Decimal("0"):
-                log_parts.append(f"qty={remaining_qty}")
-            if remaining_usd > Decimal("0"):
-                log_parts.append(f"${float(remaining_usd):.2f}")
-            descriptor = ", ".join(log_parts) if log_parts else "0"
+            # Calculate USD estimate from quantity using latest BBO (for logging only, not decisions)
+            estimated_usd = Decimal("0")
+            try:
+                if self._price_provider and remaining_qty > Decimal("0"):
+                    best_bid, best_ask = await self._price_provider.get_bbo_prices(
+                        spec.exchange_client, symbol
+                    )
+                    price = best_ask if spec.side == "buy" else best_bid
+                    estimated_usd = remaining_qty * price
+            except Exception:
+                pass  # Skip USD estimate if BBO unavailable
             
             logger.info("=" * 80)
             logger.info(
-                f"⚡ AGGRESSIVE LIMIT HEDGE: {symbol} on {exchange_name} for remaining {descriptor}"
+                f"⚡ AGGRESSIVE LIMIT HEDGE: {symbol} on {exchange_name}: "
+                f"{remaining_qty} qty" + (f" (≈${float(estimated_usd):.2f})" if estimated_usd > Decimal("0") else "")
             )
             logger.info("=" * 80)
-
-            size_usd_arg: Optional[Decimal] = None
-            quantity_arg: Optional[Decimal] = None
-            if remaining_qty > Decimal("0"):
-                quantity_arg = remaining_qty
-            elif remaining_usd > Decimal("0"):
-                size_usd_arg = remaining_usd
-            else:
-                continue
 
             # Aggressive limit order retry loop
             hedge_success = False
@@ -342,17 +331,8 @@ class HedgeManager:
                         break
                     
                     # Round quantity to step size
-                    if quantity_arg is not None:
-                        # Use remaining quantity after partial fills
-                        order_quantity = spec.exchange_client.round_to_step(remaining_qty)
-                    else:
-                        # Calculate quantity from remaining size_usd
-                        remaining_size_usd = size_usd_arg - (accumulated_filled_qty * limit_price)
-                        if remaining_size_usd > Decimal("0"):
-                            order_quantity = (remaining_size_usd / limit_price)
-                            order_quantity = spec.exchange_client.round_to_step(order_quantity)
-                        else:
-                            order_quantity = spec.exchange_client.round_to_step(remaining_qty)
+                    # Always use remaining_qty (calculated from hedge_target) - more reliable than USD
+                    order_quantity = spec.exchange_client.round_to_step(remaining_qty)
                     
                     if order_quantity <= Decimal("0"):
                         logger.warning(

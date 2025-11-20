@@ -278,6 +278,82 @@ async def test_market_hedge_partial_fill_before_cancel_tracked():
 
 
 @pytest.mark.asyncio
+async def test_hedge_skips_when_quantity_filled_even_if_usd_tracking_wrong(executor):
+    """
+    CRITICAL TEST: Verify that hedge is skipped when quantity is fully filled,
+    even if filled_usd tracking thinks there's remaining USD.
+    
+    This prevents over-hedging due to unreliable USD tracking.
+    
+    Scenario:
+    - Context is fully filled by quantity (4.393 XMR)
+    - But filled_usd tracking is wrong (due to missing price info)
+    - remaining_usd would be > 0, triggering old fallback bug
+    - Hedge should SKIP since quantity is already filled
+    """
+    hedge_manager = HedgeManager()
+    mock_client = MockExchangeClient("PARADEX")
+    
+    # Simulate context that is fully filled by quantity
+    ctx = OrderContext(
+        spec=OrderSpec(
+            exchange_client=mock_client,
+            symbol="XMR",
+            side="buy",
+            size_usd=Decimal("1600"),  # Original target
+            quantity=Decimal("4.393")   # Original target
+        ),
+        cancel_event=asyncio.Event(),
+        task=asyncio.create_task(asyncio.sleep(0)),
+        completed=True,
+        filled_quantity=Decimal("4.393"),  # ✅ Fully filled by quantity
+    )
+    
+    # Simulate filled_usd being WRONG (due to missing price)
+    # This would make remaining_usd > 0, triggering old fallback bug
+    ctx.filled_usd = Decimal("1200")  # Wrong! Should be ~1600
+    ctx.hedge_target_quantity = Decimal("4.393")
+    
+    # Mock trigger context (fully filled)
+    trigger_ctx = OrderContext(
+        spec=OrderSpec(
+            exchange_client=MockExchangeClient("LIGHTER"),
+            symbol="XMR",
+            side="sell",
+            size_usd=Decimal("1600"),
+            quantity=Decimal("4.393")
+        ),
+        cancel_event=asyncio.Event(),
+        task=asyncio.create_task(asyncio.sleep(0)),
+        completed=True,
+        filled_quantity=Decimal("4.393"),
+        result={'filled_quantity': Decimal("4.393"), 'fill_price': Decimal("365.00")}
+    )
+    
+    # Execute hedge - should skip since quantity is filled
+    with patch('strategies.execution.core.order_executor.OrderExecutor') as mock_exec_cls:
+        mock_executor = AsyncMock()
+        mock_exec_cls.return_value = mock_executor
+        
+        success, error = await hedge_manager.hedge(
+            trigger_ctx=trigger_ctx,
+            contexts=[trigger_ctx, ctx],
+            logger=executor.logger,
+            reduce_only=False
+        )
+        
+        # CRITICAL: Verify NO hedge order was placed
+        mock_executor.execute_order.assert_not_called()
+        
+        # Hedge should succeed (nothing to do)
+        assert success is True
+        assert error is None
+        
+        # Verify remaining_quantity is 0 (so hedge correctly skipped)
+        assert ctx.remaining_quantity == Decimal("0")
+
+
+@pytest.mark.asyncio
 async def test_rollback_safety_check_detects_untracked_positions():
     """
     CRITICAL TEST: Rollback safety check (Step 2.5) detects untracked positions.
