@@ -21,7 +21,8 @@ class MarketExecutionStrategy(ExecutionStrategy):
         price_provider=None,
         market_executor: Optional[MarketOrderExecutor] = None,
         limit_executor: Optional[LimitOrderExecutor] = None,
-        confirmation_waiter: Optional[OrderConfirmationWaiter] = None
+        confirmation_waiter: Optional[OrderConfirmationWaiter] = None,
+        use_websocket_events: bool = True
     ):
         """
         Initialize market execution strategy.
@@ -31,7 +32,11 @@ class MarketExecutionStrategy(ExecutionStrategy):
             market_executor: Optional MarketOrderExecutor instance
             limit_executor: Optional LimitOrderExecutor for slippage fallback
             confirmation_waiter: Optional OrderConfirmationWaiter instance
+            use_websocket_events: If True, use event-based order tracking (faster)
         """
+        # Initialize base class with websocket support
+        super().__init__(use_websocket_events=use_websocket_events)
+        
         self.price_provider = price_provider or PriceProvider()
         if market_executor is None:
             limit_exec = limit_executor or LimitOrderExecutor(price_provider=self.price_provider)

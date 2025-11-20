@@ -185,7 +185,7 @@ class OrderReconciler:
             except Exception as exc:
                 logger.debug(f"Error checking order status: {exc}")
             
-            await asyncio.sleep(0.1)  # Poll every 100ms
+            await asyncio.sleep(0.05)  # Poll every 50ms for faster response
         
         return ReconciliationResult(
             filled=filled,

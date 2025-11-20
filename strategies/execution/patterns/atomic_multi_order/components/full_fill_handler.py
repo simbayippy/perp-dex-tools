@@ -253,18 +253,6 @@ class FullFillHandler:
         rollback_performed = False
         rollback_cost = Decimal("0")
 
-        # DEBUG: Log context state after hedge
-        self.logger.info("=" * 80)
-        self.logger.info("DEBUG: Context state after hedge execution:")
-        for ctx in contexts:
-            self.logger.info(
-                f"  [{ctx.spec.exchange_client.get_exchange_name()}] {ctx.spec.symbol} ({ctx.spec.side}): "
-                f"filled_quantity={ctx.filled_quantity}, "
-                f"result.filled_quantity={ctx.result.get('filled_quantity') if ctx.result else 'None'}, "
-                f"hedge_result.success={hedge_result.success}"
-            )
-        self.logger.info("=" * 80)
-
         # CRITICAL: Check if both orders are fully filled and balanced BEFORE checking hedge_result.success
         # This prevents false rollback when both orders are filled and balanced, even if hedge reported failure
         # (hedge might fail due to timeout or other reasons, but orders might still be filled)

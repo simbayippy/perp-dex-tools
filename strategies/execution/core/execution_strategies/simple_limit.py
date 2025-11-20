@@ -14,14 +14,23 @@ from .base import ExecutionStrategy
 class SimpleLimitExecutionStrategy(ExecutionStrategy):
     """Simple limit order execution strategy (wraps LimitOrderExecutor)."""
     
-    def __init__(self, price_provider=None, limit_executor: Optional[LimitOrderExecutor] = None):
+    def __init__(
+        self,
+        price_provider=None,
+        limit_executor: Optional[LimitOrderExecutor] = None,
+        use_websocket_events: bool = True
+    ):
         """
         Initialize simple limit execution strategy.
         
         Args:
             price_provider: Optional PriceProvider for BBO price retrieval
             limit_executor: Optional LimitOrderExecutor instance
+            use_websocket_events: If True, use event-based order tracking (faster)
         """
+        # Initialize base class with websocket support
+        super().__init__(use_websocket_events=use_websocket_events)
+        
         self.price_provider = price_provider or PriceProvider()
         self.limit_executor = limit_executor or LimitOrderExecutor(price_provider=self.price_provider)
     
