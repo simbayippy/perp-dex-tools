@@ -128,6 +128,26 @@ class HedgeManager:
                 logger.error(f"Hedge order failed on {exchange_name}: {exc}")
                 return False, str(exc)
 
+            # ⚠️ CRITICAL: Check for partial fills even when execution.success=False
+            # Market orders can be cancelled after partial fills (e.g., slippage protection),
+            # and we MUST track these partial fills for rollback to work correctly.
+            # Without this, rollback will miss exposed positions!
+            partial_fill_qty = execution.filled_quantity or Decimal("0")
+            has_partial_fill = execution.filled and partial_fill_qty > Decimal("0")
+            
+            if has_partial_fill and not execution.success:
+                # Partial fill occurred but order was cancelled - MUST record for rollback
+                logger.warning(
+                    f"⚠️ [{exchange_name}] Market hedge had partial fill ({partial_fill_qty} @ ${execution.fill_price or 'unknown'}) "
+                    f"before cancellation. Recording for rollback tracking."
+                )
+                hedge_dict = execution_result_to_dict(spec, execution, hedge=True)
+                apply_result_to_context(ctx, hedge_dict)
+                # Still return error since hedge didn't complete successfully
+                error = execution.error_message or f"Market hedge failed on {exchange_name} (partial fill: {partial_fill_qty})"
+                logger.error(error)
+                return False, error
+            
             if not execution.success or not execution.filled:
                 error = execution.error_message or f"Market hedge failed on {exchange_name}"
                 logger.error(error)
