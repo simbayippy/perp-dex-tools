@@ -144,8 +144,8 @@ class MarketHedgeStrategy(HedgeStrategy):
                 error_message=None,
             )
         
-        # Calculate USD estimate from quantity using latest BBO (for logging only)
-        estimated_usd = Decimal("0")
+        # Check minimum order notional before attempting hedge
+        # This prevents attempting to hedge small partial fills that are below minimum order size
         try:
             if self._price_provider and remaining_qty > Decimal("0"):
                 best_bid, best_ask = await self._price_provider.get_bbo_prices(
@@ -153,8 +153,28 @@ class MarketHedgeStrategy(HedgeStrategy):
                 )
                 price = best_ask if spec.side == "buy" else best_bid
                 estimated_usd = remaining_qty * price
+                
+                # Check minimum order notional
+                min_notional = spec.exchange_client.get_min_order_notional(spec.symbol)
+                if min_notional is not None and min_notional > Decimal("0"):
+                    if estimated_usd < min_notional:
+                        logger.warning(
+                            f"⚠️ [{exchange_name}] Hedge order notional ${estimated_usd:.4f} below minimum ${min_notional:.2f} "
+                            f"for {spec.symbol}. Skipping hedge - size too small. "
+                            f"This should trigger rollback instead."
+                        )
+                        return HedgeResult(
+                            success=False,
+                            filled_quantity=Decimal("0"),
+                            execution_mode="market_skip_below_min_notional",
+                            error_message=f"Hedge order notional ${estimated_usd:.4f} below minimum ${min_notional:.2f}",
+                        )
+            else:
+                estimated_usd = Decimal("0")
         except Exception:
-            pass  # Skip USD estimate if BBO unavailable
+            estimated_usd = Decimal("0")
+            # If we can't get price, continue but log warning
+            logger.debug(f"Could not fetch price for minimum notional check on {exchange_name} {spec.symbol}")
         
         logger.info(
             f"⚡ Hedging {spec.symbol} on {exchange_name}: "
@@ -358,6 +378,35 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
                 execution_mode="aggressive_limit_skip_too_small",
                 error_message=None,
             )
+        
+        # Check minimum order notional before attempting hedge
+        # This prevents attempting to hedge small partial fills that are below minimum order size
+        try:
+            if self._price_provider and remaining_qty > Decimal("0"):
+                best_bid, best_ask = await self._price_provider.get_bbo_prices(
+                    spec.exchange_client, symbol
+                )
+                price = best_ask if spec.side == "buy" else best_bid
+                estimated_usd = remaining_qty * price
+                
+                # Check minimum order notional
+                min_notional = spec.exchange_client.get_min_order_notional(symbol)
+                if min_notional is not None and min_notional > Decimal("0"):
+                    if estimated_usd < min_notional:
+                        logger.warning(
+                            f"⚠️ [{exchange_name}] Hedge order notional ${estimated_usd:.4f} below minimum ${min_notional:.2f} "
+                            f"for {symbol}. Skipping aggressive limit hedge - size too small. "
+                            f"This should trigger rollback instead."
+                        )
+                        return HedgeResult(
+                            success=False,
+                            filled_quantity=Decimal("0"),
+                            execution_mode="aggressive_limit_skip_below_min_notional",
+                            error_message=f"Hedge order notional ${estimated_usd:.4f} below minimum ${min_notional:.2f}",
+                        )
+        except Exception as e:
+            # If we can't get price, continue but log warning
+            logger.debug(f"Could not fetch price for minimum notional check on {exchange_name} {symbol}: {e}")
         
         # Execute using general-purpose aggressive limit execution strategy
         execution_result = await self._execution_strategy.execute(

@@ -148,6 +148,12 @@ class AtomicMultiOrderExecutor:
                 rollback_cost=Decimal("0"),
             )
 
+        # Initialize variables for exception handling (before try block so accessible in finally)
+        _exception = None
+        rollback_performed = False
+        rollback_cost = Decimal("0")
+        contexts: List[OrderContext] = []
+        
         try:
             compose_stage = lambda *parts: self._compose_stage_id(stage_prefix, *parts)
 
@@ -207,7 +213,7 @@ class AtomicMultiOrderExecutor:
                         f"Set websocket callback router for {exchange_client.get_exchange_name()}"
                     )
 
-            contexts: List[OrderContext] = []
+            # contexts is already initialized before try block
             task_map: Dict[asyncio.Task, OrderContext] = {}
             pending_tasks: set[asyncio.Task] = set()
 
@@ -221,8 +227,7 @@ class AtomicMultiOrderExecutor:
 
             trigger_ctx: Optional[OrderContext] = None
             hedge_error: Optional[str] = None  # Will be set by _handle_full_fill_trigger if called
-            rollback_performed = False
-            rollback_cost = Decimal("0")
+            # rollback_performed and rollback_cost are already initialized before try block
 
             while pending_tasks:
                 done, pending_tasks = await asyncio.wait(
@@ -274,13 +279,18 @@ class AtomicMultiOrderExecutor:
                         trigger_ctx = potential_trigger
                         other_contexts = [c for c in contexts if c is not trigger_ctx]
                         
-                        hedge_success, hedge_error, rollback_performed, rollback_cost = await self._handle_full_fill_trigger(
+                        hedge_success, hedge_error, rollback_performed_local, rollback_cost_local = await self._handle_full_fill_trigger(
                             trigger_ctx=trigger_ctx,
                             other_contexts=other_contexts,
                             contexts=contexts,
                             pending_tasks=pending_tasks,
                             rollback_on_partial=rollback_on_partial,
                         )
+                        
+                        # Update rollback state (accessible in finally block)
+                        if rollback_performed_local:
+                            rollback_performed = True
+                            rollback_cost = rollback_cost_local
                         
                         if hedge_success:
                             all_completed = True
@@ -490,6 +500,7 @@ class AtomicMultiOrderExecutor:
                             f"⚠️ Critical quantity imbalance {imbalance_tokens:.6f} tokens ({imbalance_pct*100:.2f}%) "
                             f"detected after retries exhausted. Initiating rollback to close {filled_orders_count} filled positions."
                         )
+                        rollback_performed = True
                         rollback_cost = await self._rollback_manager.perform_emergency_rollback(
                             contexts, "retries exhausted", imbalance_tokens, imbalance_pct, stage_prefix=stage_prefix
                         )
@@ -532,24 +543,48 @@ class AtomicMultiOrderExecutor:
 
         except Exception as exc:
             self.logger.error(f"Atomic execution failed: {exc}", exc_info=True)
-
-            # Get contexts from locals if available
-            contexts = locals().get("contexts", [])
+            # Store exception for use in finally block
+            _exception = exc
         
         finally:
             # Cleanup: Restore original callbacks and clear registries
             self._cleanup_websocket_callbacks()
             
-            # Check if we need to rollback
+            # Check if we need to rollback - only if rollback wasn't already performed
             rollback_cost = None
+            
+            # Also check if contexts have been cleared (filled_quantity == 0 for all)
+            contexts_cleared = True
+            if contexts:
+                for ctx in contexts:
+                    if ctx.filled_quantity > Decimal("0"):
+                        contexts_cleared = False
+                        break
+            
             filled_orders_count = sum(1 for ctx in contexts if ctx.result and ctx.filled_quantity > Decimal("0"))
-            if filled_orders_count > 0 and rollback_on_partial:
+            
+            # Only rollback if:
+            # 1. Rollback wasn't already performed (flag check)
+            # 2. Contexts haven't been cleared (safety check - rollback_manager clears them)
+            # 3. There are filled orders
+            # 4. Rollback on partial is enabled
+            if not rollback_performed and not contexts_cleared and filled_orders_count > 0 and rollback_on_partial:
                 filled_orders_list = [
                     ctx.result
                     for ctx in contexts
                     if ctx.result and ctx.filled_quantity > Decimal("0")
                 ]
-                rollback_cost = await self._rollback_manager.rollback(filled_orders_list, stage_prefix=stage_prefix)
+                if filled_orders_list:
+                    rollback_cost = await self._rollback_manager.rollback(filled_orders_list, stage_prefix=stage_prefix)
+                    # Clear contexts after rollback to prevent any further rollback attempts
+                    # (rollback() doesn't clear contexts, but perform_emergency_rollback() does)
+                    for ctx in contexts:
+                        ctx.filled_quantity = Decimal("0")
+                        ctx.filled_usd = Decimal("0")
+                    rollback_performed = True  # Mark as performed
+            
+            # Get exception message safely
+            exc_message = str(_exception) if _exception is not None else "Unknown error"
 
             return self._build_execution_result(
                 contexts=contexts,
@@ -557,7 +592,7 @@ class AtomicMultiOrderExecutor:
                 elapsed_ms=elapsed_ms(),
                 success=False,
                 all_filled=False,
-                error_message=str(exc),
+                error_message=exc_message,
                 rollback_performed=bool(rollback_cost and rollback_on_partial),
                 rollback_cost=rollback_cost or Decimal("0"),
             )
@@ -766,7 +801,41 @@ class AtomicMultiOrderExecutor:
             )
         self.logger.info("=" * 80)
 
+        # CRITICAL: Check if both orders are fully filled and balanced BEFORE checking hedge_result.success
+        # This prevents false rollback when both orders are filled and balanced, even if hedge reported failure
+        # (hedge might fail due to timeout or other reasons, but orders might still be filled)
+        fully_filled_count = sum(1 for ctx in contexts if self._is_order_fully_filled(ctx))
+        all_fully_filled = fully_filled_count == len(contexts)
+        
+        if all_fully_filled:
+            # Both orders fully filled - verify they're balanced
+            total_long_tokens, total_short_tokens, imbalance_tokens, imbalance_pct = self._imbalance_analyzer.calculate_imbalance(contexts)
+            imbalance_tolerance = Decimal("0.01")  # 1% tolerance
+            
+            if imbalance_pct <= imbalance_tolerance:
+                self.logger.info(
+                    f"✅ Both orders fully filled and balanced: "
+                    f"longs={total_long_tokens:.6f}, shorts={total_short_tokens:.6f}, "
+                    f"imbalance={imbalance_tokens:.6f} ({imbalance_pct*100:.2f}%). "
+                    f"Returning success regardless of hedge_result.success status."
+                )
+                return True, None, False, Decimal("0")
+            else:
+                # Both fully filled but imbalanced - log warning
+                self.logger.warning(
+                    f"⚠️ Both orders fully filled but imbalanced: "
+                    f"longs={total_long_tokens:.6f}, shorts={total_short_tokens:.6f}, "
+                    f"imbalance={imbalance_tokens:.6f} ({imbalance_pct*100:.2f}%). "
+                    f"Proceeding with hedge_result check..."
+                )
+        
         if hedge_result.success:
+            # Hedge succeeded - return success
+            if not all_fully_filled:
+                # Hedge succeeded but not all orders fully filled - this is acceptable for hedge success
+                self.logger.info(
+                    f"✅ Hedge succeeded: {fully_filled_count}/{len(contexts)} orders fully filled"
+                )
             return True, None, False, Decimal("0")
         else:
             if not rollback_on_partial:
@@ -812,15 +881,19 @@ class AtomicMultiOrderExecutor:
                         
                         rollback_payload.append(context_to_filled_dict(c))
                 
-                rollback_cost = await self._rollback_manager.rollback(
-                    rollback_payload, stage_prefix=self._current_stage_prefix
+                # Use perform_emergency_rollback instead of rollback() directly
+                # This ensures contexts are properly cleared to prevent double rollback
+                rollback_cost = await self._rollback_manager.perform_emergency_rollback(
+                    contexts=contexts,
+                    reason="Hedge failure after full fill trigger",
+                    imbalance_tokens=Decimal("0"),
+                    imbalance_pct=Decimal("0"),
+                    stage_prefix=self._current_stage_prefix
                 )
                 self.logger.warning(
                     f"Rollback completed after hedge failure; total cost ${rollback_cost:.4f}"
                 )
-                for ctx in contexts:
-                    ctx.filled_quantity = Decimal("0")
-                    ctx.filled_usd = Decimal("0")
+                # Note: perform_emergency_rollback already clears contexts, no need to clear again
                 
                 return False, hedge_result.error_message or "Hedge failure", True, rollback_cost
 

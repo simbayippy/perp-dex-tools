@@ -431,11 +431,15 @@ class LighterWebSocketHandlers:
                             
                             if not is_known_liquidation:
                                 # Position went to zero but we didn't see liquidation notification
-                                # This could be a liquidation we missed, or a manual close
+                                # This could be:
+                                # - A liquidation we missed
+                                # - A manual close
+                                # - An expected rollback operation (emergency position closure)
+                                # - A normal position close via market order
                                 self.logger.warning(
                                     f"⚠️ [LIGHTER] Position suddenly zeroed: {normalized_symbol} | "
                                     f"Previous qty: {prev_qty} | Market ID: {market_id} | "
-                                    f"Possible liquidation (no liquidation notification received)"
+                                    f"Possible causes: liquidation (no notification), rollback, or manual close"
                                 )
                             else:
                                 self.logger.info(
