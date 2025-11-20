@@ -762,6 +762,18 @@ class AtomicMultiOrderExecutor:
         rollback_performed = False
         rollback_cost = Decimal("0")
 
+        # DEBUG: Log context state after hedge
+        self.logger.info("=" * 80)
+        self.logger.info("DEBUG: Context state after hedge execution:")
+        for ctx in contexts:
+            self.logger.info(
+                f"  [{ctx.spec.exchange_client.get_exchange_name()}] {ctx.spec.symbol} ({ctx.spec.side}): "
+                f"filled_quantity={ctx.filled_quantity}, "
+                f"result.filled_quantity={ctx.result.get('filled_quantity') if ctx.result else 'None'}, "
+                f"hedge_result.success={hedge_result.success}"
+            )
+        self.logger.info("=" * 80)
+
         if hedge_result.success:
             return True, None, False, Decimal("0")
         else:

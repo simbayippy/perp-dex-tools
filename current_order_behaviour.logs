@@ -1,0 +1,86 @@
+2025-11-20 11:09:19 | INFO     | unified_logger:_emit:618                 | =======================================================
+2025-11-20 11:09:19 | INFO     | unified_logger:_emit:618                 | 3.2. 🚀 Order Placement
+2025-11-20 11:09:19 | INFO     | unified_logger:_emit:618                 | =======================================================
+2025-11-20 11:09:19 | INFO     | executor:execute_atomically:190          | 🚀 Placing all orders simultaneously...
+2025-11-20 11:09:19 | INFO     | order_executor:execute_order:182         | 🟢 [ASTER] Executing buy AVNT ($59.7327500 qty=140) in mode limit_only
+2025-11-20 11:09:19 | INFO     | market_data:fetch_bbo_prices:69          | 📡 [ASTER] Using real-time BBO from WebSocket
+2025-11-20 11:09:19 | INFO     | price_provider:_fetch_exchange_bbo:76    | ✅ [ASTER] BBO: bid=0.4272, ask=0.4273
+2025-11-20 11:09:19 | INFO     | limit_order_executor:execute:107         | [ASTER] Placing limit buy AVNT (contract_id=AVNTUSDT): 140 @ $0.4272 (mid: $0.42725, offset: 0.0200%)
+2025-11-20 11:09:19 | INFO     | order_executor:execute_order:182         | 🔴 [LIGHTER] Executing sell AVNT ($59.7488500 qty=140) in mode limit_only
+2025-11-20 11:09:19 | INFO     | price_provider:_fetch_exchange_bbo:76    | ✅ [LIGHTER] BBO: bid=0.42682, ask=0.42696
+2025-11-20 11:09:19 | INFO     | limit_order_executor:execute:107         | [LIGHTER] Placing limit sell AVNT (contract_id=82): 140 @ $0.42691 (mid: $0.42689, offset: 0.0200%)
+2025-11-20 11:09:19 | INFO     | order_manager:place_limit_order:185      | 📤 [LIGHTER] Submitting order: market=82 client_id=959035 side=ASK price=42691 amount=1400
+2025-11-20 11:09:19 | INFO     | ...:handle_websocket_order_update:135    | [WEBSOCKET] [ASTER] OPEN 140 @ 0.4272000
+2025-11-20 11:09:21 | INFO     | ...:handle_websocket_order_update:171    | [WEBSOCKET] [LIGHTER] OPEN 140.0 @ 0.42691
+2025-11-20 11:09:24 | INFO     | ...:handle_websocket_order_update:182    | [WEBSOCKET] [LIGHTER] FILLED 140.0 @ 0.42691
+2025-11-20 11:09:24 | INFO     | ...:handle_websocket_order_update:212    | TRANSACTION: SELL 140.0 @ 0.42691 | Order: 959035 | Status: FILLED
+2025-11-20 11:09:25 | INFO     | limit_order_executor:execute:241         | [LIGHTER] Limit order filled: 140.0 @ $0.42691
+2025-11-20 11:09:25 | INFO     | executor:_handle_full_fill_trigger:650   | ✅ LIGHTER AVNT fully filled (140.0). Cancelling remaining limit orders and hedging to prevent directional exposure.
+2025-11-20 11:09:25 | INFO     | executor:_handle_full_fill_trigger:659   | 🔄 Cancelling limit order for ASTER AVNT (remaining: 140) → will hedge with market order
+2025-11-20 11:09:25 | INFO     | limit_order_executor:execute:196         | [ASTER] Cancellation requested for limit order 399297874
+2025-11-20 11:09:25 | INFO     | market_data:fetch_bbo_prices:69          | 📡 [ASTER] Using real-time BBO from WebSocket
+2025-11-20 11:09:25 | INFO     | price_provider:_fetch_exchange_bbo:76    | ✅ [ASTER] BBO: bid=0.4272, ask=0.4273
+2025-11-20 11:09:25 | INFO     | aggressive_limit:execute:164             | ================================================================================
+2025-11-20 11:09:25 | INFO     | aggressive_limit:execute:165             | ⚡ AGGRESSIVE LIMIT EXECUTION: AVNT on ASTER: 140.0 qty (≈$59.82)
+2025-11-20 11:09:25 | INFO     | aggressive_limit:execute:169             | ================================================================================
+2025-11-20 11:09:25 | INFO     | market_data:fetch_bbo_prices:69          | 📡 [ASTER] Using real-time BBO from WebSocket
+2025-11-20 11:09:25 | INFO     | price_provider:_fetch_exchange_bbo:76    | ✅ [ASTER] BBO: bid=0.4272, ask=0.4273
+2025-11-20 11:09:25 | INFO     | ...:calculate_break_even_hedge_price:293 | Using break-even hedge price: 0.426867 < trigger 0.426910 (deviation: 0.09%)
+2025-11-20 11:09:25 | INFO     | ...:calculate_aggressive_limit_price:131 | ✅ [ASTER] Using break-even price: 0.426867 < trigger 0.426910 for AVNT 
+2025-11-20 11:09:25 | INFO     | ...:handle_websocket_order_update:130    | [WEBSOCKET] [ASTER] CANCELED 140 @ 0.4272000
+2025-11-20 11:09:25 | INFO     | ...:handle_websocket_order_update:135    | [WEBSOCKET] [ASTER] OPEN 140 @ 0.4269000
+2025-11-20 11:09:30 | INFO     | ...:handle_websocket_order_update:130    | [WEBSOCKET] [ASTER] CANCELED 140 @ 0.4269000
+2025-11-20 11:09:30 | INFO     | market_data:fetch_bbo_prices:69          | 📡 [ASTER] Using real-time BBO from WebSocket
+2025-11-20 11:09:30 | INFO     | price_provider:_fetch_exchange_bbo:76    | ✅ [ASTER] BBO: bid=0.4273, ask=0.4274
+2025-11-20 11:09:30 | INFO     | ...:calculate_break_even_hedge_price:293 | Using break-even hedge price: 0.426867 < trigger 0.426910 (deviation: 0.11%)
+2025-11-20 11:09:30 | INFO     | ...:calculate_aggressive_limit_price:131 | ✅ [ASTER] Using break-even price: 0.426867 < trigger 0.426910 for AVNT 
+2025-11-20 11:09:30 | INFO     | ...:handle_websocket_order_update:135    | [WEBSOCKET] [ASTER] OPEN 140 @ 0.4269000
+2025-11-20 11:09:34 | INFO     | ...:handle_websocket_order_update:130    | [WEBSOCKET] [ASTER] CANCELED 140 @ 0.4269000
+2025-11-20 11:09:34 | INFO     | aggressive_limit:execute:186             | --------------------------------------------------------------------------------
+2025-11-20 11:09:34 | WARNING  | aggressive_limit:execute:187             | ⏱️ Aggressive limit execution timeout after 9.19s for ASTER AVNT. Falling back to market order.
+2025-11-20 11:09:34 | INFO     | aggressive_limit:execute:191             | --------------------------------------------------------------------------------
+2025-11-20 11:09:34 | INFO     | aggressive_limit:execute:382             | --------------------------------------------------------------------------------
+2025-11-20 11:09:34 | INFO     | aggressive_limit:execute:383             | 📋 Final Reconciliation Check: AVNT on ASTER
+2025-11-20 11:09:34 | INFO     | aggressive_limit:execute:384             | --------------------------------------------------------------------------------
+2025-11-20 11:09:34 | INFO     | aggressive_limit:execute:399             | ================================================================================
+2025-11-20 11:09:34 | INFO     | aggressive_limit:execute:400             | ⚠️ AGGRESSIVE LIMIT EXECUTION FAILED: Falling back to market order
+2025-11-20 11:09:34 | INFO     | aggressive_limit:execute:401             | ================================================================================
+2025-11-20 11:09:34 | INFO     | market_data:fetch_bbo_prices:69          | 📡 [ASTER] Using real-time BBO from WebSocket
+2025-11-20 11:09:34 | INFO     | price_provider:_fetch_exchange_bbo:76    | ✅ [ASTER] BBO: bid=0.4273, ask=0.4274
+2025-11-20 11:09:34 | INFO     | market_order_executor:execute:95         | [ASTER] Placing market buy AVNT (contract_id=AVNTUSDT): 140 @ ~$0.4274
+2025-11-20 11:09:34 | INFO     | market_data:fetch_bbo_prices:69          | 📡 [ASTER] Using real-time BBO from WebSocket
+2025-11-20 11:09:34 | INFO     | order_manager:place_market_order:338     | 📊 [ASTER] Market order BBO check: bid=0.4273, ask=0.4274
+2025-11-20 11:09:34 | INFO     | order_manager:place_market_order:396     | 📤 [ASTER] Placing market BUY order: 140 @ ~$0.4274
+2025-11-20 11:09:35 | INFO     | order_manager:place_market_order:407     | 📤 [ASTER] Market order placed: 399297917 (status=NEW)
+2025-11-20 11:09:35 | INFO     | ...:handle_websocket_order_update:135    | [WEBSOCKET] [ASTER] OPEN 140 @ n/a
+2025-11-20 11:09:35 | INFO     | ...:handle_websocket_order_update:130    | [WEBSOCKET] [ASTER] FILLED 140 @ n/a
+2025-11-20 11:09:35 | INFO     | market_order_executor:execute:367        | [ASTER] Market order filled: 140 @ $0.4274 (slippage: $0.00 / 0.000%)
+2025-11-20 11:09:35 | INFO     | aggressive_limit:execute:441             | ================================================================================
+2025-11-20 11:09:35 | INFO     | aggressive_limit:execute:442             | ✅ MARKET FALLBACK COMPLETE: AVNT on ASTER
+2025-11-20 11:09:35 | INFO     | aggressive_limit:execute:443             | ================================================================================
+2025-11-20 11:09:36 | INFO     | position_m:_get_funding_for_snapshot:338 | [LIGHTER] Querying position_funding() API for AVNT (no cache)
+2025-11-20 11:09:37 | INFO     | position_mana:get_cumulative_funding:697 | [LIGHTER] Funding for current position (market_id=82): $0.0000 (from 19 records, filtered 19 before position opened at 1763636964584)
+2025-11-20 11:09:37 | WARNING  | rollback_manager:rollback:61             | 🚨 EMERGENCY ROLLBACK (OPEN OPERATION): Closing 2 filled orders
+2025-11-20 11:09:37 | INFO     | rollback_manager:rollback:67             | Step 1/4: Canceling all orders to prevent further fills...
+2025-11-20 11:09:39 | INFO     | rollback_manager:rollback:180            | Step 2/4: Querying actual filled amounts...
+2025-11-20 11:09:39 | INFO     | rollback_manager:rollback:253            | Step 2.5/4: Querying actual positions as safety check for OPEN operations...
+2025-11-20 11:09:41 | INFO     | rollback_manager:rollback:330            | Step 3/4: Closing 2 filled positions...
+2025-11-20 11:09:41 | INFO     | rollback_manager:rollback:340            | Rollback: sell AVNT 140 @ market (contract_id=AVNTUSDT, exchange=aster)
+2025-11-20 11:09:41 | INFO     | rollback_manager:rollback:340            | Rollback: buy AVNT 140.0 @ market (contract_id=82, exchange=lighter)
+2025-11-20 11:09:41 | INFO     | market_data:fetch_bbo_prices:69          | 📡 [ASTER] Using real-time BBO from WebSocket
+2025-11-20 11:09:41 | INFO     | order_manager:place_market_order:338     | 📊 [ASTER] Market order BBO check: bid=0.4273, ask=0.4274
+2025-11-20 11:09:41 | INFO     | order_manager:place_market_order:396     | 📤 [ASTER] Placing market SELL order: 140 @ ~$0.4273
+2025-11-20 11:09:41 | INFO     | order_manager:place_market_order:392     | 📤 [LIGHTER] Placing market order: market=82, client_id=981044, side=BUY, base_amount=1400, avg_execution_price=44844
+2025-11-20 11:09:41 | INFO     | order_manager:place_market_order:407     | 📤 [ASTER] Market order placed: 399297922 (status=NEW)
+2025-11-20 11:09:41 | INFO     | ...:handle_websocket_order_update:135    | [WEBSOCKET] [ASTER] OPEN 140 @ n/a
+2025-11-20 11:09:41 | INFO     | ...:handle_websocket_order_update:130    | [WEBSOCKET] [ASTER] FILLED 140 @ n/a
+2025-11-20 11:09:41 | INFO     | ...:handle_websocket_order_update:182    | [WEBSOCKET] [LIGHTER] FILLED 140.0 @ 0.44844
+2025-11-20 11:09:41 | INFO     | ...:handle_websocket_order_update:212    | TRANSACTION: BUY 140.0 @ 0.44844 | Order: 981044 | Status: FILLED
+2025-11-20 11:09:41 | WARNING  | ...:handle_positions_stream_update:435   | ⚠️ [LIGHTER] Position suddenly zeroed: AVNT | Previous qty: 140.0 | Market ID: 82 | Possible liquidation (no liquidation notification received)
+2025-11-20 11:09:42 | WARNING  | rollback_manager:rollback:431            | Rollback cost for AVNT: $0.01 (entry: $0.4274, exit: $0.4273000)
+2025-11-20 11:09:43 | WARNING  | rollback_manager:rollback:431            | Rollback cost for AVNT: $3.01 (entry: $0.42691, exit: $0.44844)
+2025-11-20 11:09:43 | INFO     | rollback_manager:rollback:437            | Step 4/4: Verifying positions are closed...
+2025-11-20 11:09:44 | INFO     | rollback_manager:rollback:485            | ✅ [aster] AVNT: Position verified closed
+2025-11-20 11:09:44 | INFO     | rollback_manager:rollback:485            | ✅ [lighter] AVNT: Position verified closed
+2025-11-20 11:09:44 | WARNING  | rollback_manager:rollback:497            | ✅ Rollback complete. Total cost: $3.03
+2025-11-20 11:09:44 | ERROR    | position_opener:open:227                 | ❌ AVNT: Unexpected error - cannot access local variable 'exc' where it is not associated with a value

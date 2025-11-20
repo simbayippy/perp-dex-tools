@@ -344,45 +344,88 @@ class AggressiveLimitHedgeStrategy(HedgeStrategy):
         
         # Convert ExecutionResult to HedgeResult
         if execution_result.success and execution_result.filled:
-            # Success case - track result using tracker
+            # Check if this was a market fallback (execution_mode_used contains "fallback_market")
+            is_market_fallback = execution_result.execution_mode_used and "fallback_market" in execution_result.execution_mode_used
+            
             filled_qty = execution_result.filled_quantity or Decimal("0")
             fill_price = execution_result.fill_price
             
-            # Create execution_result-like object for tracker
-            execution_result_for_tracker = SimpleNamespace(
-                success=True,
-                filled=True,
-                fill_price=fill_price,
-                filled_quantity=filled_qty,
-                slippage_usd=Decimal("0"),
-                execution_mode_used=execution_result.execution_mode_used or "aggressive_limit",
-                order_id=execution_result.order_id,
-                retryable=False,
-            )
-            
-            # Track maker quantity (all fills from aggressive limit are maker)
-            self._tracker.apply_aggressive_limit_hedge_result(
-                target_ctx,
-                execution_result_for_tracker,
-                spec,
-                initial_filled_qty,
-                filled_qty,  # accumulated_filled_qty (new fills only)
-                fill_price or Decimal("0"),
-                execution_result.order_id or "",
-                execution_result.execution_mode_used.replace("aggressive_limit_", "") if execution_result.execution_mode_used else "unknown",
-                executor=executor
-            )
-            
-            maker_qty = target_ctx.result.get("maker_qty", Decimal("0")) if target_ctx.result else Decimal("0")
-            
-            return HedgeResult(
-                success=True,
-                filled_quantity=filled_qty,
-                fill_price=fill_price,
-                execution_mode=execution_result.execution_mode_used or "aggressive_limit",
-                maker_quantity=maker_qty,
-                taker_quantity=Decimal("0"),
-            )
+            if is_market_fallback:
+                # Market fallback case - use market hedge tracker
+                # The ExecutionResult already includes both limit fills (if any) and market fills
+                # We need to track this as a market hedge result
+                execution_result_for_tracker = SimpleNamespace(
+                    success=True,
+                    filled=True,
+                    fill_price=fill_price,
+                    filled_quantity=filled_qty,
+                    slippage_usd=Decimal("0"),
+                    execution_mode_used=execution_result.execution_mode_used or "aggressive_limit_fallback_market",
+                    order_id=execution_result.order_id,
+                    retryable=False,
+                )
+                
+                # Track as market hedge (this will update context correctly)
+                # Note: initial_filled_qty is the quantity before aggressive limit hedge started
+                # filled_qty includes any limit fills + market fills
+                # We need to determine maker vs taker quantities
+                # For now, assume all fills are taker (market) since fallback happened
+                # TODO: Could track partial limit fills separately if needed
+                self._tracker.apply_market_hedge_result(
+                    target_ctx,
+                    execution_result_for_tracker,
+                    spec,
+                    initial_maker_qty=None,  # No prior maker fills if we're here
+                    executor=executor
+                )
+                
+                maker_qty = target_ctx.result.get("maker_qty", Decimal("0")) if target_ctx.result else Decimal("0")
+                taker_qty = target_ctx.result.get("taker_qty", Decimal("0")) if target_ctx.result else Decimal("0")
+                
+                return HedgeResult(
+                    success=True,
+                    filled_quantity=target_ctx.filled_quantity,  # Use context value (updated by tracker)
+                    fill_price=fill_price,
+                    execution_mode=execution_result.execution_mode_used or "aggressive_limit_fallback_market",
+                    maker_quantity=maker_qty,
+                    taker_quantity=taker_qty,
+                )
+            else:
+                # Pure aggressive limit success - track as aggressive limit result
+                execution_result_for_tracker = SimpleNamespace(
+                    success=True,
+                    filled=True,
+                    fill_price=fill_price,
+                    filled_quantity=filled_qty,
+                    slippage_usd=Decimal("0"),
+                    execution_mode_used=execution_result.execution_mode_used or "aggressive_limit",
+                    order_id=execution_result.order_id,
+                    retryable=False,
+                )
+                
+                # Track maker quantity (all fills from aggressive limit are maker)
+                self._tracker.apply_aggressive_limit_hedge_result(
+                    target_ctx,
+                    execution_result_for_tracker,
+                    spec,
+                    initial_filled_qty,
+                    filled_qty,  # accumulated_filled_qty (new fills only)
+                    fill_price or Decimal("0"),
+                    execution_result.order_id or "",
+                    execution_result.execution_mode_used.replace("aggressive_limit_", "") if execution_result.execution_mode_used else "unknown",
+                    executor=executor
+                )
+                
+                maker_qty = target_ctx.result.get("maker_qty", Decimal("0")) if target_ctx.result else Decimal("0")
+                
+                return HedgeResult(
+                    success=True,
+                    filled_quantity=filled_qty,
+                    fill_price=fill_price,
+                    execution_mode=execution_result.execution_mode_used or "aggressive_limit",
+                    maker_quantity=maker_qty,
+                    taker_quantity=Decimal("0"),
+                )
         elif execution_result.filled and execution_result.filled_quantity and execution_result.filled_quantity > Decimal("0"):
             # Partial fill case - fallback to market for remainder
             accumulated_filled_qty = execution_result.filled_quantity
