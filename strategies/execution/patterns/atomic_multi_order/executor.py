@@ -192,7 +192,7 @@ class AtomicMultiOrderExecutor:
                 pending_tasks.add(task)
 
             trigger_ctx: Optional[OrderContext] = None
-            hedge_error: Optional[str] = None
+            hedge_error: Optional[str] = None  # Will be set by _handle_full_fill_trigger if called
             rollback_performed = False
             rollback_cost = Decimal("0")
 
@@ -506,8 +506,8 @@ class AtomicMultiOrderExecutor:
                 success=False,
                 all_filled=False,
                 error_message=error_message,
-                rollback_performed=False,
-                rollback_cost=Decimal("0"),
+                rollback_performed=rollback_performed,  
+                rollback_cost=rollback_cost,  
             )
 
         except Exception as exc:
@@ -786,7 +786,7 @@ class AtomicMultiOrderExecutor:
                     ctx.filled_quantity = Decimal("0")
                     ctx.filled_usd = Decimal("0")
                 
-                return False, hedge_error, True, rollback_cost
+                return False, hedge_result.error_message or "Hedge failure", True, rollback_cost
 
     def _build_execution_result(
         self,
