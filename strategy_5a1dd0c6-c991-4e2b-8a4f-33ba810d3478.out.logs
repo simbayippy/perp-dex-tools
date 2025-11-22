@@ -1,0 +1,303 @@
+## Closing Trade 1
+
+[32m2025-11-22 11:59:20[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=513.492, ask=513.728[0m
+[32m2025-11-22 11:59:20[0m | [1mINFO    [0m | [36mmarket_data:fetch_bbo_prices:69         [0m | [1m📡 [ASTER] Using real-time BBO from WebSocket[0m
+[32m2025-11-22 11:59:20[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [ASTER] BBO: bid=514.09, ask=514.1[0m
+[32m2025-11-22 11:59:20[0m | [1mINFO    [0m | [36mposition_closer:_start_exit_polling:805 [0m | [1m⏳ Started exit polling for ZEC (reason: SEVERE_EROSION, max duration: 10 minutes)[0m
+[32m2025-11-22 11:59:20[0m | [1mINFO    [0m | [36mposition_c:evaluateAndClosePositions:145[0m | [1mStarted exit polling for ZEC: SEVERE_EROSION (waiting for break-even exit opportunity)[0m
+[32m2025-11-22 12:00:22[0m | [1mINFO    [0m | [36mposition_monit:_log_exchange_metrics:324[0m | [1mPosition ZEC snapshot [Account: acc1]
+Yield (annualised) | entry 18.3259% | current 0.4380% | erosion 97.61% (limit 60.00%)
+Min hold: satisfied (risk checks active since 2025-11-22 10:05:24)
+Max hold: 21h 5m remaining (force close at 2025-11-23 09:05:24, configured: 24h)
+------------------------------------------------------------------------------------------------
+Exchange     Side   Qty         Entry        Mark         uPnL         Funding      Funding APY 
+------------------------------------------------------------------------------------------------
+ASTER       short      2.3320  495.791668  513.450018      -41.18        0.20    10.9500%
+LIGHTER     long       2.3110  495.246000  513.386000       41.92       -0.01    10.5120%[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=513.71, ask=513.934[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mmarket_data:fetch_bbo_prices:69         [0m | [1m📡 [ASTER] Using real-time BBO from WebSocket[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [ASTER] BBO: bid=514.35, ask=514.41[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mclose_executo:_close_legs_atomically:169[0m | [1m🔒 Closing position ZEC atomically | Reason: SEVERE_EROSION | Legs: [LIGHTER:sell:2.311, ASTER:buy:2.332][0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=513.71, ask=513.93[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mmarket_data:fetch_bbo_prices:69         [0m | [1m📡 [ASTER] Using real-time BBO from WebSocket[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [ASTER] BBO: bid=514.38, ask=514.49[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mexecutor:execute_atomically:180         [0m | [1mStarting atomic execution of 2 orders (rollback_on_partial=True)[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1m=======================================================[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1mclose.2. 🚀 Order Placement[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1m=======================================================[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mexecutor:execute_atomically:216         [0m | [1m🚀 Placing all orders simultaneously...[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36morder_executor:execute_order:182        [0m | [1m🔴 [LIGHTER] Executing sell ZEC ($1187.544326 qty=2.311) in mode aggressive_limit[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=513.71, ask=513.93[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:161[0m | [1m================================================================================[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:162[0m | [1m⚡ AGGRESSIVE LIMIT EXECUTION: ZEC on LIGHTER: 2.311 qty (≈$1187.18)[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:166[0m | [1m================================================================================[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=513.71, ask=513.93[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36morder_manager:place_limit_order:185     [0m | [1m📤 [LIGHTER] Submitting order: market=90 client_id=823826 side=ASK price=513710 amount=2311[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36morder_executor:execute_order:182        [0m | [1m🟢 [ASTER] Executing buy ZEC ($1197.38747244996 qty=2.332) in mode aggressive_limit[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mmarket_data:fetch_bbo_prices:69         [0m | [1m📡 [ASTER] Using real-time BBO from WebSocket[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [ASTER] BBO: bid=514.38, ask=514.49[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:161[0m | [1m================================================================================[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:162[0m | [1m⚡ AGGRESSIVE LIMIT EXECUTION: ZEC on ASTER: 2.332 qty (≈$1199.79)[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:166[0m | [1m================================================================================[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mmarket_data:fetch_bbo_prices:69         [0m | [1m📡 [ASTER] Using real-time BBO from WebSocket[0m
+[32m2025-11-22 12:00:23[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [ASTER] BBO: bid=514.38, ask=514.49[0m
+[32m2025-11-22 12:00:24[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:143   [0m | [1m[WEBSOCKET] [ASTER] OPEN 2.332 @ 514.4900[0m
+[32m2025-11-22 12:00:24[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:143   [0m | [1m[WEBSOCKET] [ASTER] EXPIRED 2.332 @ 514.4900[0m
+[32m2025-11-22 12:00:24[0m | [33m[1mWARNING [0m | [36m...:_handle_order_placement_failure:274 [0m | [33m[1m⚠️ [ASTER] Limit order placement failed for ZEC: Limit order did not remain open: EXPIRED[0m
+[32m2025-11-22 12:00:24[0m | [1mINFO    [0m | [36m...:_handle_order_placement_failure:277 [0m | [1m🔄 [ASTER] Retryable order rejection detected for ZEC: Limit order did not remain open: EXPIRED. Retrying with adaptive pricing (touch strategy, attempt 1/8).[0m
+[32m2025-11-22 12:00:24[0m | [1mINFO    [0m | [36mmarket_data:fetch_bbo_prices:69         [0m | [1m📡 [ASTER] Using real-time BBO from WebSocket[0m
+[32m2025-11-22 12:00:24[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [ASTER] BBO: bid=514.35, ask=514.45[0m
+[32m2025-11-22 12:00:24[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:143   [0m | [1m[WEBSOCKET] [ASTER] OPEN 2.332 @ 514.4400[0m
+[32m2025-11-22 12:00:24[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:185   [0m | [1m[WEBSOCKET] [LIGHTER] CANCELED 0.000 @ 513.710[0m
+[32m2025-11-22 12:00:24[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:215   [0m | [1mTRANSACTION: SELL 0.000 @ 513.710 | Order: 823826 | Status: CANCELED[0m
+[32m2025-11-22 12:00:24[0m | [1mINFO    [0m | [36mreconciler:poll_order_until_filled:168  [0m | [1m🔄 [LIGHTER] Post-only violation on attempt 1 for ZEC. Retrying with fresh BBO (touch strategy).[0m
+[32m2025-11-22 12:00:24[0m | [1mINFO    [0m | [36maggressive_limit:execute:824            [0m | [1m🔍 [LIGHTER] Reconciliation result for ZEC: filled=False, filled_qty=0, accumulated=0/2.311, partial=False, error=None[0m
+[32m2025-11-22 12:00:24[0m | [1mINFO    [0m | [36maggressive_li:_handle_unfilled_order:439[0m | [1m🔄 [LIGHTER] Order 823826 cancelled without fills for ZEC. Reason: post_only_violation. Retrying with adaptive pricing (attempt 1/8)[0m
+[32m2025-11-22 12:00:24[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=513.713, ask=514.033[0m
+[32m2025-11-22 12:00:24[0m | [1mINFO    [0m | [36morder_manager:place_limit_order:185     [0m | [1m📤 [LIGHTER] Submitting order: market=90 client_id=824987 side=ASK price=513714 amount=2311[0m
+[32m2025-11-22 12:00:25[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:185   [0m | [1m[WEBSOCKET] [LIGHTER] CANCELED 0.000 @ 513.714[0m
+[32m2025-11-22 12:00:25[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:215   [0m | [1mTRANSACTION: SELL 0.000 @ 513.714 | Order: 824987 | Status: CANCELED[0m
+[32m2025-11-22 12:00:25[0m | [1mINFO    [0m | [36mreconciler:poll_order_until_filled:168  [0m | [1m🔄 [LIGHTER] Post-only violation on attempt 2 for ZEC. Retrying with fresh BBO (inside_spread strategy).[0m
+[32m2025-11-22 12:00:25[0m | [1mINFO    [0m | [36maggressive_limit:execute:824            [0m | [1m🔍 [LIGHTER] Reconciliation result for ZEC: filled=False, filled_qty=0, accumulated=0/2.311, partial=False, error=None[0m
+[32m2025-11-22 12:00:25[0m | [1mINFO    [0m | [36maggressive_li:_handle_unfilled_order:439[0m | [1m🔄 [LIGHTER] Order 824987 cancelled without fills for ZEC. Reason: post_only_violation. Retrying with adaptive pricing (attempt 2/8)[0m
+[32m2025-11-22 12:00:25[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=513.754, ask=513.928[0m
+[32m2025-11-22 12:00:25[0m | [1mINFO    [0m | [36morder_manager:place_limit_order:185     [0m | [1m📤 [LIGHTER] Submitting order: market=90 client_id=825376 side=ASK price=513753 amount=2311[0m
+[32m2025-11-22 12:00:25[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:174   [0m | [1m[WEBSOCKET] [LIGHTER] OPEN 2.311 @ 513.753[0m
+[32m2025-11-22 12:00:25[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:143   [0m | [1m[WEBSOCKET] [ASTER] PARTIALLY_FILLED 0.087 @ 514.4400[0m
+[32m2025-11-22 12:00:25[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:143   [0m | [1m[WEBSOCKET] [ASTER] PARTIALLY_FILLED 0.747 @ 514.4400[0m
+[32m2025-11-22 12:00:26[0m | [1mINFO    [0m | [36maggressive_limit:execute:824            [0m | [1m🔍 [ASTER] Reconciliation result for ZEC: filled=True, filled_qty=2.332, accumulated=2.332/2.332, partial=False, error=None[0m
+[32m2025-11-22 12:00:26[0m | [1mINFO    [0m | [36maggressive_limit:execute:852            [0m | [1m✅ [ASTER] Order filled for ZEC: accumulated=2.332, target=2.332, threshold=2.30868[0m
+[32m2025-11-22 12:00:26[0m | [1mINFO    [0m | [36maggressive_limit:_log_fill_success:408  [0m | [1m================================================================================[0m
+[32m2025-11-22 12:00:26[0m | [1mINFO    [0m | [36maggressive_limit:_log_fill_success:409  [0m | [1m✅ AGGRESSIVE LIMIT EXECUTION SUCCESS: [ASTER] ZEC @ $514.4400 qty=2.332 fills (total: 2.332/2.332, attempt 2)[0m
+[32m2025-11-22 12:00:26[0m | [1mINFO    [0m | [36maggressive_limit:_log_fill_success:414  [0m | [1m================================================================================[0m
+[32m2025-11-22 12:00:26[0m | [1mINFO    [0m | [36mfull_fill_handler:handle:135            [0m | [1m✅ ASTER ZEC fully filled (2.332). Cancelling remaining limit orders and hedging to prevent directional exposure.[0m
+[32m2025-11-22 12:00:26[0m | [1mINFO    [0m | [36mfull_fill_handler:handle:144            [0m | [1m🔄 Cancelling limit order for LIGHTER ZEC (remaining: 2.311) → will hedge with market order[0m
+[32m2025-11-22 12:00:26[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:138   [0m | [1m[WEBSOCKET] [ASTER] FILLED 2.332 @ 514.4400[0m
+[32m2025-11-22 12:00:26[0m | [33m[1mWARNING [0m | [36mwebsocket_han:_check_position_zeroed:296[0m | [33m[1m⚠️ [ASTER] Position suddenly zeroed: ZECUSDT | Previous qty: 2.332 | Filled qty: 2.332 | Possible causes: liquidation (no notification), rollback, or manual close[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:185   [0m | [1m[WEBSOCKET] [LIGHTER] FILLED 2.311 @ 513.753[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:215   [0m | [1mTRANSACTION: SELL 2.311 @ 513.753 | Order: 825376 | Status: FILLED[0m
+[32m2025-11-22 12:00:27[0m | [33m[1mWARNING [0m | [36m...:handle_positions_stream_update:460  [0m | [33m[1m⚠️ [LIGHTER] Position suddenly zeroed: ZEC | Previous qty: 2.311 | Market ID: 90 | Possible causes: liquidation (no notification), rollback, or manual close[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36maggressive_limit:execute:824            [0m | [1m🔍 [LIGHTER] Reconciliation result for ZEC: filled=True, filled_qty=2.311, accumulated=2.311/2.311, partial=False, error=None[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36maggressive_limit:execute:852            [0m | [1m✅ [LIGHTER] Order filled for ZEC: accumulated=2.311, target=2.311, threshold=2.28789[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36maggressive_limit:_log_fill_success:408  [0m | [1m================================================================================[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36maggressive_limit:_log_fill_success:409  [0m | [1m✅ AGGRESSIVE LIMIT EXECUTION SUCCESS: [LIGHTER] ZEC @ $513.753 qty=2.311 fills (total: 2.311/2.311, attempt 3)[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36maggressive_limit:_log_fill_success:414  [0m | [1m================================================================================[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=513.647, ask=514.033[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=513.647, ask=514.033[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:161[0m | [1m================================================================================[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:162[0m | [1m⚡ AGGRESSIVE LIMIT EXECUTION: ZEC on LIGHTER: 0.021 qty (≈$10.79)[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:166[0m | [1m================================================================================[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=513.647, ask=514.033[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36m...:calculate_break_even_hedge_price:259[0m | [1mUsing break-even hedge price: 514.388556 < trigger 514.440000 (deviation: 0.11%)[0m
+[32m2025-11-22 12:00:27[0m | [33m[1mWARNING [0m | [36m...:calculate_aggressive_limit_price:162[0m | [33m[1m⚠️ [LIGHTER] Break-even price 514.388556 is not fillable for ZEC (side=sell, bid=513.647000, ask=514.033000). Skipping break-even and using adaptive pricing to prioritize fill probability.[0m
+[32m2025-11-22 12:00:27[0m | [1mINFO    [0m | [36morder_manager:place_limit_order:185     [0m | [1m📤 [LIGHTER] Submitting order: market=90 client_id=827775 side=ASK price=513647 amount=21[0m
+[32m2025-11-22 12:00:28[0m | [31m[1mERROR   [0m | [36morder_manager:place_limit_order:215     [0m | [31m[1m❌ [LIGHTER] Order submission failed: HTTP response body: code=21706 message='invalid order base or quote amount' additional_properties={}[0m
+[32m2025-11-22 12:00:28[0m | [33m[1mWARNING [0m | [36m...:_handle_order_placement_failure:274 [0m | [33m[1m⚠️ [LIGHTER] Limit order placement failed for ZEC: Order creation error: HTTP response body: code=21706 message='invalid order base or quote amount' additional_properties={}[0m
+[32m2025-11-22 12:00:28[0m | [31m[1mERROR   [0m | [36m...:_handle_order_placement_failure:284 [0m | [31m[1m❌ [LIGHTER] Fatal order placement error for ZEC: Order creation error: HTTP response body: code=21706 message='invalid order base or quote amount' additional_properties={}. Stopping retries.[0m
+[32m2025-11-22 12:00:28[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:480[0m | [1m================================================================================[0m
+[32m2025-11-22 12:00:28[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:481[0m | [1m⚠️ AGGRESSIVE LIMIT EXECUTION FAILED: Falling back to market order[0m
+[32m2025-11-22 12:00:28[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:482[0m | [1m================================================================================[0m
+[32m2025-11-22 12:00:28[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=513.653, ask=513.986[0m
+[32m2025-11-22 12:00:28[0m | [1mINFO    [0m | [36mmarket_order_executor:execute:95        [0m | [1m[LIGHTER] Placing market sell ZEC (contract_id=90): 0.021 @ ~$513.653[0m
+[32m2025-11-22 12:00:28[0m | [1mINFO    [0m | [36morder_manager:place_market_order:392    [0m | [1m📤 [LIGHTER] Placing market order: market=90, client_id=828060, side=SELL, base_amount=21, avg_execution_price=488129[0m
+[32m2025-11-22 12:00:53[0m | [1mINFO    [0m | [36mstrategies:execute_hedge:571            [0m | [1m================================================================================[0m
+[32m2025-11-22 12:00:53[0m | [1mINFO    [0m | [36mstrategies:execute_hedge:572            [0m | [1m⚠️ AGGRESSIVE LIMIT HEDGE FAILED: Falling back to market order[0m
+[32m2025-11-22 12:00:53[0m | [1mINFO    [0m | [36mstrategies:execute_hedge:573            [0m | [1m================================================================================[0m
+[32m2025-11-22 12:00:53[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=514.075, ask=514.38[0m
+[32m2025-11-22 12:00:53[0m | [1mINFO    [0m | [36mstrategies:execute_hedge:177            [0m | [1m⚡ Hedging ZEC on LIGHTER: 0.021 qty (≈$10.80)[0m
+[32m2025-11-22 12:00:53[0m | [1mINFO    [0m | [36morder_executor:execute_order:182        [0m | [1m🔴 [LIGHTER] Executing sell ZEC (qty=0.021) in mode market_only[0m
+[32m2025-11-22 12:00:53[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=514.075, ask=514.38[0m
+[32m2025-11-22 12:00:53[0m | [1mINFO    [0m | [36mmarket_order_executor:execute:95        [0m | [1m[LIGHTER] Placing market sell ZEC (contract_id=90): 0.021 @ ~$514.075[0m
+[32m2025-11-22 12:00:53[0m | [1mINFO    [0m | [36morder_manager:place_market_order:392    [0m | [1m📤 [LIGHTER] Placing market order: market=90, client_id=853995, side=SELL, base_amount=21, avg_execution_price=488516[0m
+[32m2025-11-22 12:01:19[0m | [31m[1mERROR   [0m | [36mstrategies:execute_hedge:235            [0m | [31m[1mMarket order placed but no order info available[0m
+[32m2025-11-22 12:01:19[0m | [33m[1mWARNING [0m | [36mfull_fill_handler:handle:314            [0m | [33m[1mHedge failed (Market order placed but no order info available) — attempting rollback of partial fills[0m
+[32m2025-11-22 12:01:19[0m | [33m[1mWARNING [0m | [36mrollback_manager:rollback:56            [0m | [33m[1m🚨 EMERGENCY ROLLBACK (CLOSE OPERATION): Querying actual positions for 2 exchanges[0m
+[32m2025-11-22 12:01:19[0m | [1mINFO    [0m | [36mrollback_manager:rollback:67            [0m | [1mStep 1/4: Canceling all orders to prevent further fills...[0m
+[32m2025-11-22 12:01:21[0m | [1mINFO    [0m | [36mrollback_manager:rollback:88            [0m | [1mStep 2/4: Querying actual open positions from exchanges...[0m
+[32m2025-11-22 12:01:21[0m | [1mINFO    [0m | [36mrollback_manager:rollback:105           [0m | [1m✅ [lighter] ZEC: No open position (already closed or never opened)[0m
+[32m2025-11-22 12:01:22[0m | [1mINFO    [0m | [36mrollback_manager:rollback:105           [0m | [1m✅ [aster] ZEC: No open position (already closed or never opened)[0m
+[32m2025-11-22 12:01:22[0m | [1mINFO    [0m | [36mrollback_manager:rollback:330           [0m | [1mStep 3/4: Closing 0 filled positions...[0m
+[32m2025-11-22 12:01:22[0m | [33m[1mWARNING [0m | [36mrollback_manager:rollback:497           [0m | [33m[1m✅ Rollback complete. Total cost: $0.00[0m
+[32m2025-11-22 12:01:22[0m | [33m[1mWARNING [0m | [36m...:perform_emergency_rollback:558      [0m | [33m[1m🛡️ Emergency rollback completed; cost=$0.0000. Prevented 0.000000 tokens (0.00%) quantity imbalance.[0m
+[32m2025-11-22 12:01:22[0m | [33m[1mWARNING [0m | [36mfull_fill_handler:handle:363            [0m | [33m[1mRollback completed after hedge failure; total cost $0.0000[0m
+[32m2025-11-22 12:01:22[0m | [1mINFO    [0m | [36m...:reconcile_context_after_cancel:308  [0m | [1mReconcile: ZEC order 825376 - adding fill: additional=2.311 @ 513.753, total will be 2.311[0m
+[32m2025-11-22 12:01:22[0m | [1mINFO    [0m | [36m...:reconcile_context_after_cancel:308  [0m | [1mReconcile: ZEC order 666572193 - adding fill: additional=2.332 @ 514.4400, total will be 2.332[0m
+[32m2025-11-22 12:01:22[0m | [31m[1mERROR   [0m | [36mposition_closer:close:550               [0m | [31m[1mError closing position a5dbd4b1-3b2f-4801-ac36-a606abc3d7a7: Atomic close failed for ZEC: Order statuses: LIGHTER:SELL ZEC PARTIAL (2.311000/2.311000); ASTER:BUY ZEC FILLED | Filled: 2/2 orders[0m
+[32m2025-11-22 12:01:22[0m | [31m[1mERROR   [0m | [36mstrategy:_monitor_positions_loop:590    [0m | [31m[1mMonitor loop error: Atomic close failed for ZEC: Order statuses: LIGHTER:SELL ZEC PARTIAL (2.311000/2.311000); ASTER:BUY ZEC FILLED | Filled: 2/2 orders[0m
+
+
+## Closing Trade 2
+
+
+[32m2025-11-22 15:01:59[0m | [1mINFO    [0m | [36mmarket_data:fetch_bbo_prices:69         [0m | [1m📡 [ASTER] Using real-time BBO from WebSocket[0m
+[32m2025-11-22 15:01:59[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [ASTER] BBO: bid=516.84, ask=516.85[0m
+[32m2025-11-22 15:01:59[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=516.006, ask=516.337[0m
+[32m2025-11-22 15:01:59[0m | [1mINFO    [0m | [36mposition_closer:_start_exit_polling:805 [0m | [1m⏳ Started exit polling for ZEC (reason: DIVERGENCE_FLIPPED, max duration: 10 minutes)[0m
+[32m2025-11-22 15:01:59[0m | [1mINFO    [0m | [36mposition_c:evaluateAndClosePositions:145[0m | [1mStarted exit polling for ZEC: DIVERGENCE_FLIPPED (waiting for break-even exit opportunity)[0m
+[32m2025-11-22 15:02:59[0m | [1mINFO    [0m | [36mposition_m:_get_funding_for_snapshot:338[0m | [1m[LIGHTER] Querying position_funding() API for ZEC (cache expired)[0m
+[32m2025-11-22 15:03:00[0m | [1mINFO    [0m | [36mposition_mana:get_cumulative_funding:697[0m | [1m[LIGHTER] Funding for current position (market_id=90): $0.0000 (from 1 records, filtered 1 before position opened at 1763820058.108444)[0m
+[32m2025-11-22 15:03:00[0m | [1mINFO    [0m | [36mposition_monit:_log_exchange_metrics:324[0m | [1mPosition ZEC snapshot [Account: acc1]
+Yield (annualised) | entry 27.5940% | current -0.4380% | erosion 101.59% (limit 60.00%)
+Min hold: satisfied (risk checks active since 2025-11-22 15:00:58)
+Max hold: 22h 58m remaining (force close at 2025-11-23 14:00:58, configured: 24h)
+------------------------------------------------------------------------------------------------
+Exchange     Side   Qty         Entry        Mark         uPnL         Funding      Funding APY 
+------------------------------------------------------------------------------------------------
+ASTER       long       2.9830  503.660000  518.529792       44.36       -0.02    10.9500%
+LIGHTER     short      2.9830  502.791000  517.791500      -44.75        0.00    10.5120%[0m
+[32m2025-11-22 15:03:01[0m | [1mINFO    [0m | [36mmarket_data:fetch_bbo_prices:69         [0m | [1m📡 [ASTER] Using real-time BBO from WebSocket[0m
+[32m2025-11-22 15:03:01[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [ASTER] BBO: bid=518.12, ask=518.16[0m
+[32m2025-11-22 15:03:01[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=517.441, ask=517.725[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36mclose_executo:_close_legs_atomically:169[0m | [1m🔒 Closing position ZEC atomically | Reason: DIVERGENCE_FLIPPED | Legs: [ASTER:sell:2.983, LIGHTER:buy:2.983][0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36mmarket_data:fetch_bbo_prices:69         [0m | [1m📡 [ASTER] Using real-time BBO from WebSocket[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [ASTER] BBO: bid=517.65, ask=517.66[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=516.799, ask=517.011[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36mexecutor:execute_atomically:180         [0m | [1mStarting atomic execution of 2 orders (rollback_on_partial=True)[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1m=======================================================[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1mclose.2. 🚀 Order Placement[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36munified_logger:_emit:618                [0m | [1m=======================================================[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36mexecutor:execute_atomically:216         [0m | [1m🚀 Placing all orders simultaneously...[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36morder_executor:execute_order:182        [0m | [1m🔴 [ASTER] Executing sell ZEC ($1546.89410709634 qty=2.983) in mode aggressive_limit[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36mmarket_data:fetch_bbo_prices:69         [0m | [1m📡 [ASTER] Using real-time BBO from WebSocket[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [ASTER] BBO: bid=517.65, ask=517.66[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:161[0m | [1m================================================================================[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:162[0m | [1m⚡ AGGRESSIVE LIMIT EXECUTION: ZEC on ASTER: 2.983 qty (≈$1544.15)[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:166[0m | [1m================================================================================[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36mmarket_data:fetch_bbo_prices:69         [0m | [1m📡 [ASTER] Using real-time BBO from WebSocket[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [ASTER] BBO: bid=517.65, ask=517.66[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36morder_executor:execute_order:182        [0m | [1m🟢 [LIGHTER] Executing buy ZEC ($1543.950089 qty=2.983) in mode aggressive_limit[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=516.799, ask=517.011[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:161[0m | [1m================================================================================[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:162[0m | [1m⚡ AGGRESSIVE LIMIT EXECUTION: ZEC on LIGHTER: 2.983 qty (≈$1542.24)[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:166[0m | [1m================================================================================[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=516.799, ask=517.011[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36morder_manager:place_limit_order:185     [0m | [1m📤 [LIGHTER] Submitting order: market=90 client_id=782453 side=BID price=517011 amount=2983[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:143   [0m | [1m[WEBSOCKET] [ASTER] OPEN 2.983 @ 517.6500[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:143   [0m | [1m[WEBSOCKET] [ASTER] EXPIRED 2.983 @ 517.6500[0m
+[32m2025-11-22 15:03:02[0m | [33m[1mWARNING [0m | [36m...:_handle_order_placement_failure:274 [0m | [33m[1m⚠️ [ASTER] Limit order placement failed for ZEC: Limit order did not remain open: EXPIRED[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36m...:_handle_order_placement_failure:277 [0m | [1m🔄 [ASTER] Retryable order rejection detected for ZEC: Limit order did not remain open: EXPIRED. Retrying with adaptive pricing (touch strategy, attempt 1/8).[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36mmarket_data:fetch_bbo_prices:69         [0m | [1m📡 [ASTER] Using real-time BBO from WebSocket[0m
+[32m2025-11-22 15:03:02[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [ASTER] BBO: bid=517.65, ask=517.66[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:143   [0m | [1m[WEBSOCKET] [ASTER] OPEN 2.983 @ 517.6600[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:185   [0m | [1m[WEBSOCKET] [LIGHTER] CANCELED 0.000 @ 517.011[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:215   [0m | [1mTRANSACTION: BUY 0.000 @ 517.011 | Order: 782453 | Status: CANCELED[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36mreconciler:poll_order_until_filled:168  [0m | [1m🔄 [LIGHTER] Post-only violation on attempt 1 for ZEC. Retrying with fresh BBO (touch strategy).[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36maggressive_limit:execute:824            [0m | [1m🔍 [LIGHTER] Reconciliation result for ZEC: filled=False, filled_qty=0, accumulated=0/2.983, partial=False, error=None[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36maggressive_li:_handle_unfilled_order:439[0m | [1m🔄 [LIGHTER] Order 782453 cancelled without fills for ZEC. Reason: post_only_violation. Retrying with adaptive pricing (attempt 1/8)[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=516.799, ask=516.997[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36morder_manager:place_limit_order:185     [0m | [1m📤 [LIGHTER] Submitting order: market=90 client_id=783611 side=BID price=516996 amount=2983[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:185   [0m | [1m[WEBSOCKET] [LIGHTER] CANCELED 0.000 @ 516.996[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:215   [0m | [1mTRANSACTION: BUY 0.000 @ 516.996 | Order: 783611 | Status: CANCELED[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36mreconciler:poll_order_until_filled:168  [0m | [1m🔄 [LIGHTER] Post-only violation on attempt 2 for ZEC. Retrying with fresh BBO (inside_spread strategy).[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36maggressive_limit:execute:824            [0m | [1m🔍 [LIGHTER] Reconciliation result for ZEC: filled=False, filled_qty=0, accumulated=0/2.983, partial=False, error=None[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36maggressive_li:_handle_unfilled_order:439[0m | [1m🔄 [LIGHTER] Order 783611 cancelled without fills for ZEC. Reason: post_only_violation. Retrying with adaptive pricing (attempt 2/8)[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=516.568, ask=516.805[0m
+[32m2025-11-22 15:03:03[0m | [1mINFO    [0m | [36morder_manager:place_limit_order:185     [0m | [1m📤 [LIGHTER] Submitting order: market=90 client_id=783968 side=BID price=516806 amount=2983[0m
+[32m2025-11-22 15:03:04[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:174   [0m | [1m[WEBSOCKET] [LIGHTER] OPEN 2.983 @ 516.806[0m
+[32m2025-11-22 15:03:06[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:185   [0m | [1m[WEBSOCKET] [LIGHTER] PARTIALLY_FILLED 0.700 @ 516.806[0m
+[32m2025-11-22 15:03:06[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:185   [0m | [1m[WEBSOCKET] [LIGHTER] PARTIALLY_FILLED 0.930 @ 516.806[0m
+[32m2025-11-22 15:03:06[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:185   [0m | [1m[WEBSOCKET] [LIGHTER] PARTIALLY_FILLED 1.047 @ 516.806[0m
+[32m2025-11-22 15:03:06[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:185   [0m | [1m[WEBSOCKET] [LIGHTER] PARTIALLY_FILLED 1.230 @ 516.806[0m
+[32m2025-11-22 15:03:06[0m | [1mINFO    [0m | [36mreconciler:poll_order_until_filled:123  [0m | [1m📊 [LIGHTER] Partial fill detected for ZEC: +1.230 (total new: 1.230, total all: 1.230/2.983) @ $516.806 (remaining: 1.753)[0m
+[32m2025-11-22 15:03:06[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:185   [0m | [1m[WEBSOCKET] [LIGHTER] PARTIALLY_FILLED 1.424 @ 516.806[0m
+[32m2025-11-22 15:03:06[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:185   [0m | [1m[WEBSOCKET] [LIGHTER] PARTIALLY_FILLED 2.084 @ 516.806[0m
+[32m2025-11-22 15:03:06[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:185   [0m | [1m[WEBSOCKET] [LIGHTER] PARTIALLY_FILLED 2.677 @ 516.806[0m
+[32m2025-11-22 15:03:06[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:185   [0m | [1m[WEBSOCKET] [LIGHTER] FILLED 2.983 @ 516.806[0m
+[32m2025-11-22 15:03:06[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:215   [0m | [1mTRANSACTION: BUY 2.983 @ 516.806 | Order: 783968 | Status: FILLED[0m
+[32m2025-11-22 15:03:06[0m | [33m[1mWARNING [0m | [36m...:handle_positions_stream_update:460  [0m | [33m[1m⚠️ [LIGHTER] Position suddenly zeroed: ZEC | Previous qty: 0.306 | Market ID: 90 | Possible causes: liquidation (no notification), rollback, or manual close[0m
+[32m2025-11-22 15:03:06[0m | [1mINFO    [0m | [36maggressive_limit:execute:824            [0m | [1m🔍 [LIGHTER] Reconciliation result for ZEC: filled=False, filled_qty=0, accumulated=1.230/2.983, partial=True, error=None[0m
+[32m2025-11-22 15:03:06[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=516.26, ask=516.889[0m
+[32m2025-11-22 15:03:06[0m | [1mINFO    [0m | [36morder_manager:place_limit_order:185     [0m | [1m📤 [LIGHTER] Submitting order: market=90 client_id=786778 side=BID price=516890 amount=1753[0m
+[32m2025-11-22 15:03:10[0m | [1mINFO    [0m | [36maggressive_limit:execute:824            [0m | [1m🔍 [ASTER] Reconciliation result for ZEC: filled=False, filled_qty=0, accumulated=0/2.983, partial=False, error=None[0m
+[32m2025-11-22 15:03:10[0m | [1mINFO    [0m | [36maggressive_li:_handle_unfilled_order:445[0m | [1m🔄 [ASTER] Order 671753964 not filled after 5s, canceling and retrying (attempt 2/8)[0m
+[32m2025-11-22 15:03:10[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:138   [0m | [1m[WEBSOCKET] [ASTER] CANCELED 2.983 @ 517.6600[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36maggressive_limit:_check_timeout:186     [0m | [1m--------------------------------------------------------------------------------[0m
+[32m2025-11-22 15:03:11[0m | [33m[1mWARNING [0m | [36maggressive_limit:_check_timeout:187     [0m | [33m[1m⏱️ Aggressive limit execution timeout after 8.59s for ASTER ZEC (placed 2 orders, 2 retries). Falling back to market order.[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36maggressive_limit:_check_timeout:191     [0m | [1m--------------------------------------------------------------------------------[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:480[0m | [1m================================================================================[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:481[0m | [1m⚠️ AGGRESSIVE LIMIT EXECUTION FAILED: Falling back to market order[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:482[0m | [1m================================================================================[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36mmarket_data:fetch_bbo_prices:69         [0m | [1m📡 [ASTER] Using real-time BBO from WebSocket[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [ASTER] BBO: bid=516.75, ask=516.76[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36mmarket_order_executor:execute:95        [0m | [1m[ASTER] Placing market sell ZEC (contract_id=ZECUSDT): 2.983 @ ~$516.75[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36mmarket_data:fetch_bbo_prices:69         [0m | [1m📡 [ASTER] Using real-time BBO from WebSocket[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36morder_manager:place_market_order:338    [0m | [1m📊 [ASTER] Market order BBO check: bid=516.75, ask=516.76[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36morder_manager:place_market_order:396    [0m | [1m📤 [ASTER] Placing market SELL order: 2.983 @ ~$516.75[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36morder_manager:place_market_order:407    [0m | [1m📤 [ASTER] Market order placed: 671758590 (status=NEW)[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:143   [0m | [1m[WEBSOCKET] [ASTER] OPEN 2.983 @ n/a[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36m...:handle_websocket_order_update:138   [0m | [1m[WEBSOCKET] [ASTER] FILLED 2.983 @ n/a[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36mmarket_order_executor:execute:367       [0m | [1m[ASTER] Market order filled: 2.983 @ $516.75 (slippage: $0.00 / 0.000%)[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:522[0m | [1m================================================================================[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:523[0m | [1m✅ MARKET FALLBACK COMPLETE: ZEC on ASTER[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:524[0m | [1m================================================================================[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36mfull_fill_handler:handle:135            [0m | [1m✅ ASTER ZEC fully filled (2.983). Cancelling remaining limit orders and hedging to prevent directional exposure.[0m
+[32m2025-11-22 15:03:11[0m | [1mINFO    [0m | [36mfull_fill_handler:handle:144            [0m | [1m🔄 Cancelling limit order for LIGHTER ZEC (remaining: 2.983) → will hedge with market order[0m
+[32m2025-11-22 15:03:11[0m | [33m[1mWARNING [0m | [36mwebsocket_han:_check_position_zeroed:296[0m | [33m[1m⚠️ [ASTER] Position suddenly zeroed: ZECUSDT | Previous qty: 2.983 | Filled qty: 2.983 | Possible causes: liquidation (no notification), rollback, or manual close[0m
+[32m2025-11-22 15:03:17[0m | [1mINFO    [0m | [36maggressive_limit:execute:824            [0m | [1m🔍 [LIGHTER] Reconciliation result for ZEC: filled=False, filled_qty=0, accumulated=1.230/2.983, partial=False, error=None[0m
+[32m2025-11-22 15:03:28[0m | [1mINFO    [0m | [36maggressive_limit:_check_timeout:186     [0m | [1m--------------------------------------------------------------------------------[0m
+[32m2025-11-22 15:03:28[0m | [33m[1mWARNING [0m | [36maggressive_limit:_check_timeout:187     [0m | [33m[1m⏱️ Aggressive limit execution timeout after 26.39s for LIGHTER ZEC (placed 4 orders, 4 retries). Falling back to market order.[0m
+[32m2025-11-22 15:03:28[0m | [1mINFO    [0m | [36maggressive_limit:_check_timeout:191     [0m | [1m--------------------------------------------------------------------------------[0m
+[32m2025-11-22 15:03:39[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:480[0m | [1m================================================================================[0m
+[32m2025-11-22 15:03:39[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:481[0m | [1m⚠️ AGGRESSIVE LIMIT EXECUTION FAILED: Falling back to market order[0m
+[32m2025-11-22 15:03:39[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:482[0m | [1m================================================================================[0m
+[32m2025-11-22 15:03:39[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:487[0m | [1m📊 [LIGHTER] Aggressive limit execution partial fills: 1.230 fills (total: 1.230/2.983) for ZEC. Falling back to market order for remaining 1.753.[0m
+[32m2025-11-22 15:03:39[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=516.804, ask=516.894[0m
+[32m2025-11-22 15:03:39[0m | [1mINFO    [0m | [36mmarket_order_executor:execute:95        [0m | [1m[LIGHTER] Placing market buy ZEC (contract_id=90): 1.753 @ ~$516.894[0m
+[32m2025-11-22 15:03:39[0m | [1mINFO    [0m | [36morder_manager:place_market_order:392    [0m | [1m📤 [LIGHTER] Placing market order: market=90, client_id=819644, side=BUY, base_amount=1753, avg_execution_price=542691[0m
+[32m2025-11-22 15:04:05[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=516.411, ask=516.698[0m
+[32m2025-11-22 15:04:05[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=516.411, ask=516.698[0m
+[32m2025-11-22 15:04:05[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:161[0m | [1m================================================================================[0m
+[32m2025-11-22 15:04:05[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:162[0m | [1m⚡ AGGRESSIVE LIMIT EXECUTION: ZEC on LIGHTER: 1.753 qty (≈$905.77)[0m
+[32m2025-11-22 15:04:05[0m | [1mINFO    [0m | [36maggressive_limi:_log_execution_start:166[0m | [1m================================================================================[0m
+[32m2025-11-22 15:04:05[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=516.411, ask=516.698[0m
+[32m2025-11-22 15:04:05[0m | [33m[1mWARNING [0m | [36m...:calculate_break_even_hedge_price:308[0m | [33m[1mBreak-even target 516.698325 > current ask 516.698000. Using BBO-based price 516.697000 for fill probability.[0m
+[32m2025-11-22 15:04:05[0m | [1mINFO    [0m | [36morder_manager:place_limit_order:185     [0m | [1m📤 [LIGHTER] Submitting order: market=90 client_id=845483 side=BID price=516698 amount=1753[0m
+[32m2025-11-22 15:04:17[0m | [1mINFO    [0m | [36maggressive_limit:execute:824            [0m | [1m🔍 [LIGHTER] Reconciliation result for ZEC: filled=False, filled_qty=0, accumulated=0/1.753, partial=False, error=None[0m
+[32m2025-11-22 15:04:28[0m | [1mINFO    [0m | [36maggressive_limit:_check_timeout:186     [0m | [1m--------------------------------------------------------------------------------[0m
+[32m2025-11-22 15:04:28[0m | [33m[1mWARNING [0m | [36maggressive_limit:_check_timeout:187     [0m | [33m[1m⏱️ Aggressive limit execution timeout after 23.10s for LIGHTER ZEC (placed 1 orders, 1 retries). Falling back to market order.[0m
+[32m2025-11-22 15:04:28[0m | [1mINFO    [0m | [36maggressive_limit:_check_timeout:191     [0m | [1m--------------------------------------------------------------------------------[0m
+[32m2025-11-22 15:04:39[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:480[0m | [1m================================================================================[0m
+[32m2025-11-22 15:04:39[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:481[0m | [1m⚠️ AGGRESSIVE LIMIT EXECUTION FAILED: Falling back to market order[0m
+[32m2025-11-22 15:04:39[0m | [1mINFO    [0m | [36maggressive_:_execute_market_fallback:482[0m | [1m================================================================================[0m
+[32m2025-11-22 15:04:39[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=516.857, ask=517.235[0m
+[32m2025-11-22 15:04:39[0m | [1mINFO    [0m | [36mmarket_order_executor:execute:95        [0m | [1m[LIGHTER] Placing market buy ZEC (contract_id=90): 1.753 @ ~$517.235[0m
+[32m2025-11-22 15:04:39[0m | [1mINFO    [0m | [36morder_manager:place_market_order:392    [0m | [1m📤 [LIGHTER] Placing market order: market=90, client_id=879393, side=BUY, base_amount=1753, avg_execution_price=542898[0m
+[32m2025-11-22 15:05:05[0m | [1mINFO    [0m | [36mstrategies:execute_hedge:571            [0m | [1m================================================================================[0m
+[32m2025-11-22 15:05:05[0m | [1mINFO    [0m | [36mstrategies:execute_hedge:572            [0m | [1m⚠️ AGGRESSIVE LIMIT HEDGE FAILED: Falling back to market order[0m
+[32m2025-11-22 15:05:05[0m | [1mINFO    [0m | [36mstrategies:execute_hedge:573            [0m | [1m================================================================================[0m
+[32m2025-11-22 15:05:05[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=516.096, ask=516.478[0m
+[32m2025-11-22 15:05:05[0m | [1mINFO    [0m | [36mstrategies:execute_hedge:177            [0m | [1m⚡ Hedging ZEC on LIGHTER: 1.753 qty (≈$905.39)[0m
+[32m2025-11-22 15:05:05[0m | [1mINFO    [0m | [36morder_executor:execute_order:182        [0m | [1m🟢 [LIGHTER] Executing buy ZEC (qty=1.753) in mode market_only[0m
+[32m2025-11-22 15:05:05[0m | [1mINFO    [0m | [36mprice_provider:_fetch_exchange_bbo:76   [0m | [1m✅ [LIGHTER] BBO: bid=516.096, ask=516.478[0m
+[32m2025-11-22 15:05:05[0m | [1mINFO    [0m | [36mmarket_order_executor:execute:95        [0m | [1m[LIGHTER] Placing market buy ZEC (contract_id=90): 1.753 @ ~$516.478[0m
+[32m2025-11-22 15:05:05[0m | [1mINFO    [0m | [36morder_manager:place_market_order:392    [0m | [1m📤 [LIGHTER] Placing market order: market=90, client_id=905330, side=BUY, base_amount=1753, avg_execution_price=542101[0m
+[32m2025-11-22 15:05:31[0m | [31m[1mERROR   [0m | [36mstrategies:execute_hedge:235            [0m | [31m[1mMarket order placed but no order info available[0m
+[32m2025-11-22 15:05:31[0m | [33m[1mWARNING [0m | [36mfull_fill_handler:handle:314            [0m | [33m[1mHedge failed (Market order placed but no order info available) — attempting rollback of partial fills[0m
+[32m2025-11-22 15:05:31[0m | [33m[1mWARNING [0m | [36mrollback_manager:rollback:56            [0m | [33m[1m🚨 EMERGENCY ROLLBACK (CLOSE OPERATION): Querying actual positions for 2 exchanges[0m
+[32m2025-11-22 15:05:31[0m | [1mINFO    [0m | [36mrollback_manager:rollback:67            [0m | [1mStep 1/4: Canceling all orders to prevent further fills...[0m
+[32m2025-11-22 15:05:31[0m | [1mINFO    [0m | [36mrollback_manager:rollback:88            [0m | [1mStep 2/4: Querying actual open positions from exchanges...[0m
+[32m2025-11-22 15:05:32[0m | [1mINFO    [0m | [36mrollback_manager:rollback:105           [0m | [1m✅ [aster] ZEC: No open position (already closed or never opened)[0m
+[32m2025-11-22 15:05:32[0m | [1mINFO    [0m | [36mrollback_manager:rollback:105           [0m | [1m✅ [lighter] ZEC: No open position (already closed or never opened)[0m
+[32m2025-11-22 15:05:32[0m | [1mINFO    [0m | [36mrollback_manager:rollback:330           [0m | [1mStep 3/4: Closing 0 filled positions...[0m
+[32m2025-11-22 15:05:32[0m | [33m[1mWARNING [0m | [36mrollback_manager:rollback:497           [0m | [33m[1m✅ Rollback complete. Total cost: $0.00[0m
+[32m2025-11-22 15:05:32[0m | [33m[1mWARNING [0m | [36m...:perform_emergency_rollback:558      [0m | [33m[1m🛡️ Emergency rollback completed; cost=$0.0000. Prevented 0.000000 tokens (0.00%) quantity imbalance.[0m
+[32m2025-11-22 15:05:32[0m | [33m[1mWARNING [0m | [36mfull_fill_handler:handle:363            [0m | [33m[1mRollback completed after hedge failure; total cost $0.0000[0m
+[32m2025-11-22 15:05:32[0m | [31m[1mERROR   [0m | [36mposition_closer:close:550               [0m | [31m[1mError closing position 26f48ccb-e241-4909-a1e6-2feeba6f5c94: Atomic close failed for ZEC: Order statuses: ASTER:SELL ZEC NOT FILLED (unknown reason); LIGHTER:BUY ZEC NOT FILLED (unknown reason) | Filled: 0/2 orders[0m
+[32m2025-11-22 15:05:32[0m | [31m[1mERROR   [0m | [36mstrategy:_monitor_positions_loop:590    [0m | [31m[1mMonitor loop error: Atomic close failed for ZEC: Order statuses: ASTER:SELL ZEC NOT FILLED (unknown reason); LIGHTER:BUY ZEC NOT FILLED (unknown reason) | Filled: 0/2 orders[0m
+[32m2025-11-22 15:06:34[0m | [1mINFO    [0m | [36mcore:get_user_trade_history:692         [0m | [1m[LIGHTER] Fetching trade history for ZEC (normalized: ZEC, market_id=90, account_index=213803, no order filter, time_range=1763820058-1763823995)[0m
+[32m2025-11-22 15:06:36[0m | [33m[1mWARNING [0m | [36m...:calculate_pnl_from_trade_history:315[0m | [33m[1m[aster] Cannot calculate PnL for exit trade: entry_price missing/zero and no realized_pnl (exit=$516.170000, qty=2.983)[0m
+[32m2025-11-22 15:06:36[0m | [33m[1mWARNING [0m | [36m...:calculate_pnl_from_trade_history:315[0m | [33m[1m[lighter] Cannot calculate PnL for exit trade: entry_price missing/zero and no realized_pnl (exit=$516.806000, qty=0.129)[0m
+[32m2025-11-22 15:06:36[0m | [33m[1mWARNING [0m | [36m...:calculate_pnl_from_trade_history:315[0m | [33m[1m[lighter] Cannot calculate PnL for exit trade: entry_price missing/zero and no realized_pnl (exit=$516.806000, qty=0.177)[0m
+[32m2025-11-22 15:06:36[0m | [33m[1mWARNING [0m | [36m...:calculate_pnl_from_trade_history:315[0m | [33m[1m[lighter] Cannot calculate PnL for exit trade: entry_price missing/zero and no realized_pnl (exit=$516.806000, qty=0.350)[0m
+[32m2025-11-22 15:06:36[0m | [33m[1mWARNING [0m | [36m...:calculate_pnl_from_trade_history:315[0m | [33m[1m[lighter] Cannot calculate PnL for exit trade: entry_price missing/zero and no realized_pnl (exit=$516.806000, qty=0.243)[0m
+[32m2025-11-22 15:06:36[0m | [33m[1mWARNING [0m | [36m...:calculate_pnl_from_trade_history:315[0m | [33m[1m[lighter] Cannot calculate PnL for exit trade: entry_price missing/zero and no realized_pnl (exit=$516.806000, qty=0.660)[0m
+[32m2025-11-22 15:06:36[0m | [33m[1mWARNING [0m | [36m...:calculate_pnl_from_trade_history:315[0m | [33m[1m[lighter] Cannot calculate PnL for exit trade: entry_price missing/zero and no realized_pnl (exit=$516.806000, qty=0.194)[0m
+[32m2025-11-22 15:06:36[0m | [33m[1mWARNING [0m | [36m...:calculate_pnl_from_trade_history:315[0m | [33m[1m[lighter] Cannot calculate PnL for exit trade: entry_price missing/zero and no realized_pnl (exit=$516.806000, qty=0.183)[0m
+[32m2025-11-22 15:06:36[0m | [33m[1mWARNING [0m | [36m...:calculate_pnl_from_trade_history:315[0m | [33m[1m[lighter] Cannot calculate PnL for exit trade: entry_price missing/zero and no realized_pnl (exit=$516.806000, qty=0.117)[0m
+[32m2025-11-22 15:06:36[0m | [33m[1mWARNING [0m | [36m...:calculate_pnl_from_trade_history:315[0m | [33m[1m[lighter] Cannot calculate PnL for exit trade: entry_price missing/zero and no realized_pnl (exit=$516.806000, qty=0.230)[0m
+[32m2025-11-22 15:06:36[0m | [33m[1mWARNING [0m | [36m...:calculate_pnl_from_trade_history:315[0m | [33m[1m[lighter] Cannot calculate PnL for exit trade: entry_price missing/zero and no realized_pnl (exit=$516.806000, qty=0.298)[0m
+[32m2025-11-22 15:06:36[0m | [33m[1mWARNING [0m | [36m...:calculate_pnl_from_trade_history:315[0m | [33m[1m[lighter] Cannot calculate PnL for exit trade: entry_price missing/zero and no realized_pnl (exit=$516.806000, qty=0.402)[0m
+[32m2025-11-22 15:06:36[0m | [1mINFO    [0m | [36m...:calculate_pnl_from_trade_history:343[0m | [1mPnL calculation (trade_history_timestamp_filtered_manual_close): price_pnl=$0.00, funding=$0.00 (from database), entry_fees=$0.00, closing_fees=$0.64, total_fees=$0.64, net_pnl=$-0.64[0m
+[32m2025-11-22 15:06:36[0m | [1mINFO    [0m | [36mposition_manager:close:654              [0m | [1m✅ Closed position 26f48ccb-e241-4909-a1e6-2feeba6f5c94: ZEC Reason: ALL_LEGS_CLOSED, PnL: $-0.64, Duration: 1.1h[0m
+[32m2025-11-22 15:06:36[0m | [1mINFO    [0m | [36mposition_closer:close:531               [0m | [1m✅ Closed ZEC (ALL_LEGS_CLOSED): PnL=$-0.64 (-0.04%), Age=1.1h[0m
+[32m2025-11-22 15:06:36[0m | [33m[1mWARNING [0m | [36mposition_cl:evaluateAndClosePositions:81[0m | [33m[1mClosed ZEC: ALL_LEGS_CLOSED[0m

@@ -3,6 +3,14 @@
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional, Any
 
+# Import spread utilities from execution core (single source of truth)
+from strategies.execution.core.spread_utils import (
+    calculate_spread_pct,
+    MAX_ENTRY_SPREAD_PCT,
+    MAX_EXIT_SPREAD_PCT,
+    MAX_EMERGENCY_CLOSE_SPREAD_PCT,
+)
+
 if TYPE_CHECKING:
     from exchange_clients.base_models import ExchangePositionSnapshot
     from exchange_clients.base_client import BaseExchangeClient
@@ -71,36 +79,15 @@ async def fetch_mid_price(
     return (bid + ask) / 2
 
 
-# Spread protection constants
-MAX_EXIT_SPREAD_PCT = Decimal("0.02")  # 2% threshold for closing
-MAX_EMERGENCY_CLOSE_SPREAD_PCT = Decimal("0.03")  # 3% threshold for emergency closes
-
-
-def calculate_spread_pct(bid: Decimal, ask: Decimal) -> Optional[Decimal]:
-    """
-    Calculate spread percentage from bid and ask prices.
-    
-    Formula: (ask - bid) / mid_price
-    
-    Args:
-        bid: Best bid price
-        ask: Best ask price
-        
-    Returns:
-        Spread percentage as Decimal (e.g., 0.01 = 1%), or None if invalid
-    """
-    if bid <= 0 or ask <= 0:
-        return None
-    
-    if bid > ask:
-        return None  # Invalid BBO
-    
-    mid_price = (bid + ask) / 2
-    if mid_price <= 0:
-        return None
-    
-    spread = ask - bid
-    spread_pct = spread / mid_price
-    
-    return spread_pct
+# Note: Spread protection constants and calculate_spread_pct are now imported from
+# strategies.execution.core.spread_utils (single source of truth)
+# Re-export for backward compatibility
+__all__ = [
+    "extract_snapshot_price",
+    "fetch_mid_price",
+    "calculate_spread_pct",
+    "MAX_ENTRY_SPREAD_PCT",
+    "MAX_EXIT_SPREAD_PCT",
+    "MAX_EMERGENCY_CLOSE_SPREAD_PCT",
+]
 

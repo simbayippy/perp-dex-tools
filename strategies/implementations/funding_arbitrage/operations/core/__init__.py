@@ -8,6 +8,7 @@ from .price_utils import (
     extract_snapshot_price,
     fetch_mid_price,
     calculate_spread_pct,
+    MAX_ENTRY_SPREAD_PCT,
     MAX_EXIT_SPREAD_PCT,
     MAX_EMERGENCY_CLOSE_SPREAD_PCT,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "extract_snapshot_price",
     "fetch_mid_price",
     "calculate_spread_pct",
+    "MAX_ENTRY_SPREAD_PCT",
     "MAX_EXIT_SPREAD_PCT",
     "MAX_EMERGENCY_CLOSE_SPREAD_PCT",
 ]
