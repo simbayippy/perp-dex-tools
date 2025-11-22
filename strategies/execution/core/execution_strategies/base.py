@@ -48,7 +48,7 @@ class ExecutionStrategy(ABC):
         Returns:
             True if callback registered successfully, False if not supported
         """
-        if not self._use_websocket_events or self._event_reconciler is None:
+        if not self._use_websocket_events:
             return False
         
         if not hasattr(exchange_client, 'order_fill_callback'):
@@ -60,14 +60,14 @@ class ExecutionStrategy(ABC):
         if self._websocket_registered:
             return True  # Already registered
         
-        # Store original callbacks to restore later
-        self._original_fill_callback = exchange_client.order_fill_callback
-        self._original_status_callback = getattr(exchange_client, 'order_status_callback', None)
-        
-        # Initialize event reconciler if needed
+        # Initialize event reconciler if needed (BEFORE checking if it's None!)
         if self._event_reconciler is None:
             from ..execution_components.event_reconciler import EventBasedReconciler
             self._event_reconciler = EventBasedReconciler(logger=self._logger)
+        
+        # Store original callbacks to restore later
+        self._original_fill_callback = exchange_client.order_fill_callback
+        self._original_status_callback = getattr(exchange_client, 'order_status_callback', None)
         
         # Set original callbacks in reconciler (for chaining to trading_bot callbacks)
         self._event_reconciler.set_original_callbacks(

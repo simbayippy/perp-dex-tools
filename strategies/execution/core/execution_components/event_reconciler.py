@@ -361,10 +361,13 @@ class EventBasedReconciler:
                 # Safety net: Check websocket cache for status changes (in case callback missed)
                 cached_status = self._check_order_status_in_cache(exchange_client, order_id, tracker)
                 if cached_status == "FILLED":
+                    # CRITICAL: _check_order_status_in_cache already updated tracker.filled_quantity
+                    # from the cache, so tracker now has the correct final filled amount
                     event_task.cancel()
                     status = "FILLED"
                     logger.debug(
-                        f"✅ [{exchange_name}] Order {order_id} FILLED detected via websocket cache (safety net) for {symbol}"
+                        f"✅ [{exchange_name}] Order {order_id} FILLED detected via websocket cache (safety net) for {symbol} "
+                        f"(tracker.filled_quantity={tracker.filled_quantity})"
                     )
                     break
                 elif cached_status == "CANCELED":
