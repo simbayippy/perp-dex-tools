@@ -9,10 +9,8 @@ from ..core.contract_preparer import ContractPreparer
 from ..core.price_utils import (
     extract_snapshot_price,
     fetch_mid_price,
-    calculate_spread_pct,
-    MAX_EXIT_SPREAD_PCT,
-    MAX_EMERGENCY_CLOSE_SPREAD_PCT,
 )
+from strategies.execution.core.spread_utils import SpreadCheckType, is_spread_acceptable
 
 if TYPE_CHECKING:
     from ...strategy import FundingArbitrageStrategy
@@ -106,35 +104,34 @@ class OrderBuilder:
                     
                     try:
                         bid, ask = await price_provider.get_bbo_prices(client, symbol)
-                        spread_pct = calculate_spread_pct(bid, ask)
-                        
-                        if spread_pct is not None:
-                            # Determine threshold based on exit type
-                            threshold = MAX_EMERGENCY_CLOSE_SPREAD_PCT if is_critical else MAX_EXIT_SPREAD_PCT
+
+                        # Determine spread check type based on exit type
+                        check_type = SpreadCheckType.EMERGENCY_CLOSE if is_critical else SpreadCheckType.EXIT
+                        acceptable, spread_pct, reason_msg = is_spread_acceptable(bid, ask, check_type)
+
+                        if not acceptable:
+                            # For non-critical exits, defer closing
+                            if not is_critical and not is_user_manual:
+                                self._strategy.logger.info(
+                                    f"⏸️  Wide spread detected on {exchange_name.upper()} {symbol}: "
+                                    f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
+                                    f"Deferring non-critical close (reason: {reason})."
+                                )
+                                raise WideSpreadException(spread_pct, bid, ask, exchange_name, symbol)
                             
-                            if spread_pct > threshold:
-                                # For non-critical exits, defer closing
-                                if not is_critical and not is_user_manual:
-                                    self._strategy.logger.info(
-                                        f"⏸️  Wide spread detected on {exchange_name.upper()} {symbol}: "
-                                        f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
-                                        f"Deferring non-critical close (reason: {reason})."
-                                    )
-                                    raise WideSpreadException(spread_pct, bid, ask, exchange_name, symbol)
-                                
-                                # For critical exits or user manual, log warning but proceed
-                                if is_critical:
-                                    self._strategy.logger.warning(
-                                        f"⚠️  Wide spread detected on {exchange_name.upper()} {symbol}: "
-                                        f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
-                                        f"Proceeding with critical close (reason: {reason})."
-                                    )
-                                elif is_user_manual:
-                                    self._strategy.logger.warning(
-                                        f"⚠️  Wide spread detected on {exchange_name.upper()} {symbol}: "
-                                        f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
-                                        f"User requested {order_type} order - proceed with caution."
-                                    )
+                            # For critical exits or user manual, log warning but proceed
+                            if is_critical:
+                                self._strategy.logger.warning(
+                                    f"⚠️  Wide spread detected on {exchange_name.upper()} {symbol}: "
+                                    f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
+                                    f"Proceeding with critical close (reason: {reason})."
+                                )
+                            elif is_user_manual:
+                                self._strategy.logger.warning(
+                                    f"⚠️  Wide spread detected on {exchange_name.upper()} {symbol}: "
+                                    f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
+                                    f"User requested {order_type} order - proceed with caution."
+                                )
                     except WideSpreadException:
                         # Re-raise WideSpreadException to defer closing
                         raise

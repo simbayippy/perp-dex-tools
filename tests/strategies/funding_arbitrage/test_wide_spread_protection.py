@@ -14,10 +14,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from strategies.implementations.funding_arbitrage.operations.core.price_utils import (
+from strategies.execution.core.spread_utils import (
     calculate_spread_pct,
-    MAX_EXIT_SPREAD_PCT,
-    MAX_EMERGENCY_CLOSE_SPREAD_PCT,
+    SpreadCheckType,
+    is_spread_acceptable,
 )
 from strategies.implementations.funding_arbitrage.operations.closing.order_builder import (
     OrderBuilder,
@@ -26,6 +26,10 @@ from strategies.implementations.funding_arbitrage.operations.closing.order_build
 from strategies.implementations.funding_arbitrage.operations.closing.close_executor import CloseExecutor
 from strategies.implementations.funding_arbitrage.models import FundingArbPosition
 from exchange_clients.base_models import ExchangePositionSnapshot
+
+# UPDATED: New tight thresholds
+MAX_EXIT_SPREAD_PCT = Decimal("0.001")      # 0.1%
+MAX_EMERGENCY_CLOSE_SPREAD_PCT = Decimal("0.002")  # 0.2%
 
 
 class TestSpreadCalculation:
@@ -124,7 +128,7 @@ class TestOrderBuilderSpreadCheck:
     def _make_strategy(self, price_provider_bbo=None):
         """Create a mock strategy."""
         if price_provider_bbo is None:
-            price_provider_bbo = (Decimal("100"), Decimal("100.5"))
+            price_provider_bbo = (Decimal("100"), Decimal("100.05"))  # UPDATED: Default 0.05% spread
         
         price_provider = SimpleNamespace(
             get_bbo_prices=AsyncMock(return_value=price_provider_bbo)
@@ -158,7 +162,7 @@ class TestOrderBuilderSpreadCheck:
         
         client = SimpleNamespace(
             get_exchange_name=lambda: dex,
-            fetch_bbo_prices=AsyncMock(return_value=(Decimal("100"), Decimal("100.5"))),
+            fetch_bbo_prices=AsyncMock(return_value=(Decimal("100"), Decimal("100.05"))),  # UPDATED
         )
         
         return {
@@ -172,8 +176,9 @@ class TestOrderBuilderSpreadCheck:
     
     @pytest.mark.asyncio
     async def test_non_critical_exit_defer_on_wide_spread(self):
-        """Test that non-critical exits are deferred when spread > 2%."""
-        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("103")))  # 3% spread
+        """Test that non-critical exits are deferred when spread > 0.1%."""
+        # UPDATED: 0.3% spread (bid=100, ask=100.3)
+        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("100.3")))
         builder = OrderBuilder(strategy)
         
         leg = self._make_leg()
@@ -188,8 +193,9 @@ class TestOrderBuilderSpreadCheck:
     
     @pytest.mark.asyncio
     async def test_non_critical_exit_proceed_on_acceptable_spread(self):
-        """Test that non-critical exits proceed when spread <= 2%."""
-        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("101.5")))  # 1.5% spread
+        """Test that non-critical exits proceed when spread <= 0.1%."""
+        # UPDATED: 0.08% spread (bid=100, ask=100.08) - within 0.1% threshold
+        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("100.08")))
         builder = OrderBuilder(strategy)
         
         leg = self._make_leg()
@@ -204,7 +210,8 @@ class TestOrderBuilderSpreadCheck:
     @pytest.mark.asyncio
     async def test_critical_exit_proceed_despite_wide_spread(self):
         """Test that critical exits proceed even with wide spread."""
-        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("105")))  # 5% spread
+        # UPDATED: 0.5% spread (bid=100, ask=100.5) - exceeds both thresholds
+        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("100.5")))
         builder = OrderBuilder(strategy)
         
         leg = self._make_leg()
@@ -219,7 +226,8 @@ class TestOrderBuilderSpreadCheck:
     @pytest.mark.asyncio
     async def test_user_manual_close_warns_but_proceeds(self):
         """Test that user manual closes warn but don't defer."""
-        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("103")))  # 3% spread
+        # UPDATED: 0.25% spread (bid=100, ask=100.25)
+        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("100.25")))
         builder = OrderBuilder(strategy)
         
         leg = self._make_leg()
@@ -236,7 +244,8 @@ class TestOrderBuilderSpreadCheck:
     @pytest.mark.asyncio
     async def test_spread_check_disabled(self):
         """Test that spread check is skipped when protection is disabled."""
-        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("105")))  # 5% spread
+        # UPDATED: 0.5% spread
+        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("100.5")))
         strategy.config.enable_wide_spread_protection = False
         builder = OrderBuilder(strategy)
         
@@ -271,7 +280,7 @@ class TestCloseExecutorSpreadCheck:
     def _make_strategy(self, price_provider_bbo=None):
         """Create a mock strategy."""
         if price_provider_bbo is None:
-            price_provider_bbo = (Decimal("100"), Decimal("100.5"))
+            price_provider_bbo = (Decimal("100"), Decimal("100.05"))  # UPDATED: Default 0.05% spread
         
         price_provider = SimpleNamespace(
             get_bbo_prices=AsyncMock(return_value=price_provider_bbo)
@@ -338,7 +347,7 @@ class TestCloseExecutorSpreadCheck:
         
         client = SimpleNamespace(
             get_exchange_name=lambda: dex,
-            fetch_bbo_prices=AsyncMock(return_value=(Decimal("100"), Decimal("100.5"))),
+            fetch_bbo_prices=AsyncMock(return_value=(Decimal("100"), Decimal("100.05"))),  # UPDATED
         )
         
         return {
@@ -353,7 +362,8 @@ class TestCloseExecutorSpreadCheck:
     @pytest.mark.asyncio
     async def test_emergency_close_uses_aggressive_limit_on_wide_spread(self):
         """Test that emergency close uses aggressive_limit when spread is wide."""
-        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("104")))  # 4% spread
+        # UPDATED: 0.4% spread (bid=100, ask=100.4) - exceeds 0.2% emergency threshold
+        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("100.4")))
         executor = CloseExecutor(strategy)
         executor._order_executor = strategy.order_executor
         
@@ -372,7 +382,8 @@ class TestCloseExecutorSpreadCheck:
     @pytest.mark.asyncio
     async def test_emergency_close_uses_market_on_acceptable_spread(self):
         """Test that emergency close uses market when spread is acceptable."""
-        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("101")))  # 1% spread
+        # UPDATED: 0.15% spread (bid=100, ask=100.15) - within 0.2% emergency threshold
+        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("100.15")))
         executor = CloseExecutor(strategy)
         executor._order_executor = strategy.order_executor
         
@@ -382,7 +393,7 @@ class TestCloseExecutorSpreadCheck:
         
         await executor._force_close_leg(position, leg, reason=reason)
         
-        # Should use market_only for critical reasons
+        # Should use market_only for critical reasons with acceptable spread
         call_args = strategy.order_executor.execute_order.await_args
         assert call_args is not None
         assert call_args.kwargs.get("mode").value == "market_only"
@@ -390,7 +401,8 @@ class TestCloseExecutorSpreadCheck:
     @pytest.mark.asyncio
     async def test_emergency_close_proceeds_despite_very_wide_spread(self):
         """Test that emergency close proceeds even with very wide spread."""
-        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("110")))  # 10% spread
+        # UPDATED: 1% spread (bid=100, ask=101) - way exceeds emergency threshold
+        strategy = self._make_strategy(price_provider_bbo=(Decimal("100"), Decimal("101")))
         executor = CloseExecutor(strategy)
         executor._order_executor = strategy.order_executor
         
@@ -421,4 +433,3 @@ class TestCloseExecutorSpreadCheck:
         # Should proceed with fallback (market order)
         assert strategy.order_executor.execute_order.called
         assert strategy.logger.warning.called  # Should log warning about BBO fetch failure
-

@@ -22,6 +22,12 @@ from strategies.implementations.funding_arbitrage.config import RiskManagementCo
 from exchange_clients.base_models import ExchangePositionSnapshot
 from strategies.execution.patterns.atomic_multi_order import AtomicExecutionResult
 
+# UPDATED: New spread threshold constants matching your actual implementation
+ENTRY_SPREAD_THRESHOLD = Decimal("0.001")  # 0.1%
+EXIT_SPREAD_THRESHOLD = Decimal("0.001")  # 0.1%
+EMERGENCY_CLOSE_THRESHOLD = Decimal("0.002")  # 0.2%
+AGGRESSIVE_HEDGE_THRESHOLD = Decimal("0.0005")  # 0.05%
+
 
 class StubLogger:
     """Stub logger for testing."""
@@ -51,7 +57,7 @@ class StubExchangeClient:
     """Stub exchange client for testing."""
     def __init__(self, name: str, bbo_prices=None):
         self._name = name
-        self._bbo_prices = bbo_prices or (Decimal("100"), Decimal("100.5"))
+        self._bbo_prices = bbo_prices or (Decimal("100"), Decimal("100.05"))  # UPDATED: Tighter default spread
         self.config = SimpleNamespace(contract_id=f"{name.upper()}-CONTRACT")
         self.closed = []
         self._orders = {}
@@ -102,10 +108,19 @@ class StubExchangeClient:
     
     async def place_market_order(self, contract_id: str, quantity: Decimal, side: str, reduce_only: bool = False):
         """Mock place_market_order for testing."""
-        from exchange_clients.base_models import OrderResult
+        from exchange_clients.base_models import OrderInfo, OrderResult
         order_id = f"{self._name}-market-{self._order_counter}"
         self._order_counter += 1
-        price = Decimal("100.25")
+        price = Decimal("100.025")  # UPDATED: Price within tight spread
+        info = OrderInfo(
+            order_id=order_id,
+            side=side,
+            size=Decimal(str(quantity)),
+            price=price,
+            status="FILLED",
+            filled_size=Decimal(str(quantity)),
+        )
+        self._orders[order_id] = info
         self.market_orders.append({
             "contract_id": contract_id,
             "quantity": Decimal(str(quantity)),
@@ -177,12 +192,6 @@ class StubAtomicExecutor:
         self.last_orders = orders
         self.execute_called = True
         
-        # Simulate WideSpreadException if any order has wide spread
-        for order in orders:
-            if hasattr(order, 'execution_mode') and order.execution_mode == "aggressive_limit":
-                # Check if this would trigger deferral (simulate in integration test)
-                pass
-        
         return AtomicExecutionResult(
             success=True,
             all_filled=True,
@@ -225,7 +234,7 @@ def _make_position(symbol="BTC", long_dex="aster", short_dex="lighter", opened_a
 def _make_strategy(position_manager, exchange_clients, risk_config=None, bbo_prices=None):
     """Create a mock strategy."""
     if bbo_prices is None:
-        bbo_prices = (Decimal("100"), Decimal("100.5"))
+        bbo_prices = (Decimal("100"), Decimal("100.05"))  # UPDATED: Tighter default spread
     
     price_provider = SimpleNamespace(
         get_bbo_prices=AsyncMock(return_value=bbo_prices)
@@ -235,8 +244,9 @@ def _make_strategy(position_manager, exchange_clients, risk_config=None, bbo_pri
     config = SimpleNamespace(
         risk_config=risk_cfg,
         enable_wide_spread_protection=True,
-        max_exit_spread_pct=Decimal("0.02"),  # 2%
-        max_emergency_close_spread_pct=Decimal("0.03"),  # 3%
+        # UPDATED: Use new thresholds
+        max_exit_spread_pct=EXIT_SPREAD_THRESHOLD,  # 0.1%
+        max_emergency_close_spread_pct=EMERGENCY_CLOSE_THRESHOLD,  # 0.2%
         enable_exit_polling=False,  # Disable polling for tests
     )
     
@@ -257,12 +267,12 @@ def _make_strategy(position_manager, exchange_clients, risk_config=None, bbo_pri
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_non_critical_exit_deferral_flow():
-    """Test that non-critical exits are deferred when spread > 2%."""
+    """Test that non-critical exits are deferred when spread > 0.1%."""
     position = _make_position()
     position_manager = StubPositionManager([position])
     
-    # Wide spread: 3% (bid=100, ask=103)
-    wide_bbo = (Decimal("100"), Decimal("103"))
+    # UPDATED: Wide spread: 0.3% (bid=100, ask=100.3) - exceeds 0.1% threshold
+    wide_bbo = (Decimal("100"), Decimal("100.3"))
     
     exchange_clients = {
         "aster": StubExchangeClient("aster", wide_bbo),
@@ -273,13 +283,13 @@ async def test_non_critical_exit_deferral_flow():
     closer = PositionCloser(strategy)
     closer._risk_manager = None  # Skip risk manager
     
-    # Mock should_close to return True with non-critical reason (instance method takes self as first param)
+    # Mock should_close to return True with non-critical reason
     async def mock_should_close(self, position, snapshots, gather_current_rates, should_skip_erosion_exit):
         return True, "PROFIT_EROSION"  # Non-critical
     
     closer._exit_evaluator.should_close = types.MethodType(mock_should_close, closer._exit_evaluator)
     
-    # Mock fetch snapshots (instance method takes self as first param)
+    # Mock fetch snapshots
     async def mock_fetch_snapshots(self, position):
         return {
             "aster": ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("1"), side="long"),
@@ -288,13 +298,13 @@ async def test_non_critical_exit_deferral_flow():
     
     closer._fetch_leg_snapshots = types.MethodType(mock_fetch_snapshots, closer)
     
-    # Mock gather_current_rates to return None (skip risk manager) - instance method takes self as first param
+    # Mock gather_current_rates to return None (skip risk manager)
     async def mock_gather_rates(self, position):
         return None
     
     closer._gather_current_rates = types.MethodType(mock_gather_rates, closer)
     
-    # Mock should_skip_erosion_exit - instance method takes self as first param
+    # Mock should_skip_erosion_exit
     async def mock_skip_erosion(self, position, reason):
         return False
     
@@ -317,8 +327,8 @@ async def test_critical_exit_proceeds_despite_wide_spread():
     position = _make_position()
     position_manager = StubPositionManager([position])
     
-    # Wide spread: 5% (bid=100, ask=105)
-    wide_bbo = (Decimal("100"), Decimal("105"))
+    # UPDATED: Wide spread: 0.5% (bid=100, ask=100.5) - exceeds both thresholds
+    wide_bbo = (Decimal("100"), Decimal("100.5"))
     
     exchange_clients = {
         "aster": StubExchangeClient("aster", wide_bbo),
@@ -329,13 +339,13 @@ async def test_critical_exit_proceeds_despite_wide_spread():
     closer = PositionCloser(strategy)
     closer._risk_manager = None  # Skip risk manager
     
-    # Mock detect_liquidation to return critical reason (instance method takes self as first param)
+    # Mock detect_liquidation to return critical reason
     def mock_detect_liquidation(self, position, snapshots):
         return "LEG_LIQUIDATED"  # Critical
     
     closer._exit_evaluator.detect_liquidation = types.MethodType(mock_detect_liquidation, closer._exit_evaluator)
     
-    # Mock fetch snapshots (instance method takes self as first param)
+    # Mock fetch snapshots
     async def mock_fetch_snapshots(self, position):
         return {
             "aster": ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("1"), side="long"),
@@ -351,7 +361,7 @@ async def test_critical_exit_proceeds_despite_wide_spread():
     assert len(position_manager.closed_records) > 0
     assert any("LEG_LIQUIDATED" in reason for _, reason, _ in position_manager.closed_records)
     # Should have logged warning about wide spread
-    wide_spread_logs = [msg for msg in strategy.logger.warning_calls if "Wide spread" in msg]
+    wide_spread_logs = [msg for msg in strategy.logger.warning_calls if "Wide spread" in msg or "Spread too wide" in msg]
     assert len(wide_spread_logs) > 0
 
 
@@ -365,8 +375,8 @@ async def test_user_manual_close_with_wide_spread_warning():
     position = _make_position()
     position_manager = StubPositionManager([position])
     
-    # Wide spread: 3% (bid=100, ask=103)
-    wide_bbo = (Decimal("100"), Decimal("103"))
+    # UPDATED: Wide spread: 0.25% (bid=100, ask=100.25) - exceeds 0.1% threshold
+    wide_bbo = (Decimal("100"), Decimal("100.25"))
     
     exchange_clients = {
         "aster": StubExchangeClient("aster", wide_bbo),
@@ -377,16 +387,15 @@ async def test_user_manual_close_with_wide_spread_warning():
     controller = FundingArbStrategyController(strategy=strategy)
     
     # Mock database fetch for account validation
-    # database is imported inside close_position, so patch it at the module level
     test_account_id = str(uuid4())
     with patch('database.connection.database') as mock_db:
         mock_db.fetch_one = AsyncMock(return_value={
             'id': str(position.id),
-            'account_id': test_account_id,  # Use same account_id as passed to close_position
+            'account_id': test_account_id,
             'account_name': 'test_account'
         })
         
-        # Mock position manager get (instance method takes self as first param)
+        # Mock position manager get
         async def mock_get(self, position_id):
             return position
         
@@ -395,7 +404,7 @@ async def test_user_manual_close_with_wide_spread_warning():
         # Try to close with market order (should return warning)
         result = await controller.close_position(
             position_id=str(position.id),
-            account_ids=[test_account_id],  # Use same account_id as returned by mock_db
+            account_ids=[test_account_id],
             order_type="market",
             reason="telegram_manual_close",
             confirm_wide_spread=False
@@ -405,7 +414,7 @@ async def test_user_manual_close_with_wide_spread_warning():
         assert result.get("wide_spread_warning") is True
         assert result.get("success") is False
         assert "spread_pct" in result
-        assert result.get("spread_pct") > 0.02  # > 2%
+        assert result.get("spread_pct") > EXIT_SPREAD_THRESHOLD  # > 0.1%
 
 
 @pytest.mark.asyncio
@@ -415,8 +424,8 @@ async def test_user_manual_close_confirmed_proceeds():
     position = _make_position()
     position_manager = StubPositionManager([position])
     
-    # Wide spread: 3% (bid=100, ask=103)
-    wide_bbo = (Decimal("100"), Decimal("103"))
+    # UPDATED: Wide spread: 0.25% (bid=100, ask=100.25) - exceeds 0.1% threshold
+    wide_bbo = (Decimal("100"), Decimal("100.25"))
     
     exchange_clients = {
         "aster": StubExchangeClient("aster", wide_bbo),
@@ -428,7 +437,7 @@ async def test_user_manual_close_confirmed_proceeds():
     # Mock position closer to actually close
     closer = PositionCloser(strategy)
     
-    # Mock fetch snapshots (instance method takes self as first param)
+    # Mock fetch snapshots
     async def mock_fetch_snapshots(self, position):
         return {
             "aster": ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("1"), side="long"),
@@ -455,8 +464,8 @@ async def test_acceptable_spread_allows_non_critical_exit():
     position = _make_position()
     position_manager = StubPositionManager([position])
     
-    # Acceptable spread: 1% (bid=100, ask=101)
-    acceptable_bbo = (Decimal("100"), Decimal("101"))
+    # UPDATED: Acceptable spread: 0.05% (bid=100, ask=100.05) - within 0.1% threshold
+    acceptable_bbo = (Decimal("100"), Decimal("100.05"))
     
     exchange_clients = {
         "aster": StubExchangeClient("aster", acceptable_bbo),
@@ -467,13 +476,13 @@ async def test_acceptable_spread_allows_non_critical_exit():
     closer = PositionCloser(strategy)
     closer._risk_manager = None
     
-    # Mock should_close to return True with non-critical reason (instance method takes self as first param)
+    # Mock should_close to return True with non-critical reason
     async def mock_should_close(self, position, snapshots, gather_current_rates, should_skip_erosion_exit):
         return True, "PROFIT_EROSION"  # Non-critical
     
     closer._exit_evaluator.should_close = types.MethodType(mock_should_close, closer._exit_evaluator)
     
-    # Mock fetch snapshots (instance method takes self as first param)
+    # Mock fetch snapshots
     async def mock_fetch_snapshots(self, position):
         return {
             "aster": ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("1"), side="long"),
@@ -481,6 +490,18 @@ async def test_acceptable_spread_allows_non_critical_exit():
         }
     
     closer._fetch_leg_snapshots = types.MethodType(mock_fetch_snapshots, closer)
+    
+    # Mock gather_current_rates
+    async def mock_gather_rates(self, position):
+        return None
+    
+    closer._gather_current_rates = types.MethodType(mock_gather_rates, closer)
+    
+    # Mock should_skip_erosion_exit
+    async def mock_skip_erosion(self, position, reason):
+        return False
+    
+    closer._should_skip_erosion_exit = types.MethodType(mock_skip_erosion, closer)
     
     # Evaluate and close positions
     actions = await closer.evaluateAndClosePositions()
@@ -491,4 +512,3 @@ async def test_acceptable_spread_allows_non_critical_exit():
     assert strategy.atomic_executor.execute_called
     if strategy.atomic_executor.last_orders:
         assert any(order.execution_mode == "limit_only" for order in strategy.atomic_executor.last_orders)
-

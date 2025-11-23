@@ -15,6 +15,7 @@ from ..price_provider import PriceProvider
 from .base import ExecutionStrategy
 from ..execution_components.pricer import AggressiveLimitPricer
 from ..execution_components.reconciler import OrderReconciler
+from ..spread_utils import SpreadCheckType, is_spread_acceptable
 from helpers.unified_logger import get_core_logger
 
 
@@ -738,7 +739,26 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                         logger=logger,
                     )
                     state.last_pricing_strategy = price_result.pricing_strategy
-                    
+
+                    # Validate spread hasn't widened abnormally (e.g., bid dropped dramatically)
+                    is_acceptable, spread_pct, spread_reason = is_spread_acceptable(
+                        price_result.best_bid,
+                        price_result.best_ask,
+                        check_type=SpreadCheckType.AGGRESSIVE_HEDGE,
+                    )
+
+                    if not is_acceptable:
+                        logger.warning(
+                            f"⚠️ [{exchange_name}] Spread too wide for {symbol} on attempt {retry_count + 1}: "
+                            f"{spread_pct*100:.4f}% > threshold "
+                            f"(bid={price_result.best_bid}, ask={price_result.best_ask}). "
+                            f"Reason: {spread_reason} "
+                            f"Skipping this iteration and retrying with fresh BBO."
+                        )
+                        await asyncio.sleep(config.retry_backoff_ms / 1000.0)
+                        state.retries_used += 1
+                        continue
+
                     # Round quantity to step size
                     order_quantity = exchange_client.round_to_step(remaining_qty)
                     

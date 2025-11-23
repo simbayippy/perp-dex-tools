@@ -58,7 +58,8 @@ class StubExchangeClient:
         return self.snapshots.get(symbol)
 
     async def fetch_bbo_prices(self, symbol: str):
-        return Decimal("100"), Decimal("100.5")
+        # FIXED: Tighter default spread (0.05% instead of 0.5%)
+        return Decimal("100"), Decimal("100.05")
 
     def get_quantity_multiplier(self, symbol=None):
         """Get quantity multiplier for this exchange."""
@@ -96,7 +97,8 @@ class StubExchangeClient:
     async def place_market_order(self, contract_id: str, quantity: Decimal, side: str, reduce_only: bool = False):
         order_id = f"{self._name}-market-{self._order_counter}"
         self._order_counter += 1
-        price = Decimal("100.25")
+        # FIXED: Tighter price (within 0.05% spread)
+        price = Decimal("100.025")
         info = OrderInfo(
             order_id=order_id,
             side=side,
@@ -136,10 +138,6 @@ class StubExchangeClient:
     def resolve_contract_id(self, symbol: str) -> str:
         """Resolve symbol to contract ID."""
         return f"{self._name.upper()}-{symbol}"
-
-    def get_quantity_multiplier(self, symbol: str = None) -> Decimal:
-        """Get quantity multiplier for this exchange."""
-        return Decimal("1.0")
 
 
 class StubPositionManager:
@@ -204,14 +202,21 @@ class StubAtomicExecutor:
 
 
 def _make_strategy(position_manager, exchange_clients, risk_config=None):
+    # FIXED: Tighter default BBO spread (0.05% instead of 0.5%)
     price_provider = SimpleNamespace(
-        get_bbo_prices=AsyncMock(return_value=(Decimal("100"), Decimal("100.5")))
+        get_bbo_prices=AsyncMock(return_value=(Decimal("100"), Decimal("100.05")))
     )
     risk_cfg = risk_config or RiskManagementConfig()
     return SimpleNamespace(
         position_manager=position_manager,
         exchange_clients=exchange_clients,
-        config=SimpleNamespace(risk_config=risk_cfg, enable_exit_polling=False),  # Disable polling for tests
+        config=SimpleNamespace(
+            risk_config=risk_cfg,
+            enable_exit_polling=False,
+            enable_wide_spread_protection=True,
+            max_exit_spread_pct=Decimal("0.001"),  # 0.1%
+            max_emergency_close_spread_pct=Decimal("0.002"),  # 0.2%
+        ),
         logger=StubLogger(),
         funding_rate_repo=None,
         price_provider=price_provider,
@@ -289,6 +294,12 @@ def test_position_closer_respects_risk_manager_decision():
         }
 
     closer._gather_current_rates = types.MethodType(fake_rates, closer)
+    
+    # ADDED: Mock _should_skip_erosion_exit to always return False
+    async def mock_should_skip(self, position, reason):
+        return False
+    
+    closer._should_skip_erosion_exit = types.MethodType(mock_should_skip, closer)
 
     asyncio.run(closer.evaluateAndClosePositions())
 
@@ -320,6 +331,12 @@ def test_position_closer_fallback_on_divergence_flip():
         return None  # skip risk manager evaluation path
 
     closer._gather_current_rates = types.MethodType(fake_rates, closer)
+    
+    # ADDED: Mock _should_skip_erosion_exit to always return False
+    async def mock_should_skip(self, position, reason):
+        return False
+    
+    closer._should_skip_erosion_exit = types.MethodType(mock_should_skip, closer)
 
     asyncio.run(closer.evaluateAndClosePositions())
 
@@ -337,6 +354,7 @@ def test_symbols_match_variants():
     assert matcher("ETHUSDT", "ETH")
     assert not matcher("BTC", "ETH")
 
+
 def test_position_closer_respects_max_position_age():
     old_opened_at = datetime.now() - timedelta(hours=30)
     position = _make_position(opened_at=old_opened_at)
@@ -352,6 +370,12 @@ def test_position_closer_respects_max_position_age():
     strategy = _make_strategy(position_manager, exchange_clients, risk_cfg)
     closer = PositionCloser(strategy)
     closer._risk_manager = None
+    
+    # ADDED: Mock _should_skip_erosion_exit to always return False
+    async def mock_should_skip(self, position, reason):
+        return False
+    
+    closer._should_skip_erosion_exit = types.MethodType(mock_should_skip, closer)
 
     asyncio.run(closer.evaluateAndClosePositions())
 

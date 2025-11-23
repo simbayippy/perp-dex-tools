@@ -175,38 +175,30 @@ class AggressiveLimitPricer:
                     )
         
         # If break-even not attempted or not feasible, use adaptive pricing strategy
-        # For aggressive limit orders, prioritize fill probability over price optimization
+        # For aggressive limit orders, prioritize fill probability (this is catch-up/hedge mode)
         if limit_price is None:
-            # Strategy progression to maximize fill probability:
-            # 1. First attempt: Touch best bid/ask (most aggressive, highest fill probability)
-            # 2. Next attempts: Inside spread (1 tick away, still fillable, avoids post-only)
-            # 3. Final attempts: Cross spread slightly (guaranteed fill but may pay spread)
-            
-            if retry_count == 0:
-                # First attempt: Touch best bid/ask for maximum fill probability
+            # Strategy progression for URGENT catch-up execution:
+            # 1. First attempts: Touch (most aggressive - one side already filled, need to catch up ASAP)
+            # 2. Later attempts: Inside spread (more conservative - avoid post-only violations after touch fails)
+            # 3. Never use cross spread (would cause post-only violations)
+            # After all retries exhausted, caller should fallback to market orders
+
+            if retry_count < inside_tick_retries:
+                # First attempts: Touch best bid/ask for URGENT catch-up
+                # Most aggressive valid price - essential for hedging after other leg filled
                 pricing_strategy = "touch"
                 if side == "buy":
                     limit_price = best_ask  # At ask, will fill as maker if market moves up
                 else:
                     limit_price = best_bid  # At bid, will fill as maker if market moves down
-            elif retry_count < inside_tick_retries:
-                # Next attempts: Inside spread (1 tick away from touch)
-                # Still fillable but safer from post-only violations
+            else:
+                # Later attempts: Inside spread (1 tick away from BBO)
+                # More conservative - used if touch gets post-only violations
                 pricing_strategy = "inside_spread"
                 if side == "buy":
                     limit_price = best_ask - tick_size
                 else:
                     limit_price = best_bid + tick_size
-            else:
-                # Final attempts: Cross spread slightly to guarantee fill
-                # This ensures fill but we pay a small spread
-                pricing_strategy = "cross_spread"
-                if side == "buy":
-                    # Cross ask slightly to guarantee fill
-                    limit_price = best_ask + tick_size
-                else:
-                    # Cross bid slightly to guarantee fill
-                    limit_price = best_bid - tick_size
         
         # Round price to tick size
         limit_price = exchange_client.round_to_tick(limit_price)

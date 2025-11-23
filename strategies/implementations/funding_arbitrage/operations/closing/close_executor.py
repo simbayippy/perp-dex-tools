@@ -11,9 +11,10 @@ from ..core.websocket_manager import WebSocketManager
 from ..core.price_utils import (
     extract_snapshot_price,
     fetch_mid_price,
-    calculate_spread_pct,
-    MAX_EXIT_SPREAD_PCT,
-    MAX_EMERGENCY_CLOSE_SPREAD_PCT,
+)
+from strategies.execution.core.spread_utils import (
+    SpreadCheckType,
+    is_spread_acceptable,
 )
 from ..core.decimal_utils import to_decimal
 
@@ -386,21 +387,18 @@ class CloseExecutor:
             try:
                 price_provider = strategy.price_provider
                 bid, ask = await price_provider.get_bbo_prices(leg["client"], symbol)
-                spread_pct = calculate_spread_pct(bid, ask)
-                
-                if spread_pct is not None:
-                    threshold = MAX_EMERGENCY_CLOSE_SPREAD_PCT if is_critical else MAX_EXIT_SPREAD_PCT
-                    
-                    if spread_pct > threshold:
-                        strategy.logger.warning(
-                            f"⚠️  Wide spread detected on {dex.upper()} {symbol}: "
-                            f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
-                            f"Using aggressive limit execution for better fills."
-                        )
-                        use_aggressive_limit = True
-                    elif spread_pct > MAX_EXIT_SPREAD_PCT:
-                        # Even if below emergency threshold, use aggressive limit for better execution
-                        use_aggressive_limit = True
+
+                # Determine spread check type based on exit criticality
+                check_type = SpreadCheckType.EMERGENCY_CLOSE if is_critical else SpreadCheckType.EXIT
+                acceptable, spread_pct, reason_msg = is_spread_acceptable(bid, ask, check_type)
+
+                if not acceptable:
+                    strategy.logger.warning(
+                        f"⚠️  Wide spread detected on {dex.upper()} {symbol}: "
+                        f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
+                        f"Using aggressive limit execution for better fills."
+                    )
+                    use_aggressive_limit = True
             except Exception as exc:
                 strategy.logger.warning(
                     f"⚠️  Failed to check spread for {symbol} on {dex}: {exc}. "
@@ -427,11 +425,11 @@ class CloseExecutor:
             size_usd=size_usd,
             quantity=leg["quantity"],
             mode=mode,
-            timeout_seconds=8.0 if use_aggressive_limit else 10.0,
+            timeout_seconds=3.0 if use_aggressive_limit else 10.0,  # 3s per iteration for aggressive limit
             reduce_only=True,
-            max_retries=5 if use_aggressive_limit else None,
-            total_timeout_seconds=8.0 if use_aggressive_limit else None,
-            inside_tick_retries=2 if use_aggressive_limit else None,
+            max_retries=15 if use_aggressive_limit else None,  # Max 15 retries (10 attempts × 3s = 30s realistic)
+            total_timeout_seconds=30.0 if use_aggressive_limit else None,  # 30s total timeout for aggressive limit
+            inside_tick_retries=3 if use_aggressive_limit else None,  # Try inside spread for first 3 attempts
         )
 
         if not execution.success or not execution.filled:

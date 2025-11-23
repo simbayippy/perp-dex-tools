@@ -551,29 +551,36 @@ class FundingArbStrategyController(BaseStrategyController):
             and not confirm_wide_spread
             and getattr(self.strategy.config, "enable_wide_spread_protection", True)
         ):
-            from strategies.implementations.funding_arbitrage.operations.core.price_utils import (
-                calculate_spread_pct,
-                MAX_EXIT_SPREAD_PCT,
+            from strategies.execution.core.spread_utils import (
+                SpreadCheckType,
+                is_spread_acceptable,
             )
-            
+
             # Check spread for each leg
             wide_spread_detected = False
             max_spread_pct = None
             max_bid = None
             max_ask = None
             max_dex = None
-            
+
             for dex in filter(None, [position.long_dex, position.short_dex]):
                 client = self.strategy.exchange_clients.get(dex)
                 if not client:
                     continue
-                
+
                 try:
                     price_provider = self.strategy.price_provider
                     bid, ask = await price_provider.get_bbo_prices(client, position.symbol)
-                    spread_pct = calculate_spread_pct(bid, ask)
-                    
-                    if spread_pct and spread_pct > MAX_EXIT_SPREAD_PCT:
+                    acceptable, spread_pct, reason_msg = is_spread_acceptable(
+                        bid, ask, SpreadCheckType.EXIT
+                    )
+
+                    if not acceptable:
+                        self.strategy.logger.warning(
+                            f"[SpreadCheck] Wide spread detected when attempting to close position {position.id} "
+                            f"on {dex.upper()} ({position.symbol}): spread={spread_pct:.4%}, "
+                            f"bid={bid}, ask={ask}, reason={reason_msg}"
+                        )
                         wide_spread_detected = True
                         if max_spread_pct is None or spread_pct > max_spread_pct:
                             max_spread_pct = spread_pct

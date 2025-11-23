@@ -13,7 +13,7 @@ from exchange_clients.base_models import ExchangePositionSnapshot
 from ..core.contract_preparer import ContractPreparer
 from ..core.websocket_manager import WebSocketManager
 from ..core.decimal_utils import to_decimal
-from ..core.price_utils import calculate_spread_pct, MAX_EXIT_SPREAD_PCT
+from strategies.execution.core.spread_utils import SpreadCheckType, is_spread_acceptable
 from ...risk_management import get_risk_manager
 from .exit_evaluator import ExitEvaluator
 from .pnl_calculator import PnLCalculator
@@ -924,9 +924,11 @@ class PositionCloser:
                 
                 try:
                     bid, ask = await price_provider.get_bbo_prices(client, position.symbol)
-                    spread_pct = calculate_spread_pct(bid, ask)
-                    
-                    if spread_pct is not None and spread_pct > MAX_EXIT_SPREAD_PCT:
+                    acceptable, spread_pct, reason_msg = is_spread_acceptable(
+                        bid, ask, SpreadCheckType.EXIT
+                    )
+
+                    if not acceptable:
                         strategy.logger.info(
                             f"⏸️  Wide spread detected on {dex.upper()} {position.symbol}: "
                             f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
