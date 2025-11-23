@@ -161,7 +161,7 @@ class StubExchangeClient:
         """Resolve symbol to contract ID."""
         return f"{self.name.upper()}-{symbol}"
 
-    def get_quantity_multiplier(self) -> Decimal:
+    def get_quantity_multiplier(self, symbol=None) -> Decimal:
         """Get quantity multiplier for this exchange."""
         return Decimal("1.0")
 
