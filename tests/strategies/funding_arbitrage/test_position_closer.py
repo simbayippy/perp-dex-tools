@@ -21,8 +21,20 @@ class StubLogger:
     def __init__(self):
         self.messages = []
 
-    def log(self, message: str, level: str = "INFO"):
+    def log(self, message: str, level: str = "INFO", **kwargs):
         self.messages.append((level, message))
+
+    def info(self, message: str, **kwargs):
+        self.messages.append(("INFO", message))
+
+    def debug(self, message: str, **kwargs):
+        self.messages.append(("DEBUG", message))
+
+    def error(self, message: str, **kwargs):
+        self.messages.append(("ERROR", message))
+
+    def warning(self, message: str, **kwargs):
+        self.messages.append(("WARNING", message))
 
 
 class StubExchangeClient:
@@ -47,6 +59,14 @@ class StubExchangeClient:
 
     async def fetch_bbo_prices(self, symbol: str):
         return Decimal("100"), Decimal("100.5")
+
+    def get_quantity_multiplier(self, symbol=None):
+        """Get quantity multiplier for this exchange."""
+        return Decimal("1.0")
+
+    async def ensure_market_feed(self, symbol):
+        """No-op for testing."""
+        pass
 
     def round_to_step(self, quantity: Decimal) -> Decimal:
         return quantity
@@ -73,15 +93,25 @@ class StubExchangeClient:
         )
         return OrderResult(success=True, order_id=order_id, side=side, size=Decimal(str(quantity)), price=Decimal(str(price)), status="FILLED")
 
-    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str):
+    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str, reduce_only: bool = False):
         order_id = f"{self._name}-market-{self._order_counter}"
         self._order_counter += 1
         price = Decimal("100.25")
+        info = OrderInfo(
+            order_id=order_id,
+            side=side,
+            size=Decimal(str(quantity)),
+            price=price,
+            status="FILLED",
+            filled_size=Decimal(str(quantity)),
+        )
+        self._orders[order_id] = info
         self.market_orders.append(
             {
                 "contract_id": contract_id,
                 "quantity": Decimal(str(quantity)),
                 "side": side,
+                "reduce_only": reduce_only,
             }
         )
         return OrderResult(
@@ -102,6 +132,14 @@ class StubExchangeClient:
 
     async def get_order_info(self, order_id: str, *, force_refresh: bool = False):
         return self._orders.get(order_id)
+
+    def resolve_contract_id(self, symbol: str) -> str:
+        """Resolve symbol to contract ID."""
+        return f"{self._name.upper()}-{symbol}"
+
+    def get_quantity_multiplier(self, symbol: str = None) -> Decimal:
+        """Get quantity multiplier for this exchange."""
+        return Decimal("1.0")
 
 
 class StubPositionManager:
@@ -125,6 +163,10 @@ class StubPositionManager:
             if pos.id == position_id:
                 return pos
         return None
+
+    async def get_cumulative_funding(self, position_id):
+        """Get cumulative funding for a position."""
+        return Decimal("0")
 
 
 def _make_position(symbol="BTC", long_dex="aster", short_dex="lighter", opened_at=None):
@@ -169,7 +211,7 @@ def _make_strategy(position_manager, exchange_clients, risk_config=None):
     return SimpleNamespace(
         position_manager=position_manager,
         exchange_clients=exchange_clients,
-        config=SimpleNamespace(risk_config=risk_cfg),
+        config=SimpleNamespace(risk_config=risk_cfg, enable_exit_polling=False),  # Disable polling for tests
         logger=StubLogger(),
         funding_rate_repo=None,
         price_provider=price_provider,
@@ -235,6 +277,7 @@ def test_position_closer_respects_risk_manager_decision():
 
     stub_manager = StubRiskManager()
     closer._risk_manager = stub_manager
+    closer._exit_evaluator._risk_manager = stub_manager  # ExitEvaluator has its own reference
 
     async def fake_rates(self, position):
         return {

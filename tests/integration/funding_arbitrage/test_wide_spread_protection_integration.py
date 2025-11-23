@@ -237,6 +237,7 @@ def _make_strategy(position_manager, exchange_clients, risk_config=None, bbo_pri
         enable_wide_spread_protection=True,
         max_exit_spread_pct=Decimal("0.02"),  # 2%
         max_emergency_close_spread_pct=Decimal("0.03"),  # 3%
+        enable_exit_polling=False,  # Disable polling for tests
     )
     
     return SimpleNamespace(
@@ -486,8 +487,8 @@ async def test_acceptable_spread_allows_non_critical_exit():
     
     # Position SHOULD be closed (acceptable spread)
     assert len(position_manager.closed_records) > 0
-    # Should have used aggressive_limit mode
+    # Should have used limit_only mode for non-critical exits
     assert strategy.atomic_executor.execute_called
     if strategy.atomic_executor.last_orders:
-        assert any(order.execution_mode == "aggressive_limit" for order in strategy.atomic_executor.last_orders)
+        assert any(order.execution_mode == "limit_only" for order in strategy.atomic_executor.last_orders)
 

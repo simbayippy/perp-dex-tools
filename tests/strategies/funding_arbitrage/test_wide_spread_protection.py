@@ -196,9 +196,10 @@ class TestOrderBuilderSpreadCheck:
         reason = "PROFIT_EROSION"  # Non-critical
         
         spec = await builder.build_order_spec("BTC-PERP", leg, reason=reason)
-        
+
         assert spec is not None
-        assert spec.execution_mode == "aggressive_limit"
+        # Non-critical exits now use limit_only for passive maker orders
+        assert spec.execution_mode == "limit_only"
     
     @pytest.mark.asyncio
     async def test_critical_exit_proceed_despite_wide_spread(self):
