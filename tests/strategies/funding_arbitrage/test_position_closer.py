@@ -60,6 +60,14 @@ class StubExchangeClient:
     async def fetch_bbo_prices(self, symbol: str):
         return Decimal("100"), Decimal("100.5")
 
+    def get_quantity_multiplier(self, symbol=None):
+        """Get quantity multiplier for this exchange."""
+        return Decimal("1.0")
+
+    async def ensure_market_feed(self, symbol):
+        """No-op for testing."""
+        pass
+
     def round_to_step(self, quantity: Decimal) -> Decimal:
         return quantity
 
@@ -203,7 +211,7 @@ def _make_strategy(position_manager, exchange_clients, risk_config=None):
     return SimpleNamespace(
         position_manager=position_manager,
         exchange_clients=exchange_clients,
-        config=SimpleNamespace(risk_config=risk_cfg),
+        config=SimpleNamespace(risk_config=risk_cfg, enable_exit_polling=False),  # Disable polling for tests
         logger=StubLogger(),
         funding_rate_repo=None,
         price_provider=price_provider,
@@ -269,6 +277,7 @@ def test_position_closer_respects_risk_manager_decision():
 
     stub_manager = StubRiskManager()
     closer._risk_manager = stub_manager
+    closer._exit_evaluator._risk_manager = stub_manager  # ExitEvaluator has its own reference
 
     async def fake_rates(self, position):
         return {
