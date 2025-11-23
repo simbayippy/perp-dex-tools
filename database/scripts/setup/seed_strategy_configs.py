@@ -59,6 +59,11 @@ TEMPLATES = [
             'wide_spread_cooldown_minutes': 60,
             'enable_liquidation_prevention': True,
             'min_liquidation_distance_pct': 0.10,
+            # Immediate profit-taking (cross-exchange basis spread)
+            'enable_immediate_profit_taking': True,
+            'min_immediate_profit_taking_pct': 0.002,  # 0.2% of position size
+            'profit_taking_use_aggressive_limit': True,
+            'profit_taking_verify_before_execution': True
         }
     },
     {
@@ -174,6 +179,11 @@ async def seed_strategy_configs():
                             ('wide_spread_cooldown_minutes', 60),
                             ('enable_liquidation_prevention', True),
                             ('min_liquidation_distance_pct', 0.10),
+                            # Profit-taking fields (Issue 2)
+                            ('enable_immediate_profit_taking', True),
+                            ('min_immediate_profit_taking_pct', 0.002),
+                            ('profit_taking_use_aggressive_limit', True),
+                            ('profit_taking_verify_before_execution', True),
                         ]
                         
                         for field_name, expected_value in new_fields:

@@ -150,32 +150,39 @@ class OrderBuilder:
         
         if order_type:
             use_market = order_type.lower() == "market"
+            use_aggressive_limit = order_type.lower() == "aggressive_limit"
         else:
             use_market = reason in critical_reasons
-        
+            use_aggressive_limit = False
+
         # Execution mode strategy for closing positions:
-        # 
+        #
         # INITIAL ATOMIC CLOSE (both legs placed simultaneously):
         # - Use limit_only for passive maker orders (ask - 0.01% for buy, bid + 0.01% for sell)
         # - Lower fees, better price execution
         # - Protected by spread check in LimitOrderExecutor (rejects if spread > 2%)
         # - If one side fills first → triggers aggressive_limit hedge (handled by HedgeManager)
-        # 
+        #
         # HEDGE (when one side fills first):
         # - Automatically uses aggressive_limit via HedgeManager.aggressive_limit_hedge()
         # - NOT controlled by this order_builder (hedge bypasses order_builder entirely)
         # - Adaptive pricing with break-even attempt, then touch → inside spread → cross spread
         # - Multiple retries with fallback to market
-        # 
+        #
         # CRITICAL EXITS (liquidation risk, severe imbalance):
         # - Use aggressive_limit for faster execution
         # - Speed is more important than optimal pricing
-        
+        #
+        # PROFIT-TAKING EXITS (immediate profit opportunity):
+        # - Use aggressive_limit for best execution quality
+        # - Ensures profit is realized with maker fees (inside spread pricing)
+
         if use_market:
             # User explicitly requested market order or critical reason requires it
             execution_mode = "market_only"
-        elif is_critical:
-            # Critical exits: Use aggressive_limit for faster execution
+        elif use_aggressive_limit or is_critical:
+            # Aggressive limit: User requested OR critical exit
+            # Uses adaptive pricing: inside spread → touch → cross spread
             execution_mode = "aggressive_limit"
         else:
             # Initial close attempts: Use limit_only (passive maker orders)

@@ -229,6 +229,40 @@ class PositionMonitor:
             position.metadata["exchange_unrealized_pnl"] = total_unrealized
             position.metadata["exchange_funding"] = total_funding
 
+            # Track cross-exchange spread for profit-taking opportunities
+            long_snapshot = snapshots.get(position.long_dex)
+            short_snapshot = snapshots.get(position.short_dex)
+
+            if long_snapshot and short_snapshot:
+                long_price = long_snapshot.mark_price
+                short_price = short_snapshot.mark_price
+
+                if long_price and short_price and long_price > 0 and short_price > 0:
+                    avg_price = (long_price + short_price) / Decimal("2")
+                    spread_pct = abs(long_price - short_price) / avg_price
+
+                    position.metadata["cross_exchange_spread_pct"] = float(spread_pct)
+                    position.metadata["cross_exchange_prices"] = {
+                        "long_mark": float(long_price),
+                        "short_mark": float(short_price),
+                        "spread_bps": float(spread_pct * Decimal("10000")),  # Basis points
+                    }
+
+                    # Log if spread is unusually wide (potential profit opportunity)
+                    if spread_pct > Decimal("0.002"):  # > 0.2%
+                        logger = getattr(self, "logger", None)
+                        if logger:
+                            logger.info(
+                                f"📊 Wide cross-exchange spread detected for {position.symbol}: {spread_pct*100:.3f}%",
+                                extra={
+                                    "long_dex": position.long_dex,
+                                    "short_dex": position.short_dex,
+                                    "long_price": float(long_price),
+                                    "short_price": float(short_price),
+                                    "spread_pct": float(spread_pct * 100),
+                                }
+                            )
+
         rate_map = position.metadata.setdefault("rate_map", {})
         if long_rate is not None:
             rate_map[position.long_dex] = long_rate

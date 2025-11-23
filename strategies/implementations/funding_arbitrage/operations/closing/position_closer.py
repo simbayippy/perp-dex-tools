@@ -94,6 +94,39 @@ class PositionCloser:
                 actions.append(f"Closed {position.symbol}: {imbalance_reason}")
                 continue
 
+            # Check for IMMEDIATE PROFIT OPPORTUNITY (cross-exchange basis spread)
+            # This check runs BEFORE normal exit conditions to capture favorable price divergence
+            should_take_profit, profit_reason = await self._exit_evaluator.check_immediate_profit_opportunity(
+                position, snapshots
+            )
+            if should_take_profit:
+                # Verify profitability right before execution using fresh BBO prices
+                is_profitable, verification_reason = await self._verify_profit_opportunity_pre_execution(
+                    position, snapshots
+                )
+
+                if not is_profitable:
+                    strategy.logger.warning(
+                        f"❌ Profit opportunity disappeared before execution for {position.symbol}: "
+                        f"{verification_reason}. Skipping close."
+                    )
+                    # Don't close if profit disappeared - continue to next position
+                    continue
+
+                # Execute profit-taking close with aggressive limit orders
+                strategy.logger.info(
+                    f"💰 Executing profit-taking close with aggressive limit orders for {position.symbol}"
+                )
+                self._cancel_exit_polling(position)
+                await self.close(
+                    position,
+                    profit_reason,
+                    live_snapshots=snapshots,
+                    order_type="aggressive_limit",  # Use aggressive limit for best fills
+                )
+                actions.append(f"Closed {position.symbol}: {profit_reason}")
+                continue
+
             # Check if position is in exit polling state
             polling_state = self._check_exit_polling_state(position)
             
@@ -928,6 +961,115 @@ class PositionCloser:
         """
         return await self._check_spread_before_polling(position, snapshots)
     
+    async def _verify_profit_opportunity_pre_execution(
+        self,
+        position: "FundingArbPosition",
+        snapshots: Dict[str, Optional["ExchangePositionSnapshot"]],
+    ) -> tuple[bool, str]:
+        """
+        Verify profitability RIGHT BEFORE execution using fresh BBO prices.
+
+        This prevents executing closes when profit opportunity has disappeared.
+        Fetches fresh orderbook data via websocket/API to ensure accuracy.
+
+        Returns:
+            Tuple[bool, str]: (is_profitable, reason)
+        """
+        strategy = self._strategy
+
+        # Get price provider
+        price_provider = getattr(strategy, "price_provider", None)
+        if not price_provider:
+            return False, "Price provider not available"
+
+        # Get exchange clients
+        long_client = strategy.exchange_clients.get(position.long_dex)
+        short_client = strategy.exchange_clients.get(position.short_dex)
+
+        if not long_client or not short_client:
+            return False, "Missing exchange client"
+
+        try:
+            # Get fresh BBO for both legs
+            long_bbo = await price_provider.get_bbo_prices(long_client, position.symbol)
+            long_fresh_mark = (long_bbo.bid + long_bbo.ask) / Decimal("2")
+
+            short_bbo = await price_provider.get_bbo_prices(short_client, position.symbol)
+            short_fresh_mark = (short_bbo.bid + short_bbo.ask) / Decimal("2")
+
+        except Exception as e:
+            strategy.logger.error(f"Failed to fetch fresh BBO prices for {position.symbol}: {e}")
+            return False, f"BBO fetch failed: {e}"
+
+        # Get entry prices and quantities from metadata
+        legs_metadata = position.metadata.get("legs", {})
+        long_meta = legs_metadata.get(position.long_dex, {})
+        short_meta = legs_metadata.get(position.short_dex, {})
+
+        long_entry = long_meta.get("entry_price")
+        short_entry = short_meta.get("entry_price")
+
+        if not long_entry or not short_entry:
+            return False, "Missing entry prices in metadata"
+
+        # Get quantities from snapshots
+        long_snapshot = snapshots.get(position.long_dex)
+        short_snapshot = snapshots.get(position.short_dex)
+
+        if not long_snapshot or not short_snapshot:
+            return False, "Missing snapshots"
+
+        long_qty = long_snapshot.quantity.copy_abs() if long_snapshot.quantity else Decimal("0")
+        short_qty = short_snapshot.quantity.copy_abs() if short_snapshot.quantity else Decimal("0")
+
+        # Validate quantities
+        if long_qty <= 0 or short_qty <= 0:
+            return False, f"Invalid quantities: long={long_qty}, short={short_qty}"
+
+        # Calculate PnL with fresh prices (price-based PnL only, funding already accrued)
+        long_entry_decimal = to_decimal(long_entry)
+        short_entry_decimal = to_decimal(short_entry)
+
+        long_price_pnl = (long_fresh_mark - long_entry_decimal) * long_qty
+        short_price_pnl = (short_entry_decimal - short_fresh_mark) * short_qty  # Inverse for short
+
+        # Add funding accrued from snapshots (same as initial check)
+        long_funding = to_decimal(long_snapshot.funding_accrued) if long_snapshot.funding_accrued is not None else Decimal("0")
+        short_funding = to_decimal(short_snapshot.funding_accrued) if short_snapshot.funding_accrued is not None else Decimal("0")
+
+        long_pnl = long_price_pnl + long_funding
+        short_pnl = short_price_pnl + short_funding
+        net_pnl = long_pnl + short_pnl
+
+        # Estimate closing fees (using maker fees since we'll use limit orders)
+        estimated_fees = self._exit_evaluator._estimate_closing_fees_maker(position, snapshots)
+
+        # Calculate net profit with fresh prices
+        net_profit = net_pnl - estimated_fees
+
+        # Use same threshold as initial check: 0.2% of position size
+        min_profit_pct = getattr(strategy.config, "min_immediate_profit_taking_pct", Decimal("0.002"))  # 0.2%
+        min_profit_threshold = position.size_usd * min_profit_pct
+
+        if net_profit > min_profit_threshold:
+            strategy.logger.info(
+                f"✅ Profit verified pre-execution for {position.symbol}: ${net_profit:.2f} "
+                f"(threshold: ${min_profit_threshold:.2f})",
+                extra={
+                    "long_fresh_mark": float(long_fresh_mark),
+                    "short_fresh_mark": float(short_fresh_mark),
+                    "long_pnl": float(long_pnl),
+                    "short_pnl": float(short_pnl),
+                    "net_pnl": float(net_pnl),
+                    "estimated_fees": float(estimated_fees),
+                    "net_profit": float(net_profit),
+                    "min_profit_threshold": float(min_profit_threshold),
+                }
+            )
+            return True, f"Verified: ${net_profit:.2f} profit"
+        else:
+            return False, f"Profit disappeared: ${net_profit:.2f} (threshold: ${min_profit_threshold:.2f})"
+
     @staticmethod
     def _symbols_match(position_symbol: Optional[str], event_symbol: Optional[str]) -> bool:
         """Check if two symbols match (handles variations like BTC vs BTCUSDT)."""

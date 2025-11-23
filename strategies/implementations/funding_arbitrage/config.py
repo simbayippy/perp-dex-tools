@@ -232,7 +232,41 @@ class FundingArbConfig(BaseModel):
         default=10,
         description="Maximum time to wait for break-even exit before forcing close"
     )
-    
+
+    # Immediate profit-taking (cross-exchange basis spread opportunities)
+    enable_immediate_profit_taking: bool = Field(
+        default=True,
+        description=(
+            "Enable immediate profit-taking when cross-exchange price divergence "
+            "creates profit opportunity. Captures basis spread profits by closing "
+            "when net_profit > min_immediate_profit_taking_pct * position_size."
+        )
+    )
+    min_immediate_profit_taking_pct: Decimal = Field(
+        default=Decimal("0.002"),  # 0.2%
+        description=(
+            "Minimum profit percentage (of position notional value) required to trigger "
+            "immediate profit-taking. For example, 0.002 = 0.2%, so a $2000 position needs "
+            "$4 profit minimum to close. This ensures profit opportunity is worth the execution."
+        )
+    )
+    profit_taking_use_aggressive_limit: bool = Field(
+        default=True,
+        description=(
+            "Use aggressive limit orders (inside spread) for profit-taking closes. "
+            "This maximizes realized PnL by using maker fees instead of taker fees. "
+            "If False, uses simple limit orders."
+        )
+    )
+    profit_taking_verify_before_execution: bool = Field(
+        default=True,
+        description=(
+            "Verify profitability using fresh BBO prices right before executing close. "
+            "Prevents executing closes when profit opportunity has disappeared due to "
+            "price movements between evaluation and execution."
+        )
+    )
+
     # Risk management
     risk_config: RiskManagementConfig = Field(
         default_factory=RiskManagementConfig,
