@@ -22,6 +22,18 @@ class StubLogger:
     def log(self, message: str, level: str = "INFO"):
         self.messages.append((level, message))
 
+    def info(self, message: str):
+        self.messages.append(("INFO", message))
+
+    def debug(self, message: str):
+        self.messages.append(("DEBUG", message))
+
+    def error(self, message: str):
+        self.messages.append(("ERROR", message))
+
+    def warning(self, message: str):
+        self.messages.append(("WARNING", message))
+
 
 class StubPositionManager:
     def __init__(self, open_positions=None, existing=None):
@@ -204,8 +216,7 @@ async def test_open_position_success_integration(monkeypatch):
     strategy = _strategy(position_manager=position_manager, exchange_clients=exchange_clients)
     opener = PositionOpener(strategy)
 
-    monkeypatch.setattr(opener, "_ensure_contract_attributes", AsyncMock(return_value=True))
-    monkeypatch.setattr(opener, "_validate_leverage", AsyncMock(return_value=Decimal("40")))
+    monkeypatch.setattr(opener._leverage_validator, "validate_leverage", AsyncMock(return_value=Decimal("40")))
 
     opportunity = _opportunity()
     result = await opener.open(opportunity)
@@ -239,8 +250,7 @@ async def test_open_position_handles_atomic_failure(monkeypatch):
     strategy = _strategy(atomic_result=failure_result, position_manager=position_manager, exchange_clients=exchange_clients)
     opener = PositionOpener(strategy)
 
-    monkeypatch.setattr(opener, "_ensure_contract_attributes", AsyncMock(return_value=True))
-    monkeypatch.setattr(opener, "_validate_leverage", AsyncMock(return_value=Decimal("40")))
+    monkeypatch.setattr(opener._leverage_validator, "validate_leverage", AsyncMock(return_value=Decimal("40")))
 
     opportunity = _opportunity()
     result = await opener.open(opportunity)
@@ -261,8 +271,7 @@ async def test_open_position_merges_existing(monkeypatch):
     strategy = _strategy(position_manager=position_manager, exchange_clients=exchange_clients)
     opener = PositionOpener(strategy)
 
-    monkeypatch.setattr(opener, "_ensure_contract_attributes", AsyncMock(return_value=True))
-    monkeypatch.setattr(opener, "_validate_leverage", AsyncMock(return_value=Decimal("20")))
+    monkeypatch.setattr(opener._leverage_validator, "validate_leverage", AsyncMock(return_value=Decimal("20")))
 
     opportunity = _opportunity()
     result = await opener.open(opportunity)

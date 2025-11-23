@@ -24,6 +24,18 @@ class StubLogger:
     def log(self, message: str, level: str = "INFO"):
         self.messages.append((level, message))
 
+    def info(self, message: str):
+        self.messages.append(("INFO", message))
+
+    def debug(self, message: str):
+        self.messages.append(("DEBUG", message))
+
+    def error(self, message: str):
+        self.messages.append(("ERROR", message))
+
+    def warning(self, message: str):
+        self.messages.append(("WARNING", message))
+
 
 class StubExchangeClient:
     def __init__(self, name: str = "stub", snapshots=None):

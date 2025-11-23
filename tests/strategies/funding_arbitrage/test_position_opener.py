@@ -16,6 +16,18 @@ class StubLogger:
     def log(self, message: str, level: str = "INFO"):
         self.entries.append((level, message))
 
+    def info(self, message: str):
+        self.entries.append(("INFO", message))
+
+    def debug(self, message: str):
+        self.entries.append(("DEBUG", message))
+
+    def error(self, message: str):
+        self.entries.append(("ERROR", message))
+
+    def warning(self, message: str):
+        self.entries.append(("WARNING", message))
+
 
 class StubFeeCalculator:
     def calculate_total_cost(self, *args, **kwargs) -> Decimal:
@@ -147,14 +159,10 @@ async def test_position_opener_success(monkeypatch):
     )
     opener = PositionOpener(strategy)
 
+    # Mock the leverage validator to return a successful result
     monkeypatch.setattr(
-        opener,
-        "_ensure_contract_attributes",
-        AsyncMock(return_value=True),
-    )
-    monkeypatch.setattr(
-        opener,
-        "_validate_leverage",
+        opener._leverage_validator,
+        "validate_leverage",
         AsyncMock(return_value=Decimal("90")),
     )
 
@@ -176,8 +184,7 @@ async def test_position_opener_handles_atomic_failure(monkeypatch):
     )
     opener = PositionOpener(strategy)
 
-    monkeypatch.setattr(opener, "_ensure_contract_attributes", AsyncMock(return_value=True))
-    monkeypatch.setattr(opener, "_validate_leverage", AsyncMock(return_value=Decimal("50")))
+    monkeypatch.setattr(opener._leverage_validator, "validate_leverage", AsyncMock(return_value=Decimal("50")))
 
     opportunity = _opportunity()
     position = await opener.open(opportunity)
@@ -196,8 +203,7 @@ async def test_position_opener_leverage_validation_failure(monkeypatch):
     )
     opener = PositionOpener(strategy)
 
-    monkeypatch.setattr(opener, "_ensure_contract_attributes", AsyncMock(return_value=True))
-    monkeypatch.setattr(opener, "_validate_leverage", AsyncMock(return_value=None))
+    monkeypatch.setattr(opener._leverage_validator, "validate_leverage", AsyncMock(return_value=None))
 
     opportunity = _opportunity()
     position = await opener.open(opportunity)
@@ -218,8 +224,7 @@ async def test_position_opener_passes_limit_offset(monkeypatch, offset):
     )
     opener = PositionOpener(strategy)
 
-    monkeypatch.setattr(opener, "_ensure_contract_attributes", AsyncMock(return_value=True))
-    monkeypatch.setattr(opener, "_validate_leverage", AsyncMock(return_value=Decimal("75")))
+    monkeypatch.setattr(opener._leverage_validator, "validate_leverage", AsyncMock(return_value=Decimal("75")))
 
     opportunity = _opportunity()
     await opener.open(opportunity)
