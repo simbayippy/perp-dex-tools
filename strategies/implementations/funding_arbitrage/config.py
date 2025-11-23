@@ -219,6 +219,20 @@ class FundingArbConfig(BaseModel):
         description="Max spread % for emergency closes (3%)"
     )
     
+    # Exit polling (delayed exit until profitable)
+    enable_exit_polling: bool = Field(
+        default=True,
+        description="Enable exit polling to wait for break-even exit"
+    )
+    exit_polling_interval_seconds: int = Field(
+        default=15,
+        description="Interval between price checks during exit polling (if websocket unavailable)"
+    )
+    exit_polling_max_duration_minutes: int = Field(
+        default=10,
+        description="Maximum time to wait for break-even exit before forcing close"
+    )
+    
     # Risk management
     risk_config: RiskManagementConfig = Field(
         default_factory=RiskManagementConfig,

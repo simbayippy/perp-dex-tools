@@ -345,13 +345,20 @@ class FundingArbStrategyController(BaseStrategyController):
             if hasattr(client, 'get_leverage_info'):
                 leverage_info = await client.get_leverage_info(symbol)
                 if leverage_info:
-                    # For Lighter: use max_leverage (symbol-level, already correct at 5x)
-                    # account_leverage is in wrong format (500/5E+2 instead of 5)
+                    # For Lighter: leverage is per-position, not account-level. Prioritize position leverage
+                    # (from initial_margin_fraction) over max_leverage (symbol-level maximum).
+                    # Note: Lighter doesn't support set_account_leverage() - leverage is determined
+                    # by Lighter's system when the position is created, not when orders are placed.
                     if dex_name == 'lighter':
+                        # account_leverage here is actually position-level leverage calculated from
+                        # the position's initial_margin_fraction (see account_manager.py line 240-248)
+                        position_leverage = leverage_info.get('account_leverage')
+                        if position_leverage is not None:
+                            return float(position_leverage)
+                        # Fallback to max_leverage if position doesn't exist yet or leverage unavailable
                         max_leverage = leverage_info.get('max_leverage')
                         if max_leverage is not None:
                             return float(max_leverage)
-                        # If max_leverage not available, fall through to account_leverage
                     
                     # For other exchanges: use max_leverage like leverage_validator does (line 174)
                     max_leverage = leverage_info.get('max_leverage')

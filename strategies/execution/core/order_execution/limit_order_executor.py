@@ -15,6 +15,7 @@ from exchange_clients.base_models import CancelReason, is_retryable_cancellation
 
 from ..execution_types import ExecutionResult
 from ..price_provider import PriceProvider
+from ..spread_utils import is_spread_acceptable
 from helpers.unified_logger import get_core_logger
 
 
@@ -76,6 +77,29 @@ class LimitOrderExecutor:
         try:
             best_bid, best_ask = await self.price_provider.get_bbo_prices(exchange_client, symbol)
             mid_price = (best_bid + best_ask) / 2
+            
+            # CRITICAL: Check spread before placing order (protect against spread widening)
+            # The spread may have widened between initial checks and actual order placement
+            exchange_name = exchange_client.get_exchange_name()
+            is_opening = not reduce_only
+            acceptable, spread_pct, reason = is_spread_acceptable(
+                best_bid, best_ask, is_opening=is_opening, is_critical=False
+            )
+            
+            if not acceptable:
+                operation_type = "opening" if is_opening else "closing"
+                self.logger.warning(
+                    f"[{exchange_name.upper()}] Spread too wide for {operation_type} {symbol}: "
+                    f"{reason} (bid={best_bid}, ask={best_ask}). "
+                    f"Rejecting limit order to prevent slippage."
+                )
+                return ExecutionResult(
+                    success=False,
+                    filled=False,
+                    error_message=f"Spread too wide: {reason}",
+                    execution_mode_used="limit_rejected_wide_spread",
+                    retryable=False,  # Don't retry - spread needs to narrow first
+                )
             
             # Calculate limit price (maker order with small improvement)
             if side == "buy":

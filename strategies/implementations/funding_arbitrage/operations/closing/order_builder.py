@@ -153,17 +153,35 @@ class OrderBuilder:
         else:
             use_market = reason in critical_reasons
         
-        # For critical exits with wide spread, use aggressive_limit instead of market
-        # For non-critical exits with acceptable spread, use aggressive_limit for better execution
-        # Aggressive limit uses adaptive pricing (inside spread → touch → cross spread) for optimal fills
-        if is_critical and not use_market:
-            # Critical exits: use aggressive_limit for better execution with adaptive pricing
-            execution_mode = "aggressive_limit"
-        elif not use_market:
-            # Non-critical exits: use aggressive_limit for better execution with adaptive pricing
+        # Execution mode strategy for closing positions:
+        # 
+        # INITIAL ATOMIC CLOSE (both legs placed simultaneously):
+        # - Use limit_only for passive maker orders (ask - 0.01% for buy, bid + 0.01% for sell)
+        # - Lower fees, better price execution
+        # - Protected by spread check in LimitOrderExecutor (rejects if spread > 2%)
+        # - If one side fills first → triggers aggressive_limit hedge (handled by HedgeManager)
+        # 
+        # HEDGE (when one side fills first):
+        # - Automatically uses aggressive_limit via HedgeManager.aggressive_limit_hedge()
+        # - NOT controlled by this order_builder (hedge bypasses order_builder entirely)
+        # - Adaptive pricing with break-even attempt, then touch → inside spread → cross spread
+        # - Multiple retries with fallback to market
+        # 
+        # CRITICAL EXITS (liquidation risk, severe imbalance):
+        # - Use aggressive_limit for faster execution
+        # - Speed is more important than optimal pricing
+        
+        if use_market:
+            # User explicitly requested market order or critical reason requires it
+            execution_mode = "market_only"
+        elif is_critical:
+            # Critical exits: Use aggressive_limit for faster execution
             execution_mode = "aggressive_limit"
         else:
-            execution_mode = "market_only"
+            # Initial close attempts: Use limit_only (passive maker orders)
+            # This is the first attempt to close both sides atomically
+            # Hedge attempts are handled separately by HedgeManager (not through order_builder)
+            execution_mode = "limit_only"
         
         limit_offset_pct = None if use_market else self._resolve_limit_offset_pct()
 

@@ -324,6 +324,7 @@ class StrategyNotificationService:
         age_hours: Optional[float] = None,
         size_usd: Optional[Decimal] = None,
         liquidation_risk_details: Optional[Dict[str, Any]] = None,
+        leg_pnl: Optional[Dict[str, Decimal]] = None,
     ) -> bool:
         """
         Send notification when a position is closed.
@@ -336,6 +337,7 @@ class StrategyNotificationService:
             age_hours: Optional position age in hours
             size_usd: Optional position size in USD
             liquidation_risk_details: Optional dict with liquidation risk info (for future use)
+            leg_pnl: Optional dict mapping exchange name to leg PnL (e.g., {"aster": Decimal("10.50"), "lighter": Decimal("-5.20")})
             
         Returns:
             True if notification queued successfully, False otherwise
@@ -384,6 +386,16 @@ class StrategyNotificationService:
                 if pnl_pct is not None:
                     message += f" ({pnl_pct*100:+.2f}%)"
             
+            # Add individual leg PnL if available
+            if leg_pnl:
+                message += "\n\n<b>Leg PnL:</b>"
+                for dex_name, leg_pnl_value in leg_pnl.items():
+                    if leg_pnl_value is not None:
+                        leg_emoji = "📈" if leg_pnl_value >= 0 else "📉"
+                        exchange_emoji = self._get_exchange_emoji(dex_name)
+                        exchange_display = f"{exchange_emoji} {dex_name.upper()}" if exchange_emoji else dex_name.upper()
+                        message += f"\n  {leg_emoji} {exchange_display}: ${leg_pnl_value:.2f}"
+            
             if age_hours is not None:
                 hours = int(age_hours)
                 minutes = int((age_hours - hours) * 60)
@@ -402,6 +414,8 @@ class StrategyNotificationService:
                 details["age_hours"] = age_hours
             if size_usd:
                 details["size_usd"] = float(size_usd)
+            if leg_pnl:
+                details["leg_pnl"] = {dex: float(pnl) for dex, pnl in leg_pnl.items() if pnl is not None}
             
             # Insert notification
             await database.execute(
@@ -492,6 +506,32 @@ class StrategyNotificationService:
             }
             if leverage_info:
                 details["leverage_info"] = leverage_info
+            
+            # Check if we've already sent a notification for this (exchange, symbol) pair recently (within last 5 minutes)
+            # This prevents duplicate notifications when multiple opportunities are checked simultaneously
+            recent_notification = await database.fetch_one(
+                """
+                SELECT id FROM strategy_notifications
+                WHERE strategy_run_id = :run_id
+                  AND notification_type = 'insufficient_margin'
+                  AND symbol = :symbol
+                  AND details->>'exchange_name' = :exchange_name
+                  AND created_at > NOW() - INTERVAL '5 minutes'
+                LIMIT 1
+                """,
+                {
+                    "run_id": run_id,
+                    "symbol": symbol,
+                    "exchange_name": exchange_name
+                }
+            )
+            
+            if recent_notification:
+                logger.debug(
+                    f"Skipping duplicate insufficient margin notification for {exchange_name.upper()}/{symbol} "
+                    f"(already notified within last 5 minutes)"
+                )
+                return False
             
             # Insert notification
             await database.execute(
