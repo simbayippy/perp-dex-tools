@@ -3,6 +3,14 @@
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional, Any
 
+# Import spread utilities from execution core (single source of truth)
+from strategies.execution.core.spread_utils import (
+    calculate_spread_pct,
+    MAX_ENTRY_SPREAD_PCT,
+    MAX_EXIT_SPREAD_PCT,
+    MAX_EMERGENCY_CLOSE_SPREAD_PCT,
+)
+
 if TYPE_CHECKING:
     from exchange_clients.base_models import ExchangePositionSnapshot
     from exchange_clients.base_client import BaseExchangeClient
@@ -69,4 +77,17 @@ async def fetch_mid_price(
         return None
 
     return (bid + ask) / 2
+
+
+# Note: Spread protection constants and calculate_spread_pct are now imported from
+# strategies.execution.core.spread_utils (single source of truth)
+# Re-export for backward compatibility
+__all__ = [
+    "extract_snapshot_price",
+    "fetch_mid_price",
+    "calculate_spread_pct",
+    "MAX_ENTRY_SPREAD_PCT",
+    "MAX_EXIT_SPREAD_PCT",
+    "MAX_EMERGENCY_CLOSE_SPREAD_PCT",
+]
 

@@ -866,6 +866,51 @@ class MonitoringHandler(BaseHandler):
                 reason="telegram_manual_close"
             )
             
+            # Check for wide spread warning
+            if data.get("wide_spread_warning") and order_type == "market":
+                # Show confirmation menu for wide spread market order
+                spread_pct = data.get("spread_pct", 0) * 100
+                bid = data.get("bid", 0)
+                ask = data.get("ask", 0)
+                
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                
+                keyboard = [
+                    [
+                        InlineKeyboardButton(
+                            "✅ Confirm Market Order",
+                            callback_data=f"confirm_market:{position_id}"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "❌ Cancel",
+                            callback_data=f"cancel_close:{position_id}"
+                        )
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(
+                    f"⚠️ <b>Wide Spread Detected</b>\n\n"
+                    f"Spread: <b>{spread_pct:.2f}%</b>\n"
+                    f"Bid: <code>${bid:.6f}</code>\n"
+                    f"Ask: <code>${ask:.6f}</code>\n\n"
+                    f"Market orders may experience significant slippage.\n\n"
+                    f"<b>Proceed anyway?</b>",
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+                
+                # Store pending close request
+                context.user_data['pending_close'] = {
+                    'position_id': position_id,
+                    'order_type': order_type,
+                    'api_url': api_url,
+                    'api_key': api_key,
+                }
+                return
+            
             message = self.formatter.format_close_result(data)
             await query.edit_message_text(message, parse_mode='HTML')
             
@@ -909,6 +954,77 @@ class MonitoringHandler(BaseHandler):
             # Clear user_data
             context.user_data.pop('close_position_id', None)
     
+    async def confirm_wide_spread_close_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle confirmation of wide spread market order."""
+        query = update.callback_query
+        await query.answer()
+        
+        # Parse callback data: "confirm_market:{position_id}"
+        callback_data = query.data
+        if not callback_data.startswith("confirm_market:"):
+            await query.edit_message_text(
+                "❌ Invalid confirmation. Please use /close again.",
+                parse_mode='HTML'
+            )
+            return
+        
+        position_id = callback_data.split(":", 1)[1]
+        
+        # Get pending close request
+        pending_close = context.user_data.get('pending_close')
+        if not pending_close or pending_close.get('position_id') != position_id:
+            await query.edit_message_text(
+                "❌ Close request expired. Please use /close again.",
+                parse_mode='HTML'
+            )
+            context.user_data.pop('pending_close', None)
+            return
+        
+        # Show processing message
+        await query.edit_message_text(
+            f"⏳ <b>Closing position with market order...</b>\n\n"
+            f"Position ID: <code>{position_id}</code>\n"
+            f"Order Type: MARKET (confirmed)",
+            parse_mode='HTML'
+        )
+        
+        try:
+            client = ControlAPIClient(pending_close['api_url'], pending_close['api_key'])
+            data = await client.close_position(
+                position_id=position_id,
+                order_type=pending_close['order_type'],
+                reason="telegram_manual_close",
+                confirm_wide_spread=True
+            )
+            
+            message = self.formatter.format_close_result(data)
+            await query.edit_message_text(message, parse_mode='HTML')
+            
+        except Exception as e:
+            self.logger.error(f"Confirmed close error: {e}")
+            await query.edit_message_text(
+                self.formatter.format_error(f"Failed to close position: {str(e)}"),
+                parse_mode='HTML'
+            )
+        finally:
+            # Clear user_data
+            context.user_data.pop('close_position_id', None)
+            context.user_data.pop('pending_close', None)
+    
+    async def cancel_close_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle cancellation of close request."""
+        query = update.callback_query
+        await query.answer()
+        
+        await query.edit_message_text(
+            "❌ Close cancelled.",
+            parse_mode='HTML'
+        )
+        
+        # Clear user_data
+        context.user_data.pop('close_position_id', None)
+        context.user_data.pop('pending_close', None)
+    
     def register_handlers(self, application):
         """Register monitoring command and callback handlers"""
         # Note: /status removed - use /list_strategies instead for strategy status
@@ -941,6 +1057,14 @@ class MonitoringHandler(BaseHandler):
         application.add_handler(CallbackQueryHandler(
             self.close_order_type_callback,
             pattern="^close_type:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.confirm_wide_spread_close_callback,
+            pattern="^confirm_market:"
+        ))
+        application.add_handler(CallbackQueryHandler(
+            self.cancel_close_callback,
+            pattern="^cancel_close:"
         ))
         application.add_handler(CallbackQueryHandler(
             self.close_order_type_callback,

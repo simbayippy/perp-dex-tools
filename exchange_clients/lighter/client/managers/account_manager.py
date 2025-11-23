@@ -225,7 +225,8 @@ class LighterAccountManager:
             maintenance_margin_int = market_detail.maintenance_margin_fraction
             maintenance_margin = Decimal(str(maintenance_margin_int)) / BASIS_POINTS_DIVISOR
             
-            # Try to get account-level leverage (current usage)
+            # Get position-level leverage (Lighter doesn't have account-level leverage concept)
+            # Leverage is determined per-position via initial_margin_fraction when position is created
             account_leverage = None
             try:
                 if self.account_api:
@@ -240,7 +241,8 @@ class LighterAccountManager:
                         # Look for position in this specific market
                         for position in account.positions:
                             if position.market_id == market_id:
-                                # Found position - get its leverage
+                                # Found position - calculate leverage from its initial_margin_fraction
+                                # This is the actual leverage used by this specific position
                                 if hasattr(position, 'initial_margin_fraction'):
                                     imf_int = position.initial_margin_fraction
                                     imf = Decimal(str(imf_int)) / BASIS_POINTS_DIVISOR
@@ -248,9 +250,7 @@ class LighterAccountManager:
                                         account_leverage = Decimal('1') / imf
                                 break
                         
-                        # Fallback: check account-level leverage
-                        if account_leverage is None and hasattr(account, 'leverage'):
-                            account_leverage = Decimal(str(account.leverage))
+                        # Note: Lighter doesn't have account-level leverage, so no fallback needed
                             
             except Exception as e:
                 self.logger.debug(f"Could not get account leverage: {e}")
@@ -258,7 +258,7 @@ class LighterAccountManager:
             self.logger.info(
                 f"📊 [LIGHTER] Leverage info for {symbol}:\n"
                 f"  - Symbol max leverage: {max_leverage:.1f}x\n"
-                f"  - Account leverage: {account_leverage}x\n"
+                f"  - Position leverage: {account_leverage}x (from position's initial_margin_fraction, if position exists)\n"
                 f"  - Max notional: None\n"
                 f"  - Margin requirement: {min_margin_fraction} ({min_margin_fraction*100:.1f}%)"
             )

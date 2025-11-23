@@ -406,6 +406,100 @@ class ExitEvaluator:
 
         return False
     
+    def can_exit_at_break_even(
+        self,
+        position: "FundingArbPosition",
+        snapshots: Dict[str, Optional["ExchangePositionSnapshot"]],
+    ) -> bool:
+        """
+        Check if position can exit at break-even or better.
+        
+        Uses unrealized PnL from snapshots to determine if net exit would be break-even
+        after accounting for estimated closing fees.
+        
+        Args:
+            position: Position to check
+            snapshots: Exchange snapshots with unrealized PnL
+            
+        Returns:
+            True if net unrealized PnL >= estimated closing fees (break-even or better)
+        """
+        strategy = self._strategy
+        
+        # Get unrealized PnL from snapshots for both legs
+        total_unrealized_pnl = Decimal("0")
+        has_unrealized_data = False
+        
+        for dex in [position.long_dex, position.short_dex]:
+            snapshot = snapshots.get(dex) or snapshots.get(dex.lower())
+            if not snapshot:
+                continue
+            
+            if snapshot.unrealized_pnl is not None:
+                total_unrealized_pnl += to_decimal(snapshot.unrealized_pnl)
+                has_unrealized_data = True
+            elif snapshot.mark_price is not None and snapshot.entry_price is not None:
+                # Fallback: calculate from entry_price and mark_price
+                entry_price = to_decimal(snapshot.entry_price)
+                mark_price = to_decimal(snapshot.mark_price)
+                quantity = snapshot.quantity.copy_abs() if snapshot.quantity else Decimal("0")
+                
+                if quantity > 0:
+                    side = snapshot.side or ("long" if dex == position.long_dex else "short")
+                    if side == "long":
+                        leg_pnl = (mark_price - entry_price) * quantity
+                    else:  # short
+                        leg_pnl = (entry_price - mark_price) * quantity
+                    total_unrealized_pnl += leg_pnl
+                    has_unrealized_data = True
+        
+        if not has_unrealized_data:
+            # If we can't determine unrealized PnL, assume we can't exit at break-even
+            strategy.logger.debug(
+                f"Cannot determine break-even for {position.symbol}: missing unrealized PnL data"
+            )
+            return False
+        
+        # Estimate closing fees (using limit orders for better execution)
+        estimated_closing_fees = Decimal("0")
+        try:
+            fee_calculator = getattr(strategy, "fee_calculator", None)
+            if fee_calculator:
+                for dex in [position.long_dex, position.short_dex]:
+                    snapshot = snapshots.get(dex) or snapshots.get(dex.lower())
+                    if not snapshot:
+                        continue
+                    
+                    quantity = snapshot.quantity.copy_abs() if snapshot.quantity else Decimal("0")
+                    mark_price = snapshot.mark_price
+                    if quantity > 0 and mark_price:
+                        mark_price_decimal = to_decimal(mark_price)
+                        order_value_usd = quantity * mark_price_decimal
+                        
+                        fee_structure = fee_calculator.get_fee_structure(dex)
+                        # Use maker fee (limit orders) for estimation
+                        fee_rate = fee_structure.maker_fee
+                        estimated_closing_fees += order_value_usd * to_decimal(fee_rate)
+        except Exception as exc:
+            strategy.logger.warning(
+                f"Failed to estimate closing fees for {position.symbol}: {exc}. "
+                f"Assuming break-even check passes."
+            )
+            # If we can't estimate fees, be conservative and assume we can exit
+            return True
+        
+        # Break-even if total_unrealized_pnl >= estimated_closing_fees
+        can_exit = total_unrealized_pnl >= estimated_closing_fees
+        
+        strategy.logger.debug(
+            f"Break-even check for {position.symbol}: "
+            f"unrealized_pnl=${total_unrealized_pnl:.2f}, "
+            f"estimated_closing_fees=${estimated_closing_fees:.2f}, "
+            f"can_exit={can_exit}"
+        )
+        
+        return can_exit
+    
     @staticmethod
     def _symbols_match(position_symbol: Optional[str], event_symbol: Optional[str]) -> bool:
         """Check if two symbols match (handles variations like BTC vs BTCUSDT)."""

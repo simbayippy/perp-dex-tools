@@ -25,6 +25,7 @@ except ImportError:
 class ClosePositionRequest(BaseModel):
     order_type: str = Field(default="market", description="Order type: 'market' or 'limit'")
     reason: str = Field(default="manual_close", description="Reason for closing")
+    confirm_wide_spread: bool = Field(default=False, description="Confirm to proceed despite wide spread warning")
 
 
 class ErrorResponse(BaseModel):
@@ -300,8 +301,13 @@ async def close_position(
             position_id=position_id,
             account_ids=account_ids,
             order_type=request.order_type,
-            reason=request.reason
+            reason=request.reason,
+            confirm_wide_spread=request.confirm_wide_spread
         )
+        
+        # If wide spread warning, return the warning response (don't raise error)
+        if result.get("wide_spread_warning"):
+            return result
         
         if not result.get("success"):
             raise HTTPException(

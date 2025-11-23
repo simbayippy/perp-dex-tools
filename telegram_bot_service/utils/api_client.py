@@ -89,7 +89,8 @@ class ControlAPIClient:
         self,
         position_id: str,
         order_type: str = "market",
-        reason: str = "manual_close"
+        reason: str = "manual_close",
+        confirm_wide_spread: bool = False
     ) -> Dict[str, Any]:
         """
         Close a position.
@@ -98,6 +99,7 @@ class ControlAPIClient:
             position_id: Position ID (UUID)
             order_type: "market" or "limit"
             reason: Reason for closing
+            confirm_wide_spread: If True, proceed with close despite wide spread warning
         """
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
@@ -105,7 +107,8 @@ class ControlAPIClient:
                 headers=self.headers,
                 json={
                     "order_type": order_type,
-                    "reason": reason
+                    "reason": reason,
+                    "confirm_wide_spread": confirm_wide_spread
                 }
             )
             response.raise_for_status()

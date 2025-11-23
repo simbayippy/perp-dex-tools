@@ -6,6 +6,7 @@ Fundamental components for order execution:
 - LiquidityAnalyzer: Pre-flight depth checks
 - PositionSizer: USD↔Quantity conversion
 - SlippageCalculator: Slippage tracking
+- Spread utilities: calculate_spread_pct, is_spread_acceptable, MAX_*_SPREAD_PCT constants
 """
 
 from strategies.execution.core.order_executor import OrderExecutor
@@ -18,6 +19,13 @@ from strategies.execution.core.execution_strategies import (
     SimpleLimitExecutionStrategy,
     AggressiveLimitExecutionStrategy,
     MarketExecutionStrategy,
+)
+from strategies.execution.core.spread_utils import (
+    calculate_spread_pct,
+    is_spread_acceptable,
+    MAX_ENTRY_SPREAD_PCT,
+    MAX_EXIT_SPREAD_PCT,
+    MAX_EMERGENCY_CLOSE_SPREAD_PCT,
 )
 
 __all__ = [
@@ -32,5 +40,10 @@ __all__ = [
     "SimpleLimitExecutionStrategy",
     "AggressiveLimitExecutionStrategy",
     "MarketExecutionStrategy",
+    "calculate_spread_pct",
+    "is_spread_acceptable",
+    "MAX_ENTRY_SPREAD_PCT",
+    "MAX_EXIT_SPREAD_PCT",
+    "MAX_EMERGENCY_CLOSE_SPREAD_PCT",
 ]
 

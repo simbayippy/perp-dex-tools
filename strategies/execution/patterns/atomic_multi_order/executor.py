@@ -661,6 +661,7 @@ class AtomicMultiOrderExecutor:
             "limit_with_fallback": ExecutionMode.LIMIT_WITH_FALLBACK,
             "market_only": ExecutionMode.MARKET_ONLY,
             "adaptive": ExecutionMode.ADAPTIVE,
+            "aggressive_limit": ExecutionMode.AGGRESSIVE_LIMIT,
         }
 
         execution_mode = mode_map.get(spec.execution_mode, ExecutionMode.LIMIT_WITH_FALLBACK)
