@@ -42,6 +42,7 @@ class StubPositionManager:
         self.created = []
         self.updated = []
         self.closed = []
+        self.account_id = None  # Optional - for storing trades
 
     async def find_open_position(self, *args, **kwargs):
         return self._existing
@@ -93,6 +94,10 @@ class StubExchangeClient:
     async def ensure_market_feed(self, symbol):
         """No-op for testing."""
         pass
+
+    def get_quantity_multiplier(self, symbol=None):
+        """Get quantity multiplier for this exchange."""
+        return Decimal("1.0")
 
     async def get_position_snapshot(self, symbol):
         return self.snapshot
@@ -227,6 +232,7 @@ def _strategy(atomic_result=None, position_manager=None, exchange_clients=None, 
             get_bbo_prices=AsyncMock(return_value=(Decimal("100"), Decimal("101")))
         ),
         position_opened_this_session=False,  # Required by persistence handler
+        notification_service=None,  # Optional - position opener catches exceptions
     )
 
 
@@ -240,7 +246,7 @@ async def test_open_position_success_integration(monkeypatch):
     strategy = _strategy(position_manager=position_manager, exchange_clients=exchange_clients)
     opener = PositionOpener(strategy)
 
-    monkeypatch.setattr(opener._leverage_validator, "validate_leverage", AsyncMock(return_value=Decimal("40")))
+    monkeypatch.setattr(opener._leverage_validator, "validate_leverage", AsyncMock(return_value={"adjusted_size": Decimal("40"), "normalized_leverage": Decimal("10")}))
 
     opportunity = _opportunity()
     result = await opener.open(opportunity)
@@ -274,7 +280,7 @@ async def test_open_position_handles_atomic_failure(monkeypatch):
     strategy = _strategy(atomic_result=failure_result, position_manager=position_manager, exchange_clients=exchange_clients)
     opener = PositionOpener(strategy)
 
-    monkeypatch.setattr(opener._leverage_validator, "validate_leverage", AsyncMock(return_value=Decimal("40")))
+    monkeypatch.setattr(opener._leverage_validator, "validate_leverage", AsyncMock(return_value={"adjusted_size": Decimal("40"), "normalized_leverage": Decimal("10")}))
 
     opportunity = _opportunity()
     result = await opener.open(opportunity)
@@ -295,7 +301,7 @@ async def test_open_position_merges_existing(monkeypatch):
     strategy = _strategy(position_manager=position_manager, exchange_clients=exchange_clients)
     opener = PositionOpener(strategy)
 
-    monkeypatch.setattr(opener._leverage_validator, "validate_leverage", AsyncMock(return_value=Decimal("20")))
+    monkeypatch.setattr(opener._leverage_validator, "validate_leverage", AsyncMock(return_value={"adjusted_size": Decimal("20"), "normalized_leverage": Decimal("10")}))
 
     opportunity = _opportunity()
     result = await opener.open(opportunity)
