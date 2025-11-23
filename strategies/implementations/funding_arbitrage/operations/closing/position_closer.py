@@ -535,6 +535,13 @@ class PositionCloser:
             )
             
             try:
+                # Extract leg PnL from pre_close_snapshots for individual leg breakdown
+                leg_pnl: Dict[str, Decimal] = {}
+                for dex in [position.long_dex, position.short_dex]:
+                    snapshot = pre_close_snapshots.get(dex) or pre_close_snapshots.get(dex.lower())
+                    if snapshot and snapshot.unrealized_pnl is not None:
+                        leg_pnl[dex] = to_decimal(snapshot.unrealized_pnl)
+                
                 await strategy.notification_service.notify_position_closed(
                     symbol=position.symbol,
                     reason=reason,
@@ -542,6 +549,7 @@ class PositionCloser:
                     pnl_pct=pnl_pct,
                     age_hours=position.get_age_hours(),
                     size_usd=position.size_usd,
+                    leg_pnl=leg_pnl if leg_pnl else None,
                 )
             except Exception as exc:
                 strategy.logger.warning(f"Failed to send position closed notification: {exc}")
