@@ -85,15 +85,25 @@ class StubExchangeClient:
         )
         return OrderResult(success=True, order_id=order_id, side=side, size=Decimal(str(quantity)), price=Decimal(str(price)), status="FILLED")
 
-    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str):
+    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str, reduce_only: bool = False):
         order_id = f"{self._name}-market-{self._order_counter}"
         self._order_counter += 1
         price = Decimal("100.25")
+        info = OrderInfo(
+            order_id=order_id,
+            side=side,
+            size=Decimal(str(quantity)),
+            price=price,
+            status="FILLED",
+            filled_size=Decimal(str(quantity)),
+        )
+        self._orders[order_id] = info
         self.market_orders.append(
             {
                 "contract_id": contract_id,
                 "quantity": Decimal(str(quantity)),
                 "side": side,
+                "reduce_only": reduce_only,
             }
         )
         return OrderResult(
@@ -114,6 +124,14 @@ class StubExchangeClient:
 
     async def get_order_info(self, order_id: str, *, force_refresh: bool = False):
         return self._orders.get(order_id)
+
+    def resolve_contract_id(self, symbol: str) -> str:
+        """Resolve symbol to contract ID."""
+        return f"{self._name.upper()}-{symbol}"
+
+    def get_quantity_multiplier(self, symbol: str = None) -> Decimal:
+        """Get quantity multiplier for this exchange."""
+        return Decimal("1.0")
 
 
 class StubPositionManager:
@@ -137,6 +155,10 @@ class StubPositionManager:
             if pos.id == position_id:
                 return pos
         return None
+
+    async def get_cumulative_funding(self, position_id):
+        """Get cumulative funding for a position."""
+        return Decimal("0")
 
 
 def _make_position(symbol="BTC", long_dex="aster", short_dex="lighter", opened_at=None):

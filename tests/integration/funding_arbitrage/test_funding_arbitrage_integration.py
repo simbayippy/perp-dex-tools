@@ -69,20 +69,30 @@ class StubPositionManager:
                 return pos
         return None
 
+    async def get_cumulative_funding(self, position_id):
+        """Get cumulative funding for a position."""
+        return Decimal("0")
+
 
 class StubExchangeClient:
     def __init__(self, name, snapshot=None):
         self.name = name
-        self.config = SimpleNamespace(contract_id=f"{name.upper()}-CONTRACT")
+        self.config = SimpleNamespace(contract_id=f"{name.upper()}-CONTRACT", ticker="BTC")
         self.snapshot = snapshot
         self.closed = []
         self.market_orders = []
+        self._orders = {}
+        self._order_counter = 0
 
     def get_exchange_name(self):
         return self.name
 
     async def get_contract_attributes(self):
-        return "CONTRACT", Decimal("0.01")
+        return f"{self.name.upper()}-CONTRACT", Decimal("0.01")
+
+    async def ensure_market_feed(self, symbol):
+        """No-op for testing."""
+        pass
 
     async def get_position_snapshot(self, symbol):
         return self.snapshot
@@ -93,16 +103,28 @@ class StubExchangeClient:
     def round_to_step(self, quantity: Decimal) -> Decimal:
         return quantity
 
-    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str):
+    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str, reduce_only: bool = False):
+        order_id = f"{self.name}-market-{self._order_counter}"
+        self._order_counter += 1
         price = Decimal("100.5")
+        info = OrderInfo(
+            order_id=order_id,
+            side=side,
+            size=Decimal(str(quantity)),
+            price=price,
+            status="FILLED",
+            filled_size=Decimal(str(quantity)),
+        )
+        self._orders[order_id] = info
         self.market_orders.append({
             "contract_id": contract_id,
             "quantity": Decimal(str(quantity)),
             "side": side,
+            "reduce_only": reduce_only,
         })
         return OrderResult(
             success=True,
-            order_id=f"{self.name}-market",
+            order_id=order_id,
             side=side,
             size=Decimal(str(quantity)),
             price=price,
@@ -125,18 +147,18 @@ class StubExchangeClient:
         return OrderResult(success=True, order_id=order_id)
 
     async def get_order_info(self, order_id: str, *, force_refresh: bool = False):
-        return OrderInfo(
-            order_id=order_id,
-            side="buy",
-            size=Decimal("1"),
-            price=Decimal("100"),
-            status="FILLED",
-            filled_size=Decimal("1"),
-            remaining_size=Decimal("0"),
-        )
+        return self._orders.get(order_id)
 
     async def close_position(self, symbol: str):
         self.closed.append(symbol)
+
+    def resolve_contract_id(self, symbol: str) -> str:
+        """Resolve symbol to contract ID."""
+        return f"{self.name.upper()}-{symbol}"
+
+    def get_quantity_multiplier(self) -> Decimal:
+        """Get quantity multiplier for this exchange."""
+        return Decimal("1.0")
 
 
 def _atomic_success():
@@ -189,7 +211,8 @@ def _strategy(atomic_result=None, position_manager=None, exchange_clients=None, 
     return SimpleNamespace(
         exchange_clients=exchange_clients or {},
         atomic_executor=SimpleNamespace(
-            execute_atomically=AsyncMock(return_value=atomic_result or _atomic_success())
+            execute_atomically=AsyncMock(return_value=atomic_result or _atomic_success()),
+            _normalized_leverage={},  # Required by execution engine
         ),
         fee_calculator=SimpleNamespace(calculate_total_cost=lambda *args, **kwargs: Decimal("1.0")),
         position_manager=position_manager or StubPositionManager(),
@@ -203,6 +226,7 @@ def _strategy(atomic_result=None, position_manager=None, exchange_clients=None, 
         price_provider=SimpleNamespace(
             get_bbo_prices=AsyncMock(return_value=(Decimal("100"), Decimal("101")))
         ),
+        position_opened_this_session=False,  # Required by persistence handler
     )
 
 

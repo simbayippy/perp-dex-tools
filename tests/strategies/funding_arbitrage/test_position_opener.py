@@ -56,6 +56,7 @@ class StubAtomicExecutor:
         self.calls = 0
         self.last_args = None
         self.last_kwargs = None
+        self._normalized_leverage = {}  # Required by execution engine
 
     async def execute_atomically(self, *args, **kwargs):
         self.calls += 1
@@ -89,6 +90,7 @@ def _strategy(
         failed_symbols=set(),
         price_provider=StubPriceProvider(),
         atomic_retry_policy=None,
+        position_opened_this_session=False,  # Required by persistence handler
     )
 
 
@@ -113,10 +115,18 @@ def _opportunity(symbol="BTC"):
 
 
 def _exchange_client():
+    async def get_contract_attributes():
+        return "BTCUSDT", Decimal("0.01")
+
+    async def ensure_market_feed(symbol):
+        pass  # No-op for testing
+
     return SimpleNamespace(
-        config=SimpleNamespace(contract_id="BTCUSDT"),
+        config=SimpleNamespace(contract_id="BTCUSDT", ticker="BTC"),
         get_exchange_name=lambda: "stubdex",
         round_to_step=lambda qty: qty,
+        get_contract_attributes=get_contract_attributes,
+        ensure_market_feed=ensure_market_feed,
     )
 
 
