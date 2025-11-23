@@ -13,19 +13,19 @@ class StubLogger:
     def __init__(self):
         self.entries = []
 
-    def log(self, message: str, level: str = "INFO"):
+    def log(self, message: str, level: str = "INFO", **kwargs):
         self.entries.append((level, message))
 
-    def info(self, message: str):
+    def info(self, message: str, **kwargs):
         self.entries.append(("INFO", message))
 
-    def debug(self, message: str):
+    def debug(self, message: str, **kwargs):
         self.entries.append(("DEBUG", message))
 
-    def error(self, message: str):
+    def error(self, message: str, **kwargs):
         self.entries.append(("ERROR", message))
 
-    def warning(self, message: str):
+    def warning(self, message: str, **kwargs):
         self.entries.append(("WARNING", message))
 
 
