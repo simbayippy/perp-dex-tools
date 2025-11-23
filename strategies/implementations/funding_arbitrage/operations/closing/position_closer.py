@@ -113,16 +113,16 @@ class PositionCloser:
                     # Don't close if profit disappeared - continue to next position
                     continue
 
-                # Execute profit-taking close with aggressive limit orders
+                # Execute profit-taking close with normal limit orders (hedge will use aggressive_limit)
                 strategy.logger.info(
-                    f"💰 Executing profit-taking close with aggressive limit orders for {position.symbol}"
+                    f"💰 Executing profit-taking close with limit orders for {position.symbol}"
                 )
                 self._cancel_exit_polling(position)
                 await self.close(
                     position,
                     profit_reason,
                     live_snapshots=snapshots,
-                    order_type="aggressive_limit",  # Use aggressive limit for best fills
+                    order_type="limit",  # Use normal limit orders initially, hedge will use aggressive_limit if one leg fills first
                 )
                 actions.append(f"Closed {position.symbol}: {profit_reason}")
                 continue

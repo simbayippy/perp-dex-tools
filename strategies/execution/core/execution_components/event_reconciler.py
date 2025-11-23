@@ -355,6 +355,11 @@ class EventBasedReconciler:
                 elapsed = time.time() - start_time
                 if elapsed >= attempt_timeout:
                     event_task.cancel()
+                    # Properly await cancellation to ensure inner tasks are cleaned up
+                    try:
+                        await event_task
+                    except asyncio.CancelledError:
+                        pass
                     status = "TIMEOUT"
                     break
                 
@@ -364,6 +369,11 @@ class EventBasedReconciler:
                     # CRITICAL: _check_order_status_in_cache already updated tracker.filled_quantity
                     # from the cache, so tracker now has the correct final filled amount
                     event_task.cancel()
+                    # Properly await cancellation to ensure inner tasks are cleaned up
+                    try:
+                        await event_task
+                    except asyncio.CancelledError:
+                        pass
                     status = "FILLED"
                     logger.debug(
                         f"✅ [{exchange_name}] Order {order_id} FILLED detected via websocket cache (safety net) for {symbol} "
@@ -372,6 +382,11 @@ class EventBasedReconciler:
                     break
                 elif cached_status == "CANCELED":
                     event_task.cancel()
+                    # Properly await cancellation to ensure inner tasks are cleaned up
+                    try:
+                        await event_task
+                    except asyncio.CancelledError:
+                        pass
                     status = "CANCELED"
                     logger.debug(
                         f"✅ [{exchange_name}] Order {order_id} CANCELED detected via websocket cache (safety net) for {symbol}"
@@ -381,7 +396,7 @@ class EventBasedReconciler:
                 # Wait before next check (status callbacks should fire before this)
                 await asyncio.sleep(check_interval)
             
-            # Get result from event task if it completed
+            # Get result from event task if it completed (and wasn't cancelled above)
             if status is None:
                 try:
                     status = await event_task
