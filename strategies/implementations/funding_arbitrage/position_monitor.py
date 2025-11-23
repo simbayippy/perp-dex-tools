@@ -230,8 +230,8 @@ class PositionMonitor:
             position.metadata["exchange_funding"] = total_funding
 
             # Track cross-exchange spread for profit-taking opportunities
-            long_snapshot = snapshots.get(position.long_dex)
-            short_snapshot = snapshots.get(position.short_dex)
+            long_snapshot = exchange_snapshots.get((position.long_dex.lower(), position.symbol.upper()))
+            short_snapshot = exchange_snapshots.get((position.short_dex.lower(), position.symbol.upper()))
 
             if long_snapshot and short_snapshot:
                 long_price = long_snapshot.mark_price
