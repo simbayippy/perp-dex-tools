@@ -1,4 +1,8 @@
 ## ISSUE - when lighter has maintanenece on their platform
+- we can use their https://status.lighter.xyz/ where we can register a custom webhook endpoint where they'll send us updates
+- use this to get an idea of when theres maintanenece, as well as how long
+- we can also thus know that its not an issue, and not jump to assumption that position on lighter got Closed
+- basically -> webhook -> get maintanenece duration -> if position open, account for this
 
 ===========================
 2025-11-09 12:07:16 | INFO     | trading_bot:_connect_exchanges:257       | Connecting to aster...

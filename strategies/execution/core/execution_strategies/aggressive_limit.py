@@ -844,6 +844,25 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                             retry_count, config.max_retries, logger
                         )
                     
+                    # Defensive check: if accumulated fills meet threshold, treat as filled
+                    # even if reconciliation result says filled=False (handles timeout edge cases)
+                    if not recon_result.filled and self._check_fill_threshold(state.accumulated_filled_qty, target_quantity):
+                        logger.warning(
+                            f"⚠️ [{exchange_name}] Reconciliation returned filled=False but accumulated fills "
+                            f"({state.accumulated_filled_qty}/{target_quantity}) meet threshold. "
+                            f"Treating as filled to prevent double-ordering."
+                        )
+                        # Treat as filled
+                        filled_qty = state.accumulated_filled_qty
+                        fill_price = state.accumulated_fill_price or price_result.limit_price
+                        self._log_fill_success(
+                            exchange_name, symbol, fill_price, filled_qty,
+                            state.accumulated_filled_qty, target_quantity, retry_count, logger
+                        )
+                        state.execution_success = True
+                        state.retries_used = retry_count + 1
+                        break
+                    
                     # Check if filled
                     if recon_result.filled and state.accumulated_filled_qty > Decimal("0"):
                         filled_qty = state.accumulated_filled_qty

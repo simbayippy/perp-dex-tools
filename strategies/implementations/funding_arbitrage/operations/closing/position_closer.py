@@ -990,12 +990,12 @@ class PositionCloser:
             return False, "Missing exchange client"
 
         try:
-            # Get fresh BBO for both legs
-            long_bbo = await price_provider.get_bbo_prices(long_client, position.symbol)
-            long_fresh_mark = (long_bbo.bid + long_bbo.ask) / Decimal("2")
+            # Get fresh BBO for both legs (returns tuple of (bid, ask))
+            long_bid, long_ask = await price_provider.get_bbo_prices(long_client, position.symbol)
+            long_fresh_mark = (long_bid + long_ask) / Decimal("2")
 
-            short_bbo = await price_provider.get_bbo_prices(short_client, position.symbol)
-            short_fresh_mark = (short_bbo.bid + short_bbo.ask) / Decimal("2")
+            short_bid, short_ask = await price_provider.get_bbo_prices(short_client, position.symbol)
+            short_fresh_mark = (short_bid + short_ask) / Decimal("2")
 
         except Exception as e:
             strategy.logger.error(f"Failed to fetch fresh BBO prices for {position.symbol}: {e}")

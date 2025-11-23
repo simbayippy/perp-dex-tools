@@ -475,9 +475,13 @@ class EventBasedReconciler:
                     f"(fill or cancel) for {order_id}"
                 )
                 
+                # Track final status detected during extended wait
+                final_status_detected = None
+                
                 while time.time() - wait_start < extended_wait:
                     # Check if tracker received websocket event (for incremental fills)
                     if tracker.status in {"FILLED", "CANCELED"}:
+                        final_status_detected = tracker.status
                         if tracker.status == "FILLED":
                             logger.info(
                                 f"✅ [{exchange_name}] Order {order_id} filled (via websocket callback): "
@@ -493,12 +497,14 @@ class EventBasedReconciler:
                     # This catches status changes that don't trigger incremental fill callbacks
                     cached_status = self._check_order_status_in_cache(exchange_client, order_id, tracker)
                     if cached_status == "FILLED":
+                        final_status_detected = "FILLED"
                         logger.info(
                             f"✅ [{exchange_name}] Order {order_id} filled (via websocket cache): "
                             f"{tracker.filled_quantity} @ ${tracker.fill_price or limit_price} for {symbol}"
                         )
                         break
                     elif cached_status == "CANCELED":
+                        final_status_detected = "CANCELED"
                         logger.info(
                             f"✅ [{exchange_name}] Order {order_id} cancelled (via websocket cache) for {symbol}"
                         )
@@ -511,6 +517,7 @@ class EventBasedReconciler:
                 if tracker.status not in {"FILLED", "CANCELED"}:
                     # Check websocket cache one more time (cancellation might have arrived)
                     if self._check_cancellation_status(exchange_client, order_id, tracker):
+                        final_status_detected = "CANCELED"
                         logger.info(
                             f"✅ [{exchange_name}] Order {order_id} cancelled (found in websocket cache) for {symbol}"
                         )
@@ -521,6 +528,7 @@ class EventBasedReconciler:
                             if final_check:
                                 final_status = final_check.status.upper()
                                 if final_status == "FILLED":
+                                    final_status_detected = "FILLED"
                                     filled_size = getattr(final_check, 'filled_size', Decimal("0"))
                                     price = getattr(final_check, 'price', limit_price)
                                     if filled_size > tracker.filled_quantity:
@@ -538,6 +546,7 @@ class EventBasedReconciler:
                                         f"Captured via polling: {filled_size} @ ${price}"
                                     )
                                 elif final_status in {"CANCELED", "CANCELLED"}:
+                                    final_status_detected = "CANCELED"
                                     # Update tracker with cancel status
                                     filled_size = getattr(final_check, 'filled_size', Decimal("0"))
                                     tracker.on_cancel(coerce_decimal(filled_size) if filled_size else Decimal("0"))
@@ -554,17 +563,42 @@ class EventBasedReconciler:
                                 f"❌ [{exchange_name}] Failed to verify final state for {order_id}: {final_exc}"
                             )
                 
-                # Check if we have partial fills
+                # Recalculate accumulated fills after extended wait (fills may have arrived during wait)
+                new_fills_from_order_after_wait = tracker.filled_quantity - current_order_filled_qty
+                if new_fills_from_order_after_wait > Decimal("0"):
+                    accumulated_filled_qty += new_fills_from_order_after_wait
+                    current_order_filled_qty = tracker.filled_quantity
+                
+                # Determine fill status based on tracker state
+                # Check if order was fully filled (99% threshold to handle rounding)
+                fill_threshold = order_quantity * Decimal("0.99")
+                is_full_fill = tracker.filled_quantity >= fill_threshold
+                
                 if tracker.filled_quantity > Decimal("0"):
-                    partial_fill_detected = True
                     filled_qty = tracker.filled_quantity
                     fill_price = tracker.fill_price or limit_price
                     
-                    logger.debug(
-                        f"📊 [{exchange_name}] Partial fill detected on timeout for {symbol}: "
-                        f"{filled_qty} @ ${fill_price}"
-                    )
+                    # Determine if this is a full fill or partial fill
+                    if final_status_detected == "FILLED" or tracker.status == "FILLED" or is_full_fill:
+                        # Full fill detected
+                        filled = True
+                        partial_fill_detected = False
+                        logger.info(
+                            f"✅ [{exchange_name}] Order {order_id} fully filled on timeout for {symbol}: "
+                            f"{filled_qty} @ ${fill_price}"
+                        )
+                    else:
+                        # Partial fill detected
+                        filled = False
+                        partial_fill_detected = True
+                        logger.debug(
+                            f"📊 [{exchange_name}] Partial fill detected on timeout for {symbol}: "
+                            f"{filled_qty} @ ${fill_price}"
+                        )
                 else:
+                    # No fills detected
+                    filled = False
+                    partial_fill_detected = False
                     logger.debug(
                         f"⏱️ [{exchange_name}] Order {order_id} timeout for {symbol} "
                         f"(no fills detected)"
