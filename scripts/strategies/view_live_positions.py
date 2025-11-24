@@ -302,7 +302,7 @@ class LivePositionViewer:
 
         layout = Layout()
         layout.split(
-            Layout(self._render_logs(), size=20),
+            Layout(self._render_logs(), size=16),
             Layout(self.generate_table()),
         )
         return layout
@@ -850,10 +850,48 @@ async def auto_configure_viewer(
 def find_log_files(run: Optional[StrategyRunInfo]) -> List[Tuple[str, Path]]:
     if not run:
         return []
-    log_dir = project_root / "logs"
-    stdout = log_dir / f"strategy_{run.run_id}.out.log"
-    stderr = log_dir / f"strategy_{run.run_id}.err.log"
-    return [("stdout", stdout), ("stderr", stderr)]
+
+    def locate_logs(base_dir: Path, run_id: str) -> Tuple[Optional[Path], Optional[Path], str]:
+        if not base_dir.exists():
+            return None, None, run_id
+
+        # Attempt fuzzy match on existing files
+        for log_file in base_dir.glob("strategy_*.out.log"):
+            name = log_file.name
+            if not name.startswith("strategy_") or not name.endswith(".out.log"):
+                continue
+            file_uuid = name[len("strategy_") : -len(".out.log")]
+            if file_uuid.startswith(run_id) or run_id.startswith(file_uuid[:8]):
+                stdout_path = log_file
+                stderr_path = base_dir / f"strategy_{file_uuid}.err.log"
+                return stdout_path, stderr_path, file_uuid
+
+        # Direct path fallback
+        stdout_path = base_dir / f"strategy_{run_id}.out.log"
+        stderr_path = base_dir / f"strategy_{run_id}.err.log"
+        return stdout_path, stderr_path, run_id
+
+    search_dirs = [project_root / "logs", project_root]
+    stdout = stderr = None
+    run_id = run.run_id
+
+    for directory in search_dirs:
+        stdout_candidate, stderr_candidate, normalized_id = locate_logs(directory, run_id)
+        if stdout_candidate and stdout_candidate.exists():
+            stdout = stdout_candidate
+            run_id = normalized_id
+        if stderr_candidate and stderr_candidate.exists():
+            stderr = stderr_candidate
+            run_id = normalized_id
+        if stdout or stderr:
+            break
+
+    log_files: List[Tuple[str, Path]] = []
+    if stdout and stdout.exists():
+        log_files.append(("stdout", stdout))
+    if stderr and stderr.exists():
+        log_files.append(("stderr", stderr))
+    return log_files
 
 
 async def main() -> None:
