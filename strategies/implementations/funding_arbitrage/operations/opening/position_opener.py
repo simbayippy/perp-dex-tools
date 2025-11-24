@@ -228,15 +228,6 @@ class PositionOpener:
             except Exception as e:
                 self._strategy.logger.warning(f"Failed to register profit-taking listeners: {e}")
 
-            # Add position to live table and start display
-            try:
-                live_table = getattr(self._strategy, 'live_table', None)
-                if live_table:
-                    await live_table.add_position(persistence.position)
-                    await self._strategy.ensure_live_table_started()
-            except Exception as e:
-                self._strategy.logger.warning(f"Failed to add position to live table: {e}")
-
             return persistence.position
 
         except Exception as e:

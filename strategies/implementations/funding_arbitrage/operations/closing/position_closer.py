@@ -273,14 +273,6 @@ class PositionCloser:
                 f"✅ Closed {position.symbol} ({reason}): PnL=${pnl:.2f} ({pnl_pct*100:.2f}%) via {pnl_method}"
             )
 
-            # Remove position from live table
-            try:
-                live_table = getattr(strategy, 'live_table', None)
-                if live_table:
-                    await live_table.remove_position(position)
-            except Exception as e:
-                strategy.logger.debug(f"Failed to remove position from live table: {e}")
-
             try:
                 # Create simple leg pnl dict for notification
                 leg_pnl_est = {}

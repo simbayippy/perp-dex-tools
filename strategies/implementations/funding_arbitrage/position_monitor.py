@@ -325,16 +325,12 @@ class PositionMonitor:
         Emit an INFO log with the latest per-leg metrics and aggregate exchange figures.
         Useful for verifying delta-neutral hedges after position openings.
 
-        Note: This is skipped when live table is active (live table displays the same data in real-time).
+        Note: Logs are always emitted for viewing via check_strategy_logs.py and supervisorctl.
+        The live table (if active) displays in the running process terminal separately.
         """
         legs_metadata = position.metadata.get("legs")
         if not legs_metadata:
             return
-
-        # Skip static logs if live table is active (it displays the same data in real-time)
-        if self._strategy and hasattr(self._strategy, 'live_table'):
-            if self._strategy.live_table.is_active:
-                return
 
         headers = [
             ("Exchange", 12),
