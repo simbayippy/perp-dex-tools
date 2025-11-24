@@ -916,10 +916,12 @@ class PositionCloser:
                     )
 
                     if not acceptable:
+                        from strategies.execution.core.spread_utils import _SPREAD_THRESHOLDS
+                        threshold = _SPREAD_THRESHOLDS[SpreadCheckType.EXIT]
                         strategy.logger.info(
                             f"⏸️  Wide spread detected on {dex.upper()} {position.symbol}: "
-                            f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
-                            f"Deferring exit polling."
+                            f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}), "
+                            f"threshold={threshold*100:.2f}%. Deferring exit polling."
                         )
                         return False
                 except Exception as exc:
