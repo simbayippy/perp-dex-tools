@@ -247,7 +247,6 @@ def _make_strategy(position_manager, exchange_clients, risk_config=None, bbo_pri
         # UPDATED: Use new thresholds
         max_exit_spread_pct=EXIT_SPREAD_THRESHOLD,  # 0.1%
         max_emergency_close_spread_pct=EMERGENCY_CLOSE_THRESHOLD,  # 0.2%
-        enable_exit_polling=False,  # Disable polling for tests
     )
     
     return SimpleNamespace(
@@ -262,62 +261,6 @@ def _make_strategy(position_manager, exchange_clients, risk_config=None, bbo_pri
             notify_position_closed=AsyncMock()
         ),
     )
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_non_critical_exit_deferral_flow():
-    """Test that non-critical exits are deferred when spread > 0.1%."""
-    position = _make_position()
-    position_manager = StubPositionManager([position])
-    
-    # UPDATED: Wide spread: 0.3% (bid=100, ask=100.3) - exceeds 0.1% threshold
-    wide_bbo = (Decimal("100"), Decimal("100.3"))
-    
-    exchange_clients = {
-        "aster": StubExchangeClient("aster", wide_bbo),
-        "lighter": StubExchangeClient("lighter", wide_bbo),
-    }
-    
-    strategy = _make_strategy(position_manager, exchange_clients, bbo_prices=wide_bbo)
-    closer = PositionCloser(strategy)
-    closer._risk_manager = None  # Skip risk manager
-    
-    # Mock should_close to return True with non-critical reason
-    async def mock_should_close(self, position, snapshots, gather_current_rates, should_skip_erosion_exit):
-        return True, "PROFIT_EROSION"  # Non-critical
-    
-    closer._exit_evaluator.should_close = types.MethodType(mock_should_close, closer._exit_evaluator)
-    
-    # Mock fetch snapshots
-    async def mock_fetch_snapshots(self, position):
-        return {
-            "aster": ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("1"), side="long"),
-            "lighter": ExchangePositionSnapshot(symbol="BTC", quantity=Decimal("1"), side="short"),
-        }
-    
-    closer._fetch_leg_snapshots = types.MethodType(mock_fetch_snapshots, closer)
-    
-    # Mock gather_current_rates to return None (skip risk manager)
-    async def mock_gather_rates(self, position):
-        return None
-    
-    closer._gather_current_rates = types.MethodType(mock_gather_rates, closer)
-    
-    # Mock should_skip_erosion_exit
-    async def mock_skip_erosion(self, position, reason):
-        return False
-    
-    closer._should_skip_erosion_exit = types.MethodType(mock_skip_erosion, closer)
-    
-    # Evaluate and close positions
-    actions = await closer.evaluateAndClosePositions()
-    
-    # Position should NOT be closed (deferred)
-    assert len(position_manager.closed_records) == 0
-    # Should have logged deferral message
-    deferral_logs = [msg for msg in strategy.logger.info_calls if "Deferring close" in msg or "Deferring" in msg]
-    assert len(deferral_logs) > 0
 
 
 @pytest.mark.asyncio

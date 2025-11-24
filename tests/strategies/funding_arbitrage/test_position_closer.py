@@ -212,7 +212,6 @@ def _make_strategy(position_manager, exchange_clients, risk_config=None):
         exchange_clients=exchange_clients,
         config=SimpleNamespace(
             risk_config=risk_cfg,
-            enable_exit_polling=False,
             enable_wide_spread_protection=True,
             max_exit_spread_pct=Decimal("0.001"),  # 0.1%
             max_emergency_close_spread_pct=Decimal("0.002"),  # 0.2%

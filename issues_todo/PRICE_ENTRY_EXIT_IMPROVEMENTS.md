@@ -364,45 +364,6 @@ The `AggressiveLimitHedgeStrategy` has been successfully refactored into a gener
 
 ## Implementation Plan
 
-### Issue 1: Delayed Exit Until Profitable
-
-**Location**: `strategies/implementations/funding_arbitrage/operations/closing/`
-
-**Changes**:
-1. Add exit polling mechanism:
-   - When exit conditions met, don't close immediately
-   - Enter "exit_polling" state
-   - Poll prices periodically (e.g., every 10-30 seconds)
-   - Calculate break-even price based on entry prices
-   - When current prices allow break-even exit, place limit orders
-   
-2. Exit polling logic:
-   ```python
-   # Calculate break-even prices
-   long_break_even = long_entry_price  # For long: need to sell at >= entry
-   short_break_even = short_entry_price  # For short: need to buy at <= entry
-   
-   # Check if current prices allow break-even
-   if long_mark >= long_break_even and short_mark <= short_break_even:
-       # Place limit orders at break-even or better
-       place_limit_close_orders()
-   ```
-
-3. Add config:
-   - `enable_exit_polling`: bool (default: True)
-   - `exit_polling_interval_seconds`: int (default: 15)
-   - `exit_polling_max_duration_minutes`: int (default: 30)
-   - `exit_order_type`: str ("limit" or "aggressive_limit", default: "limit")
-
-4. Fallback: If polling timeout expires, use current exit logic
-
-**Files**:
-- `exit_evaluator.py` - Add exit polling state
-- `position_closer.py` - Implement polling logic
-- `close_executor.py` - Use limit orders for exit
-- `config.py` - Add polling config
-- `models.py` - Add `exit_polling_state` to position metadata
-
 ### Issue 2: Take Profit on Divergence
 
 **Location**: `strategies/implementations/funding_arbitrage/operations/closing/`
@@ -635,11 +596,6 @@ result = await executor.execute_order(
 ### TODO Configurations
 
 ```python
-# Exit polling (Issue 1)
-enable_exit_polling: bool = Field(
-    default=True,
-    description="Enable exit polling to wait for profitable exit"
-)
 exit_polling_interval_seconds: int = Field(
     default=15,
     description="Interval between price checks during exit polling"

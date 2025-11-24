@@ -223,16 +223,6 @@ class FundingArbConfig(BaseModel):
         description="Enable spread validation before closing"
     )
     
-    # Exit polling (delayed exit until profitable)
-    enable_exit_polling: bool = Field(
-        default=True,
-        description="Enable exit polling to wait for break-even exit"
-    )
-    exit_polling_max_duration_minutes: int = Field(
-        default=5,
-        description="Maximum time to wait for break-even exit before forcing close"
-    )
-
     # Immediate profit-taking (cross-exchange basis spread opportunities)
     enable_immediate_profit_taking: bool = Field(
         default=True,
