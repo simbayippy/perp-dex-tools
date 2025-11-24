@@ -395,14 +395,14 @@ class AsterAccountManager:
                     leverage_info['margin_requirement'] = Decimal('1') / leverage_info['max_leverage']
             
             # Log comprehensive info
-            # self.logger.info(
-            #     f"📊 [ASTER] Leverage info for {symbol}:\n"
-            #     f"  - Symbol max leverage: {leverage_info.get('max_leverage')}x\n"
-            #     f"  - Account leverage: {leverage_info.get('account_leverage')}x\n"
-            #     f"  - Max notional: ${leverage_info.get('max_notional')}\n"
-            #     f"  - Margin requirement: {leverage_info.get('margin_requirement')} "
-            #     f"({(leverage_info.get('margin_requirement', 0) * 100):.1f}%)"
-            # )
+            self.logger.info(
+                f"📊 [ASTER] Leverage info for {symbol}:\n"
+                f"  - Symbol max leverage: {leverage_info.get('max_leverage')}x\n"
+                f"  - Account leverage: {leverage_info.get('account_leverage')}x\n"
+                f"  - Max notional: ${leverage_info.get('max_notional')}\n"
+                f"  - Margin requirement: {leverage_info.get('margin_requirement')} "
+                f"({(leverage_info.get('margin_requirement', 0) * 100):.1f}%)"
+            )
             
             return leverage_info
         

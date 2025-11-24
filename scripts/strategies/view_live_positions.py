@@ -212,7 +212,7 @@ class LivePositionViewer:
         self._log_lines: List[str] = []
         self._log_lock = asyncio.Lock()
         self._log_tasks: List[asyncio.Task] = []
-        self._log_history = 80
+        self._log_history = 200
 
     async def fetch_positions(self) -> Dict[str, Any]:
         """Fetch positions from Control API (slow-changing data)."""
@@ -302,7 +302,7 @@ class LivePositionViewer:
 
         layout = Layout()
         layout.split(
-            Layout(self._render_logs(), size=14),
+            Layout(self._render_logs(), size=20),
             Layout(self.generate_table()),
         )
         return layout
@@ -869,8 +869,8 @@ async def main() -> None:
     parser.add_argument(
         "--static-refresh",
         type=float,
-        default=30.0,
-        help="Static data refresh interval (seconds)",
+        default=300.0,
+        help="Static data refresh interval (seconds, default: 300)",
     )
 
     args = parser.parse_args()

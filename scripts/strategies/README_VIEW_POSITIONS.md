@@ -9,6 +9,7 @@ View real-time funding arbitrage positions directly from the Control API using t
 - ✅ **Account aware:** automatically filters to the account tied to the running strategy (override with `--account`)
 - ✅ **Split cadence:** static metrics (entry, funding, leverage) refresh slowly while marks refresh instantly
 - ✅ **Log tailing:** the top panel continuously streams stdout/stderr from `logs/strategy_<run>.out.log`
+- ✅ **Low-noise REST refresh:** static metrics re-poll every 5 minutes by default (tweak with `--static-refresh`)
 - ✅ **Rich TUI:** colorful, compact table rendered with [`rich`](https://github.com/Textualize/rich)
 
 ## Prerequisites
@@ -58,7 +59,7 @@ CLI flags overview:
 | `--host/--port` | Manual Control API host/port (fallback if no username) |
 | `--api-key` | Override API key resolution |
 | `--refresh` | Table redraw interval (default 1s) |
-| `--static-refresh` | Slow REST refresh interval for funding/entry data (default 30s) |
+| `--static-refresh` | Slow REST refresh interval for funding/entry data (default 300s) |
 
 ## How It Works
 

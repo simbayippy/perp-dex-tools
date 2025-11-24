@@ -288,13 +288,13 @@ class ParadexAccountManager:
                 margin_req_str = f"{margin_req:.4f} ({margin_req*100:.1f}%)" if margin_req else "N/A"
                 max_notional_str = str(leverage_info.get('max_notional', 'N/A'))
                 
-                # self.logger.info(
-                #     f"📊 [PARADEX] Leverage info for {symbol}:\n"
-                #     f"  - Symbol max leverage: {max_leverage:.1f}x\n"
-                #     f"  - Account leverage: N/Ax\n"
-                #     f"  - Max notional: {max_notional_str}\n"
-                #     f"  - Margin requirement: {margin_req_str}"
-                # )
+                self.logger.info(
+                    f"📊 [PARADEX] Leverage info for {symbol}:\n"
+                    f"  - Symbol max leverage: {max_leverage:.1f}x\n"
+                    f"  - Account leverage: N/Ax\n"
+                    f"  - Max notional: {max_notional_str}\n"
+                    f"  - Margin requirement: {margin_req_str}"
+                )
             else:
                 leverage_info['error'] = f"Symbol {symbol} not found on Paradex"
             
