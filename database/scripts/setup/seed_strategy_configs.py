@@ -55,11 +55,14 @@ TEMPLATES = [
             'max_oi_usd': 1500000.0,
             'min_volume_24h': 350000.0,
             'min_oi_usd': 100000.0,
-            'max_entry_price_divergence_pct': 0.01,
-            'wide_spread_cooldown_minutes': 60,
+            'max_entry_price_divergence_pct': 0.005,
+            'wide_spread_cooldown_minutes': 10,
+            'max_entry_spread_pct': 0.001,  # 0.1% max spread for opening
+            'max_exit_spread_pct': 0.001,  # 0.1% max spread for closing
+            'max_emergency_close_spread_pct': 0.002,  # 0.2% max spread for emergency
+            'enable_wide_spread_protection': True,
             'enable_liquidation_prevention': True,
-            'min_liquidation_distance_pct': 0.10,
-            # Immediate profit-taking (cross-exchange basis spread)
+            'min_liquidation_distance_pct': 0.05,
             'enable_immediate_profit_taking': True,
             'min_immediate_profit_taking_pct': 0.002  # 0.2% of position size
         }
@@ -175,6 +178,10 @@ async def seed_strategy_configs():
                         new_fields = [
                             ('max_entry_price_divergence_pct', 0.01),
                             ('wide_spread_cooldown_minutes', 60),
+                            ('max_entry_spread_pct', 0.001),
+                            ('max_exit_spread_pct', 0.001),
+                            ('max_emergency_close_spread_pct', 0.002),
+                            ('enable_wide_spread_protection', True),
                             ('enable_liquidation_prevention', True),
                             ('min_liquidation_distance_pct', 0.10),
                             ('enable_immediate_profit_taking', True),

@@ -96,36 +96,15 @@ class PositionCloser:
 
             # Check for IMMEDIATE PROFIT OPPORTUNITY (cross-exchange basis spread)
             # This check runs BEFORE normal exit conditions to capture favorable price divergence
-            should_take_profit, profit_reason = await self._exit_evaluator.check_immediate_profit_opportunity(
-                position, snapshots
-            )
-            if should_take_profit:
-                # Verify profitability right before execution using fresh BBO prices
-                is_profitable, verification_reason = await self._verify_profit_opportunity_pre_execution(
-                    position, snapshots
+            # Delegated to profit_taker module (operations.closing.profit_taking)
+            profit_taker = getattr(strategy, 'profit_taker', None)
+            if profit_taker:
+                was_closed = await profit_taker.evaluate_and_execute(
+                    position, snapshots, trigger_source="polling"
                 )
-
-                if not is_profitable:
-                    strategy.logger.warning(
-                        f"❌ Profit opportunity disappeared before execution for {position.symbol}: "
-                        f"{verification_reason}. Skipping close."
-                    )
-                    # Don't close if profit disappeared - continue to next position
-                    continue
-
-                # Execute profit-taking close with normal limit orders (hedge will use aggressive_limit)
-                strategy.logger.info(
-                    f"💰 Executing profit-taking close with limit orders for {position.symbol}"
-                )
-                self._cancel_exit_polling(position)
-                await self.close(
-                    position,
-                    profit_reason,
-                    live_snapshots=snapshots,
-                    order_type="limit",  # Use normal limit orders initially, hedge will use aggressive_limit if one leg fills first
-                )
-                actions.append(f"Closed {position.symbol}: {profit_reason}")
-                continue
+                if was_closed:
+                    actions.append(f"Closed {position.symbol} for profit")
+                    continue  # Position was closed, move to next
 
             # Check if position is in exit polling state
             polling_state = self._check_exit_polling_state(position)
@@ -334,6 +313,14 @@ class PositionCloser:
                 )
                 self._cancel_exit_polling(position)
                 await strategy.position_manager.update(position)
+
+        # Unregister real-time profit-taking BBO listeners
+        try:
+            profit_taker = getattr(strategy, 'profit_taker', None)
+            if profit_taker:
+                await profit_taker.unregister_position(position)
+        except Exception as e:
+            strategy.logger.debug(f"Failed to unregister profit-taking listeners: {e}")
 
         # Check if position is already being closed (prevent concurrent closes)
         if position.id in self._positions_closing:

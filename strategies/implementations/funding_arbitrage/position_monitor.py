@@ -297,6 +297,27 @@ class PositionMonitor:
         if has_updates or apy_updated:
             position.metadata["legs"] = legs_metadata
 
+        # Cache snapshots for real-time profit checking (zero-API-call profit checks)
+        # Convert exchange_snapshots from {(dex, symbol): snapshot} to {dex: snapshot} format
+        if exchange_snapshots:
+            snapshot_cache = {}
+            for (dex_key, symbol_key), snapshot in exchange_snapshots.items():
+                # Match the dex from position (case-insensitive)
+                if dex_key.lower() == position.long_dex.lower():
+                    snapshot_cache[position.long_dex] = snapshot
+                elif dex_key.lower() == position.short_dex.lower():
+                    snapshot_cache[position.short_dex] = snapshot
+
+            if snapshot_cache:
+                position.metadata["snapshot_cache"] = {
+                    "timestamp": now_ts.isoformat(),
+                    "snapshots": snapshot_cache,
+                }
+                self._logger.debug(
+                    f"[SNAPSHOT_CACHE] Cached snapshots for {position.symbol} "
+                    f"({len(snapshot_cache)} legs, timestamp={now_ts.isoformat()})"
+                )
+
     def _log_exchange_metrics(self, position: FundingArbPosition) -> None:
         """
         Emit an INFO log with the latest per-leg metrics and aggregate exchange figures.

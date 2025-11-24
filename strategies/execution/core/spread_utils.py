@@ -18,12 +18,55 @@ class SpreadCheckType(Enum):
 
 
 # Spread protection thresholds (internal - use SpreadCheckType enum in public API)
+# These defaults can be overridden via configure_spread_thresholds()
 _SPREAD_THRESHOLDS = {
     SpreadCheckType.ENTRY: Decimal("0.001"),  # 0.1% threshold for opening positions
     SpreadCheckType.EXIT: Decimal("0.001"),  # 0.1% threshold for closing positions
     SpreadCheckType.EMERGENCY_CLOSE: Decimal("0.002"),  # 0.2% threshold for emergency closes
     SpreadCheckType.AGGRESSIVE_HEDGE: Decimal("0.0005"),  # 0.05% threshold for aggressive hedge retries
 }
+
+
+def configure_spread_thresholds(
+    entry_threshold: Optional[Decimal] = None,
+    exit_threshold: Optional[Decimal] = None,
+    emergency_threshold: Optional[Decimal] = None,
+    hedge_threshold: Optional[Decimal] = None,
+) -> None:
+    """
+    Configure spread thresholds from strategy config.
+
+    This allows strategies to customize spread protection thresholds at initialization
+    without modifying the module-level defaults. Once configured, all subsequent calls
+    to is_spread_acceptable() will use the configured thresholds.
+
+    Args:
+        entry_threshold: Threshold for opening positions (e.g., Decimal("0.001") = 0.1%)
+        exit_threshold: Threshold for normal position closes (e.g., Decimal("0.001") = 0.1%)
+        emergency_threshold: Threshold for emergency closes (e.g., Decimal("0.002") = 0.2%)
+        hedge_threshold: Threshold for aggressive hedge retries (e.g., Decimal("0.0005") = 0.05%)
+
+    Example:
+        >>> # Configure from funding arbitrage config
+        >>> configure_spread_thresholds(
+        ...     entry_threshold=config.max_entry_spread_pct,
+        ...     exit_threshold=config.max_exit_spread_pct,
+        ...     emergency_threshold=config.max_emergency_close_spread_pct,
+        ... )
+    """
+    global _SPREAD_THRESHOLDS
+
+    if entry_threshold is not None:
+        _SPREAD_THRESHOLDS[SpreadCheckType.ENTRY] = entry_threshold
+
+    if exit_threshold is not None:
+        _SPREAD_THRESHOLDS[SpreadCheckType.EXIT] = exit_threshold
+
+    if emergency_threshold is not None:
+        _SPREAD_THRESHOLDS[SpreadCheckType.EMERGENCY_CLOSE] = emergency_threshold
+
+    if hedge_threshold is not None:
+        _SPREAD_THRESHOLDS[SpreadCheckType.AGGRESSIVE_HEDGE] = hedge_threshold
 
 
 

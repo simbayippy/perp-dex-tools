@@ -195,28 +195,32 @@ class FundingArbConfig(BaseModel):
     
     # Entry validation
     max_entry_price_divergence_pct: Decimal = Field(
-        default=Decimal("0.01"),  # 1%
+        default=Decimal("0.005"),  # 0.5%
         description="Maximum price divergence between exchanges to allow entry"
     )
     
     # Cooldown
     wide_spread_cooldown_minutes: int = Field(
-        default=60,
+        default=10,
         description="Cooldown period for symbols with wide spreads"
     )
-    
-    # Wide spread protection on exit
+
+    # Spread protection thresholds (aligned with spread_utils.py)
+    max_entry_spread_pct: Decimal = Field(
+        default=Decimal("0.001"),  # 0.1%
+        description="Max spread % allowed for opening positions (0.001 = 0.1%)"
+    )
     max_exit_spread_pct: Decimal = Field(
-        default=Decimal("0.02"),
-        description="Max spread % before deferring non-critical exits (2%)"
+        default=Decimal("0.001"),  # 0.1%
+        description="Max spread % before deferring non-critical exits (0.001 = 0.1%)"
+    )
+    max_emergency_close_spread_pct: Decimal = Field(
+        default=Decimal("0.002"),  # 0.2%
+        description="Max spread % for emergency closes (0.002 = 0.2%)"
     )
     enable_wide_spread_protection: bool = Field(
         default=True,
         description="Enable spread validation before closing"
-    )
-    max_emergency_close_spread_pct: Decimal = Field(
-        default=Decimal("0.03"),
-        description="Max spread % for emergency closes (3%)"
     )
     
     # Exit polling (delayed exit until profitable)
@@ -250,20 +254,12 @@ class FundingArbConfig(BaseModel):
             "$4 profit minimum to close. This ensures profit opportunity is worth the execution."
         )
     )
-    profit_taking_use_aggressive_limit: bool = Field(
-        default=True,
+    realtime_profit_check_interval: float = Field(
+        default=1.0,
         description=(
-            "Use aggressive limit orders (inside spread) for profit-taking closes. "
-            "This maximizes realized PnL by using maker fees instead of taker fees. "
-            "If False, uses simple limit orders."
-        )
-    )
-    profit_taking_verify_before_execution: bool = Field(
-        default=True,
-        description=(
-            "Verify profitability using fresh BBO prices right before executing close. "
-            "Prevents executing closes when profit opportunity has disappeared due to "
-            "price movements between evaluation and execution."
+            "Minimum seconds between profit checks per position (throttle). "
+            "Prevents excessive checks on high-frequency BBO updates. "
+            "Recommended: 1.0-2.0 seconds for balance between responsiveness and overhead."
         )
     )
 

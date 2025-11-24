@@ -48,7 +48,10 @@ from .position_monitor import PositionMonitor
 # Funding_arb operation helpers
 from .operations import PositionOpener, OpportunityScanner, PositionCloser
 from .operations.cooldown_manager import CooldownManager
-
+from .operations.closing.profit_taking import (
+    ProfitTaker,
+    RealTimeProfitMonitor,
+)
 
 class FundingArbitrageStrategy(BaseStrategy):
     """
@@ -95,9 +98,17 @@ class FundingArbitrageStrategy(BaseStrategy):
         # Initialize BaseStrategy (note: no exchange_client for multi-DEX)
         super().__init__(funding_config, exchange_client=None)
         self.config = funding_config  # Store the converted config
-        
+
         # Store original config path for hot-reloading
         self._config_path = funding_config.config_path if hasattr(funding_config, 'config_path') else None
+
+        # Configure spread thresholds from config (must be done before any execution components)
+        from strategies.execution.core.spread_utils import configure_spread_thresholds
+        configure_spread_thresholds(
+            entry_threshold=self.config.max_entry_spread_pct,
+            exit_threshold=self.config.max_exit_spread_pct,
+            emergency_threshold=self.config.max_emergency_close_spread_pct,
+        )
         
         # Store exchange clients dict (multi-DEX support)
         self.exchange_clients = exchange_clients
@@ -203,6 +214,10 @@ class FundingArbitrageStrategy(BaseStrategy):
         self.position_opener = PositionOpener(self)
         self.opportunity_scanner = OpportunityScanner(self)
         self.position_closer = PositionCloser(self)
+
+        # Profit-taking operations (independent from risk-based closing)
+        self.profit_taker = ProfitTaker(self)
+        self.profit_monitor = RealTimeProfitMonitor(self)
 
         # Async orchestration helpers
         self._monitor_task = None
@@ -630,6 +645,15 @@ class FundingArbitrageStrategy(BaseStrategy):
         if self._monitor_stop_event:
             self._monitor_stop_event = None
         self._last_opportunity_scan_ts = 0.0
+
+        # Cleanup profit-taking monitor listeners
+        if hasattr(self, 'profit_monitor'):
+            try:
+                await asyncio.wait_for(self.profit_monitor.cleanup_all(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self.logger.warning("Profit monitor cleanup timed out")
+            except Exception as e:
+                self.logger.error(f"Error cleaning up profit monitor: {e}")
 
         # Close position and state managers with timeout
         if hasattr(self, 'position_manager'):
