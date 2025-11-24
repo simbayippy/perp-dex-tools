@@ -21,7 +21,7 @@ class SpreadCheckType(Enum):
 # These defaults can be overridden via configure_spread_thresholds()
 _SPREAD_THRESHOLDS = {
     SpreadCheckType.ENTRY: Decimal("0.001"),  # 0.1% threshold for opening positions
-    SpreadCheckType.EXIT: Decimal("0.001"),  # 0.1% threshold for closing positions
+    SpreadCheckType.EXIT: Decimal("0.002"),  # 0.2% threshold for closing positions
     SpreadCheckType.EMERGENCY_CLOSE: Decimal("0.003"),  # 0.3% threshold for emergency closes
     SpreadCheckType.AGGRESSIVE_HEDGE: Decimal("0.002"),  # 0.2% threshold for aggressive hedge retries
 }

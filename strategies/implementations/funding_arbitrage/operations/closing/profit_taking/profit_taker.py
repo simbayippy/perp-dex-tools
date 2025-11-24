@@ -89,12 +89,12 @@ class ProfitTaker:
                 )
                 return False
 
-            # 3. Execute close with aggressive limit orders (optimal: maker fees, better fill)
+            # 3. Execute close with limit orders (mid price) -> hedge with aggressive limit
             await self._strategy.position_closer.close(
                 position,
                 reason,
                 live_snapshots=snapshots,
-                order_type="aggressive_limit"
+                order_type="limit"
             )
 
             self._logger.info(

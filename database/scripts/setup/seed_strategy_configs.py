@@ -58,15 +58,15 @@ TEMPLATES = [
             'max_entry_price_divergence_pct': 0.005,
             'wide_spread_cooldown_minutes': 10,
             'max_entry_spread_pct': 0.001,  # 0.1% max spread for opening
-            'max_exit_spread_pct': 0.001,  # 0.1% max spread for closing
-            'max_emergency_close_spread_pct': 0.002,  # 0.2% max spread for emergency
+            'max_exit_spread_pct': 0.002,  # 0.2% max spread for closing
+            'max_emergency_close_spread_pct': 0.003,  # 0.3% max spread for emergency
             'enable_wide_spread_protection': True,
             'enable_liquidation_prevention': True,
             'min_liquidation_distance_pct': 0.05,
             'enable_immediate_profit_taking': True,
             'min_immediate_profit_taking_pct': 0.002,  # 0.2% of position size
             # Progressive price walking for wide spread markets
-            'max_aggressive_hedge_spread_pct': 0.0015,  # 0.15% (vs hardcoded 0.05%)
+            'max_aggressive_hedge_spread_pct': 0.002,  # 0.2% 
             'wide_spread_fallback_threshold': 3,  # attempts before progressive walking
             'progressive_walk_max_attempts': 5,  # progressive walking attempts
             'progressive_walk_step_ticks': 1,  # ticks per attempt
