@@ -195,44 +195,102 @@ class FundingArbConfig(BaseModel):
     
     # Entry validation
     max_entry_price_divergence_pct: Decimal = Field(
-        default=Decimal("0.01"),  # 1%
+        default=Decimal("0.005"),  # 0.5%
         description="Maximum price divergence between exchanges to allow entry"
     )
     
     # Cooldown
     wide_spread_cooldown_minutes: int = Field(
-        default=60,
+        default=10,
         description="Cooldown period for symbols with wide spreads"
     )
-    
-    # Wide spread protection on exit
+
+    # Spread protection thresholds (aligned with spread_utils.py)
+    max_entry_spread_pct: Decimal = Field(
+        default=Decimal("0.001"),  # 0.1%
+        description="Max spread % allowed for opening positions (0.001 = 0.1%)"
+    )
     max_exit_spread_pct: Decimal = Field(
-        default=Decimal("0.02"),
-        description="Max spread % before deferring non-critical exits (2%)"
+        default=Decimal("0.001"),  # 0.1%
+        description="Max spread % before deferring non-critical exits (0.001 = 0.1%)"
+    )
+    max_emergency_close_spread_pct: Decimal = Field(
+        default=Decimal("0.002"),  # 0.2%
+        description="Max spread % for emergency closes (0.002 = 0.2%)"
     )
     enable_wide_spread_protection: bool = Field(
         default=True,
         description="Enable spread validation before closing"
     )
-    max_emergency_close_spread_pct: Decimal = Field(
-        default=Decimal("0.03"),
-        description="Max spread % for emergency closes (3%)"
-    )
     
-    # Exit polling (delayed exit until profitable)
-    enable_exit_polling: bool = Field(
+    # Immediate profit-taking (cross-exchange basis spread opportunities)
+    enable_immediate_profit_taking: bool = Field(
         default=True,
-        description="Enable exit polling to wait for break-even exit"
+        description=(
+            "Enable immediate profit-taking when cross-exchange price divergence "
+            "creates profit opportunity. Captures basis spread profits by closing "
+            "when net_profit > min_immediate_profit_taking_pct * position_size."
+        )
     )
-    exit_polling_interval_seconds: int = Field(
-        default=15,
-        description="Interval between price checks during exit polling (if websocket unavailable)"
+    min_immediate_profit_taking_pct: Decimal = Field(
+        default=Decimal("0.002"),  # 0.2%
+        description=(
+            "Minimum profit percentage (of position notional value) required to trigger "
+            "immediate profit-taking. For example, 0.002 = 0.2%, so a $2000 position needs "
+            "$4 profit minimum to close. This ensures profit opportunity is worth the execution."
+        )
     )
-    exit_polling_max_duration_minutes: int = Field(
-        default=10,
-        description="Maximum time to wait for break-even exit before forcing close"
+    realtime_profit_check_interval: float = Field(
+        default=1.0,
+        description=(
+            "Minimum seconds between profit checks per position (throttle). "
+            "Prevents excessive checks on high-frequency BBO updates. "
+            "Recommended: 1.0-2.0 seconds for balance between responsiveness and overhead."
+        )
     )
-    
+
+    # Progressive price walking for wide spread markets
+    max_aggressive_hedge_spread_pct: Decimal = Field(
+        default=Decimal("0.002"),  # 0.2%
+        description=(
+            "Max spread % for aggressive limit retries (inside spread pricing). "
+            "If spread exceeds this threshold, aggressive limit orders are skipped "
+            "and progressive price walking begins. Default 0.15% vs hardcoded 0.05%."
+        )
+    )
+    wide_spread_fallback_threshold: int = Field(
+        default=3,
+        description=(
+            "Number of consecutive wide spread failures before switching to progressive "
+            "price walking. Once this threshold is reached, execution transitions from "
+            "aggressive inside-spread pricing to progressive mid-price walking."
+        )
+    )
+    progressive_walk_max_attempts: int = Field(
+        default=5,
+        description=(
+            "Maximum attempts during progressive price walking phase. Each attempt moves "
+            "the limit price progressively closer to the aggressive side of the book, "
+            "starting from mid-price. After exhausting these attempts, falls back to market order."
+        )
+    )
+    progressive_walk_step_ticks: int = Field(
+        default=1,
+        description=(
+            "Number of ticks to move per progressive walking attempt. Each subsequent "
+            "attempt moves this many ticks closer to the aggressive side (bid for sells, "
+            "ask for buys). Higher values = more aggressive progression."
+        )
+    )
+    progressive_walk_min_spread_pct: Decimal = Field(
+        default=Decimal("0.10"),  # 10% of spread
+        description=(
+            "Stop progressive walking when this close to aggressive side (as % of spread). "
+            "Prevents walking too close to bid/ask where execution becomes taker-like. "
+            "For example, 0.10 = stop at 10% of spread from aggressive side."
+        )
+    )
+
     # Risk management
     risk_config: RiskManagementConfig = Field(
         default_factory=RiskManagementConfig,

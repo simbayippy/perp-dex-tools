@@ -21,11 +21,9 @@ from strategies.execution.core.execution_strategies import (
     MarketExecutionStrategy,
 )
 from strategies.execution.core.spread_utils import (
+    SpreadCheckType,
     calculate_spread_pct,
     is_spread_acceptable,
-    MAX_ENTRY_SPREAD_PCT,
-    MAX_EXIT_SPREAD_PCT,
-    MAX_EMERGENCY_CLOSE_SPREAD_PCT,
 )
 
 __all__ = [
@@ -40,10 +38,8 @@ __all__ = [
     "SimpleLimitExecutionStrategy",
     "AggressiveLimitExecutionStrategy",
     "MarketExecutionStrategy",
+    "SpreadCheckType",
     "calculate_spread_pct",
     "is_spread_acceptable",
-    "MAX_ENTRY_SPREAD_PCT",
-    "MAX_EXIT_SPREAD_PCT",
-    "MAX_EMERGENCY_CLOSE_SPREAD_PCT",
 ]
 

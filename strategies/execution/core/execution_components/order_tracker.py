@@ -81,7 +81,7 @@ class OrderTracker:
                 return_when=asyncio.FIRST_COMPLETED
             )
             
-            # Cancel pending tasks
+            # Cancel pending tasks and properly await cancellation to prevent "Task was destroyed but it is pending" errors
             for task in pending:
                 task.cancel()
                 try:
@@ -95,9 +95,30 @@ class OrderTracker:
             # Return current status (will be FILLED or CANCELED)
             return self.status
             
-        except Exception:
-            # Cleanup on error
+        except asyncio.CancelledError:
+            # Outer task was cancelled - ensure inner tasks are cancelled and properly awaited
             fill_task.cancel()
             cancel_task.cancel()
+            try:
+                await fill_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await cancel_task
+            except asyncio.CancelledError:
+                pass
+            raise  # Re-raise to propagate cancellation
+        except Exception:
+            # Cleanup on error - ensure tasks are cancelled and properly awaited
+            fill_task.cancel()
+            cancel_task.cancel()
+            try:
+                await fill_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            try:
+                await cancel_task
+            except (asyncio.CancelledError, Exception):
+                pass
             return "TIMEOUT"
 

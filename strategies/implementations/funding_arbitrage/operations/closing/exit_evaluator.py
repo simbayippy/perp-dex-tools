@@ -1,4 +1,15 @@
-"""Exit condition evaluation for position closing."""
+"""
+Exit condition evaluation for position closing.
+
+This module handles RISK-BASED position closing only:
+- Funding rate flips
+- Profit erosion
+- Time limits
+- Liquidation risk
+
+Profit-taking logic has been moved to:
+    operations.closing.profit_taking.profit_evaluator
+"""
 
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
@@ -499,7 +510,7 @@ class ExitEvaluator:
         )
         
         return can_exit
-    
+
     @staticmethod
     def _symbols_match(position_symbol: Optional[str], event_symbol: Optional[str]) -> bool:
         """Check if two symbols match (handles variations like BTC vs BTCUSDT)."""

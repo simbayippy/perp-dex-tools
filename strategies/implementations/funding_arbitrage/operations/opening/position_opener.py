@@ -220,6 +220,14 @@ class PositionOpener:
             except Exception as e:
                 self._strategy.logger.warning(f"Failed to send position opened notification: {e}")
 
+            # Register real-time profit-taking BBO listeners
+            try:
+                profit_taker = getattr(self._strategy, 'profit_taker', None)
+                if profit_taker:
+                    await profit_taker.register_position(persistence.position)
+            except Exception as e:
+                self._strategy.logger.warning(f"Failed to register profit-taking listeners: {e}")
+
             return persistence.position
 
         except Exception as e:

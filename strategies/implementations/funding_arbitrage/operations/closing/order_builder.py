@@ -9,10 +9,8 @@ from ..core.contract_preparer import ContractPreparer
 from ..core.price_utils import (
     extract_snapshot_price,
     fetch_mid_price,
-    calculate_spread_pct,
-    MAX_EXIT_SPREAD_PCT,
-    MAX_EMERGENCY_CLOSE_SPREAD_PCT,
 )
+from strategies.execution.core.spread_utils import SpreadCheckType, is_spread_acceptable
 
 if TYPE_CHECKING:
     from ...strategy import FundingArbitrageStrategy
@@ -106,35 +104,34 @@ class OrderBuilder:
                     
                     try:
                         bid, ask = await price_provider.get_bbo_prices(client, symbol)
-                        spread_pct = calculate_spread_pct(bid, ask)
-                        
-                        if spread_pct is not None:
-                            # Determine threshold based on exit type
-                            threshold = MAX_EMERGENCY_CLOSE_SPREAD_PCT if is_critical else MAX_EXIT_SPREAD_PCT
+
+                        # Determine spread check type based on exit type
+                        check_type = SpreadCheckType.EMERGENCY_CLOSE if is_critical else SpreadCheckType.EXIT
+                        acceptable, spread_pct, reason_msg = is_spread_acceptable(bid, ask, check_type)
+
+                        if not acceptable:
+                            # For non-critical exits, defer closing
+                            if not is_critical and not is_user_manual:
+                                self._strategy.logger.info(
+                                    f"⏸️  Wide spread detected on {exchange_name.upper()} {symbol}: "
+                                    f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
+                                    f"Deferring non-critical close (reason: {reason})."
+                                )
+                                raise WideSpreadException(spread_pct, bid, ask, exchange_name, symbol)
                             
-                            if spread_pct > threshold:
-                                # For non-critical exits, defer closing
-                                if not is_critical and not is_user_manual:
-                                    self._strategy.logger.info(
-                                        f"⏸️  Wide spread detected on {exchange_name.upper()} {symbol}: "
-                                        f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
-                                        f"Deferring non-critical close (reason: {reason})."
-                                    )
-                                    raise WideSpreadException(spread_pct, bid, ask, exchange_name, symbol)
-                                
-                                # For critical exits or user manual, log warning but proceed
-                                if is_critical:
-                                    self._strategy.logger.warning(
-                                        f"⚠️  Wide spread detected on {exchange_name.upper()} {symbol}: "
-                                        f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
-                                        f"Proceeding with critical close (reason: {reason})."
-                                    )
-                                elif is_user_manual:
-                                    self._strategy.logger.warning(
-                                        f"⚠️  Wide spread detected on {exchange_name.upper()} {symbol}: "
-                                        f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
-                                        f"User requested {order_type} order - proceed with caution."
-                                    )
+                            # For critical exits or user manual, log warning but proceed
+                            if is_critical:
+                                self._strategy.logger.warning(
+                                    f"⚠️  Wide spread detected on {exchange_name.upper()} {symbol}: "
+                                    f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
+                                    f"Proceeding with critical close (reason: {reason})."
+                                )
+                            elif is_user_manual:
+                                self._strategy.logger.warning(
+                                    f"⚠️  Wide spread detected on {exchange_name.upper()} {symbol}: "
+                                    f"{spread_pct*100:.2f}% (bid={bid}, ask={ask}). "
+                                    f"User requested {order_type} order - proceed with caution."
+                                )
                     except WideSpreadException:
                         # Re-raise WideSpreadException to defer closing
                         raise
@@ -150,32 +147,39 @@ class OrderBuilder:
         
         if order_type:
             use_market = order_type.lower() == "market"
+            use_aggressive_limit = order_type.lower() == "aggressive_limit"
         else:
             use_market = reason in critical_reasons
-        
+            use_aggressive_limit = False
+
         # Execution mode strategy for closing positions:
-        # 
+        #
         # INITIAL ATOMIC CLOSE (both legs placed simultaneously):
         # - Use limit_only for passive maker orders (ask - 0.01% for buy, bid + 0.01% for sell)
         # - Lower fees, better price execution
         # - Protected by spread check in LimitOrderExecutor (rejects if spread > 2%)
         # - If one side fills first → triggers aggressive_limit hedge (handled by HedgeManager)
-        # 
+        #
         # HEDGE (when one side fills first):
         # - Automatically uses aggressive_limit via HedgeManager.aggressive_limit_hedge()
         # - NOT controlled by this order_builder (hedge bypasses order_builder entirely)
         # - Adaptive pricing with break-even attempt, then touch → inside spread → cross spread
         # - Multiple retries with fallback to market
-        # 
+        #
         # CRITICAL EXITS (liquidation risk, severe imbalance):
         # - Use aggressive_limit for faster execution
         # - Speed is more important than optimal pricing
-        
+        #
+        # PROFIT-TAKING EXITS (immediate profit opportunity):
+        # - Use aggressive_limit for best execution quality
+        # - Ensures profit is realized with maker fees (inside spread pricing)
+
         if use_market:
             # User explicitly requested market order or critical reason requires it
             execution_mode = "market_only"
-        elif is_critical:
-            # Critical exits: Use aggressive_limit for faster execution
+        elif use_aggressive_limit or is_critical:
+            # Aggressive limit: User requested OR critical exit
+            # Uses adaptive pricing: inside spread → touch → cross spread
             execution_mode = "aggressive_limit"
         else:
             # Initial close attempts: Use limit_only (passive maker orders)

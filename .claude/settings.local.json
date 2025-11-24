@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest:*)",
+      "Bash(pytest:*)",
+      "Bash(./venv/bin/pytest:*)",
+      "Bash(python3 -m pytest:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

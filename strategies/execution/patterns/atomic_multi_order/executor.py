@@ -307,10 +307,36 @@ class AtomicMultiOrderExecutor:
                 if update.all_completed:
                     break
 
-            # Wait for any remaining tasks
-            remaining_tasks = [ctx.task for ctx in contexts if not ctx.completed]
-            if remaining_tasks:
-                await asyncio.gather(*remaining_tasks, return_exceptions=True)
+            # Wait for any remaining tasks and apply their results
+            # This ensures all contexts are registered before reconciliation runs
+            remaining_contexts = [ctx for ctx in contexts if not ctx.completed]
+            if remaining_contexts:
+                remaining_tasks = [ctx.task for ctx in remaining_contexts]
+                gathered_results = await asyncio.gather(*remaining_tasks, return_exceptions=True)
+
+                # Apply results to ensure registration completes BEFORE reconciliation
+                for result, ctx in zip(gathered_results, remaining_contexts):
+                    if isinstance(result, Exception):
+                        self.logger.error(f"Order task failed for {ctx.spec.symbol}: {result}")
+                        result_dict = {
+                            "success": False,
+                            "filled": False,
+                            "error": str(result),
+                            "order_id": None,
+                            "exchange_client": ctx.spec.exchange_client,
+                            "symbol": ctx.spec.symbol,
+                            "side": ctx.spec.side,
+                            "slippage_usd": Decimal("0"),
+                            "execution_mode_used": "error",
+                            "filled_quantity": Decimal("0"),
+                            "fill_price": None,
+                        }
+                    else:
+                        result_dict = result
+                    # Register context and process pending websocket callbacks
+                    apply_result_to_context(ctx, result_dict, executor=self)
+
+            # Now that all contexts are registered and pending callbacks processed, reconcile
             for ctx in contexts:
                 await reconcile_context_after_cancel(ctx, self.logger)
 

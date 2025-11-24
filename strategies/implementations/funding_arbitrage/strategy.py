@@ -48,7 +48,10 @@ from .position_monitor import PositionMonitor
 # Funding_arb operation helpers
 from .operations import PositionOpener, OpportunityScanner, PositionCloser
 from .operations.cooldown_manager import CooldownManager
-
+from .operations.closing.profit_taking import (
+    ProfitTaker,
+    RealTimeProfitMonitor,
+)
 
 class FundingArbitrageStrategy(BaseStrategy):
     """
@@ -95,9 +98,25 @@ class FundingArbitrageStrategy(BaseStrategy):
         # Initialize BaseStrategy (note: no exchange_client for multi-DEX)
         super().__init__(funding_config, exchange_client=None)
         self.config = funding_config  # Store the converted config
-        
+
         # Store original config path for hot-reloading
         self._config_path = funding_config.config_path if hasattr(funding_config, 'config_path') else None
+
+        # Configure spread thresholds from config (must be done before any execution components)
+        from strategies.execution.core.spread_utils import configure_spread_thresholds
+        self.logger.info(
+            f"Configuring spread thresholds: "
+            f"entry={self.config.max_entry_spread_pct*100:.2f}%, "
+            f"exit={self.config.max_exit_spread_pct*100:.2f}%, "
+            f"emergency={self.config.max_emergency_close_spread_pct*100:.2f}%, "
+            f"aggressive_hedge={self.config.max_aggressive_hedge_spread_pct*100:.2f}%"
+        )
+        configure_spread_thresholds(
+            entry_threshold=self.config.max_entry_spread_pct,
+            exit_threshold=self.config.max_exit_spread_pct,
+            emergency_threshold=self.config.max_emergency_close_spread_pct,
+            hedge_threshold=self.config.max_aggressive_hedge_spread_pct,
+        )
         
         # Store exchange clients dict (multi-DEX support)
         self.exchange_clients = exchange_clients
@@ -203,6 +222,10 @@ class FundingArbitrageStrategy(BaseStrategy):
         self.position_opener = PositionOpener(self)
         self.opportunity_scanner = OpportunityScanner(self)
         self.position_closer = PositionCloser(self)
+
+        # Profit-taking operations (independent from risk-based closing)
+        self.profit_taker = ProfitTaker(self)
+        self.profit_monitor = RealTimeProfitMonitor(self)
 
         # Async orchestration helpers
         self._monitor_task = None
@@ -344,7 +367,6 @@ class FundingArbitrageStrategy(BaseStrategy):
     # ========================================================================
     # Helpers
     # ========================================================================
-    
     def _convert_trading_config(self, trading_config) -> FundingArbConfig:
         """
         Convert TradingConfig from runbot.py to FundingArbConfig.
@@ -474,6 +496,48 @@ class FundingArbitrageStrategy(BaseStrategy):
         min_oi_usd_value = strategy_params.get('min_oi_usd')
         min_oi_usd = Decimal(str(min_oi_usd_value)) if min_oi_usd_value is not None else None
 
+        # Extract spread protection thresholds
+        max_entry_spread_pct_value = strategy_params.get('max_entry_spread_pct')
+        max_entry_spread_pct = Decimal(str(max_entry_spread_pct_value)) if max_entry_spread_pct_value is not None else Decimal("0.001")
+
+        max_exit_spread_pct_value = strategy_params.get('max_exit_spread_pct')
+        max_exit_spread_pct = Decimal(str(max_exit_spread_pct_value)) if max_exit_spread_pct_value is not None else Decimal("0.001")
+
+        max_emergency_close_spread_pct_value = strategy_params.get('max_emergency_close_spread_pct')
+        max_emergency_close_spread_pct = Decimal(str(max_emergency_close_spread_pct_value)) if max_emergency_close_spread_pct_value is not None else Decimal("0.002")
+
+        # Extract wide spread protection parameters
+        wide_spread_cooldown_minutes_value = strategy_params.get('wide_spread_cooldown_minutes')
+        wide_spread_cooldown_minutes = int(wide_spread_cooldown_minutes_value) if wide_spread_cooldown_minutes_value is not None else 60
+
+        enable_wide_spread_protection = strategy_params.get('enable_wide_spread_protection', True)
+
+        # Extract immediate profit taking parameters
+        enable_immediate_profit_taking = strategy_params.get('enable_immediate_profit_taking', False)
+
+        min_immediate_profit_taking_pct_value = strategy_params.get('min_immediate_profit_taking_pct')
+        min_immediate_profit_taking_pct = Decimal(str(min_immediate_profit_taking_pct_value)) if min_immediate_profit_taking_pct_value is not None else Decimal("0.001")
+
+        realtime_profit_check_interval_value = strategy_params.get('realtime_profit_check_interval')
+        realtime_profit_check_interval = float(realtime_profit_check_interval_value) if realtime_profit_check_interval_value is not None else 1.0
+
+        # Extract entry price divergence parameter
+        max_entry_price_divergence_pct_value = strategy_params.get('max_entry_price_divergence_pct')
+        max_entry_price_divergence_pct = Decimal(str(max_entry_price_divergence_pct_value)) if max_entry_price_divergence_pct_value is not None else Decimal("0.005")
+
+        # Extract progressive price walking parameters
+        max_aggressive_hedge_spread_pct_value = strategy_params.get('max_aggressive_hedge_spread_pct')
+        max_aggressive_hedge_spread_pct = Decimal(str(max_aggressive_hedge_spread_pct_value)) if max_aggressive_hedge_spread_pct_value is not None else Decimal("0.0015")
+
+        wide_spread_fallback_threshold = strategy_params.get('wide_spread_fallback_threshold', 3)
+
+        progressive_walk_max_attempts = strategy_params.get('progressive_walk_max_attempts', 5)
+
+        progressive_walk_step_ticks = strategy_params.get('progressive_walk_step_ticks', 1)
+
+        progressive_walk_min_spread_pct_value = strategy_params.get('progressive_walk_min_spread_pct')
+        progressive_walk_min_spread_pct = Decimal(str(progressive_walk_min_spread_pct_value)) if progressive_walk_min_spread_pct_value is not None else Decimal("0.10")
+
         funding_config = FundingArbConfig(
             exchange=trading_config.exchange,
             exchanges=exchanges,
@@ -494,16 +558,30 @@ class FundingArbitrageStrategy(BaseStrategy):
             database_url=settings.database_url,
             # Risk management defaults
             risk_config=risk_config,
+            max_entry_spread_pct=max_entry_spread_pct,
+            max_exit_spread_pct=max_exit_spread_pct,
+            max_emergency_close_spread_pct=max_emergency_close_spread_pct,
+            wide_spread_cooldown_minutes=wide_spread_cooldown_minutes,
+            enable_wide_spread_protection=enable_wide_spread_protection,
+            enable_immediate_profit_taking=enable_immediate_profit_taking,
+            min_immediate_profit_taking_pct=min_immediate_profit_taking_pct,
+            realtime_profit_check_interval=realtime_profit_check_interval,
+            max_entry_price_divergence_pct=max_entry_price_divergence_pct,
+            # Progressive price walking
+            max_aggressive_hedge_spread_pct=max_aggressive_hedge_spread_pct,
+            wide_spread_fallback_threshold=wide_spread_fallback_threshold,
+            progressive_walk_max_attempts=progressive_walk_max_attempts,
+            progressive_walk_step_ticks=progressive_walk_step_ticks,
+            progressive_walk_min_spread_pct=progressive_walk_min_spread_pct,
             # Ticker for logging
             ticker=trading_config.ticker,
             config_path=config_path,
             # Multi-account support
             account_name=strategy_params.get('_account_name')
-            # Note: bridge_settings not implemented yet
         )
         
-        return funding_config
-    
+        return funding_config    
+
     async def reload_config(self) -> bool:
         """
         Reload configuration from the config file without restarting.
@@ -630,6 +708,15 @@ class FundingArbitrageStrategy(BaseStrategy):
         if self._monitor_stop_event:
             self._monitor_stop_event = None
         self._last_opportunity_scan_ts = 0.0
+
+        # Cleanup profit-taking monitor listeners
+        if hasattr(self, 'profit_monitor'):
+            try:
+                await asyncio.wait_for(self.profit_monitor.cleanup_all(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self.logger.warning("Profit monitor cleanup timed out")
+            except Exception as e:
+                self.logger.error(f"Error cleaning up profit monitor: {e}")
 
         # Close position and state managers with timeout
         if hasattr(self, 'position_manager'):

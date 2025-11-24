@@ -15,7 +15,7 @@ from exchange_clients.base_models import CancelReason, is_retryable_cancellation
 
 from ..execution_types import ExecutionResult
 from ..price_provider import PriceProvider
-from ..spread_utils import is_spread_acceptable
+from ..spread_utils import SpreadCheckType, is_spread_acceptable
 from helpers.unified_logger import get_core_logger
 
 
@@ -81,15 +81,14 @@ class LimitOrderExecutor:
             # CRITICAL: Check spread before placing order (protect against spread widening)
             # The spread may have widened between initial checks and actual order placement
             exchange_name = exchange_client.get_exchange_name()
-            is_opening = not reduce_only
+            check_type = SpreadCheckType.ENTRY if not reduce_only else SpreadCheckType.EXIT
             acceptable, spread_pct, reason = is_spread_acceptable(
-                best_bid, best_ask, is_opening=is_opening, is_critical=False
+                best_bid, best_ask, check_type
             )
-            
+
             if not acceptable:
-                operation_type = "opening" if is_opening else "closing"
                 self.logger.warning(
-                    f"[{exchange_name.upper()}] Spread too wide for {operation_type} {symbol}: "
+                    f"[{exchange_name.upper()}] Spread too wide for {symbol}: "
                     f"{reason} (bid={best_bid}, ask={best_ask}). "
                     f"Rejecting limit order to prevent slippage."
                 )
@@ -101,13 +100,9 @@ class LimitOrderExecutor:
                     retryable=False,  # Don't retry - spread needs to narrow first
                 )
             
-            # Calculate limit price (maker order with small improvement)
-            if side == "buy":
-                # Buy at ask - offset (better than market taker)
-                limit_price = best_ask * (Decimal('1') - price_offset_pct)
-            else:
-                # Sell at bid + offset (better than market taker)
-                limit_price = best_bid * (Decimal('1') + price_offset_pct)
+            # Calculate limit price using mid pricing (patient waiting strategy)
+            # Use mid price for initial limit orders - not urgent, waiting for favorable fill
+            limit_price = mid_price
             
             # Align price to the exchange's tick size before we derive order size or submit
             limit_price = exchange_client.round_to_tick(limit_price)
@@ -130,7 +125,7 @@ class LimitOrderExecutor:
             exchange_name = exchange_client.get_exchange_name()
             self.logger.info(
                 f"[{exchange_name.upper()}] Placing limit {side} {symbol} (contract_id={contract_id}): "
-                f"{order_quantity} @ ${limit_price} (mid: ${mid_price}, offset: {price_offset_pct * Decimal('100')}%)"
+                f"{order_quantity} @ ${limit_price} (mid pricing, bid=${best_bid}, ask=${best_ask})"
             )
             
             # Place limit order using the normalized contract_id

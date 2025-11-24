@@ -367,6 +367,10 @@ class StrategyNotificationService:
                 exchange_emoji = self._get_exchange_emoji(exchange_name.lower())
                 exchange_display = f"{exchange_emoji} {exchange_name}" if exchange_emoji else exchange_name
                 reason_display = f"Liquidation Risk ({exchange_display})"
+            elif reason.startswith("IMMEDIATE_PROFIT:"):
+                # Extract profit details from reason (e.g., "IMMEDIATE_PROFIT: $4.50 (0.225%)")
+                profit_details = reason.replace("IMMEDIATE_PROFIT:", "").strip()
+                reason_display = f"💰 Profit Taking ({profit_details})"
             else:
                 reason_display = reason.replace("_", " ").title()
             

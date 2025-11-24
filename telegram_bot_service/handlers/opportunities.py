@@ -156,71 +156,81 @@ class OpportunitiesHandler(BaseHandler):
                 lines.append("")  # Separator between opportunities
         
         return "\n".join(lines)
-    
+
+    async def _get_active_configs(self, user_id: str) -> List[Dict[str, Any]]:
+        """Get active funding arbitrage configs for a user."""
+        query = """
+            SELECT sc.id, sc.config_name
+            FROM strategy_runs sr
+            JOIN strategy_configs sc ON sr.config_id = sc.id
+            WHERE sr.user_id = :user_id
+              AND sr.status IN ('running', 'starting', 'paused')
+              AND sc.strategy_type = 'funding_arbitrage'
+            GROUP BY sc.id, sc.config_name
+            ORDER BY sc.config_name;
+        """
+        rows = await self.database.fetch_all(query, {"user_id": user_id})
+        return [dict(row) for row in rows]
+
     async def opportunity_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /opportunity command - shows unfiltered opportunities."""
+        """Handle /opportunities command by showing active or available configs first."""
         user, _ = await self.require_auth(update, context)
         if not user:
             return
-        
-        try:
-            # Show loading message
-            loading_msg = await update.message.reply_text(
-                "🔍 <b>Finding opportunities...</b>\n\n"
-                "Scanning funding rates across all exchanges...",
-                parse_mode='HTML'
-            )
-            
-            # Find opportunities with minimal filters (unfiltered)
-            filters = OpportunityFilter(
-                limit=3,
-                min_profit_percent=Decimal("0"),  # No minimum profit filter
-                sort_by="net_profit_percent",
-                sort_desc=True
-            )
-            
-            opportunities = await self.opportunity_finder.find_opportunities(filters)
-            
-            # Format message
-            header = "📊 <b>Top Funding Arbitrage Opportunities</b>"
-            message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
-            
-            # Create keyboard with refresh and config button
-            keyboard = [
-                [InlineKeyboardButton("🔄 Refresh", callback_data="opportunity_refresh")],
-                [InlineKeyboardButton("⚙️ View My Configs", callback_data="opportunity_configs")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            # Replace loading message
-            await loading_msg.edit_text(
-                message,
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
-            
-        except Exception as e:
-            self.logger.error(f"Opportunity command error: {e}", exc_info=True)
-            await update.message.reply_text(
-                f"❌ Failed to fetch opportunities: {str(e)}",
-                parse_mode='HTML'
-            )
     
-    async def opportunity_configs_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle config selection callback - shows user's configs."""
-        query = update.callback_query
-        await query.answer()
-        
-        user, _ = await self.require_auth(update, context)
-        if not user:
-            return
-        
+        message_to_edit = None
         try:
             user_id = str(user["id"])
             
-            # Get user's own configs (funding_arbitrage only)
+            # Determine if this is a command or callback
+            if update.callback_query:
+                await update.callback_query.answer()
+                message_to_edit = update.callback_query.message
+            else:
+                message_to_edit = await update.message.reply_text(
+                    "🔍 Finding your configurations...", parse_mode='HTML'
+                )
+
+            active_configs = await self._get_active_configs(user_id)
+
+            if len(active_configs) == 1:
+                config_id = str(active_configs[0]["id"])
+                await self._show_filtered_opportunities(message_to_edit, context, config_id, from_command=True)
+                return
+
+            if len(active_configs) > 1:
+                lines = ["📊 <b>Select Active Configuration</b>\n\n"
+                         "You have multiple active strategies. Choose a config to see its opportunities:"]
+                keyboard = []
+                for cfg in active_configs:
+                    keyboard.append([
+                        InlineKeyboardButton(
+                            f"🟢 {cfg['config_name']}",
+                            callback_data=f"opportunity_config:{cfg['id']}"
+                        )
+                    ])
+                keyboard.append([InlineKeyboardButton("🌐 View All (Unfiltered)", callback_data="opportunity_all")])
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await message_to_edit.edit_text("\n".join(lines), parse_mode='HTML', reply_markup=reply_markup)
+                return
+            
+            # No active configs, show all available configs
+            await self._show_all_configs(message_to_edit, context, user_id)
+
+        except Exception as e:
+            self.logger.error(f"Opportunity command error: {e}", exc_info=True)
+            error_message = f"❌ Failed to fetch opportunities: {str(e)}"
+            if message_to_edit:
+                await message_to_edit.edit_text(error_message, parse_mode='HTML')
+            elif update.message:
+                await update.message.reply_text(error_message, parse_mode='HTML')
+    
+    async def _show_all_configs(self, message_to_edit: Update.message, context: ContextTypes.DEFAULT_TYPE, user_id: str):
+        """Show all available funding arbitrage configs for a user."""
+        try:
+            # Get user's own configs
             user_configs_query = """
-                SELECT id, config_name, strategy_type, is_active, created_at
+                SELECT id, config_name, is_active
                 FROM strategy_configs
                 WHERE user_id = :user_id 
                   AND is_template = FALSE
@@ -229,9 +239,9 @@ class OpportunitiesHandler(BaseHandler):
             """
             user_configs = await self.database.fetch_all(user_configs_query, {"user_id": user_id})
             
-            # Get public templates (funding_arbitrage only)
+            # Get public templates
             templates_query = """
-                SELECT id, config_name, strategy_type, created_at
+                SELECT id, config_name
                 FROM strategy_configs
                 WHERE is_template = TRUE
                   AND strategy_type = 'funding_arbitrage'
@@ -239,163 +249,159 @@ class OpportunitiesHandler(BaseHandler):
             """
             templates = await self.database.fetch_all(templates_query)
             
-            # Build message
-            lines = ["📋 <b>Select Configuration</b>\n"]
+            lines = ["📋 <b>Select Configuration</b>\n\n"
+                     "No active strategies found. Choose a config to see its potential opportunities:"]
             keyboard = []
             
-            # User's own configs
             if user_configs:
-                lines.append("<b>Your Configs:</b>")
+                lines.append("\n<b>Your Configs:</b>")
                 for cfg in user_configs:
-                    cfg_dict = dict(cfg) if not isinstance(cfg, dict) else cfg
-                    config_id = str(cfg_dict["id"])
-                    config_name = cfg_dict["config_name"]
+                    cfg_dict = dict(cfg)
                     status = "🟢" if cfg_dict.get("is_active", False) else "⚫"
-                    lines.append(f"{status} <b>{config_name}</b>")
-                    
+                    lines.append(f"{status} {cfg_dict['config_name']}")
                     keyboard.append([
                         InlineKeyboardButton(
-                            f"📋 {config_name}",
-                            callback_data=f"opportunity_config:{config_id}"
+                            f"📋 {cfg_dict['config_name']}",
+                            callback_data=f"opportunity_config:{cfg_dict['id']}"
                         )
                     ])
-                lines.append("")
             
-            # Public templates
             if templates:
-                lines.append("<b>Public Templates:</b>")
-                for tpl in templates[:10]:  # Limit to 10 templates
-                    tpl_dict = dict(tpl) if not isinstance(tpl, dict) else tpl
-                    config_id = str(tpl_dict['id'])
-                    config_name = tpl_dict['config_name']
-                    lines.append(f"⭐ {config_name}")
-                    
+                lines.append("\n<b>Public Templates:</b>")
+                for tpl in templates[:5]:
+                    tpl_dict = dict(tpl)
+                    lines.append(f"⭐ {tpl_dict['config_name']}")
                     keyboard.append([
                         InlineKeyboardButton(
-                            f"⭐ {config_name}",
-                            callback_data=f"opportunity_config:{config_id}"
+                            f"⭐ {tpl_dict['config_name']}",
+                            callback_data=f"opportunity_config:{tpl_dict['id']}"
                         )
                     ])
-                if len(templates) > 10:
-                    lines.append(f"... and {len(templates) - 10} more")
             
             if not user_configs and not templates:
-                lines.append("No funding arbitrage configs found.")
-                lines.append("Create one with /create_config")
+                lines.append("\nNo funding arbitrage configs found. Create one with /create_config")
+
+            keyboard.append([InlineKeyboardButton("🌐 View All (Unfiltered)", callback_data="opportunity_all")])
             
-            # Add back button
-            keyboard.append([
-                InlineKeyboardButton("🔙 Back to Opportunities", callback_data="opportunity_back")
-            ])
+            message_text = "\n".join(lines)
+            reply_markup = InlineKeyboardMarkup(keyboard)
             
-            message = "\n".join(lines)
-            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
-            
-            await query.edit_message_text(
-                message,
+            await message_to_edit.edit_text(
+                message_text,
                 parse_mode='HTML',
                 reply_markup=reply_markup
             )
             
         except Exception as e:
-            self.logger.error(f"Opportunity configs callback error: {e}", exc_info=True)
-            await query.edit_message_text(
-                f"❌ Failed to load configs: {str(e)}",
-                parse_mode='HTML'
-            )
-    
-    async def opportunity_config_view_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle config-specific opportunity view callback."""
-        query = update.callback_query
-        await query.answer()
-        
-        user, _ = await self.require_auth(update, context)
-        if not user:
-            return
-        
-        # Parse config_id from callback data
-        callback_data = query.data
-        if not callback_data.startswith("opportunity_config:"):
-            await query.edit_message_text(
-                "❌ Invalid selection. Please try again.",
-                parse_mode='HTML'
-            )
-            return
-        
-        config_id = callback_data.split(":", 1)[1]
-        
+            self.logger.error(f"Show all configs error: {e}", exc_info=True)
+            await message_to_edit.edit_text(f"❌ Failed to load configs: {str(e)}", parse_mode='HTML')
+
+    async def _show_filtered_opportunities(self, message_to_edit: Update.message, context: ContextTypes.DEFAULT_TYPE, config_id: str, from_command: bool = False):
+        """Show opportunities filtered by a specific config."""
         try:
-            # Show loading message
-            await query.edit_message_text(
-                "🔍 <b>Finding opportunities...</b>\n\n"
-                "Applying config filters...",
-                parse_mode='HTML'
+            await message_to_edit.edit_text(
+                "🔍 Finding opportunities with your config filters...", parse_mode='HTML'
             )
             
-            # Get config from database
             config_row = await self.database.fetch_one(
-                """
-                SELECT config_name, config_data, strategy_type, is_template, user_id
-                FROM strategy_configs
-                WHERE id = :id
-                """,
-                {"id": config_id}
+                "SELECT config_name, config_data FROM strategy_configs WHERE id = :id", {"id": config_id}
             )
             
             if not config_row:
-                await query.edit_message_text(
-                    "❌ Config not found.",
-                    parse_mode='HTML'
-                )
+                await message_to_edit.edit_text("❌ Config not found.", parse_mode='HTML')
                 return
             
-            config_dict = dict(config_row) if not isinstance(config_row, dict) else config_row
+            config_dict = dict(config_row)
             config_name = config_dict['config_name']
             config_data_raw = config_dict['config_data']
             
-            # Parse config_data (JSONB might be string or dict)
             import json
-            if isinstance(config_data_raw, str):
-                try:
-                    config_data = json.loads(config_data_raw)
-                except json.JSONDecodeError:
-                    config_data = {}
-            else:
-                config_data = config_data_raw or {}
+            config_data = json.loads(config_data_raw) if isinstance(config_data_raw, str) else (config_data_raw or {})
             
-            # Convert config params to OpportunityFilter
             filters = self._config_to_opportunity_filter(config_data)
             filters.limit = 3
             filters.sort_by = "net_profit_percent"
             filters.sort_desc = True
             
-            # Find opportunities with config filters
             opportunities = await self.opportunity_finder.find_opportunities(filters)
             
-            # Format message with config-specific header
             header = f"📊 <b>Opportunities for: {config_name}</b>"
             message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
             
-            # Create keyboard with refresh and back button
             keyboard = [
-                [InlineKeyboardButton("🔄 Refresh", callback_data=f"opportunity_config_refresh:{config_id}")],
-                [InlineKeyboardButton("🔙 Back to Configs", callback_data="opportunity_configs")]
+                [InlineKeyboardButton("🔄 Refresh", callback_data=f"opportunity_config_refresh:{config_id}")]
             ]
+            
+            if from_command:
+                # This is the default view for a user with one active config.
+                # Provide a way to see the unfiltered list.
+                keyboard.append([InlineKeyboardButton("🌐 View All (Unfiltered)", callback_data="opportunity_all")])
+            else:
+                # This view came from a selection list, so provide a "Back" button and all view.
+                keyboard.append([InlineKeyboardButton("🔙 Back to Configs", callback_data="opportunity_back_to_configs_command")])
+                keyboard.append([InlineKeyboardButton("🌐 View All (Unfiltered)", callback_data="opportunity_all")])
+            
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await query.edit_message_text(
+            await message_to_edit.edit_text(
                 message,
                 parse_mode='HTML',
                 reply_markup=reply_markup
             )
             
         except Exception as e:
-            self.logger.error(f"Opportunity config view error: {e}", exc_info=True)
-            await query.edit_message_text(
-                f"❌ Failed to fetch opportunities: {str(e)}",
-                parse_mode='HTML'
+            self.logger.error(f"Filtered opportunities error: {e}", exc_info=True)
+            await message_to_edit.edit_text(f"❌ Failed to fetch opportunities: {str(e)}", parse_mode='HTML')
+
+    async def _show_unfiltered_opportunities(self, message_to_edit: Update.message, context: ContextTypes.DEFAULT_TYPE):
+        """Show unfiltered opportunities."""
+        try:
+            await message_to_edit.edit_text(
+                "🔍 Finding opportunities (unfiltered)...", parse_mode='HTML'
             )
-    
+            
+            filters = OpportunityFilter(limit=3, min_profit_percent=Decimal("0"), sort_by="net_profit_percent", sort_desc=True)
+            opportunities = await self.opportunity_finder.find_opportunities(filters)
+            
+            header = "📊 <b>Top Funding Arbitrage Opportunities (Unfiltered)</b>"
+            message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
+            
+            keyboard = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data="opportunity_all_refresh")],
+                [InlineKeyboardButton("🔙 Back to My Configs", callback_data="opportunity_back_to_configs_command")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await message_to_edit.edit_text(
+                message,
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Unfiltered opportunities error: {e}", exc_info=True)
+            await message_to_edit.edit_text(f"❌ Failed to fetch opportunities: {str(e)}", parse_mode='HTML')
+
+    async def opportunity_configs_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle "View My Configs" button, showing all available configs."""
+        query = update.callback_query
+        await query.answer()
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        await self._show_all_configs(query.message, context, str(user["id"]))
+
+    async def opportunity_config_view_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle a specific config selection to view its opportunities."""
+        query = update.callback_query
+        await query.answer()
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+
+        config_id = query.data.split(":", 1)[1]
+        await self._show_filtered_opportunities(query.message, context, config_id)
+
     def _config_to_opportunity_filter(self, config_data: Dict[str, Any]) -> OpportunityFilter:
         """Convert config data to OpportunityFilter."""
         # Extract config parameters
@@ -434,224 +440,53 @@ class OpportunitiesHandler(BaseHandler):
         
         return filters
     
-    async def opportunity_refresh_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle refresh button - refresh default unfiltered view."""
+    async def opportunity_all_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle 'View All' button."""
         query = update.callback_query
-        await query.answer("🔄 Refreshing opportunities...")
-        
-        user, _ = await self.require_auth(update, context)
-        if not user:
-            return
-        
-        try:
-            # Show loading message
-            await query.edit_message_text(
-                "🔍 <b>Finding opportunities...</b>\n\n"
-                "Scanning funding rates across all exchanges...",
-                parse_mode='HTML'
-            )
-            
-            # Find opportunities with minimal filters (unfiltered)
-            filters = OpportunityFilter(
-                limit=3,
-                min_profit_percent=Decimal("0"),  # No minimum profit filter
-                sort_by="net_profit_percent",
-                sort_desc=True
-            )
-            
-            opportunities = await self.opportunity_finder.find_opportunities(filters)
-            
-            # Format message
-            header = "📊 <b>Top Funding Arbitrage Opportunities</b>"
-            message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
-            
-            # Create keyboard with config button and refresh button
-            keyboard = [
-                [InlineKeyboardButton("🔄 Refresh", callback_data="opportunity_refresh")],
-                [InlineKeyboardButton("⚙️ View My Configs", callback_data="opportunity_configs")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                message,
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
-            
-        except Exception as e:
-            self.logger.error(f"Opportunity refresh callback error: {e}", exc_info=True)
-            await query.edit_message_text(
-                f"❌ Failed to refresh opportunities: {str(e)}",
-                parse_mode='HTML'
-            )
-    
+        await query.answer()
+        await self._show_unfiltered_opportunities(query.message, context)
+
+    async def opportunity_all_refresh_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle refresh for the unfiltered view."""
+        query = update.callback_query
+        await query.answer("🔄 Refreshing...")
+        await self._show_unfiltered_opportunities(query.message, context)
+
     async def opportunity_config_refresh_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle refresh button for config-filtered view."""
         query = update.callback_query
-        await query.answer("🔄 Refreshing opportunities...")
-        
-        user, _ = await self.require_auth(update, context)
-        if not user:
-            return
-        
-        # Parse config_id from callback data
-        callback_data = query.data
-        if not callback_data.startswith("opportunity_config_refresh:"):
-            await query.edit_message_text(
-                "❌ Invalid refresh request. Please try again.",
-                parse_mode='HTML'
-            )
-            return
-        
-        config_id = callback_data.split(":", 1)[1]
-        
-        try:
-            # Show loading message
-            await query.edit_message_text(
-                "🔍 <b>Finding opportunities...</b>\n\n"
-                "Applying config filters...",
-                parse_mode='HTML'
-            )
-            
-            # Get config from database
-            config_row = await self.database.fetch_one(
-                """
-                SELECT config_name, config_data, strategy_type, is_template, user_id
-                FROM strategy_configs
-                WHERE id = :id
-                """,
-                {"id": config_id}
-            )
-            
-            if not config_row:
-                await query.edit_message_text(
-                    "❌ Config not found.",
-                    parse_mode='HTML'
-                )
-                return
-            
-            config_dict = dict(config_row) if not isinstance(config_row, dict) else config_row
-            config_name = config_dict['config_name']
-            config_data_raw = config_dict['config_data']
-            
-            # Parse config_data (JSONB might be string or dict)
-            import json
-            if isinstance(config_data_raw, str):
-                try:
-                    config_data = json.loads(config_data_raw)
-                except json.JSONDecodeError:
-                    config_data = {}
-            else:
-                config_data = config_data_raw or {}
-            
-            # Convert config params to OpportunityFilter
-            filters = self._config_to_opportunity_filter(config_data)
-            filters.limit = 3
-            filters.sort_by = "net_profit_percent"
-            filters.sort_desc = True
-            
-            # Find opportunities with config filters
-            opportunities = await self.opportunity_finder.find_opportunities(filters)
-            
-            # Format message with config-specific header
-            header = f"📊 <b>Opportunities for: {config_name}</b>"
-            message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
-            
-            # Create keyboard with refresh and back button
-            keyboard = [
-                [InlineKeyboardButton("🔄 Refresh", callback_data=f"opportunity_config_refresh:{config_id}")],
-                [InlineKeyboardButton("🔙 Back to Configs", callback_data="opportunity_configs")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                message,
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
-            
-        except Exception as e:
-            self.logger.error(f"Opportunity config refresh error: {e}", exc_info=True)
-            await query.edit_message_text(
-                f"❌ Failed to refresh opportunities: {str(e)}",
-                parse_mode='HTML'
-            )
-    
-    async def opportunity_back_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle back button - return to default unfiltered view."""
-        query = update.callback_query
-        await query.answer()
-        
-        user, _ = await self.require_auth(update, context)
-        if not user:
-            return
-        
-        try:
-            # Show loading message
-            await query.edit_message_text(
-                "🔍 <b>Finding opportunities...</b>\n\n"
-                "Scanning funding rates across all exchanges...",
-                parse_mode='HTML'
-            )
-            
-            # Find opportunities with minimal filters (unfiltered)
-            filters = OpportunityFilter(
-                limit=3,
-                min_profit_percent=Decimal("0"),  # No minimum profit filter
-                sort_by="net_profit_percent",
-                sort_desc=True
-            )
-            
-            opportunities = await self.opportunity_finder.find_opportunities(filters)
-            
-            # Format message
-            header = "📊 <b>Top Funding Arbitrage Opportunities</b>"
-            message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
-            
-            # Create keyboard with config button and refresh button
-            keyboard = [
-                [InlineKeyboardButton("🔄 Refresh", callback_data="opportunity_refresh")],
-                [InlineKeyboardButton("⚙️ View My Configs", callback_data="opportunity_configs")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                message,
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
-            
-        except Exception as e:
-            self.logger.error(f"Opportunity back callback error: {e}", exc_info=True)
-            await query.edit_message_text(
-                f"❌ Failed to fetch opportunities: {str(e)}",
-                parse_mode='HTML'
-            )
-    
+        await query.answer("🔄 Refreshing...")
+        config_id = query.data.split(":", 1)[1]
+        await self._show_filtered_opportunities(query.message, context, config_id)
+
+    async def opportunity_back_to_configs_command_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle 'Back' button to return to the initial /opportunities command view."""
+        # This effectively re-runs the /opportunities command logic
+        from unittest.mock import Mock
+        mock_message = Mock()
+        mock_message.reply_text = update.callback_query.message.edit_text
+        mock_update = Mock()
+        mock_update.message = mock_message
+        mock_update.effective_user = update.effective_user
+        mock_update.callback_query = None
+        await self.opportunity_command(mock_update, context)
+
     def register_handlers(self, application):
         """Register opportunity command and callback handlers"""
-        # Command handler
         application.add_handler(CommandHandler("opportunities", self.opportunity_command))
-        
-        # Callback query handlers
-        application.add_handler(CallbackQueryHandler(
-            self.opportunity_refresh_callback,
-            pattern="^opportunity_refresh$"
-        ))
-        application.add_handler(CallbackQueryHandler(
-            self.opportunity_config_refresh_callback,
-            pattern="^opportunity_config_refresh:"
-        ))
-        application.add_handler(CallbackQueryHandler(
-            self.opportunity_configs_callback,
-            pattern="^opportunity_configs$"
-        ))
-        application.add_handler(CallbackQueryHandler(
-            self.opportunity_config_view_callback,
-            pattern="^opportunity_config:"
-        ))
-        application.add_handler(CallbackQueryHandler(
-            self.opportunity_back_callback,
-            pattern="^opportunity_back$"
-        ))
+        application.add_handler(CallbackQueryHandler(self.opportunity_command, pattern="^opportunity_back_to_configs_command$"))
+        application.add_handler(CallbackQueryHandler(self.opportunity_configs_callback, pattern="^opportunity_configs$"))
+        application.add_handler(CallbackQueryHandler(self.opportunity_config_view_callback, pattern="^opportunity_config:"))
+        application.add_handler(CallbackQueryHandler(self.opportunity_all_callback, pattern="^opportunity_all$"))
+        application.add_handler(CallbackQueryHandler(self.opportunity_all_refresh_callback, pattern="^opportunity_all_refresh$"))
+        application.add_handler(CallbackQueryHandler(self.opportunity_config_refresh_callback, pattern="^opportunity_config_refresh:"))
+        application.add_handler(CallbackQueryHandler(self.opportunity_back_callback, pattern="^opportunity_back_to_configs$"))
 
+    async def opportunity_back_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle 'Back to Configs' button, which shows the list of all available configs."""
+        query = update.callback_query
+        await query.answer()
+        user, _ = await self.require_auth(update, context)
+        if not user:
+            return
+        await self._show_all_configs(query.message, context, str(user["id"]))
