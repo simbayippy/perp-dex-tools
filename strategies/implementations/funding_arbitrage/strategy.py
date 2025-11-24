@@ -214,6 +214,7 @@ class FundingArbitrageStrategy(BaseStrategy):
             exchange_clients=self.exchange_clients,
             logger=self.logger,
             strategy_config=self.config,
+            strategy=self,  # Pass strategy reference for live table check
         )
         
         # Cooldown manager for wide spread tracking
@@ -227,9 +228,19 @@ class FundingArbitrageStrategy(BaseStrategy):
         self.profit_taker = ProfitTaker(self)
         self.profit_monitor = RealTimeProfitMonitor(self)
 
+        # Live table display (real-time position monitoring via WebSocket)
+        from .display import LiveTableDisplay
+        self.live_table = LiveTableDisplay(
+            exchange_clients=self.exchange_clients,
+            logger=self.logger,
+            strategy_config=self.config,
+        )
+
         # Async orchestration helpers
         self._monitor_task = None
         self._monitor_stop_event = None
+        self._live_table_task = None
+        self._live_table_stop_event = None
         self._last_opportunity_scan_ts = 0.0
         self._shutdown_requested = False  # Track if strategy is shutting down
 
@@ -337,6 +348,10 @@ class FundingArbitrageStrategy(BaseStrategy):
         # Initialize position and state managers
         await self.position_manager.initialize()
         self.logger.info("FundingArbitrageStrategy initialized successfully")
+
+        # Load existing open positions into live table (for restarts)
+        await self._load_existing_positions_to_live_table()
+
         if self._monitor_task is None:
             self._monitor_stop_event = asyncio.Event()
             self.logger.info("🔄 Creating background monitor task...")
@@ -685,6 +700,121 @@ class FundingArbitrageStrategy(BaseStrategy):
         finally:
             pass  # Silent exit
 
+    async def _live_table_display_task(self):
+        """Background loop to display live position table with real-time updates."""
+        from rich.live import Live
+
+        stop_event = self._live_table_stop_event
+
+        try:
+            self.live_table.is_active = True
+            self.logger.info("[LIVE_TABLE] Starting real-time display...")
+
+            with Live(
+                self.live_table.generate_table(),
+                console=self.live_table.console,
+                refresh_per_second=4,
+                screen=False,  # Don't take over full screen
+            ) as live:
+                while stop_event and not stop_event.is_set():
+                    # Check shutdown flag from strategy
+                    if self._shutdown_requested:
+                        break
+
+                    # Check if we still have positions
+                    if not self.live_table.has_positions():
+                        self.logger.info("[LIVE_TABLE] No more positions, stopping display")
+                        break
+
+                    # Update table
+                    try:
+                        live.update(self.live_table.generate_table())
+                    except Exception as e:
+                        self.logger.debug(f"[LIVE_TABLE] Error updating display: {e}")
+
+                    # Wait before next update
+                    try:
+                        await asyncio.wait_for(stop_event.wait(), timeout=0.25)
+                        break  # Event was set, exit
+                    except asyncio.TimeoutError:
+                        continue  # Timeout expected, continue loop
+                    except asyncio.CancelledError:
+                        break  # Task cancelled, exit
+        except asyncio.CancelledError:
+            # Task cancellation - exit cleanly
+            pass
+        except Exception as e:
+            self.logger.error(f"[LIVE_TABLE] Display task error: {e}")
+        finally:
+            self.live_table.is_active = False
+            self.logger.info("[LIVE_TABLE] Display stopped")
+
+    async def _load_existing_positions_to_live_table(self) -> None:
+        """
+        Load existing open positions into live table on strategy startup.
+
+        This ensures that if the bot restarts with open positions, the live table
+        will display them immediately.
+        """
+        try:
+            open_positions = await self.position_manager.get_open_positions()
+
+            if not open_positions:
+                self.logger.debug("[LIVE_TABLE] No existing open positions to load")
+                return
+
+            self.logger.info(f"[LIVE_TABLE] Loading {len(open_positions)} existing positions...")
+
+            for position in open_positions:
+                try:
+                    await self.live_table.add_position(position)
+                    self.logger.debug(f"[LIVE_TABLE] Loaded existing position: {position.symbol}")
+                except Exception as e:
+                    self.logger.warning(f"[LIVE_TABLE] Failed to load position {position.symbol}: {e}")
+
+            # Start live table display if we loaded positions
+            if self.live_table.has_positions():
+                await self.ensure_live_table_started()
+                self.logger.info(f"[LIVE_TABLE] ✅ Loaded {len(open_positions)} positions from database")
+        except Exception as e:
+            self.logger.warning(f"[LIVE_TABLE] Failed to load existing positions: {e}")
+
+    async def ensure_live_table_started(self) -> None:
+        """Ensure live table display task is running (idempotent)."""
+        if self._live_table_task and not self._live_table_task.done():
+            # Already running
+            return
+
+        if not self.live_table.has_positions():
+            # No positions to display
+            return
+
+        # Start new task
+        self._live_table_stop_event = asyncio.Event()
+        self._live_table_task = asyncio.create_task(
+            self._live_table_display_task(),
+            name="funding-arb-live-table"
+        )
+        self.logger.info(f"[LIVE_TABLE] Started display task: {self._live_table_task.get_name()}")
+
+    async def stop_live_table(self) -> None:
+        """Stop live table display task."""
+        if not self._live_table_task or self._live_table_task.done():
+            return
+
+        if self._live_table_stop_event:
+            self._live_table_stop_event.set()
+
+        self._live_table_task.cancel()
+
+        try:
+            await asyncio.wait_for(self._live_table_task, timeout=3.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            pass
+        finally:
+            self._live_table_task = None
+            self._live_table_stop_event = None
+
     # ========================================================================
     # Cleanup
     # ========================================================================
@@ -708,6 +838,19 @@ class FundingArbitrageStrategy(BaseStrategy):
         if self._monitor_stop_event:
             self._monitor_stop_event = None
         self._last_opportunity_scan_ts = 0.0
+
+        # Stop live table task
+        if self._live_table_task and not self._live_table_task.done():
+            await self.stop_live_table()
+
+        # Cleanup live table listeners
+        if hasattr(self, 'live_table'):
+            try:
+                await asyncio.wait_for(self.live_table.cleanup(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self.logger.warning("Live table cleanup timed out")
+            except Exception as e:
+                self.logger.error(f"Error cleaning up live table: {e}")
 
         # Cleanup profit-taking monitor listeners
         if hasattr(self, 'profit_monitor'):
