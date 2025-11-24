@@ -326,7 +326,7 @@ class RealTimeProfitMonitor:
             if long_client:
                 long_ws = getattr(long_client, 'ws_manager', None)
                 if long_ws and hasattr(long_ws, 'get_latest_bbo'):
-                    long_bbo = long_ws.get_latest_bbo(position.symbol)
+                    long_bbo = long_ws.get_latest_bbo()
                     if long_bbo:
                         bbo_prices[position.long_dex] = long_bbo
 
@@ -335,7 +335,7 @@ class RealTimeProfitMonitor:
             if short_client:
                 short_ws = getattr(short_client, 'ws_manager', None)
                 if short_ws and hasattr(short_ws, 'get_latest_bbo'):
-                    short_bbo = short_ws.get_latest_bbo(position.symbol)
+                    short_bbo = short_ws.get_latest_bbo()
                     if short_bbo:
                         bbo_prices[position.short_dex] = short_bbo
 
