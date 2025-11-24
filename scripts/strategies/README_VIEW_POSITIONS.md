@@ -15,12 +15,33 @@ The `view_live_positions.py` script fetches position data from a running strateg
 - ✅ Works from any terminal (local or SSH)
 - ✅ No impact on running strategy
 
+## Getting Your API Key
+
+The Control API requires authentication. First, get your API key:
+
+```bash
+# Get API key for your username
+python database/scripts/users/get_api_key.py --username YOUR_USERNAME
+
+# Or get API key by Telegram user ID
+python database/scripts/users/get_api_key.py --telegram-user-id YOUR_TELEGRAM_ID
+
+# Interactive mode
+python database/scripts/users/get_api_key.py --interactive
+```
+
+This will display your API key. Copy it for use with the viewer.
+
 ## Usage
 
 ### Basic Usage
 
 ```bash
-# View positions for a strategy running on port 8768
+# View positions with API key
+python scripts/strategies/view_live_positions.py --port 8768 --api-key YOUR_API_KEY
+
+# Or set as environment variable (recommended)
+export CONTROL_API_KEY=your_api_key_here
 python scripts/strategies/view_live_positions.py --port 8768
 ```
 
@@ -28,14 +49,14 @@ python scripts/strategies/view_live_positions.py --port 8768
 
 ```bash
 # Refresh every 2 seconds instead of 1 second
-python scripts/strategies/view_live_positions.py --port 8768 --refresh 2
+python scripts/strategies/view_live_positions.py --port 8768 --api-key YOUR_API_KEY --refresh 2
 ```
 
 ### Remote Server
 
 ```bash
 # Connect to a remote VPS
-python scripts/strategies/view_live_positions.py --host 192.168.1.100 --port 8768
+python scripts/strategies/view_live_positions.py --host 192.168.1.100 --port 8768 --api-key YOUR_API_KEY
 ```
 
 ## How It Works
@@ -71,6 +92,11 @@ Each strategy has its own Control API port. You can find it:
 ```
 
 ## Troubleshooting
+
+### "HTTP 401 Unauthorized"
+- You need an API key to access the Control API
+- Run `python database/scripts/users/get_api_key.py --username YOUR_USERNAME` to get your key
+- Pass it with `--api-key` or set `CONTROL_API_KEY` environment variable
 
 ### "Connection error: Cannot connect to host"
 - Check that the strategy is running with Control API enabled

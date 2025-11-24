@@ -34,15 +34,17 @@ sys.path.insert(0, str(project_root))
 class LivePositionViewer:
     """Fetches position data from Control API and displays in Rich table."""
 
-    def __init__(self, api_url: str, refresh_interval: float = 1.0):
+    def __init__(self, api_url: str, api_key: str, refresh_interval: float = 1.0):
         """
         Initialize viewer.
 
         Args:
             api_url: Base URL for Control API (e.g., http://127.0.0.1:8768)
+            api_key: API key for authentication
             refresh_interval: Refresh interval in seconds
         """
         self.api_url = api_url.rstrip("/")
+        self.api_key = api_key
         self.refresh_interval = refresh_interval
         self.console = Console()
         self.session: Optional[aiohttp.ClientSession] = None
@@ -54,8 +56,10 @@ class LivePositionViewer:
             self.session = aiohttp.ClientSession()
 
         try:
+            headers = {"X-API-Key": self.api_key}
             async with self.session.get(
                 f"{self.api_url}/api/v1/positions",
+                headers=headers,
                 timeout=aiohttp.ClientTimeout(total=5)
             ) as response:
                 if response.status == 200:
@@ -253,14 +257,21 @@ async def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # View positions on default port
+  # View positions with API key from environment
+  export CONTROL_API_KEY=your_api_key
   python scripts/strategies/view_live_positions.py --port 8768
 
+  # View positions with explicit API key
+  python scripts/strategies/view_live_positions.py --port 8768 --api-key YOUR_KEY
+
   # Custom refresh interval (2 seconds)
-  python scripts/strategies/view_live_positions.py --port 8768 --refresh 2
+  python scripts/strategies/view_live_positions.py --port 8768 --api-key YOUR_KEY --refresh 2
 
   # Connect to remote server
-  python scripts/strategies/view_live_positions.py --host 192.168.1.100 --port 8768
+  python scripts/strategies/view_live_positions.py --host 192.168.1.100 --port 8768 --api-key YOUR_KEY
+
+Note: Get your API key from the database:
+  python database/scripts/users/get_api_key.py
         """
     )
 
@@ -276,6 +287,10 @@ Examples:
         help="Control API port (e.g., 8768)"
     )
     parser.add_argument(
+        "--api-key",
+        help="API key for authentication (or set CONTROL_API_KEY env var)"
+    )
+    parser.add_argument(
         "--refresh",
         type=float,
         default=1.0,
@@ -284,8 +299,23 @@ Examples:
 
     args = parser.parse_args()
 
+    # Get API key from args or environment
+    import os
+    api_key = args.api_key or os.getenv("CONTROL_API_KEY")
+
+    if not api_key:
+        print("❌ Error: API key required")
+        print()
+        print("Provide API key via:")
+        print("  1. --api-key argument: python scripts/strategies/view_live_positions.py --port 8768 --api-key YOUR_KEY")
+        print("  2. CONTROL_API_KEY environment variable: export CONTROL_API_KEY=your_key")
+        print()
+        print("To get your API key, run:")
+        print("  python database/scripts/users/get_api_key.py")
+        sys.exit(1)
+
     api_url = f"http://{args.host}:{args.port}"
-    viewer = LivePositionViewer(api_url, args.refresh)
+    viewer = LivePositionViewer(api_url, api_key, args.refresh)
 
     await viewer.run()
 
