@@ -62,6 +62,12 @@ def test_is_spread_acceptable_uses_configured_thresholds():
 
 def test_partial_configuration():
     """Test that configure_spread_thresholds supports partial updates."""
+    # Get old values (should be default for test sanitization)
+    old_entry = _SPREAD_THRESHOLDS[SpreadCheckType.ENTRY]
+    old_exit = _SPREAD_THRESHOLDS[SpreadCheckType.EXIT]
+    old_emergency = _SPREAD_THRESHOLDS[SpreadCheckType.EMERGENCY_CLOSE]
+    old_hedge = _SPREAD_THRESHOLDS[SpreadCheckType.AGGRESSIVE_HEDGE]
+
     # Configure only entry threshold
     configure_spread_thresholds(entry_threshold=Decimal("0.002"))
 
@@ -69,9 +75,9 @@ def test_partial_configuration():
     assert _SPREAD_THRESHOLDS[SpreadCheckType.ENTRY] == Decimal("0.002")
 
     # Other thresholds unchanged
-    assert _SPREAD_THRESHOLDS[SpreadCheckType.EXIT] == Decimal("0.001")
-    assert _SPREAD_THRESHOLDS[SpreadCheckType.EMERGENCY_CLOSE] == Decimal("0.002")
-
+    assert _SPREAD_THRESHOLDS[SpreadCheckType.EXIT] == old_exit
+    assert _SPREAD_THRESHOLDS[SpreadCheckType.EMERGENCY_CLOSE] == old_emergency
+    assert _SPREAD_THRESHOLDS[SpreadCheckType.AGGRESSIVE_HEDGE] == old_hedge
 
 def test_funding_arbitrage_typical_config():
     """Test typical funding arbitrage configuration (from config.py defaults)."""
