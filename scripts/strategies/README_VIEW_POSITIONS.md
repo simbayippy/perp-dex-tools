@@ -1,127 +1,102 @@
-# Live Position Viewer
+# Live Position Viewer (WebSocket Edition)
 
-View real-time positions via the Control API with a beautiful Rich table display.
+View real-time funding arbitrage positions directly from the Control API using the new streaming WebSocket feed.
 
-## Overview
+## Highlights
 
-The `view_live_positions.py` script fetches position data from a running strategy's Control API and displays it in a live-updating Rich table in your terminal.
+- ✅ **WebSocket marks:** prices update the moment BBO streams tick (no REST polling loops)
+- ✅ **Auto discovery:** `--username` resolves the correct Control API port + stored API key from the database
+- ✅ **Account aware:** automatically filters to the account tied to the running strategy (override with `--account`)
+- ✅ **Split cadence:** static metrics (entry, funding, leverage) refresh slowly while marks refresh instantly
+- ✅ **Rich TUI:** colorful, compact table rendered with [`rich`](https://github.com/Textualize/rich)
 
-## Features
+## Prerequisites
 
-- ✅ Real-time position monitoring (updates every 1-2 seconds)
-- ✅ Fetches data via Control API (no direct process access needed)
-- ✅ Beautiful Rich table with color-coded uPnL
-- ✅ Shows all metrics: qty, entry, mark, uPnL, funding, APY, age
-- ✅ Works from any terminal (local or SSH)
-- ✅ No impact on running strategy
-
-## Getting Your API Key
-
-The Control API requires authentication. First, get your API key:
-
-```bash
-# Get API key for your username
-python database/scripts/users/get_api_key.py --username YOUR_USERNAME
-
-# Or get API key by Telegram user ID
-python database/scripts/users/get_api_key.py --telegram-user-id YOUR_TELEGRAM_ID
-
-# Interactive mode
-python database/scripts/users/get_api_key.py --interactive
-```
-
-This will display your API key. Copy it for use with the viewer.
+- Strategy must run with the Control API enabled (via Telegram bot or `CONTROL_API_ENABLED=1`)
+- Database access (`DATABASE_URL`) and `CREDENTIAL_ENCRYPTION_KEY` are required for auto-discovery
+- `pip install -r requirements.txt` (already includes `aiohttp`, `rich`, `databases`, `python-dotenv`)
 
 ## Usage
 
-### Basic Usage
+### Auto-detect everything (recommended)
 
 ```bash
-# View positions with API key
-python scripts/strategies/view_live_positions.py --port 8768 --api-key YOUR_API_KEY
+# Resolve API key + control port for alice, filter to her only running account
+python scripts/strategies/view_live_positions.py --username alice
 
-# Or set as environment variable (recommended)
-export CONTROL_API_KEY=your_api_key_here
-python scripts/strategies/view_live_positions.py --port 8768
+# Specify account when the user has multiple simultaneous runs
+python scripts/strategies/view_live_positions.py --username alice --account acc1
 ```
 
-### Custom Refresh Interval
+What happens under the hood:
+
+1. Uses `DATABASE_URL` to find the user and running `strategy_runs`
+2. Pulls the Control API port tied to the selected run
+3. Reads the stored Telegram API key (`telegram_api_key_encrypted`) if available
+4. Subscribes to `/api/v1/live/bbo` for tick-level price updates
+
+### Manual overrides
 
 ```bash
-# Refresh every 2 seconds instead of 1 second
-python scripts/strategies/view_live_positions.py --port 8768 --api-key YOUR_API_KEY --refresh 2
+# Explicit host/port/API key (legacy behavior)
+python scripts/strategies/view_live_positions.py \
+    --host 127.0.0.1 --port 8768 --api-key YOUR_API_KEY
+
+# Change UI refresh cadence and slow-static refresh cycle
+python scripts/strategies/view_live_positions.py \
+    --username alice --refresh 0.5 --static-refresh 60
 ```
 
-### Remote Server
+CLI flags overview:
 
-```bash
-# Connect to a remote VPS
-python scripts/strategies/view_live_positions.py --host 192.168.1.100 --port 8768 --api-key YOUR_API_KEY
-```
+| Flag | Description |
+|------|-------------|
+| `--username` | Fetch API key + port from DB (requires `DATABASE_URL`) |
+| `--account` | Prefer a specific account when user has multiple runs |
+| `--host/--port` | Manual Control API host/port (fallback if no username) |
+| `--api-key` | Override API key resolution |
+| `--refresh` | Table redraw interval (default 1s) |
+| `--static-refresh` | Slow REST refresh interval for funding/entry data (default 30s) |
 
 ## How It Works
 
-1. Strategy runs with `--enable-control-api` flag (automatically enabled via Telegram bot)
-2. Control API exposes `/api/v1/positions` endpoint
-3. Viewer script fetches position data every N seconds
-4. Rich table displays data with real-time updates
+1. **REST fetch (slow lane):** periodically calls `/api/v1/positions` to refresh entry, funding, leverage, etc.
+2. **WebSocket stream (fast lane):** subscribes to `/api/v1/live/bbo` which mirrors the strategy's WebSocket BBO events.
+3. **Local synthesis:** viewer recalculates mark price + uPnL per leg using live bids/asks while preserving the slow metrics.
 
-## Requirements
+The Control API server now exposes a FastAPI websocket endpoint:
 
-- Strategy must be running with Control API enabled
-- Default port is configured in `.env` as `CONTROL_API_PORT` (e.g., 8768)
-- Requires `aiohttp` and `rich` packages (already in requirements.txt)
-
-## Finding the Port
-
-Each strategy has its own Control API port. You can find it:
-
-1. **In Telegram**: Use `/status` command to see the API port
-2. **In logs**: Check strategy logs for "Control API server started on http://127.0.0.1:XXXX"
-3. **In config**: Check your strategy YAML config file for `control_api_port`
+```
+GET  /api/v1/positions      # unchanged (slow/static data)
+WS   /api/v1/live/bbo       # new! push BBO events to any authorized client
+```
 
 ## Example Output
 
 ```
-╭─────────────────────────── Live Positions (via Control API) ───────────────────────────╮
-│ Symbol │ Exchange │ Side  │    Qty │    Entry │     Mark │    uPnL │ Funding │    APY │      Age │
-├────────┼──────────┼───────┼────────┼──────────┼──────────┼─────────┼─────────┼────────┼──────────┤
-│    ZEC │    ASTER │  long │ 0.0500 │ 582.3400 │ 582.4500 │  +$0.55 │    0.25 │  3.12% │ 02:15:30 │
-│        │  LIGHTER │ short │ 0.0500 │ 582.4000 │ 582.4500 │  -$0.25 │   -0.15 │ -2.45% │          │
-╰──────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────── Live Positions (via Control API) ──────────────────────────╮
+│ Account │ Symbol │ Exchange │ Side  │   Qty │    Entry │     Mark │    uPnL │ APY │ Age │
+├─────────┼────────┼──────────┼───────┼───────┼──────────┼──────────┼─────────┼─────┼─────┤
+│ acc1    │ ZEC    │ ASTER    │ long  │ 4.539 │ 549.9061 │ 592.3210 │ -$192.5 │ 7.6%│ 02:41│
+│         │        │ LIGHTER  │ short │ 4.539 │ 549.6910 │ 591.3950 │ +$189.3 │-53% │     │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
 ```
+
+Marks update instantly whenever the websocket emits a new bid/ask, so uPnL flickers in real time without hammering REST endpoints.
 
 ## Troubleshooting
 
-### "HTTP 401 Unauthorized"
-- You need an API key to access the Control API
-- Run `python database/scripts/users/get_api_key.py --username YOUR_USERNAME` to get your key
-- Pass it with `--api-key` or set `CONTROL_API_KEY` environment variable
+| Symptom | Fix |
+|---------|-----|
+| `Missing API key` | Provide `--api-key` or set `CONTROL_API_KEY`. Auto-mode requires Telegram auth to have stored a key. |
+| `No strategy runs` | Ensure the user has an active `strategy_runs` row with a non-null `control_api_port`. |
+| `WebSocket error` | Control API might be offline. Check `trading_bot` logs for the control server status. |
+| `Stale funding values` | Increase `--static-refresh` cadence if you need faster funding updates. |
 
-### "Connection error: Cannot connect to host"
-- Check that the strategy is running with Control API enabled
-- Verify the port number is correct
-- Ensure firewall allows connections to the port (if remote)
+## Related Tools
 
-### "No open positions"
-- This is normal if the strategy hasn't opened any positions yet
-- The viewer will continue running and show positions when they open
+- [`scripts/strategies/check_strategy_logs.py`](./check_strategy_logs.py) – Stream stdout/stderr logs
+- [`scripts/strategies/view_all_strategies.py`](./view_all_strategies.py) – Inspect running strategy runs & ports
+- [`strategies/control/server.py`](../../strategies/control/server.py) – Control API server implementation
 
-### "HTTP 404"
-- Control API is running but the endpoint doesn't exist
-- This might indicate an older version of the strategy that doesn't support the positions endpoint
-- Update your strategy code to the latest version
-
-## Comparison with Other Monitoring Tools
-
-| Tool | Purpose | When to Use |
-|------|---------|-------------|
-| `view_live_positions.py` | Real-time position viewer | VPS admin wants to monitor positions in real-time |
-| `check_strategy_logs.py` | View log files | Debug errors or review historical logs |
-| Position Monitor logs | Periodic snapshots | Already in logs every 60s, no setup needed |
-| Control API `/positions` | Programmatic access | Building custom tools or integrations |
-
-## See Also
-
-- [scripts/strategies/check_strategy_logs.py](./check_strategy_logs.py) - View strategy logs
-- [strategies/control/README.md](../../strategies/control/README.md) - Control API documentation
+Enjoy the near tick-for-tick monitoring! If you need to expose the websocket to external consumers (e.g., dashboards), you already have a Control API endpoint ready to serve them. 💹

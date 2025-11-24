@@ -5,7 +5,16 @@ FastAPI server for controlling running strategies via REST API.
 """
 
 from typing import Optional, Dict, Any
-from fastapi import FastAPI, Request, HTTPException, status, Depends, Query
+from fastapi import (
+    FastAPI,
+    Request,
+    HTTPException,
+    status,
+    Depends,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from databases import Database
@@ -13,6 +22,7 @@ import os
 
 from strategies.control.auth import APIKeyAuth
 from strategies.control.funding_arb_controller import FundingArbStrategyController
+from strategies.control.live_stream import LivePositionStreamManager
 
 # Import database - will be initialized when bot starts
 try:
@@ -44,12 +54,15 @@ _auth: Optional[APIKeyAuth] = None
 
 # Strategy controller registry (will be populated when bot starts)
 _strategy_controller: Optional[FundingArbStrategyController] = None
+_live_stream_manager = LivePositionStreamManager()
 
 
 def set_strategy_controller(controller: FundingArbStrategyController):
     """Set the strategy controller (called by TradingBot)."""
     global _strategy_controller
     _strategy_controller = controller
+    strategy = controller.strategy if controller else None
+    _live_stream_manager.attach_strategy(strategy)
 
 
 def get_strategy_controller() -> Optional[FundingArbStrategyController]:
@@ -74,10 +87,15 @@ def get_auth() -> APIKeyAuth:
         if database is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database not available"
-            )
-        _auth = APIKeyAuth(database)
+            detail="Database not available"
+        )
+    _auth = APIKeyAuth(database)
     return _auth
+
+
+def get_stream_manager() -> LivePositionStreamManager:
+    """Return the singleton stream manager."""
+    return _live_stream_manager
 
 
 async def get_user_info(request: Request) -> Dict[str, Any]:
@@ -365,6 +383,42 @@ async def health_check():
     return {"status": "ok"}
 
 
+@app.websocket("/api/v1/live/bbo")
+async def live_bbo_stream(websocket: WebSocket):
+    """WebSocket endpoint streaming BBO updates."""
+    api_key = (
+        websocket.headers.get("X-API-Key")
+        or websocket.headers.get("Authorization")
+        or websocket.query_params.get("api_key")
+        or websocket.query_params.get("token")
+    )
+
+    auth = get_auth()
+    try:
+        # Support "Bearer <token>" in Authorization header
+        if api_key and api_key.lower().startswith("bearer "):
+            api_key_value = api_key[7:]
+        else:
+            api_key_value = api_key
+        user_info = await auth.authenticate_api_key(api_key_value)
+    except HTTPException as exc:
+        await websocket.close(code=1008, reason=exc.detail)
+        return
+
+    await websocket.accept()
+    stream_manager = get_stream_manager()
+    connection = await stream_manager.register_connection(websocket, user_info)
+
+    try:
+        while True:
+            # We don't expect messages from client; just keep connection alive
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await stream_manager.unregister_connection(connection)
+    except Exception:
+        await stream_manager.unregister_connection(connection)
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler."""
@@ -372,4 +426,3 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": f"Internal server error: {str(exc)}"}
     )
-
