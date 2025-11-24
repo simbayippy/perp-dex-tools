@@ -104,6 +104,12 @@ class FundingArbitrageStrategy(BaseStrategy):
 
         # Configure spread thresholds from config (must be done before any execution components)
         from strategies.execution.core.spread_utils import configure_spread_thresholds
+        self.logger.info(
+            f"Configuring spread thresholds: "
+            f"entry={self.config.max_entry_spread_pct*100:.2f}%, "
+            f"exit={self.config.max_exit_spread_pct*100:.2f}%, "
+            f"emergency={self.config.max_emergency_close_spread_pct*100:.2f}%"
+        )
         configure_spread_thresholds(
             entry_threshold=self.config.max_entry_spread_pct,
             exit_threshold=self.config.max_exit_spread_pct,
