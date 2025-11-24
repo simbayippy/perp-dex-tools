@@ -292,13 +292,13 @@ class BackpackAccountManager:
             margin_req = result["margin_requirement"]
             margin_pct = (margin_req * 100) if margin_req else None
             
-            self.logger.info(
-                f"📊 [BACKPACK] Leverage info for {symbol}:\n"
-                f"  - Symbol max leverage: {result['max_leverage']:.1f}x\n"
-                f"  - Account leverage: {result.get('account_leverage', 'N/A')}x\n"
-                f"  - Max notional: {result['max_notional'] or 'None'}\n"
-                f"  - Margin requirement: {margin_req} ({margin_pct:.1f}%)" if margin_pct else f"  - Margin requirement: {margin_req}"
-            )
+            # self.logger.info(
+            #     f"📊 [BACKPACK] Leverage info for {symbol}:\n"
+            #     f"  - Symbol max leverage: {result['max_leverage']:.1f}x\n"
+            #     f"  - Account leverage: {result.get('account_leverage', 'N/A')}x\n"
+            #     f"  - Max notional: {result['max_notional'] or 'None'}\n"
+            #     f"  - Margin requirement: {margin_req} ({margin_pct:.1f}%)" if margin_pct else f"  - Margin requirement: {margin_req}"
+            # )
 
         return result
 

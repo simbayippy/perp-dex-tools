@@ -255,13 +255,13 @@ class LighterAccountManager:
             except Exception as e:
                 self.logger.debug(f"Could not get account leverage: {e}")
             
-            self.logger.info(
-                f"📊 [LIGHTER] Leverage info for {symbol}:\n"
-                f"  - Symbol max leverage: {max_leverage:.1f}x\n"
-                f"  - Position leverage: {account_leverage}x (from position's initial_margin_fraction, if position exists)\n"
-                f"  - Max notional: None\n"
-                f"  - Margin requirement: {min_margin_fraction} ({min_margin_fraction*100:.1f}%)"
-            )
+            # self.logger.info(
+            #     f"📊 [LIGHTER] Leverage info for {symbol}:\n"
+            #     f"  - Symbol max leverage: {max_leverage:.1f}x\n"
+            #     f"  - Position leverage: {account_leverage}x (from position's initial_margin_fraction, if position exists)\n"
+            #     f"  - Max notional: None\n"
+            #     f"  - Margin requirement: {min_margin_fraction} ({min_margin_fraction*100:.1f}%)"
+            # )
             
             return {
                 'max_leverage': max_leverage,
