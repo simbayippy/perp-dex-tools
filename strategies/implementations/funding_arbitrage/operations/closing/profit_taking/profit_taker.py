@@ -136,12 +136,12 @@ class ProfitTaker:
             )
 
         except Exception as exc:
-            self._logger.warning(
+            self._logger.error(
                 f"Error verifying profit opportunity for {position.symbol}: {exc}. "
-                f"Proceeding with close (fail-open)."
+                f"Aborting close to prevent unprofitable execution (fail-closed)."
             )
-            # Fail-open: if verification fails, assume it's still profitable
-            return True, "Verification failed, proceeding"
+            # Fail-closed: if verification fails, don't proceed to prevent unprofitable closes
+            return False, f"Verification failed: {str(exc)}"
 
     async def register_position(self, position: "FundingArbPosition") -> None:
         """

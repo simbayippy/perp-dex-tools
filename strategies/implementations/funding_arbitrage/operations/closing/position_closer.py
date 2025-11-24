@@ -334,8 +334,93 @@ class PositionCloser:
                 # Assuming safe to avoid stuck positions on API glitches, or return False to be safe.
                 # Returning True allows retry mechanisms in close_executor to handle it.
                 return True
-                
+
         return True
+
+    async def _verify_profit_opportunity_pre_execution(
+        self,
+        position: "FundingArbPosition",
+        snapshots: Dict[str, Optional["ExchangePositionSnapshot"]],
+    ) -> tuple[bool, Optional[str]]:
+        """
+        Verify profit opportunity with fresh BBO before execution.
+
+        Re-checks profitability to prevent closing when opportunity disappeared
+        between detection and execution. This is critical for profit-taking closes.
+
+        Args:
+            position: Position to verify
+            snapshots: Current position snapshots
+
+        Returns:
+            (is_verified, reason) tuple
+            - is_verified: True if still profitable, False if opportunity gone
+            - reason: Description of verification result
+        """
+        strategy = self._strategy
+
+        # Fetch fresh BBO prices for both legs
+        bbo_prices = {}
+        for dex in [position.long_dex, position.short_dex]:
+            client = strategy.exchange_clients.get(dex)
+            if not client:
+                strategy.logger.warning(
+                    f"Cannot verify profit for {position.symbol}: "
+                    f"No client for {dex}"
+                )
+                return False, f"No client available for {dex}"
+
+            if not strategy.price_provider:
+                # No price provider - skip verification
+                return True, "Price provider not available, skipping verification"
+
+            try:
+                bid, ask = await strategy.price_provider.get_bbo_prices(
+                    client, position.symbol
+                )
+                bbo_prices[dex] = {"bid": bid, "ask": ask}
+                strategy.logger.debug(
+                    f"[{dex.upper()}] Fresh BBO for {position.symbol}: "
+                    f"bid={bid}, ask={ask}"
+                )
+            except Exception as e:
+                strategy.logger.warning(
+                    f"Failed to fetch fresh BBO for {dex} {position.symbol}: {e}"
+                )
+                return False, f"BBO fetch failed for {dex}: {str(e)}"
+
+        # Re-check profitability with fresh BBO prices
+        profit_taker = getattr(strategy, 'profit_taker', None)
+        if not profit_taker:
+            return True, "Profit taker not available, skipping verification"
+
+        evaluator = getattr(profit_taker, '_profit_evaluator', None)
+        if not evaluator:
+            return True, "Profit evaluator not available, skipping verification"
+
+        try:
+            should_close, reason = await evaluator.check_immediate_profit_opportunity(
+                position, snapshots, bbo_prices=bbo_prices
+            )
+
+            if not should_close:
+                strategy.logger.info(
+                    f"❌ Profit verification failed for {position.symbol}: {reason}. "
+                    f"Aborting close to prevent unprofitable execution."
+                )
+                return False, f"Profit opportunity disappeared: {reason}"
+
+            strategy.logger.debug(
+                f"✅ Profit verification passed for {position.symbol}: {reason}"
+            )
+            return True, reason
+
+        except Exception as e:
+            strategy.logger.error(
+                f"Error during profit verification for {position.symbol}: {e}",
+                exc_info=True
+            )
+            return False, f"Verification error: {str(e)}"
 
     async def _fetch_leg_snapshots(self, position: "FundingArbPosition") -> Dict[str, Optional["ExchangePositionSnapshot"]]:
         """Fetch up-to-date exchange snapshots for both legs."""

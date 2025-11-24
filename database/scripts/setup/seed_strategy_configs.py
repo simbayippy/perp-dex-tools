@@ -64,7 +64,13 @@ TEMPLATES = [
             'enable_liquidation_prevention': True,
             'min_liquidation_distance_pct': 0.05,
             'enable_immediate_profit_taking': True,
-            'min_immediate_profit_taking_pct': 0.002  # 0.2% of position size
+            'min_immediate_profit_taking_pct': 0.002,  # 0.2% of position size
+            # Progressive price walking for wide spread markets
+            'max_aggressive_hedge_spread_pct': 0.0015,  # 0.15% (vs hardcoded 0.05%)
+            'wide_spread_fallback_threshold': 3,  # attempts before progressive walking
+            'progressive_walk_max_attempts': 5,  # progressive walking attempts
+            'progressive_walk_step_ticks': 1,  # ticks per attempt
+            'progressive_walk_min_spread_pct': 0.10,  # stop at 10% of spread
         }
     },
     {

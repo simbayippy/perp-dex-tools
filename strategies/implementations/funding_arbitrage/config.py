@@ -249,6 +249,48 @@ class FundingArbConfig(BaseModel):
         )
     )
 
+    # Progressive price walking for wide spread markets
+    max_aggressive_hedge_spread_pct: Decimal = Field(
+        default=Decimal("0.002"),  # 0.2%
+        description=(
+            "Max spread % for aggressive limit retries (inside spread pricing). "
+            "If spread exceeds this threshold, aggressive limit orders are skipped "
+            "and progressive price walking begins. Default 0.15% vs hardcoded 0.05%."
+        )
+    )
+    wide_spread_fallback_threshold: int = Field(
+        default=3,
+        description=(
+            "Number of consecutive wide spread failures before switching to progressive "
+            "price walking. Once this threshold is reached, execution transitions from "
+            "aggressive inside-spread pricing to progressive mid-price walking."
+        )
+    )
+    progressive_walk_max_attempts: int = Field(
+        default=5,
+        description=(
+            "Maximum attempts during progressive price walking phase. Each attempt moves "
+            "the limit price progressively closer to the aggressive side of the book, "
+            "starting from mid-price. After exhausting these attempts, falls back to market order."
+        )
+    )
+    progressive_walk_step_ticks: int = Field(
+        default=1,
+        description=(
+            "Number of ticks to move per progressive walking attempt. Each subsequent "
+            "attempt moves this many ticks closer to the aggressive side (bid for sells, "
+            "ask for buys). Higher values = more aggressive progression."
+        )
+    )
+    progressive_walk_min_spread_pct: Decimal = Field(
+        default=Decimal("0.10"),  # 10% of spread
+        description=(
+            "Stop progressive walking when this close to aggressive side (as % of spread). "
+            "Prevents walking too close to bid/ask where execution becomes taker-like. "
+            "For example, 0.10 = stop at 10% of spread from aggressive side."
+        )
+    )
+
     # Risk management
     risk_config: RiskManagementConfig = Field(
         default_factory=RiskManagementConfig,

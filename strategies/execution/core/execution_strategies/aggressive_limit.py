@@ -39,6 +39,10 @@ class ExecutionState:
     last_pricing_strategy: str
     execution_success: bool
     execution_error: Optional[str]
+    # Progressive price walking state
+    consecutive_wide_spread_skips: int = 0
+    fallback_mode: str = "aggressive"  # "aggressive" | "progressive" | "market"
+    progressive_attempt_count: int = 0
 
 
 class AggressiveLimitExecutionStrategy(ExecutionStrategy):
@@ -725,39 +729,85 @@ class AggressiveLimitExecutionStrategy(ExecutionStrategy):
                 try:
                     # Calculate remaining quantity
                     remaining_qty = target_quantity - state.accumulated_filled_qty
-                    
-                    # Calculate price using pricer
-                    price_result = await self._pricer.calculate_aggressive_limit_price(
-                        exchange_client=exchange_client,
-                        symbol=symbol,
-                        side=side,
-                        retry_count=retry_count,
-                        inside_tick_retries=config.inside_tick_retries,
-                        max_deviation_pct=max_deviation_pct,
-                        trigger_fill_price=trigger_fill_price,
-                        trigger_side=trigger_side,
-                        logger=logger,
-                    )
-                    state.last_pricing_strategy = price_result.pricing_strategy
 
-                    # Validate spread hasn't widened abnormally (e.g., bid dropped dramatically)
-                    is_acceptable, spread_pct, spread_reason = is_spread_acceptable(
-                        price_result.best_bid,
-                        price_result.best_ask,
-                        check_type=SpreadCheckType.AGGRESSIVE_HEDGE,
-                    )
-
-                    if not is_acceptable:
-                        logger.warning(
-                            f"⚠️ [{exchange_name}] Spread too wide for {symbol} on attempt {retry_count + 1}: "
-                            f"{spread_pct*100:.4f}% > threshold "
-                            f"(bid={price_result.best_bid}, ask={price_result.best_ask}). "
-                            f"Reason: {spread_reason} "
-                            f"Skipping this iteration and retrying with fresh BBO."
+                    # Calculate price based on current fallback mode
+                    if state.fallback_mode == "progressive":
+                        # Progressive price walking: start at mid-price and walk towards aggressive side
+                        price_result = await self._pricer.calculate_progressive_walk_price(
+                            exchange_client=exchange_client,
+                            symbol=symbol,
+                            side=side,
+                            attempt_number=state.progressive_attempt_count,
+                            max_attempts=getattr(config, 'progressive_walk_max_attempts', 5),
+                            step_ticks=getattr(config, 'progressive_walk_step_ticks', 1),
+                            min_spread_pct=getattr(config, 'progressive_walk_min_spread_pct', Decimal("0.10")),
+                            logger=logger,
                         )
-                        await asyncio.sleep(config.retry_backoff_ms / 1000.0)
-                        state.retries_used += 1
-                        continue
+                        state.progressive_attempt_count += 1
+                        state.last_pricing_strategy = f"progressive_walk_{state.progressive_attempt_count}"
+
+                        # Check if exhausted progressive attempts
+                        max_progressive = getattr(config, 'progressive_walk_max_attempts', 5)
+                        if state.progressive_attempt_count >= max_progressive:
+                            logger.info(
+                                f"📉 [{exchange_name}] Progressive walking exhausted ({state.progressive_attempt_count}/{max_progressive}) "
+                                f"for {symbol}. Will fall back to market order."
+                            )
+                            # Will trigger market fallback after this attempt if no fill
+
+                        # Reset spread skip counter since we're in progressive mode now
+                        state.consecutive_wide_spread_skips = 0
+
+                    else:
+                        # Aggressive limit pricing (existing logic)
+                        price_result = await self._pricer.calculate_aggressive_limit_price(
+                            exchange_client=exchange_client,
+                            symbol=symbol,
+                            side=side,
+                            retry_count=retry_count,
+                            inside_tick_retries=config.inside_tick_retries,
+                            max_deviation_pct=max_deviation_pct,
+                            trigger_fill_price=trigger_fill_price,
+                            trigger_side=trigger_side,
+                            logger=logger,
+                        )
+                        state.last_pricing_strategy = price_result.pricing_strategy
+
+                        # Validate spread hasn't widened abnormally (only check in aggressive mode)
+                        is_acceptable, spread_pct, spread_reason = is_spread_acceptable(
+                            price_result.best_bid,
+                            price_result.best_ask,
+                            check_type=SpreadCheckType.AGGRESSIVE_HEDGE,
+                        )
+
+                        if not is_acceptable:
+                            logger.warning(
+                                f"⚠️ [{exchange_name}] Spread too wide for {symbol} on attempt {retry_count + 1}: "
+                                f"{spread_pct*100:.4f}% > threshold "
+                                f"(bid={price_result.best_bid}, ask={price_result.best_ask}). "
+                                f"Reason: {spread_reason} "
+                                f"Skipping aggressive limit and will retry."
+                            )
+
+                            # Track consecutive spread failures
+                            state.consecutive_wide_spread_skips += 1
+
+                            # Check if should switch to progressive walking
+                            fallback_threshold = getattr(config, 'wide_spread_fallback_threshold', 3)
+                            if (state.consecutive_wide_spread_skips >= fallback_threshold and
+                                state.fallback_mode == "aggressive"):
+
+                                state.fallback_mode = "progressive"
+                                state.progressive_attempt_count = 0
+                                logger.info(
+                                    f"🔄 [{exchange_name}] Switching to progressive price walking for {symbol} "
+                                    f"after {state.consecutive_wide_spread_skips} consecutive wide spread attempts. "
+                                    f"Will start at mid-price and progressively walk towards aggressive side."
+                                )
+
+                            await asyncio.sleep(config.retry_backoff_ms / 1000.0)
+                            state.retries_used += 1
+                            continue
 
                     # Round quantity to step size
                     order_quantity = exchange_client.round_to_step(remaining_qty)

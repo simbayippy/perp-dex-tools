@@ -202,12 +202,115 @@ class AggressiveLimitPricer:
         
         # Round price to tick size
         limit_price = exchange_client.round_to_tick(limit_price)
-        
+
         return PriceResult(
             best_bid=best_bid,
             best_ask=best_ask,
             limit_price=limit_price,
             pricing_strategy=pricing_strategy,
             break_even_strategy=break_even_strategy
+        )
+
+    async def calculate_progressive_walk_price(
+        self,
+        exchange_client: BaseExchangeClient,
+        symbol: str,
+        side: str,
+        attempt_number: int,
+        max_attempts: int,
+        step_ticks: int,
+        min_spread_pct: Decimal,
+        logger=None,
+    ) -> PriceResult:
+        """
+        Calculate price using progressive walking strategy.
+
+        Starts at mid-price and progressively moves closer to the aggressive
+        side of the book with each attempt. This provides a gradual transition
+        from maker-fee pricing towards taker-like pricing when spreads are wide.
+
+        Algorithm:
+        - Attempt 0: Start at mid-price (50% of spread)
+        - Each subsequent attempt: Move N ticks towards aggressive side
+        - Stop when within min_spread_pct of aggressive side
+
+        Example (SELL order, bid=$90, ask=$100, tick=$1):
+          Attempt 0: $95 (mid, 50% of spread)
+          Attempt 1: $94 (moved 1 tick towards bid)
+          Attempt 2: $93 (moved 2 ticks towards bid)
+          Attempt 3: $92 (moved 3 ticks towards bid)
+          Attempt 4: $91 (moved 4 ticks towards bid, 10% of spread - stop)
+
+        Args:
+            exchange_client: Exchange client instance
+            symbol: Trading symbol
+            side: "buy" or "sell"
+            attempt_number: Current progressive attempt (0-indexed)
+            max_attempts: Maximum progressive attempts
+            step_ticks: Ticks to move per attempt
+            min_spread_pct: Stop when this % of spread from aggressive side
+            logger: Optional logger instance
+
+        Returns:
+            PriceResult with calculated limit price
+        """
+        # Fetch fresh BBO prices
+        best_bid, best_ask = await self._price_provider.get_bbo_prices(
+            exchange_client, symbol
+        )
+
+        mid_price = (best_bid + best_ask) / Decimal("2")
+        spread = best_ask - best_bid
+        tick_size = await exchange_client.get_tick_size(symbol)
+
+        # Calculate aggressive target (where we're walking towards)
+        aggressive_target = best_bid if side == "sell" else best_ask
+
+        # Calculate how far to walk from mid-price
+        # attempt_number=0 → start at mid
+        # attempt_number increases → move towards aggressive_target
+        ticks_to_move = attempt_number * step_ticks
+
+        if side == "sell":
+            # Walk from mid towards bid (downwards)
+            walked_price = mid_price - (Decimal(str(ticks_to_move)) * tick_size)
+
+            # Ensure we don't go below our minimum spread threshold
+            min_price = best_bid + (spread * min_spread_pct)
+            limit_price = max(walked_price, min_price)
+
+            # Ensure we don't go below bid (invalid)
+            limit_price = max(limit_price, best_bid + tick_size)
+
+        else:  # side == "buy"
+            # Walk from mid towards ask (upwards)
+            walked_price = mid_price + (Decimal(str(ticks_to_move)) * tick_size)
+
+            # Ensure we don't go above our minimum spread threshold
+            max_price = best_ask - (spread * min_spread_pct)
+            limit_price = min(walked_price, max_price)
+
+            # Ensure we don't go above ask (invalid)
+            limit_price = min(limit_price, best_ask - tick_size)
+
+        # Round to tick size
+        limit_price = exchange_client.round_to_tick(limit_price)
+
+        # Calculate position in spread for logging (0.0 = bid, 1.0 = ask)
+        spread_position_pct = ((limit_price - best_bid) / spread) if spread > 0 else Decimal("0.5")
+
+        if logger:
+            logger.info(
+                f"🚶 [{exchange_client.get_exchange_name()}] Progressive walk attempt {attempt_number + 1}/{max_attempts} "
+                f"for {symbol} {side}: price={limit_price} (at {spread_position_pct*100:.1f}% of spread), "
+                f"bid={best_bid}, ask={best_ask}, mid={mid_price}"
+            )
+
+        return PriceResult(
+            best_bid=best_bid,
+            best_ask=best_ask,
+            limit_price=limit_price,
+            pricing_strategy=f"progressive_walk_{attempt_number + 1}",
+            break_even_strategy=None
         )
 

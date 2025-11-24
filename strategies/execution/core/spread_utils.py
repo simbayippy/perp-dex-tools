@@ -22,8 +22,8 @@ class SpreadCheckType(Enum):
 _SPREAD_THRESHOLDS = {
     SpreadCheckType.ENTRY: Decimal("0.001"),  # 0.1% threshold for opening positions
     SpreadCheckType.EXIT: Decimal("0.001"),  # 0.1% threshold for closing positions
-    SpreadCheckType.EMERGENCY_CLOSE: Decimal("0.002"),  # 0.2% threshold for emergency closes
-    SpreadCheckType.AGGRESSIVE_HEDGE: Decimal("0.0005"),  # 0.05% threshold for aggressive hedge retries
+    SpreadCheckType.EMERGENCY_CLOSE: Decimal("0.003"),  # 0.3% threshold for emergency closes
+    SpreadCheckType.AGGRESSIVE_HEDGE: Decimal("0.002"),  # 0.2% threshold for aggressive hedge retries
 }
 
 

@@ -108,12 +108,14 @@ class FundingArbitrageStrategy(BaseStrategy):
             f"Configuring spread thresholds: "
             f"entry={self.config.max_entry_spread_pct*100:.2f}%, "
             f"exit={self.config.max_exit_spread_pct*100:.2f}%, "
-            f"emergency={self.config.max_emergency_close_spread_pct*100:.2f}%"
+            f"emergency={self.config.max_emergency_close_spread_pct*100:.2f}%, "
+            f"aggressive_hedge={self.config.max_aggressive_hedge_spread_pct*100:.2f}%"
         )
         configure_spread_thresholds(
             entry_threshold=self.config.max_entry_spread_pct,
             exit_threshold=self.config.max_exit_spread_pct,
             emergency_threshold=self.config.max_emergency_close_spread_pct,
+            hedge_threshold=self.config.max_aggressive_hedge_spread_pct,
         )
         
         # Store exchange clients dict (multi-DEX support)
@@ -523,6 +525,19 @@ class FundingArbitrageStrategy(BaseStrategy):
         max_entry_price_divergence_pct_value = strategy_params.get('max_entry_price_divergence_pct')
         max_entry_price_divergence_pct = Decimal(str(max_entry_price_divergence_pct_value)) if max_entry_price_divergence_pct_value is not None else Decimal("0.005")
 
+        # Extract progressive price walking parameters
+        max_aggressive_hedge_spread_pct_value = strategy_params.get('max_aggressive_hedge_spread_pct')
+        max_aggressive_hedge_spread_pct = Decimal(str(max_aggressive_hedge_spread_pct_value)) if max_aggressive_hedge_spread_pct_value is not None else Decimal("0.0015")
+
+        wide_spread_fallback_threshold = strategy_params.get('wide_spread_fallback_threshold', 3)
+
+        progressive_walk_max_attempts = strategy_params.get('progressive_walk_max_attempts', 5)
+
+        progressive_walk_step_ticks = strategy_params.get('progressive_walk_step_ticks', 1)
+
+        progressive_walk_min_spread_pct_value = strategy_params.get('progressive_walk_min_spread_pct')
+        progressive_walk_min_spread_pct = Decimal(str(progressive_walk_min_spread_pct_value)) if progressive_walk_min_spread_pct_value is not None else Decimal("0.10")
+
         funding_config = FundingArbConfig(
             exchange=trading_config.exchange,
             exchanges=exchanges,
@@ -552,6 +567,12 @@ class FundingArbitrageStrategy(BaseStrategy):
             min_immediate_profit_taking_pct=min_immediate_profit_taking_pct,
             realtime_profit_check_interval=realtime_profit_check_interval,
             max_entry_price_divergence_pct=max_entry_price_divergence_pct,
+            # Progressive price walking
+            max_aggressive_hedge_spread_pct=max_aggressive_hedge_spread_pct,
+            wide_spread_fallback_threshold=wide_spread_fallback_threshold,
+            progressive_walk_max_attempts=progressive_walk_max_attempts,
+            progressive_walk_step_ticks=progressive_walk_step_ticks,
+            progressive_walk_min_spread_pct=progressive_walk_min_spread_pct,
             # Ticker for logging
             ticker=trading_config.ticker,
             config_path=config_path,
