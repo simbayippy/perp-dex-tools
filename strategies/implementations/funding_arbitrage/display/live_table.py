@@ -345,8 +345,13 @@ class LiveTableDisplay:
             # Get funding APY
             funding_rate = rate_map.get(dex)
             if funding_rate is not None:
-                apy = float(funding_rate * Decimal("3") * Decimal("365") * Decimal("100"))
-                apy_str = f"{apy:.2f}%"
+                try:
+                    rate_decimal = Decimal(str(funding_rate))
+                    apy = float(rate_decimal * Decimal("3") * Decimal("365") * Decimal("100"))
+                    apy_str = f"{apy:.2f}%"
+                except Exception as e:
+                    self.logger.debug(f"[LIVE_TABLE] Error calculating APY: {e}")
+                    apy_str = "n/a"
             else:
                 apy_str = "n/a"
 
