@@ -616,11 +616,18 @@ class LivePositionViewer:
         ask = payload.get("ask")
 
         async with self._data_lock:
-            legs = self._leg_index.get((exchange, symbol))
-            if not legs:
+            matching_legs: List[Dict[str, Any]] = []
+            for (dex_key, pos_symbol), leg_group in self._leg_index.items():
+                if dex_key != exchange:
+                    continue
+                if self._symbol_matches(symbol, pos_symbol):
+                    matching_legs.extend(leg_group)
+
+            if not matching_legs:
                 return
+
             updated = False
-            for leg in legs:
+            for leg in matching_legs:
                 mark = self._select_mark_price(leg.get("side"), bid, ask)
                 if mark is None:
                     continue
@@ -668,6 +675,38 @@ class LivePositionViewer:
             return float(value)
         except (TypeError, ValueError):
             return None
+
+    def _symbol_matches(self, bbo_symbol: Optional[str], position_symbol: Optional[str]) -> bool:
+        """Heuristic symbol matcher to align exchange-specific symbols with normalized ones."""
+        if not bbo_symbol or not position_symbol:
+            return False
+
+        bbo_upper = str(bbo_symbol).upper()
+        pos_upper = str(position_symbol).upper()
+
+        if bbo_upper == pos_upper:
+            return True
+
+        # Normalize separators and suffixes (USDT/PERP)
+        bbo_compact = bbo_upper.replace("-", "").replace("_", "")
+        pos_compact = pos_upper.replace("-", "").replace("_", "")
+
+        if bbo_compact == pos_compact:
+            return True
+
+        if bbo_upper == f"{pos_upper}USDT":
+            return True
+        if bbo_upper.endswith("USDT") and bbo_upper[:-4] == pos_upper:
+            return True
+        if bbo_upper.endswith("-PERP") and bbo_upper[:-5] == pos_upper:
+            return True
+
+        if pos_upper in bbo_upper or bbo_upper in pos_upper:
+            return True
+        if pos_compact in bbo_compact or bbo_compact in pos_compact:
+            return True
+
+        return False
 
 
 async def auto_configure_viewer(args: argparse.Namespace, console: Console) -> Tuple[str, int, str, Optional[str]]:

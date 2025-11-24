@@ -402,6 +402,7 @@ async def live_bbo_stream(websocket: WebSocket):
             api_key_value = api_key
         user_info = await auth.authenticate_api_key(api_key_value)
     except HTTPException as exc:
+        await websocket.accept()
         await websocket.close(code=1008, reason=exc.detail)
         return
 
