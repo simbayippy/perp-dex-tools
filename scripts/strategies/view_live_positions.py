@@ -15,7 +15,7 @@ import json
 import os
 import signal
 import sys
-from collections import defaultdict
+from collections import defaultdict, deque
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -26,7 +26,9 @@ import aiohttp
 from databases import Database
 from dotenv import load_dotenv
 from rich.console import Console
+from rich.layout import Layout
 from rich.live import Live
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
@@ -180,12 +182,14 @@ class LivePositionViewer:
         refresh_interval: float = 1.0,
         static_refresh_interval: float = 30.0,
         account_filter: Optional[str] = None,
+        log_files: Optional[List[Tuple[str, Path]]] = None,
     ) -> None:
         self.api_url = api_url.rstrip("/")
         self.api_key = api_key
         self.refresh_interval = refresh_interval
         self.static_refresh_interval = static_refresh_interval
         self.account_filter = account_filter
+        self.log_files = log_files or []
 
         if self.api_url.startswith("https://"):
             self.ws_url = "wss://" + self.api_url[len("https://") :]
@@ -205,6 +209,10 @@ class LivePositionViewer:
         self._data_lock = asyncio.Lock()
         self._dirty = asyncio.Event()
         self._last_error: Optional[str] = None
+        self._log_lines: List[str] = []
+        self._log_lock = asyncio.Lock()
+        self._log_tasks: List[asyncio.Task] = []
+        self._log_history = 80
 
     async def fetch_positions(self) -> Dict[str, Any]:
         """Fetch positions from Control API (slow-changing data)."""
@@ -287,6 +295,27 @@ class LivePositionViewer:
         for position in positions:
             self._add_position_rows(table, position)
         return table
+
+    def _render(self):
+        if not self.log_files:
+            return self.generate_table()
+
+        layout = Layout()
+        layout.split(
+            Layout(self._render_logs(), size=14),
+            Layout(self.generate_table()),
+        )
+        return layout
+
+    def _render_logs(self) -> Panel:
+        if not self.log_files:
+            return Panel("[dim]Log streaming disabled[/dim]", title="Strategy Logs", border_style="cyan")
+
+        if not self._log_lines:
+            message = "[dim]Waiting for log data...[/dim]"
+        else:
+            message = "\n".join(self._log_lines[-self._log_history :])
+        return Panel(message, title="Strategy Logs", border_style="cyan")
 
     def _add_position_rows(self, table: Table, position: Dict[str, Any]) -> None:
         symbol = position.get("symbol", "n/a")
@@ -410,9 +439,10 @@ class LivePositionViewer:
 
             tasks.append(asyncio.create_task(self._static_refresh_loop()))
             tasks.append(asyncio.create_task(self._websocket_loop()))
+            tasks.append(asyncio.create_task(self._log_manager_loop()))
 
             with Live(
-                self.generate_table(),
+                self._render(),
                 console=self.console,
                 refresh_per_second=4,
                 screen=False,
@@ -423,7 +453,7 @@ class LivePositionViewer:
                     except asyncio.TimeoutError:
                         pass
                     self._dirty.clear()
-                    live.update(self.generate_table())
+                    live.update(self._render())
 
         finally:
             self.running = False
@@ -432,6 +462,10 @@ class LivePositionViewer:
             for task in tasks:
                 with suppress(asyncio.CancelledError):
                     await task
+            for log_task in self._log_tasks:
+                log_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await log_task
             if self.session:
                 await self.session.close()
             self.console.print("[green]✅ Viewer stopped[/green]")
@@ -708,25 +742,89 @@ class LivePositionViewer:
 
         return False
 
+    async def _log_manager_loop(self) -> None:
+        if not self.log_files:
+            return
 
-async def auto_configure_viewer(args: argparse.Namespace, console: Console) -> Tuple[str, int, str, Optional[str]]:
+        for label, path in self.log_files:
+            task = asyncio.create_task(self._tail_log_file(label, path))
+            self._log_tasks.append(task)
+
+        while self.running:
+            await asyncio.sleep(1)
+
+    async def _tail_log_file(self, label: str, path: Path) -> None:
+        path = Path(path)
+        while self.running:
+            if not path.exists():
+                await asyncio.sleep(1)
+                continue
+
+            try:
+                with path.open("r") as handle:
+                    lines = deque(handle, maxlen=self._log_history)
+                    if lines:
+                        await self._append_log_lines(label, list(lines))
+                    position = handle.tell()
+
+                    while self.running:
+                        handle.seek(position)
+                        chunk = handle.read()
+                        if chunk:
+                            position = handle.tell()
+                            new_lines = chunk.splitlines()
+                            if new_lines:
+                                await self._append_log_lines(label, new_lines)
+                        await asyncio.sleep(0.5)
+            except FileNotFoundError:
+                await asyncio.sleep(1)
+            except Exception as exc:
+                await self._append_log_lines(label, [f"[log error] {exc}"])
+                await asyncio.sleep(2)
+
+    async def _append_log_lines(self, label: str, lines: List[str]) -> None:
+        formatted = []
+        for line in lines:
+            stripped = line.rstrip()
+            if not stripped:
+                continue
+            tag = label.upper()
+            if label.lower() == "stderr":
+                formatted.append(f"[red][{tag}][/red] {stripped}")
+            else:
+                formatted.append(f"[green][{tag}][/green] {stripped}")
+
+        if not formatted:
+            return
+
+        async with self._log_lock:
+            self._log_lines.extend(formatted)
+            if len(self._log_lines) > self._log_history:
+                self._log_lines = self._log_lines[-self._log_history :]
+        self._dirty.set()
+
+
+async def auto_configure_viewer(
+    args: argparse.Namespace, console: Console
+) -> Tuple[str, int, str, Optional[str], Optional[StrategyRunInfo]]:
     """
     Resolve host, port, API key, and account filter using username discovery.
 
     Returns:
-        Tuple (host, port, api_key, account_filter)
+        Tuple (host, port, api_key, account_filter, run_info)
     """
     host = args.host or os.getenv("CONTROL_API_HOST", "127.0.0.1")
     port = args.port or int(os.getenv("CONTROL_API_PORT", "0") or "0")
     api_key = args.api_key or os.getenv("CONTROL_API_KEY")
     account_filter = args.account
+    selected_run: Optional[StrategyRunInfo] = None
 
     if not args.username:
         if not port:
             raise ValueError("Control API port required (use --port or set CONTROL_API_PORT)")
         if not api_key:
             raise ValueError("API key required (use --api-key, CONTROL_API_KEY, or --username)")
-        return host, port, api_key, account_filter
+        return host, port, api_key, account_filter, None
 
     database_url = os.getenv("DATABASE_URL")
     discovery = ControlAPIDiscovery(database_url, console)
@@ -740,13 +838,22 @@ async def auto_configure_viewer(args: argparse.Namespace, console: Console) -> T
                 "API key not found. Provide --api-key or ensure Telegram auth stored a key for this user."
             )
         if not port:
-            run = await discovery.select_strategy_run(user, args.account)
-            port = run.port
-            account_filter = run.account_name
+            selected_run = await discovery.select_strategy_run(user, args.account)
+            port = selected_run.port
+            account_filter = selected_run.account_name
     finally:
         await discovery.close()
 
-    return host, port, api_key, account_filter
+    return host, port, api_key, account_filter, selected_run
+
+
+def find_log_files(run: Optional[StrategyRunInfo]) -> List[Tuple[str, Path]]:
+    if not run:
+        return []
+    log_dir = project_root / "logs"
+    stdout = log_dir / f"strategy_{run.run_id}.out.log"
+    stderr = log_dir / f"strategy_{run.run_id}.err.log"
+    return [("stdout", stdout), ("stderr", stderr)]
 
 
 async def main() -> None:
@@ -772,11 +879,12 @@ async def main() -> None:
     console = Console()
 
     try:
-        host, port, api_key, account_filter = await auto_configure_viewer(args, console)
+        host, port, api_key, account_filter, run_info = await auto_configure_viewer(args, console)
     except Exception as exc:
         console.print(f"[red]❌ {exc}[/red]")
         sys.exit(1)
 
+    log_files = find_log_files(run_info)
     api_url = f"http://{host}:{port}"
     viewer = LivePositionViewer(
         api_url=api_url,
@@ -784,6 +892,7 @@ async def main() -> None:
         refresh_interval=args.refresh,
         static_refresh_interval=args.static_refresh,
         account_filter=account_filter,
+        log_files=log_files,
     )
     await viewer.run()
 

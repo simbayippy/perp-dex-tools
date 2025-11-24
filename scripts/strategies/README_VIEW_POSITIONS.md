@@ -1,6 +1,6 @@
 # Live Position Viewer (WebSocket Edition)
 
-View real-time funding arbitrage positions directly from the Control API using the new streaming WebSocket feed.
+View real-time funding arbitrage positions directly from the Control API using the new streaming WebSocket feed, while tailing the latest strategy logs in the same terminal.
 
 ## Highlights
 
@@ -8,6 +8,7 @@ View real-time funding arbitrage positions directly from the Control API using t
 - ✅ **Auto discovery:** `--username` resolves the correct Control API port + stored API key from the database
 - ✅ **Account aware:** automatically filters to the account tied to the running strategy (override with `--account`)
 - ✅ **Split cadence:** static metrics (entry, funding, leverage) refresh slowly while marks refresh instantly
+- ✅ **Log tailing:** the top panel continuously streams stdout/stderr from `logs/strategy_<run>.out.log`
 - ✅ **Rich TUI:** colorful, compact table rendered with [`rich`](https://github.com/Textualize/rich)
 
 ## Prerequisites
@@ -33,7 +34,8 @@ What happens under the hood:
 1. Uses `DATABASE_URL` to find the user and running `strategy_runs`
 2. Pulls the Control API port tied to the selected run
 3. Reads the stored Telegram API key (`telegram_api_key_encrypted`) if available
-4. Subscribes to `/api/v1/live/bbo` for tick-level price updates
+4. Locates `logs/strategy_<run>.out|err.log` for live log streaming
+5. Subscribes to `/api/v1/live/bbo` for tick-level price updates
 
 ### Manual overrides
 
@@ -63,6 +65,7 @@ CLI flags overview:
 1. **REST fetch (slow lane):** periodically calls `/api/v1/positions` to refresh entry, funding, leverage, etc.
 2. **WebSocket stream (fast lane):** subscribes to `/api/v1/live/bbo` which mirrors the strategy's WebSocket BBO events.
 3. **Local synthesis:** viewer recalculates mark price + uPnL per leg using live bids/asks while preserving the slow metrics.
+4. **Log tailer:** continuously reads `strategy_<run>.out.log` (and `.err.log`), showing the latest ~80 lines in the top panel.
 
 The Control API server now exposes a FastAPI websocket endpoint:
 
@@ -74,12 +77,17 @@ WS   /api/v1/live/bbo       # new! push BBO events to any authorized client
 ## Example Output
 
 ```
-╭────────────────────────── Live Positions (via Control API) ──────────────────────────╮
-│ Account │ Symbol │ Exchange │ Side  │   Qty │    Entry │     Mark │    uPnL │ APY │ Age │
-├─────────┼────────┼──────────┼───────┼───────┼──────────┼──────────┼─────────┼─────┼─────┤
-│ acc1    │ ZEC    │ ASTER    │ long  │ 4.539 │ 549.9061 │ 592.3210 │ -$192.5 │ 7.6%│ 02:41│
-│         │        │ LIGHTER  │ short │ 4.539 │ 549.6910 │ 591.3950 │ +$189.3 │-53% │     │
-╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭───────────────────────────── Strategy Logs ─────────────────────────────╮
+│ [STDOUT] ... position_opener ... Submitted long leg                       │
+│ [STDOUT] ... execution_engine ... Filled short leg                        │
+│ [STDERR] ... Warning: funding drift 65% > limit                           │
+╰──────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────── Live Positions (via Control API) ─────────────╮
+│ Account │ Symbol │ Exchange │ Side  │   Qty │    Entry │     Mark │ uPnL │ Age │
+├─────────┼────────┼──────────┼───────┼───────┼──────────┼──────────┼──────┼─────┤
+│ acc1    │ ZEC    │ ASTER    │ long  │ 4.539 │ 549.9061 │ 592.3210 │-$192│02:41│
+│         │        │ LIGHTER  │ short │ 4.539 │ 549.6910 │ 591.3950 │+$189│     │
+╰─────────────────────────────────────────────────────────────────────────╯
 ```
 
 Marks update instantly whenever the websocket emits a new bid/ask, so uPnL flickers in real time without hammering REST endpoints.
