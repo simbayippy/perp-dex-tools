@@ -43,21 +43,30 @@ class APIKeyAuth:
             # Fall back to X-API-Key header
             api_key = request.headers.get("X-API-Key")
         
+        return await self.authenticate_api_key(api_key)
+
+    async def authenticate_api_key(self, api_key: Optional[str]) -> Dict[str, Any]:
+        """
+        Validate a raw API key string (used for WebSocket authentication).
+        
+        Args:
+            api_key: Key provided by client
+        
+        Returns:
+            User info dict
+        """
         if not api_key:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Missing API key. Provide 'X-API-Key' header or 'Authorization: Bearer <key>'"
             )
         
-        # Validate key
         user_info = await self.key_repo.validate_key(api_key)
-        
         if not user_info:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired API key"
             )
-        
         return user_info
     
     async def get_accessible_account_ids(self, user_id: str, is_admin: bool) -> list[str]:
@@ -122,4 +131,3 @@ class APIKeyAuth:
             )
         
         return account['id']
-

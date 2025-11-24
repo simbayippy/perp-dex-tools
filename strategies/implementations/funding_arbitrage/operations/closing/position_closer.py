@@ -272,7 +272,7 @@ class PositionCloser:
             strategy.logger.info(
                 f"✅ Closed {position.symbol} ({reason}): PnL=${pnl:.2f} ({pnl_pct*100:.2f}%) via {pnl_method}"
             )
-            
+
             try:
                 # Create simple leg pnl dict for notification
                 leg_pnl_est = {}

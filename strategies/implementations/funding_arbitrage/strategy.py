@@ -214,6 +214,7 @@ class FundingArbitrageStrategy(BaseStrategy):
             exchange_clients=self.exchange_clients,
             logger=self.logger,
             strategy_config=self.config,
+            strategy=self,  # Pass strategy reference for live table check
         )
         
         # Cooldown manager for wide spread tracking
@@ -337,6 +338,7 @@ class FundingArbitrageStrategy(BaseStrategy):
         # Initialize position and state managers
         await self.position_manager.initialize()
         self.logger.info("FundingArbitrageStrategy initialized successfully")
+
         if self._monitor_task is None:
             self._monitor_stop_event = asyncio.Event()
             self.logger.info("🔄 Creating background monitor task...")

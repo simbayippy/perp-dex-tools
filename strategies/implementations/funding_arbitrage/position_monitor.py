@@ -30,12 +30,14 @@ class PositionMonitor:
         exchange_clients: Dict[str, BaseExchangeClient],
         logger: Any,
         strategy_config: Any = None,
+        strategy: Any = None,
     ) -> None:
         self._position_manager = position_manager
         self._funding_rate_repo = funding_rate_repo
         self._exchange_clients = exchange_clients
         self._logger = logger
         self._strategy_config = strategy_config
+        self._strategy = strategy  # Reference to strategy for live table check
         # Store account name for logging
         self._account_name = getattr(position_manager, 'account_name', None)
 
@@ -322,6 +324,9 @@ class PositionMonitor:
         """
         Emit an INFO log with the latest per-leg metrics and aggregate exchange figures.
         Useful for verifying delta-neutral hedges after position openings.
+
+        Note: Logs are always emitted for viewing via check_strategy_logs.py and supervisorctl.
+        The live table (if active) displays in the running process terminal separately.
         """
         legs_metadata = position.metadata.get("legs")
         if not legs_metadata:
