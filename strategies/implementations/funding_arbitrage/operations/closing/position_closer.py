@@ -189,9 +189,9 @@ class PositionCloser:
                 actions.append(f"Closed {position.symbol}: {reason} (Break-even)")
                 return
             else:
-                strategy.logger.debug(f"Break-even reached for {position.symbol} but spread too wide.")
+                strategy.logger.info(f"Break-even reached for {position.symbol} but spread too wide.")
         else:
-            strategy.logger.debug(
+            strategy.logger.info(
                 f"⏳ {position.symbol} waiting for break-even (Reason: {polling_state.get('exit_reason')})"
             )
 
