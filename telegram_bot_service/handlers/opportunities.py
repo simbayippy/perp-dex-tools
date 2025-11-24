@@ -329,13 +329,17 @@ class OpportunitiesHandler(BaseHandler):
             message = self._format_opportunities_list(opportunities, header, max_opportunities=3)
             
             keyboard = [
-                [InlineKeyboardButton("🔄 Refresh", callback_data=f"opportunity_config_refresh:{config_id}")],
-                [InlineKeyboardButton("🔙 Back to Configs", callback_data="opportunity_back_to_configs")]
+                [InlineKeyboardButton("🔄 Refresh", callback_data=f"opportunity_config_refresh:{config_id}")]
             ]
             
             if from_command:
-                # If coming from the main command, "Back" should go to the config list
-                 keyboard[1] = [InlineKeyboardButton("🔙 Back to Configs", callback_data="opportunity_back_to_configs_command")]
+                # This is the default view for a user with one active config.
+                # Provide a way to see the unfiltered list.
+                keyboard.append([InlineKeyboardButton("🌐 View All (Unfiltered)", callback_data="opportunity_all")])
+            else:
+                # This view came from a selection list, so provide a "Back" button and all view.
+                keyboard.append([InlineKeyboardButton("🔙 Back to Configs", callback_data="opportunity_back_to_configs_command")])
+                keyboard.append([InlineKeyboardButton("🌐 View All (Unfiltered)", callback_data="opportunity_all")])
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             
