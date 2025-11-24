@@ -426,7 +426,14 @@ class LiveTableDisplay:
         if not position.opened_at:
             return "n/a"
 
-        age_seconds = (datetime.now(timezone.utc) - position.opened_at).total_seconds()
+        # Ensure both datetimes are timezone-aware for comparison
+        opened_at = position.opened_at
+        if opened_at.tzinfo is None:
+            # Make timezone-aware if naive
+            opened_at = opened_at.replace(tzinfo=timezone.utc)
+
+        now = datetime.now(timezone.utc)
+        age_seconds = (now - opened_at).total_seconds()
         hours = int(age_seconds // 3600)
         minutes = int((age_seconds % 3600) // 60)
         seconds = int(age_seconds % 60)
